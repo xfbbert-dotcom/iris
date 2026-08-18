@@ -79,6 +79,20 @@ test("cross-group document grant acceptance is executable and default-deny", () 
   assert.doesNotMatch(runbook, /\$artifact\.facts/iu);
 });
 
+test("cross-group document grant source binding accepts live-checked unknown permission", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const sourceBindingStart = runbook.indexOf("function Assert-SourceBinding");
+  const denialStageStart = runbook.indexOf("function Assert-DenialStage", sourceBindingStart);
+  assert.ok(sourceBindingStart >= 0 && denialStageStart > sourceBindingStart);
+  const sourceBinding = runbook.slice(sourceBindingStart, denialStageStart);
+
+  assert.match(sourceBinding, /permission_state\s+IN\s*\(\s*'unknown'\s*,\s*'readable'\s*\)/iu);
+  assert.doesNotMatch(sourceBinding, /permission_state\s*=\s*'readable'/iu);
+  assert.match(sourceBinding, /source_type='group_visible_document'/u);
+  assert.match(sourceBinding, /sync_state='synced'/u);
+  assert.match(sourceBinding, /can_use_for_answering=TRUE/u);
+});
+
 test("cross-group document grant CI executes real migration and concurrency coverage", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   for (const testFile of [

@@ -31,7 +31,9 @@ Caddy stopped, and zero active grants for the pilot source. This is the pre-gran
 
 Verify `DOCUMENT_SOURCE_ID` is one `group_visible_document` evidenced by `SOURCE_GROUP_ID` and not
 by either other group. Confirm source, grantee, and control IDs are exact and pairwise distinct.
-Record only source ID, current snapshot ID/hash/version, and timestamps.
+Record only source ID, current snapshot ID/hash/version, and timestamps. A source may retain the
+normal `unknown` permission projection; `denied` and `stale` remain ineligible, and the retrieval
+and final-send paths must still pass their live Feishu permission checks.
 
 ## Step 4: Pre-Grant And Control Denial
 
@@ -442,7 +444,7 @@ function Assert-SourceBinding {
   $facts = Invoke-JsonSql -Sql @"
 SELECT json_build_object(
   'sourceCount',(SELECT count(*) FROM document_sources WHERE id='$($Context.DocumentSourceId)'
-    AND source_type='group_visible_document' AND permission_state='readable' AND sync_state='synced'
+    AND source_type='group_visible_document' AND permission_state IN ('unknown','readable') AND sync_state='synced'
     AND can_use_for_answering=TRUE),
   'sourceEvidenceCount',(SELECT count(*) FROM document_source_evidence WHERE document_source_id='$($Context.DocumentSourceId)'
     AND kind='group_message' AND group_id='$($Context.SourceGroupId)'),
