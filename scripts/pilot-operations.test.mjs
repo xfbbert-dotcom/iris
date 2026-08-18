@@ -65,7 +65,7 @@ test("cross-group document grant acceptance is executable and default-deny", () 
   assertMarkersInOrder(acceptance, [
     "Invoke-Compose @(\"stop\", \"caddy\")",
     "Assert-ReviewedBuild $context",
-    "./deploy/pilot/backup.sh",
+    "Invoke-ReviewedPilotBackup $context",
     "$enableAttempted = $true",
     "Get-KnownGroupIds $context",
     "preflight group disable",
@@ -280,6 +280,26 @@ test("cross-group rollback treats empty Compose service output as stopped and co
     "$null = Test-CrossGroupCaddyRunning",
   ].join("; ");
   assertPowerShellRunbookGate(unavailableCommand, {}, false, crossGroupGrantAcceptancePath);
+});
+
+test("cross-group backup stays on the reviewed checkout and reattests the running image", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const backupStart = runbook.indexOf("function Invoke-ReviewedPilotBackup");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance");
+  assert.ok(backupStart >= 0 && acceptanceStart > backupStart);
+  const backup = runbook.slice(backupStart, acceptanceStart);
+  const acceptance = runbook.slice(acceptanceStart);
+
+  assert.match(backup, /\$reviewedRoot\s*=\s*\(Get-Location\)\.Path/iu);
+  assert.match(backup, /IRIS_REPOSITORY_DIR\s*=\s*\$reviewedRoot/iu);
+  assert.match(backup, /IRIS_ENV_FILE[\s\S]*\.env\.pilot/iu);
+  assert.match(backup, /IRIS_COMPOSE_FILE[\s\S]*deploy[\\/]pilot[\\/]docker-compose\.yml/iu);
+  assert.match(backup, /IRIS_BACKUP_DIR[\s\S]*\/opt\/iris\/repository\/backups/iu);
+  assert.match(backup, /\.\/deploy\/pilot\/backup\.sh/iu);
+  assert.match(backup, /finally[\s\S]*SetEnvironmentVariable/iu);
+  assert.match(backup, /Assert-ReviewedBuild\s+\$Context/iu);
+  assert.match(acceptance, /Assert-ReviewedBuild\s+\$context[\s\S]*Invoke-ReviewedPilotBackup\s+\$context/iu);
+  assert.doesNotMatch(acceptance, /&\s+\.\/deploy\/pilot\/backup\.sh/iu);
 });
 
 test("cross-group document grant CI executes real migration and concurrency coverage", () => {

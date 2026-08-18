@@ -360,6 +360,46 @@ function Assert-ReviewedBuild {
   }
 }
 
+function Invoke-ReviewedPilotBackup {
+  param([object]$Context)
+  $reviewedRoot = (Get-Location).Path
+  $overrides = [ordered]@{
+    IRIS_REPOSITORY_DIR = $reviewedRoot
+    IRIS_ENV_FILE = Join-Path $reviewedRoot ".env.pilot"
+    IRIS_COMPOSE_FILE = Join-Path $reviewedRoot "deploy/pilot/docker-compose.yml"
+    IRIS_BACKUP_DIR = "/opt/iris/repository/backups"
+  }
+  $previous = @{}
+  $backupExitCode = [int]::MinValue
+  foreach ($name in $overrides.Keys) {
+    $previous[$name] = [Environment]::GetEnvironmentVariable(
+      $name,
+      [EnvironmentVariableTarget]::Process
+    )
+  }
+  try {
+    foreach ($name in $overrides.Keys) {
+      [Environment]::SetEnvironmentVariable(
+        $name,
+        [string]$overrides[$name],
+        [EnvironmentVariableTarget]::Process
+      )
+    }
+    & ./deploy/pilot/backup.sh
+    $backupExitCode = $LASTEXITCODE
+  } finally {
+    foreach ($name in $overrides.Keys) {
+      [Environment]::SetEnvironmentVariable(
+        $name,
+        $previous[$name],
+        [EnvironmentVariableTarget]::Process
+      )
+    }
+  }
+  if ($backupExitCode -ne 0) { throw "verified encrypted backup failed" }
+  Assert-ReviewedBuild $Context
+}
+
 function Invoke-CoreJson {
   param([string]$Method, [string]$Path, [object]$Body)
   $token = Get-RequiredEnvironmentValue "IRIS_INTERNAL_API_TOKEN"
@@ -744,8 +784,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
     Invoke-Compose @("stop", "caddy")
     Assert-ReviewedBuild $context
     Invoke-Compose @("config", "--quiet")
-    & ./deploy/pilot/backup.sh
-    if ($LASTEXITCODE -ne 0) { throw "verified encrypted backup failed" }
+    Invoke-ReviewedPilotBackup $context
     $script:FailedStep = 2
     $enableAttempted = $true
     $script:KnownGroupIds = @(Get-KnownGroupIds $context)
