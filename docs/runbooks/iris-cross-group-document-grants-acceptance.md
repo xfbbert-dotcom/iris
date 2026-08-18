@@ -44,8 +44,9 @@ from both groups. Stop Caddy after the two observations.
 
 ## Step 5: Exact Grant And Grantee Answer
 
-Create one exact grant through the authenticated internal API with expected version `0`. Require
-one active projection at version `1` and one append-only `granted` event. Start Caddy, ask once from
+Read the existing exact source/grantee projection first. It must be absent or revoked. Create or
+regrant through the authenticated internal API with that baseline version, require the next version
+to be active, and require one append-only `granted` event. Start Caddy, ask once from
 the grantee, then stop Caddy. Require one delivery whose source trace binds the exact grant ID,
 version, grantor group, grantee group, source, snapshot, and fragment. The control group remains
 denied.
@@ -54,15 +55,15 @@ denied.
 
 The exact-SHA CI run must execute the real-PostgreSQL prepared-answer revocation and
 begin-send/revoke serialization tests. Accept only send-won-before-revoke or
-revoke-won-before-send and reject every send-after-revoke result. Live, revoke version `1`, ask
+revoke-won-before-send and reject every send-after-revoke result. Live, revoke the active version, ask
 again from the grantee, and require no pilot-source trace or disclosure. No production pause hook
 is enabled. The reviewed prepared-answer test also requires the losing path to become
 `permission_blocked` before external I/O.
 
 ## Step 7: Regrant, Replay, And Final Drain
 
-Regrant the revoked row at expected version `2`, requiring active version `3` and exactly one new
-`granted` event. Replay the identical operation key and require `already_applied`, event delta zero,
+Regrant the revoked row at its current version, requiring the next version active and exactly one new
+`granted` event. Replay the identical operation key and expected version; require `already_applied`, event delta zero,
 and no duplicate delivery. Ask once from the grantee and once from the control. Require one exact
 grantee delivery and continued control denial. Stop Caddy and wait for final queue/DLQ/outbox and
 unresolved answer counts to reach zero.
@@ -170,11 +171,12 @@ function Assert-CrossGroupDrainCounts {
 
 function Assert-CrossGroupGrantFacts {
   param([object]$Facts)
+  $versions = Get-CrossGroupGrantVersionSequence ([int64]$Facts.baselineVersion)
   Assert-ExactInteger $Facts.preGrant.granteeTraceCount 0 "pre-grant grantee trace count"
   Assert-ExactInteger $Facts.preGrant.controlTraceCount 0 "pre-grant control trace count"
   Assert-ExactInteger $Facts.preGrant.promptGrantCount 0 "pre-grant prompt grant count"
   if ([string]$Facts.grant.state -cne "active") { throw "grant must be active" }
-  Assert-ExactInteger $Facts.grant.version 1 "initial grant version"
+  Assert-ExactInteger $Facts.grant.version $versions.initial "initial grant version"
   Assert-ExactInteger $Facts.grant.grantedEventCount 1 "initial granted event count"
   Assert-ExactInteger $Facts.grantee.deliveryCount 1 "grantee delivery count"
   Assert-ExactInteger $Facts.grantee.traceCount 1 "grantee trace count"
@@ -182,10 +184,11 @@ function Assert-CrossGroupGrantFacts {
   Assert-ExactInteger $Facts.control.traceCount 0 "control trace count"
   Assert-ExactInteger $Facts.control.sourceDisclosureCount 0 "control disclosure count"
   Assert-ExactInteger $Facts.revocation.preparedCount 1 "prepared revocation count"
+  Assert-ExactInteger $Facts.revocation.version $versions.revoked "revoked grant version"
   Assert-ExactInteger $Facts.revocation.permissionBlockedCount 1 "permission blocked count"
   Assert-ExactInteger $Facts.revocation.sendStartedCount 0 "revoked send-start count"
   Assert-ExactInteger $Facts.revocation.sentCount 0 "revoked sent count"
-  Assert-ExactInteger $Facts.regrant.version 3 "regrant version"
+  Assert-ExactInteger $Facts.regrant.version $versions.regranted "regrant version"
   Assert-ExactInteger $Facts.regrant.grantedEventCount 1 "regrant event count"
   Assert-ExactInteger $Facts.regrant.replayEventDelta 0 "regrant replay event delta"
   Assert-ExactInteger $Facts.regrant.deliveryCount 1 "regrant delivery count"
@@ -276,6 +279,49 @@ function Invoke-JsonSql {
   $lines = @(Invoke-PilotSql -Sql $Sql)
   if ($lines.Count -ne 1) { throw "PostgreSQL metadata query did not return one row" }
   return ($lines[0] | ConvertFrom-Json)
+}
+
+function Get-CrossGroupGrantVersionSequence {
+  param([int64]$BaselineVersion)
+  if ($BaselineVersion -lt 0 -or $BaselineVersion -gt ([int64]::MaxValue - 3)) {
+    throw "grant baseline version is invalid"
+  }
+  return [pscustomobject]@{
+    initial = $BaselineVersion + 1
+    revoked = $BaselineVersion + 2
+    regranted = $BaselineVersion + 3
+  }
+}
+
+function Get-CrossGroupGrantBaseline {
+  param([object]$Context)
+  $facts = Invoke-JsonSql -Sql @"
+SELECT json_build_object(
+  'projectionCount',(SELECT count(*) FROM document_source_group_grants
+    WHERE document_source_id='$($Context.DocumentSourceId)' AND grantee_group_id='$($Context.GranteeGroupId)'),
+  'grantId',(SELECT id FROM document_source_group_grants
+    WHERE document_source_id='$($Context.DocumentSourceId)' AND grantee_group_id='$($Context.GranteeGroupId)'),
+  'grantorGroupId',(SELECT grantor_group_id FROM document_source_group_grants
+    WHERE document_source_id='$($Context.DocumentSourceId)' AND grantee_group_id='$($Context.GranteeGroupId)'),
+  'state',(SELECT state FROM document_source_group_grants
+    WHERE document_source_id='$($Context.DocumentSourceId)' AND grantee_group_id='$($Context.GranteeGroupId)'),
+  'version',(SELECT version FROM document_source_group_grants
+    WHERE document_source_id='$($Context.DocumentSourceId)' AND grantee_group_id='$($Context.GranteeGroupId)')
+);
+"@
+  $projectionCount = [int64]$facts.projectionCount
+  if ($projectionCount -eq 0) {
+    return [pscustomobject]@{ grantId = $null; version = [int64]0 }
+  }
+  if ($projectionCount -ne 1 -or [string]$facts.state -cne "revoked" -or
+      [string]$facts.grantorGroupId -cne [string]$Context.SourceGroupId -or
+      [int64]$facts.version -lt 1) {
+    throw "existing pilot grant projection is not one exact revoked baseline"
+  }
+  return [pscustomobject]@{
+    grantId = Assert-Reference -Name "baseline grant" -Value ([string]$facts.grantId)
+    version = [int64]$facts.version
+  }
 }
 
 function Assert-ReviewedBuild {
@@ -433,7 +479,10 @@ function Get-CrossGroupDrainSnapshot {
   $unresolved = [int64](Invoke-PilotSql -Sql @"
 SELECT count(*) FROM answer_reply_deliveries
 WHERE chat_id IN ('$($Context.SourceGroupId)','$($Context.GranteeGroupId)','$($Context.ControlGroupId)')
-  AND state IN ('sending','reconciliation_required');
+  AND (
+    state IN ('prepared','sending','reconciliation_required')
+    OR (state IN ('permission_blocked','not_sent_reconciled') AND safe_notice_sent_at IS NULL)
+  );
 "@)
   return [pscustomobject]@{
     pendingCount = 0
@@ -597,7 +646,7 @@ SELECT json_build_object(
 
 function Invoke-RollbackStep {
   param([scriptblock]$Action, [string]$Label)
-  try { & $Action } catch { $script:RollbackErrors += "$Label failed" }
+  try { & $Action } catch { $script:RollbackErrors += "$Label failed: $($_.Exception.Message)" }
 }
 
 function Invoke-CrossGroupDocumentGrantRollback {
@@ -708,6 +757,8 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
     Assert-ExactInteger ([int64](Invoke-PilotSql -Sql "SELECT count(*) FROM document_source_group_grants WHERE document_source_id='$($context.DocumentSourceId)' AND grantee_group_id='$($context.GranteeGroupId)' AND state='active'")) 0 "preflight active grant count"
     $script:FailedStep = 3
     Assert-SourceBinding $context
+    $grantBaseline = Get-CrossGroupGrantBaseline $context
+    $grantVersions = Get-CrossGroupGrantVersionSequence $grantBaseline.version
     $script:BaselineAppendOnlyEventCount = Get-AppendOnlyEventCount
 
     foreach ($groupId in @($context.SourceGroupId, $context.GranteeGroupId, $context.ControlGroupId)) {
@@ -746,32 +797,33 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
       [Uri]::EscapeDataString($context.DocumentSourceId) + "/group-grants") @{
         grantorGroupId = $context.SourceGroupId
         granteeGroupId = $context.GranteeGroupId
-        expectedVersion = 0
+        expectedVersion = $grantBaseline.version
         operationKey = $initialGrantKey
       }
     $grant = $created.grant
-    if ($created.outcome -cne "applied" -or [int64]$grant.version -ne 1) {
-      throw "initial grant was not applied at version 1"
+    if ($created.outcome -cne "applied" -or [int64]$grant.version -ne [int64]$grantVersions.initial -or
+        ($null -ne $grantBaseline.grantId -and [string]$grant.id -cne [string]$grantBaseline.grantId)) {
+      throw "initial grant was not applied at the next exact version"
     }
-    Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $initialGrantKey -Version 1 -State "active" -EventType "granted"
+    Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $initialGrantKey -Version $grantVersions.initial -State "active" -EventType "granted"
 
     $stageStartedAt = [DateTimeOffset]::UtcNow
     Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $script:KnownGroupIds
     $grantedEvidence = Get-FreshCrossGroupEvidence $context "granted" $stageStartedAt
     Invoke-Compose @("stop", "caddy")
-    Assert-GrantedAnswerStage -Context $context -Evidence $grantedEvidence -GrantId $grant.id -GrantVersion 1
+    Assert-GrantedAnswerStage -Context $context -Evidence $grantedEvidence -GrantId $grant.id -GrantVersion $grantVersions.initial
 
     $script:FailedStep = 6
     $revocationKey = New-OperationKey
     $revoked = Invoke-CoreJson "POST" ("/internal/document-sync/sources/" +
       [Uri]::EscapeDataString($context.DocumentSourceId) + "/group-grants/" +
       [Uri]::EscapeDataString([string]$grant.id) + "/revoke") @{
-        expectedVersion = 1
+        expectedVersion = $grantVersions.initial
         operationKey = $revocationKey
       }
     $grant = $revoked.grant
-    if ([int64]$grant.version -ne 2 -or $grant.state -cne "revoked") { throw "revoke failed" }
-    Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $revocationKey -Version 2 -State "revoked" -EventType "revoked"
+    if ([int64]$grant.version -ne [int64]$grantVersions.revoked -or $grant.state -cne "revoked") { throw "revoke failed" }
+    Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $revocationKey -Version $grantVersions.revoked -State "revoked" -EventType "revoked"
     $stageStartedAt = [DateTimeOffset]::UtcNow
     Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $script:KnownGroupIds
     $revokedEvidence = Get-FreshCrossGroupEvidence $context "revoked" $stageStartedAt
@@ -784,7 +836,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
       [Uri]::EscapeDataString($context.DocumentSourceId) + "/group-grants") @{
         grantorGroupId = $context.SourceGroupId
         granteeGroupId = $context.GranteeGroupId
-        expectedVersion = 2
+        expectedVersion = $grantVersions.revoked
         operationKey = $regrantKey
       }
     $grant = $regranted.grant
@@ -793,19 +845,19 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
       [Uri]::EscapeDataString($context.DocumentSourceId) + "/group-grants") @{
         grantorGroupId = $context.SourceGroupId
         granteeGroupId = $context.GranteeGroupId
-        expectedVersion = 2
+        expectedVersion = $grantVersions.revoked
         operationKey = $regrantKey
       }
     $eventCountAfterReplay = Get-AppendOnlyEventCount
-    if ([int64]$grant.version -ne 3 -or $replay.outcome -cne "already_applied" -or $eventCountAfterReplay -ne $eventCountBeforeReplay) {
+    if ([int64]$grant.version -ne [int64]$grantVersions.regranted -or $replay.outcome -cne "already_applied" -or $eventCountAfterReplay -ne $eventCountBeforeReplay) {
       throw "regrant replay contract failed"
     }
-    Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $regrantKey -Version 3 -State "active" -EventType "granted"
+    Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $regrantKey -Version $grantVersions.regranted -State "active" -EventType "granted"
     $stageStartedAt = [DateTimeOffset]::UtcNow
     Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $script:KnownGroupIds
     $regrantedEvidence = Get-FreshCrossGroupEvidence $context "regranted" $stageStartedAt
     Invoke-Compose @("stop", "caddy")
-    Assert-GrantedAnswerStage -Context $context -Evidence $regrantedEvidence -GrantId $grant.id -GrantVersion 3
+    Assert-GrantedAnswerStage -Context $context -Evidence $regrantedEvidence -GrantId $grant.id -GrantVersion $grantVersions.regranted
     $null = Wait-CrossGroupDrain $context
     $passed = $true
     return [pscustomobject]@{ result = "pass"; failedStep = $null; rollbackRequired = $true }

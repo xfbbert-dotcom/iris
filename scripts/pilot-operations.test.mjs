@@ -189,6 +189,77 @@ test("cross-group stage evidence uses provider message IDs and rollback closes e
   assert.match(runbook, /throw \("rollback failed: " \+ \(\$script:RollbackErrors -join "; "\)\)/u);
 });
 
+test("cross-group grant acceptance reruns from a revoked projection and drains in-flight replies", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance");
+  const rollbackStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantRollback");
+  assert.ok(acceptanceStart >= 0 && rollbackStart >= 0);
+  const acceptance = runbook.slice(acceptanceStart);
+  const rollback = runbook.slice(rollbackStart, acceptanceStart);
+
+  assert.match(runbook, /function Get-CrossGroupGrantBaseline/u);
+  assert.match(runbook, /function Get-CrossGroupGrantVersionSequence/u);
+  assert.match(acceptance, /\$grantBaseline\s*=\s*Get-CrossGroupGrantBaseline\s+\$context/u);
+  assert.match(acceptance, /\$grantVersions\s*=\s*Get-CrossGroupGrantVersionSequence\s+\$grantBaseline\.version/u);
+  assert.match(acceptance, /expectedVersion\s*=\s*\$grantBaseline\.version/u);
+  assert.match(acceptance, /expectedVersion\s*=\s*\$grantVersions\.initial/u);
+  assert.match(acceptance, /expectedVersion\s*=\s*\$grantVersions\.revoked/u);
+  assert.doesNotMatch(acceptance, /expectedVersion\s*=\s*0/u);
+  assert.doesNotMatch(acceptance, /grant\.version\s+-ne\s+1/u);
+  assert.match(runbook, /\$Label failed: \$\(\$_\.Exception\.Message\)/u);
+  assert.match(
+    runbook,
+    /state\s+IN\s*\('prepared','sending','reconciliation_required'\)[\s\S]*safe_notice_sent_at\s+IS\s+NULL/iu,
+  );
+
+  const command = [
+    "$fresh = Get-CrossGroupGrantVersionSequence 0",
+    "if ($fresh.initial -ne 1 -or $fresh.revoked -ne 2 -or $fresh.regranted -ne 3) { throw 'fresh version sequence failed' }",
+    "$rerun = Get-CrossGroupGrantVersionSequence 2",
+    "if ($rerun.initial -ne 3 -or $rerun.revoked -ne 4 -or $rerun.regranted -ne 5) { throw 'rerun version sequence failed' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(command, {}, true, crossGroupGrantAcceptancePath);
+
+  const baselineCommand = [
+    "function Invoke-JsonSql { param([string]$Sql) return $inputValue }",
+    "$context = [pscustomobject]@{ DocumentSourceId='source-a'; SourceGroupId='group-a'; GranteeGroupId='group-b' }",
+    "$baseline = Get-CrossGroupGrantBaseline $context",
+    "if ($baseline.version -ne $expectedVersion -or [string]$baseline.grantId -cne $expectedGrantId) { throw 'grant baseline mismatch' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(
+    `$expectedVersion=0; $expectedGrantId=''; ${baselineCommand}`,
+    { projectionCount: 0, grantId: null, grantorGroupId: null, state: null, version: null },
+    true,
+    crossGroupGrantAcceptancePath,
+  );
+  const revokedBaseline = {
+    projectionCount: 1,
+    grantId: "grant-existing",
+    grantorGroupId: "group-a",
+    state: "revoked",
+    version: 4,
+  };
+  assertPowerShellRunbookGate(
+    `$expectedVersion=4; $expectedGrantId='grant-existing'; ${baselineCommand}`,
+    revokedBaseline,
+    true,
+    crossGroupGrantAcceptancePath,
+  );
+  for (const invalid of [
+    { ...revokedBaseline, projectionCount: 2 },
+    { ...revokedBaseline, state: "active" },
+    { ...revokedBaseline, grantorGroupId: "group-other" },
+    { ...revokedBaseline, version: 0 },
+  ]) {
+    assertPowerShellRunbookGate(
+      `$expectedVersion=4; $expectedGrantId='grant-existing'; ${baselineCommand}`,
+      invalid,
+      false,
+      crossGroupGrantAcceptancePath,
+    );
+  }
+});
+
 test("cross-group document grant CI executes real migration and concurrency coverage", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   for (const testFile of [
@@ -235,11 +306,18 @@ test("cross-group document grant evidence is exact-SHA, image, stage, and time b
 
 test("cross-group document grant gates reject false-positive facts", () => {
   const valid = {
+    baselineVersion: 0,
     preGrant: { granteeTraceCount: 0, controlTraceCount: 0, promptGrantCount: 0 },
     grant: { state: "active", version: 1, grantedEventCount: 1 },
     grantee: { deliveryCount: 1, traceCount: 1, exactGrantBindingCount: 1 },
     control: { traceCount: 0, sourceDisclosureCount: 0 },
-    revocation: { preparedCount: 1, permissionBlockedCount: 1, sendStartedCount: 0, sentCount: 0 },
+    revocation: {
+      version: 2,
+      preparedCount: 1,
+      permissionBlockedCount: 1,
+      sendStartedCount: 0,
+      sentCount: 0,
+    },
     regrant: { version: 3, grantedEventCount: 1, replayEventDelta: 0, deliveryCount: 1 },
     race: { safeOutcomeCount: 1, sendAfterRevokeCount: 0 },
   };
@@ -251,11 +329,19 @@ test("cross-group document grant gates reject false-positive facts", () => {
     { ...valid, grantee: { ...valid.grantee, exactGrantBindingCount: 0 } },
     { ...valid, control: { ...valid.control, sourceDisclosureCount: 1 } },
     { ...valid, revocation: { ...valid.revocation, sendStartedCount: 1 } },
+    { ...valid, revocation: { ...valid.revocation, version: 4 } },
     { ...valid, regrant: { ...valid.regrant, replayEventDelta: 1 } },
     { ...valid, race: { ...valid.race, sendAfterRevokeCount: 1 } },
   ]) {
     assertPowerShellRunbookGate(command, invalid, false, crossGroupGrantAcceptancePath);
   }
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    baselineVersion: 2,
+    grant: { ...valid.grant, version: 3 },
+    revocation: { ...valid.revocation, version: 4 },
+    regrant: { ...valid.regrant, version: 5 },
+  }, true, crossGroupGrantAcceptancePath);
 });
 
 test("cross-group document grant rollback rejects residual or lost durable facts", () => {
