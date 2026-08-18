@@ -176,7 +176,16 @@ test("cross-group stage evidence uses provider message IDs and rollback closes e
   }
 
   const rollback = runbook.slice(rollbackStart, acceptanceStart);
+  const acceptance = runbook.slice(acceptanceStart);
   assert.match(rollback, /readGroupContext\s*=\s*\$false/u);
+  assert.match(
+    acceptance,
+    /"PATCH"\s+"\/internal\/runtime-control\/capabilities"\s+@\{\s*readGroupContext\s*=\s*\$false;?\s*replyWhenMentioned\s*=\s*\$false/u,
+  );
+  assert.match(
+    acceptance,
+    /"PATCH"\s+"\/internal\/runtime-control\/capabilities"\s+@\{\s*readGroupContext\s*=\s*\$true\s+replyWhenMentioned\s*=\s*\$true/u,
+  );
   assert.match(runbook, /throw \("rollback failed: " \+ \(\$script:RollbackErrors -join "; "\)\)/u);
 });
 

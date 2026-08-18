@@ -697,7 +697,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
     }
     Assert-DurableMutation (Invoke-CoreJson "POST" "/internal/runtime-control/global" @{ enabled = $false }) "preflight global disable"
     $result = Invoke-CoreJson "PATCH" "/internal/runtime-control/capabilities" @{
-      replyWhenMentioned = $false; readGroupDocuments = $false; retrieveKnowledgeBase = $false
+      readGroupContext = $false; replyWhenMentioned = $false; readGroupDocuments = $false; retrieveKnowledgeBase = $false
       generateKnowledgeDrafts = $false; proactiveSpeech = $false; writeKnowledgeBase = $false
       callExternalTools = $false
     }
@@ -715,6 +715,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
       Assert-DurableMutation $result "selected group enable"
     }
     $result = Invoke-CoreJson "PATCH" "/internal/runtime-control/capabilities" @{
+      readGroupContext = $true
       replyWhenMentioned = $true
       readGroupDocuments = $true
       retrieveKnowledgeBase = $true
