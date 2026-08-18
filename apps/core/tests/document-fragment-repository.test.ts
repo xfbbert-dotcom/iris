@@ -1172,6 +1172,123 @@ describe("DocumentFragmentRepository", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  it("joins exact active answer grants before ranking and maps the cross-group binding", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      const grantJoin = normalized.indexOf("left join document_source_group_grants current_scope_grant");
+      expect(grantJoin).toBeGreaterThan(-1);
+      expect(grantJoin).toBeLessThan(normalized.indexOf("order by e.embedding"));
+      expect(normalized).toContain("current_scope_grant.grantee_group_id = $4");
+      expect(normalized).toContain("current_scope_grant.state = 'active'");
+      expect(normalized).toContain("evidence.group_id = current_scope_grant.grantor_group_id");
+      expect(normalized).toContain("or current_scope_grant.id is not null");
+      expect(normalized).toContain("case when ds.source_type = 'group_visible_document'");
+      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 3, "group-reader"]);
+      return { rows: [retrievedRow({
+        source_type: "group_visible_document",
+        cross_group_grant_id: "grant-1",
+        cross_group_grant_version: "7",
+        cross_group_grantor_group_id: "group-source",
+        cross_group_grantee_group_id: "group-reader",
+      })] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.searchSimilarFragments({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 3,
+      groupId: "group-reader",
+      usage: "answering",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-1",
+        crossGroupGrantVersion: 7,
+        crossGroupGrantorGroupId: "group-source",
+        crossGroupGranteeGroupId: "group-reader",
+      }),
+    ]);
+  });
+
+  it("attaches exact answer grants to metadata-only candidates before the per-source window", async () => {
+    const query = vi.fn(async (sql: string) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized.indexOf("left join document_source_group_grants current_scope_grant"))
+        .toBeLessThan(normalized.indexOf(") select id, document_source_id"));
+      expect(normalized.indexOf("current_scope_grant.state = 'active'"))
+        .toBeLessThan(normalized.indexOf("where source_rank <= 3"));
+      return { rows: [retrievedCandidateRow({
+        source_type: "group_visible_document",
+        cross_group_grant_id: "grant-1",
+        cross_group_grant_version: 7,
+        cross_group_grantor_group_id: "group-source",
+        cross_group_grantee_group_id: "group-reader",
+      })] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.searchSimilarFragmentCandidates({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 36,
+      groupId: "group-reader",
+      usage: "answering",
+    })).resolves.toEqual([
+      expect.objectContaining({ crossGroupGrantId: "grant-1", crossGroupGrantVersion: 7 }),
+    ]);
+  });
+
+  it("keeps knowledge-draft retrieval grant-free and rejects partial grant rows", async () => {
+    const knowledgeQuery = vi.fn(async (sql: string) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).not.toContain("document_source_group_grants");
+      expect(normalized).not.toContain("cross_group_grant_id");
+      return { rows: [] };
+    });
+    const knowledgeRepository = createDocumentFragmentRepository({
+      queryable: queryableFrom(knowledgeQuery),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+    await expect(knowledgeRepository.searchSimilarFragmentCandidates({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 36,
+      groupId: "group-reader",
+      usage: "knowledge_drafts",
+      authorizedSpaceId: "space-1",
+    })).resolves.toEqual([]);
+
+    const partialQuery = vi.fn(async () => ({ rows: [retrievedRow({
+      source_type: "group_visible_document",
+      cross_group_grant_id: "grant-1",
+    })] }));
+    const partialRepository = createDocumentFragmentRepository({
+      queryable: queryableFrom(partialQuery),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+    await expect(partialRepository.searchSimilarFragments({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 3,
+      groupId: "group-reader",
+    })).rejects.toThrow(/grant binding/iu);
+  });
 });
 
 const databaseUrl = process.env.DATABASE_URL?.trim();

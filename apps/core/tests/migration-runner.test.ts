@@ -81,6 +81,41 @@ describe("runMigrations", () => {
     expect(normalized).not.toContain("disable trigger");
   });
 
+  it("defines ordered append-only cross-group document grants and exact receipt bindings in 0051", async () => {
+    const migrationNames = await readdir(defaultMigrationsDir());
+    expect(migrationNames.filter((name) => name.startsWith("0051_"))).toEqual([
+      "0051_document_source_group_grants.sql",
+    ]);
+    expect(migrationNames.indexOf("0051_document_source_group_grants.sql"))
+      .toBeGreaterThan(migrationNames.indexOf("0050_answer_reply_not_sent_reconciliation.sql"));
+
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0051_document_source_group_grants.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+    const grantTable = normalized.match(
+      /create table document_source_group_grants \((.*?)\);/u,
+    )?.[1];
+    const eventTable = normalized.match(
+      /create table document_source_group_grant_events \((.*?)\);/u,
+    )?.[1];
+
+    expect(grantTable).toContain("document_source_id text not null");
+    expect(grantTable).toContain("grantor_group_id text not null");
+    expect(grantTable).toContain("grantee_group_id text not null");
+    expect(grantTable).toContain("unique (document_source_id, grantee_group_id)");
+    expect(eventTable).toContain("operation_key text not null unique");
+    expect(eventTable).toContain("operation_fingerprint text not null");
+    expect(normalized).toContain("document_source_group_grant_events_append_only");
+    expect(normalized).toContain("document_source_group_grant_events_truncate_guard");
+    expect(normalized).toContain("add column cross_group_grant_id text");
+    expect(normalized).toContain("add column cross_group_grant_version bigint");
+    expect(normalized).toContain("add column cross_group_grantor_group_id text");
+    expect(normalized).toContain("add column cross_group_grantee_group_id text");
+    expect(normalized).toContain("answer_reply_source_traces_cross_group_grant_shape_check");
+  });
+
   it("defines bounded append-only answer source citation receipts", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0045_answer_source_citations.sql"),
@@ -1021,8 +1056,8 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         { table_name: "knowledge_conflict_delivery_outbox" },
         { table_name: "knowledge_conflict_evidence" },
         { table_name: "knowledge_conflict_interactions" },
-        { table_name: "knowledge_conflict_scan_operations" },
         { table_name: "knowledge_conflict_scan_inbox" },
+        { table_name: "knowledge_conflict_scan_operations" },
       ] });
 
       const catalog = await client.query<{
@@ -1040,7 +1075,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
             WHERE namespace_row.nspname = current_schema()
               AND table_row.relname LIKE 'knowledge_conflict%'
             ORDER BY constraint_row.conname
-          ) AS constraints,
+          )::text[] AS constraints,
           ARRAY(
             SELECT index_row.relname
             FROM pg_class index_row
@@ -1049,7 +1084,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
               AND index_row.relkind = 'i'
               AND index_row.relname LIKE 'knowledge_conflict%'
             ORDER BY index_row.relname
-          ) AS indexes,
+          )::text[] AS indexes,
           ARRAY(
             SELECT trigger_row.tgname
             FROM pg_trigger trigger_row
@@ -1060,7 +1095,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
               AND (table_row.relname LIKE 'knowledge_conflict%'
                 OR table_row.relname = 'answer_reply_knowledge_conflicts')
             ORDER BY trigger_row.tgname
-          ) AS triggers,
+          )::text[] AS triggers,
           (
             SELECT COUNT(*)::int
             FROM pg_constraint constraint_row
@@ -1131,7 +1166,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         }),
       ]));
       const scanOutcomeDefinition = definitions.rows.find((row) =>
-        row.definition.includes("terminal_outcome"));
+        row.conname === "knowledge_conflict_scan_inbox_terminal_outcome_check");
       expect(scanOutcomeDefinition?.definition).toContain("superseded");
       expect(scanOutcomeDefinition?.definition).toContain("permission_blocked");
 
@@ -1142,7 +1177,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           AND table_name = 'knowledge_conflict_candidates'
           AND column_name IN ('target_source_updated_at', 'target_source_version')
         ORDER BY column_name
-      `)).resolves.toEqual({ rows: [
+      `)).resolves.toMatchObject({ rows: [
         { column_name: "target_source_updated_at", is_nullable: "NO" },
         { column_name: "target_source_version", is_nullable: "YES" },
       ] });
@@ -1188,15 +1223,15 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         );
         INSERT INTO document_fragments (
           id, document_source_id, document_snapshot_id, source_uri,
-          chunk_index, text, content_hash, embedding, created_at
+          chunk_index, text, content_hash, embedding, embedding_profile_id, created_at
         ) VALUES
         (
           'fragment-1', 'document-1', 'snapshot-1', 'https://example.com/document-1',
-          0, 'CNY 5,000', repeat('c', 64), '[0,0,0,0,0,0]', NOW()
+          0, 'CNY 5,000', repeat('c', 64), '[0,0,0,0,0,0]', 'static-dev-6d', NOW()
         ),
         (
           'fragment-2', 'document-2', 'snapshot-2', 'https://example.com/document-2',
-          0, 'CNY 20,000', repeat('e', 64), '[0,0,0,0,0,0]', NOW()
+          0, 'CNY 20,000', repeat('e', 64), '[0,0,0,0,0,0]', 'static-dev-6d', NOW()
         );
         INSERT INTO knowledge_drafts (
           id, source_group_id, origin_kind, status, current_revision_number,

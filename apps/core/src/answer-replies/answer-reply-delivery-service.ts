@@ -8,6 +8,7 @@ import type {
   AnswerReplyRepository,
 } from "./answer-reply-repository.js";
 import {
+  AnswerReplyGrantStaleError,
   createAnswerReplyDeliveryId,
   createAnswerReplySafeNoticeUuid,
   createAnswerReplyUuid,
@@ -21,6 +22,7 @@ import {
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import type {
   AnswerSourcePermissionDecision,
+  AnswerSourcePermissionGrantBinding,
   AnswerSourcePermissionVerifier,
 } from "./answer-source-permission-verifier.js";
 import type {
@@ -276,10 +278,7 @@ export function createAnswerReplyDeliveryService({
     receipt: AnswerReplyReceipt,
   ): Promise<{ replyMessageId?: string }> {
     const documentSourceIds = uniqueDocumentSourceIds(receipt);
-    const blockedDocumentSourceIds = await findBlockedDocumentSourceIds(
-      receipt.delivery.chatId,
-      documentSourceIds,
-    );
+    const blockedDocumentSourceIds = await findBlockedDocumentSourceIds(receipt);
 
     if (blockedDocumentSourceIds.length > 0) {
       return blockPreparedAnswer(receipt, blockedDocumentSourceIds);
@@ -296,15 +295,24 @@ export function createAnswerReplyDeliveryService({
     }
 
     const beginAt = now();
-    const sending = requireSendingReceipt(
-      await repository.beginAnswerSend({
-        deliveryId: receipt.delivery.id,
-        expectedVersion: receipt.delivery.version,
-        at: beginAt,
-      }),
-      receipt,
-      beginAt,
-    );
+    let sending: AnswerReplyReceipt;
+    try {
+      sending = requireSendingReceipt(
+        await repository.beginAnswerSend({
+          deliveryId: receipt.delivery.id,
+          expectedVersion: receipt.delivery.version,
+          at: beginAt,
+        }),
+        receipt,
+        beginAt,
+      );
+    } catch (error) {
+      if (error instanceof AnswerReplyGrantStaleError) {
+        if (documentSourceIds.length === 0) throw contractError();
+        return blockPreparedAnswer(receipt, documentSourceIds);
+      }
+      throw error;
+    }
     const reply = await replier.replyText({
       messageId: sending.delivery.incomingMessageId,
       text: sending.delivery.preparedReplyText!,
@@ -369,16 +377,22 @@ export function createAnswerReplyDeliveryService({
   }
 
   async function findBlockedDocumentSourceIds(
-    chatId: string,
-    documentSourceIds: string[],
+    receipt: AnswerReplyReceipt,
   ): Promise<string[]> {
+    const chatId = receipt.delivery.chatId;
+    const documentSourceIds = uniqueDocumentSourceIds(receipt);
     if (documentSourceIds.length === 0) {
       return [];
     }
 
     let decisions: unknown;
     try {
-      decisions = await verifier.verify({ chatId, documentSourceIds });
+      const crossGroupGrantBindings = toAnswerSourcePermissionGrantBindings(receipt);
+      decisions = await verifier.verify({
+        chatId,
+        documentSourceIds,
+        ...(crossGroupGrantBindings.length === 0 ? {} : { crossGroupGrantBindings }),
+      });
     } catch {
       return documentSourceIds;
     }
@@ -602,6 +616,10 @@ function toPreparedSourceTraceInputs(
     contentHash: source.contentHash,
     embeddingProfileId: source.embeddingProfileId,
     initialPermissionCheckedAt: source.initialPermissionCheckedAt,
+    crossGroupGrantId: source.crossGroupGrantId,
+    crossGroupGrantVersion: source.crossGroupGrantVersion,
+    crossGroupGrantorGroupId: source.crossGroupGrantorGroupId,
+    crossGroupGranteeGroupId: source.crossGroupGranteeGroupId,
   }));
 }
 
@@ -624,6 +642,10 @@ function arePreparedSourceFactsEqual(
         && source.sourceTitle === expected.sourceTitle
         && source.contentHash === expected.contentHash
         && source.embeddingProfileId === expected.embeddingProfileId
+        && source.crossGroupGrantId === expected.crossGroupGrantId
+        && source.crossGroupGrantVersion === expected.crossGroupGrantVersion
+        && source.crossGroupGrantorGroupId === expected.crossGroupGrantorGroupId
+        && source.crossGroupGranteeGroupId === expected.crossGroupGranteeGroupId
         && isSameDate(
           source.initialPermissionCheckedAt,
           expected.initialPermissionCheckedAt,
@@ -639,6 +661,25 @@ function uniqueDocumentSourceIds(receipt: AnswerReplyReceipt): string[] {
       seen.add(source.documentSourceId);
       result.push(source.documentSourceId);
     }
+  }
+  return result;
+}
+
+function toAnswerSourcePermissionGrantBindings(
+  receipt: AnswerReplyReceipt,
+): AnswerSourcePermissionGrantBinding[] {
+  const result: AnswerSourcePermissionGrantBinding[] = [];
+  const seen = new Set<string>();
+  for (const source of receipt.sources) {
+    if (source.crossGroupGrantId === undefined || seen.has(source.documentSourceId)) continue;
+    seen.add(source.documentSourceId);
+    result.push({
+      documentSourceId: source.documentSourceId,
+      grantId: source.crossGroupGrantId,
+      version: source.crossGroupGrantVersion!,
+      grantorGroupId: source.crossGroupGrantorGroupId!,
+      granteeGroupId: source.crossGroupGranteeGroupId!,
+    });
   }
   return result;
 }
@@ -861,6 +902,10 @@ function areSourceFactsEqual(
         && source.sourceTitle === prior.sourceTitle
         && source.contentHash === prior.contentHash
         && source.embeddingProfileId === prior.embeddingProfileId
+        && source.crossGroupGrantId === prior.crossGroupGrantId
+        && source.crossGroupGrantVersion === prior.crossGroupGrantVersion
+        && source.crossGroupGrantorGroupId === prior.crossGroupGrantorGroupId
+        && source.crossGroupGranteeGroupId === prior.crossGroupGranteeGroupId
         && isSameDate(
           source.initialPermissionCheckedAt,
           prior.initialPermissionCheckedAt,

@@ -263,6 +263,89 @@ describe("answer source citation renderer", () => {
     }
   });
 
+  it("copies an exact cross-group grant binding to every source trace", () => {
+    const grant = {
+      crossGroupGrantId: "grant-a",
+      crossGroupGrantVersion: 3,
+      crossGroupGrantorGroupId: "group-owner",
+      crossGroupGranteeGroupId: "group-reader",
+    };
+    const result = renderAnswerWithSourceCitations({
+      answerText: "Answer body",
+      citedSourceRefs: ["D1"],
+      allowedFragments: [
+        fragment({
+          id: "fragment-a-1",
+          sourceType: "feishu_group_document",
+          ...grant,
+        }),
+        fragment({
+          id: "fragment-a-2",
+          chunkIndex: 1,
+          sourceType: "feishu_group_document",
+          ...grant,
+        }),
+      ],
+      initialPermissionCheckedAt: checkedAt,
+    });
+
+    expect(result.sourceTraces).toHaveLength(2);
+    expect(result.sourceTraces).toEqual([
+      expect.objectContaining(grant),
+      expect.objectContaining(grant),
+    ]);
+  });
+
+  it.each([
+    ["partial", [
+      fragment({
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+      }),
+    ]],
+    ["mixed", [
+      fragment({
+        id: "fragment-a-1",
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+        crossGroupGrantVersion: 1,
+        crossGroupGrantorGroupId: "group-owner",
+        crossGroupGranteeGroupId: "group-reader",
+      }),
+      fragment({
+        id: "fragment-a-2",
+        chunkIndex: 1,
+        sourceType: "feishu_group_document",
+      }),
+    ]],
+    ["conflicting", [
+      fragment({
+        id: "fragment-a-1",
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+        crossGroupGrantVersion: 1,
+        crossGroupGrantorGroupId: "group-owner",
+        crossGroupGranteeGroupId: "group-reader",
+      }),
+      fragment({
+        id: "fragment-a-2",
+        chunkIndex: 1,
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+        crossGroupGrantVersion: 2,
+        crossGroupGrantorGroupId: "group-owner",
+        crossGroupGranteeGroupId: "group-reader",
+      }),
+    ]],
+  ])("rejects %s cross-group grant metadata for one source", (_label, allowedFragments) => {
+    expect(() => renderAnswerWithSourceCitations({
+      answerText: "Answer body",
+      citedSourceRefs: ["D1"],
+      allowedFragments,
+      initialPermissionCheckedAt: checkedAt,
+    })).toThrow();
+  });
+
   it("rejects runtime source types outside the exact public source type set", () => {
     for (const sourceType of ["toString", "constructor", "__proto__", "unknown"]) {
       expect(() =>

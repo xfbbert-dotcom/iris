@@ -59,6 +59,9 @@ jobs:
           npm --workspace apps/core test -- postgres-document-source-registry.test.ts
           npm --workspace apps/core test -- document-snapshot-repository.test.ts
           npm --workspace apps/core test -- document-fragment-repository.test.ts
+          npm --workspace apps/core test -- migration-runner.test.ts
+          npm --workspace apps/core test -- postgres-document-source-group-grant-repository.test.ts
+          npm --workspace apps/core test -- postgres-answer-reply-repository.test.ts
           npm --workspace apps/core test -- postgres-group-memory-repository.test.ts
           npm --workspace apps/core test -- agent-execution-ledger.test.ts
 

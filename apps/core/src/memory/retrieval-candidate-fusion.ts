@@ -36,8 +36,21 @@ export function fuseRetrievedDocumentFragments(input: {
         candidates.set(key, { fragment, score, firstSeen });
         firstSeen += 1;
       } else {
+        if (!hasEqualGrantBinding(existing.fragment, fragment)) {
+          throw new Error("retrieval candidate grant binding conflict");
+        }
         existing.score += score;
       }
     });
   }
+}
+
+function hasEqualGrantBinding(
+  left: RetrievedDocumentFragment,
+  right: RetrievedDocumentFragment,
+): boolean {
+  return left.crossGroupGrantId === right.crossGroupGrantId
+    && left.crossGroupGrantVersion === right.crossGroupGrantVersion
+    && left.crossGroupGrantorGroupId === right.crossGroupGrantorGroupId
+    && left.crossGroupGranteeGroupId === right.crossGroupGranteeGroupId;
 }

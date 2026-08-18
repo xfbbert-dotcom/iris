@@ -14,6 +14,7 @@ import {
   requireValidAnswerReplyReceipt,
 } from "./answer-reply-receipt-validator.js";
 import {
+  AnswerReplyGrantStaleError,
   AnswerReplyPreparationConflictError,
   AnswerReplyVersionConflictError,
   createAnswerReplyDeliveryId,
@@ -120,6 +121,10 @@ type SourceTraceRow = {
   content_hash: unknown;
   embedding_profile_id: unknown;
   initial_permission_checked_at: unknown;
+  cross_group_grant_id: unknown;
+  cross_group_grant_version: unknown;
+  cross_group_grantor_group_id: unknown;
+  cross_group_grantee_group_id: unknown;
 };
 
 type EventRow = {
@@ -208,6 +213,11 @@ export function createPostgresAnswerReplyRepository(input: {
         await acquireAdvisoryLock(
           client,
           `${normalized.provider}:${normalized.incomingMessageId}`,
+        );
+        await lockCurrentSourceGrantBindings(
+          client,
+          normalized.sourceTraces,
+          normalized.chatId,
         );
         const lockedCandidate = normalized.knowledgeConflictCandidateId === undefined
           ? undefined
@@ -354,6 +364,8 @@ export function createPostgresAnswerReplyRepository(input: {
       const normalized = normalizeTransitionInput(transitionInput);
       return withTransaction(dataSource, async (client) => {
         await acquireAdvisoryLock(client, normalized.deliveryId);
+        const prelockedSources = await loadSources(client, normalized.deliveryId);
+        await lockCurrentSourceGrantBindings(client, prelockedSources);
         const binding = await loadKnowledgeConflictBinding(client, normalized.deliveryId);
         const lockedCandidate = binding === undefined
           ? undefined
@@ -363,6 +375,7 @@ export function createPostgresAnswerReplyRepository(input: {
               errorKind: "transition",
             });
         const { delivery, sources } = await lockDeliveryInTransaction(client, normalized);
+        requireSameSourceGrantBindings(prelockedSources, sources, delivery.chatId);
         if ((delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)) {
           throw new AnswerReplyTransitionError();
         }
@@ -725,6 +738,154 @@ async function requireCurrentAnswerCandidate(
   }
 }
 
+type SourceGrantBinding = {
+  grantId: string;
+  version: number;
+  documentSourceId: string;
+  grantorGroupId: string;
+  granteeGroupId: string;
+};
+
+async function lockCurrentSourceGrantBindings(
+  client: AnswerReplyTransactionClient,
+  sources: readonly AnswerReplySourceTraceInput[],
+  expectedGranteeGroupId?: string,
+): Promise<void> {
+  const bindings = collectSourceGrantBindings(sources);
+  if (
+    expectedGranteeGroupId !== undefined &&
+    bindings.some((binding) => binding.granteeGroupId !== expectedGranteeGroupId)
+  ) {
+    throw new AnswerReplyGrantStaleError();
+  }
+
+  const documentSourceIds = [...new Set(
+    bindings.map(({ documentSourceId }) => documentSourceId),
+  )].sort();
+  for (const documentSourceId of documentSourceIds) {
+    const sourceLock = await client.query<{ id: string }>(
+      `SELECT id FROM document_sources WHERE id = $1 FOR KEY SHARE`,
+      [documentSourceId],
+    );
+    if (sourceLock.rows.length !== 1) throw new AnswerReplyGrantStaleError();
+  }
+
+  for (const binding of [...bindings].sort((left, right) =>
+    left.grantId.localeCompare(right.grantId))) {
+    const result = await client.query<{ id: string }>(
+      `SELECT group_grant.id
+       FROM document_source_group_grants group_grant
+       JOIN document_sources source ON source.id = group_grant.document_source_id
+       WHERE group_grant.id = $1
+         AND group_grant.version = $2
+         AND group_grant.document_source_id = $3
+         AND group_grant.grantor_group_id = $4
+         AND group_grant.grantee_group_id = $5
+         AND group_grant.state = 'active'
+         AND source.source_type = 'group_visible_document'
+         AND (
+           source.origin_group_id = group_grant.grantor_group_id
+           OR EXISTS (
+             SELECT 1 FROM document_source_evidence evidence
+             WHERE evidence.document_source_id = source.id
+               AND evidence.kind = 'group_message'
+               AND evidence.group_id = group_grant.grantor_group_id
+           )
+         )
+       FOR UPDATE OF group_grant`,
+      [
+        binding.grantId,
+        binding.version,
+        binding.documentSourceId,
+        binding.grantorGroupId,
+        binding.granteeGroupId,
+      ],
+    );
+    if (result.rows.length !== 1) throw new AnswerReplyGrantStaleError();
+  }
+}
+
+function collectSourceGrantBindings(
+  sources: readonly AnswerReplySourceTraceInput[],
+): SourceGrantBinding[] {
+  requireConsistentSourceGrantBindings(sources);
+  const byGrantId = new Map<string, SourceGrantBinding>();
+  for (const source of sources) {
+    if (source.crossGroupGrantId === undefined) continue;
+    const binding: SourceGrantBinding = {
+      grantId: source.crossGroupGrantId,
+      version: source.crossGroupGrantVersion!,
+      documentSourceId: source.documentSourceId,
+      grantorGroupId: source.crossGroupGrantorGroupId!,
+      granteeGroupId: source.crossGroupGranteeGroupId!,
+    };
+    const existing = byGrantId.get(binding.grantId);
+    if (existing !== undefined && sourceGrantSignature(existing) !== sourceGrantSignature(binding)) {
+      throw new AnswerReplyGrantStaleError();
+    }
+    byGrantId.set(binding.grantId, binding);
+  }
+  return [...byGrantId.values()];
+}
+
+function requireConsistentSourceGrantBindings(
+  sources: readonly AnswerReplySourceTraceInput[],
+): void {
+  const byDocumentSourceId = new Map<string, string>();
+  for (const source of sources) {
+    const signature = JSON.stringify([
+      source.crossGroupGrantId,
+      source.crossGroupGrantVersion,
+      source.crossGroupGrantorGroupId,
+      source.crossGroupGranteeGroupId,
+    ]);
+    const existing = byDocumentSourceId.get(source.documentSourceId);
+    if (existing !== undefined && existing !== signature) {
+      throw new Error("sourceTrace cross-group grant is inconsistent");
+    }
+    byDocumentSourceId.set(source.documentSourceId, signature);
+  }
+}
+
+function requireSameSourceGrantBindings(
+  left: readonly AnswerReplySourceTraceInput[],
+  right: readonly AnswerReplySourceTraceInput[],
+  expectedGranteeGroupId: string,
+): void {
+  if (
+    left.length !== right.length ||
+    left.some((source, index) => {
+      const candidate = right[index];
+      return candidate === undefined ||
+        source.documentSourceId !== candidate.documentSourceId ||
+        sourceGrantTraceSignature(source) !== sourceGrantTraceSignature(candidate);
+    }) ||
+    right.some((source) =>
+      source.crossGroupGranteeGroupId !== undefined &&
+      source.crossGroupGranteeGroupId !== expectedGranteeGroupId)
+  ) {
+    throw new AnswerReplyGrantStaleError();
+  }
+}
+
+function sourceGrantTraceSignature(source: AnswerReplySourceTraceInput): string {
+  return JSON.stringify([
+    source.crossGroupGrantId,
+    source.crossGroupGrantVersion,
+    source.crossGroupGrantorGroupId,
+    source.crossGroupGranteeGroupId,
+  ]);
+}
+
+function sourceGrantSignature(binding: SourceGrantBinding): string {
+  return JSON.stringify([
+    binding.version,
+    binding.documentSourceId,
+    binding.grantorGroupId,
+    binding.granteeGroupId,
+  ]);
+}
+
 async function loadSources(
   queryable: AnswerReplyQueryable,
   deliveryId: string,
@@ -734,7 +895,9 @@ async function loadSources(
        id, delivery_id, prompt_rank, citation_rank, document_source_id,
        document_snapshot_id, fragment_id, chunk_index, source_type,
        source_uri, source_title, content_hash, embedding_profile_id,
-       initial_permission_checked_at
+       initial_permission_checked_at, cross_group_grant_id,
+       cross_group_grant_version, cross_group_grantor_group_id,
+       cross_group_grantee_group_id
      FROM answer_reply_source_traces
      WHERE delivery_id = $1
      ORDER BY prompt_rank ASC`,
@@ -769,9 +932,12 @@ async function insertSourceTrace(
        id, delivery_id, prompt_rank, citation_rank, document_source_id,
        document_snapshot_id, fragment_id, chunk_index, source_type,
        source_uri, source_title, content_hash, embedding_profile_id,
-       initial_permission_checked_at
+       initial_permission_checked_at, cross_group_grant_id,
+       cross_group_grant_version, cross_group_grantor_group_id,
+       cross_group_grantee_group_id
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+       $15, $16, $17, $18
      )`,
     [
       createAnswerReplySourceTraceId(deliveryId, trace.promptRank),
@@ -788,6 +954,10 @@ async function insertSourceTrace(
       trace.contentHash,
       trace.embeddingProfileId,
       trace.initialPermissionCheckedAt,
+      trace.crossGroupGrantId ?? null,
+      trace.crossGroupGrantVersion ?? null,
+      trace.crossGroupGrantorGroupId ?? null,
+      trace.crossGroupGranteeGroupId ?? null,
     ],
   );
 }
@@ -1036,7 +1206,7 @@ function normalizeSourceTraces(
   if (!Array.isArray(value) || value.length > MAX_SOURCE_TRACES) {
     throw new Error("sourceTraces is invalid");
   }
-  return value.map((trace, index) => {
+  const normalized = value.map((trace, index) => {
     if (trace === null || typeof trace !== "object" || trace.promptRank !== index + 1) {
       throw new Error("sourceTrace promptRank is invalid");
     }
@@ -1047,6 +1217,7 @@ function normalizeSourceTraces(
     if (!SOURCE_TYPES.includes(sourceType)) {
       throw new Error("sourceTrace sourceType is invalid");
     }
+    const grantBinding = normalizeSourceGrantBinding(trace, sourceType);
     return {
       promptRank: index + 1,
       ...(citationRank === undefined ? {} : { citationRank }),
@@ -1074,8 +1245,53 @@ function normalizeSourceTraces(
         trace.embeddingProfileId,
       ),
       initialPermissionCheckedAt: requireDate(trace.initialPermissionCheckedAt),
+      ...grantBinding,
     };
   });
+  requireConsistentSourceGrantBindings(normalized);
+  return normalized;
+}
+
+function normalizeSourceGrantBinding(
+  trace: AnswerReplySourceTraceInput,
+  sourceType: AnswerReplySourceTraceInput["sourceType"],
+): Pick<
+  AnswerReplySourceTraceInput,
+  | "crossGroupGrantId"
+  | "crossGroupGrantVersion"
+  | "crossGroupGrantorGroupId"
+  | "crossGroupGranteeGroupId"
+> {
+  const values = [
+    trace.crossGroupGrantId,
+    trace.crossGroupGrantVersion,
+    trace.crossGroupGrantorGroupId,
+    trace.crossGroupGranteeGroupId,
+  ];
+  if (values.every((value) => value === undefined)) return {};
+  const grantId = requireReference("sourceTrace crossGroupGrantId", trace.crossGroupGrantId);
+  const version = requireInteger(
+    "sourceTrace crossGroupGrantVersion",
+    trace.crossGroupGrantVersion,
+    1,
+  );
+  const grantorGroupId = requireReference(
+    "sourceTrace crossGroupGrantorGroupId",
+    trace.crossGroupGrantorGroupId,
+  );
+  const granteeGroupId = requireReference(
+    "sourceTrace crossGroupGranteeGroupId",
+    trace.crossGroupGranteeGroupId,
+  );
+  if (sourceType !== "feishu_group_document" || grantorGroupId === granteeGroupId) {
+    throw new Error("sourceTrace cross-group grant is invalid");
+  }
+  return {
+    crossGroupGrantId: grantId,
+    crossGroupGrantVersion: version,
+    crossGroupGrantorGroupId: grantorGroupId,
+    crossGroupGranteeGroupId: granteeGroupId,
+  };
 }
 
 function normalizeTransitionInput(input: VersionedTransitionInput): VersionedTransitionInput {
@@ -1202,6 +1418,40 @@ function mapDelivery(row: DeliveryRow): AnswerReplyDelivery {
 
 function mapSourceTrace(row: SourceTraceRow): AnswerReplySourceTrace {
   const sourceType = requireDatabaseEnum(row.source_type, SOURCE_TYPES);
+  const grantFields = [
+    row.cross_group_grant_id,
+    row.cross_group_grant_version,
+    row.cross_group_grantor_group_id,
+    row.cross_group_grantee_group_id,
+  ];
+  const hasGrantBinding = grantFields.every((value) => value !== null);
+  if (!hasGrantBinding && !grantFields.every((value) => value === null)) {
+    throw new Error("answer reply database row is invalid");
+  }
+  const grantBinding = hasGrantBinding
+    ? {
+        crossGroupGrantId: requireDatabaseBoundedString(
+          row.cross_group_grant_id,
+          MAX_REFERENCE_CHARS,
+        ),
+        crossGroupGrantVersion: requireDatabaseInteger(row.cross_group_grant_version, 1),
+        crossGroupGrantorGroupId: requireDatabaseBoundedString(
+          row.cross_group_grantor_group_id,
+          MAX_REFERENCE_CHARS,
+        ),
+        crossGroupGranteeGroupId: requireDatabaseBoundedString(
+          row.cross_group_grantee_group_id,
+          MAX_REFERENCE_CHARS,
+        ),
+      }
+    : {};
+  if (
+    hasGrantBinding &&
+    (sourceType !== "feishu_group_document" ||
+      grantBinding.crossGroupGrantorGroupId === grantBinding.crossGroupGranteeGroupId)
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
   return {
     id: requireDatabaseBoundedString(row.id, MAX_REFERENCE_CHARS),
     deliveryId: requireDatabaseBoundedString(row.delivery_id, MAX_REFERENCE_CHARS),
@@ -1235,6 +1485,7 @@ function mapSourceTrace(row: SourceTraceRow): AnswerReplySourceTrace {
       MAX_REFERENCE_CHARS,
     ),
     initialPermissionCheckedAt: requireDatabaseDate(row.initial_permission_checked_at),
+    ...grantBinding,
   };
 }
 
@@ -1470,6 +1721,7 @@ function requireDatabaseDocumentSourceIds(
 function isContentFreeDomainError(error: unknown): boolean {
   return error instanceof AnswerReplyPreparationConflictError
     || error instanceof AnswerReplyVersionConflictError
+    || error instanceof AnswerReplyGrantStaleError
     || error instanceof AnswerReplyTransitionError
     || error instanceof AnswerReplyNotFoundError;
 }

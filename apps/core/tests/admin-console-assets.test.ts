@@ -53,8 +53,99 @@ describe("admin console assets", () => {
     expect(script).toContain("/internal/document-sync/user-submitted-documents");
     expect(script).toContain("/policy");
     expect(script).toContain("/enqueue");
+    expect(html).toContain("document-source-group-grants");
+    expect(html).toContain("document-source-grant-form");
+    expect(script).toContain("/group-grants?limit=20");
+    expect(script).toContain("createOpaqueOperationKey");
+    expect(script).toContain("Grant source ");
+    expect(script).toContain("Revoke grant ");
     expect(script).not.toContain("bodyText");
     expect(script).not.toContain("rawContent");
+    expect(script).not.toContain("createdBy");
+    expect(script).not.toContain("updatedBy");
+    expect(script).not.toContain("operationKey.textContent");
+  });
+
+  it("loads, grants, and revokes exact source-bound group grants with fresh confirmations", async () => {
+    const confirmations: string[] = [];
+    let listCount = 0;
+    const fetch = vi.fn((path: string, options?: unknown) => {
+      if (path === "/internal/document-sync/sources?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          sources: [{
+            id: "source-1",
+            title: "Policy",
+            sourceUri: "https://tenant.feishu.cn/docx/source-1",
+            sourceType: "group_visible_document",
+            answeringEnabled: true,
+            knowledgeDraftsEnabled: false,
+          }],
+        }));
+      }
+      if (path === "/internal/document-sync/sources/source-1/group-grants?limit=20") {
+        listCount += 1;
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          grants: listCount === 1 ? [] : [{
+            id: "grant-1",
+            documentSourceId: "source-1",
+            grantorGroupId: "group-owner",
+            granteeGroupId: "group-reader",
+            state: "active",
+            version: 1,
+            updatedAt: "2026-08-18T05:00:00.000Z",
+          }],
+        }));
+      }
+      if (path === "/internal/document-sync/sources/source-1/group-grants") {
+        const request = options as { body: string };
+        const body = JSON.parse(request.body) as Record<string, unknown>;
+        expect(body).toMatchObject({
+          grantorGroupId: "group-owner",
+          granteeGroupId: "group-reader",
+          expectedVersion: 0,
+        });
+        expect(typeof body.operationKey).toBe("string");
+        expect(String(body.operationKey).length).toBeGreaterThan(12);
+        return Promise.resolve(jsonResponse({ ok: true, outcome: "applied" }));
+      }
+      if (path === "/internal/document-sync/sources/source-1/group-grants/grant-1/revoke") {
+        const request = options as { body: string };
+        const body = JSON.parse(request.body) as Record<string, unknown>;
+        expect(body).toMatchObject({ expectedVersion: 1 });
+        expect(typeof body.operationKey).toBe("string");
+        return Promise.resolve(jsonResponse({ ok: true, outcome: "applied" }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, {
+      operator: "operator@example.com",
+      confirm: (message) => { confirmations.push(message); return true; },
+    });
+
+    await console.trigger("document-source-refresh", "click");
+    const grantsButton = console.allElements().find((element) => element.textContent === "Grants");
+    expect(grantsButton).toBeDefined();
+    await grantsButton!.trigger("click");
+    console.element("document-source-grantor-group").value = "group-owner";
+    console.element("document-source-grantee-group").value = "group-reader";
+    console.element("document-source-grant-version").value = "0";
+    await console.trigger("document-source-grant-form", "submit");
+
+    const revoke = console.allElements().filter((element) => element.textContent === "Revoke").at(-1);
+    expect(revoke).toBeDefined();
+    await revoke!.trigger("click");
+
+    expect(confirmations).toEqual([
+      "Grant source source-1 from group-owner to group-reader at expected version 0?",
+      "Revoke grant grant-1 for source source-1 from group-owner to group-reader at version 1?",
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(6);
+    const visible = console.allElements().map((element) => element.textContent).join("\n");
+    expect(visible).toContain("group-owner");
+    expect(visible).toContain("group-reader");
+    expect(visible).not.toContain("operator@example.com");
   });
 
   it("renders compact wiki space controls adjacent to document sources", () => {

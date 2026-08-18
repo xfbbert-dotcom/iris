@@ -71,6 +71,12 @@ import {
   type DocumentSourceType,
 } from "./documents/document-source-registry.js";
 import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
+import type { DocumentSourceGroupGrant } from "./documents/document-source-group-grant.js";
+import {
+  DocumentSourceGroupGrantConflictError,
+  DocumentSourceGroupGrantNotFoundError,
+  DocumentSourceGroupGrantValidationError,
+} from "./documents/postgres-document-source-group-grant-repository.js";
 import {
   normalizeFeishuDocumentSourceUri,
   parseFeishuWikiNodeToken,
@@ -828,6 +834,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.get("/internal/readiness", async () => {
+    const documentSyncStatus = documentSyncRuntime === undefined
+      ? undefined
+      : await getDocumentSyncStatus(documentSyncRuntime);
     const knowledgeCardStatus = await getKnowledgeCardStatus(
       knowledgeCardRuntime,
       knowledgeCardStatusReader,
@@ -839,7 +848,13 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
-      { knowledgeCardStatus, knowledgeConflictStatus, actionApprovalStatus, actionReviewStatus },
+      {
+        ...(documentSyncStatus === undefined ? {} : { documentSyncStatus }),
+        knowledgeCardStatus,
+        knowledgeConflictStatus,
+        actionApprovalStatus,
+        actionReviewStatus,
+      },
     );
   });
 
@@ -1591,6 +1606,104 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       });
     }
   });
+
+  app.get("/internal/document-sync/sources/:id/group-grants", async (request, reply) => {
+    const groupGrants = documentSyncRuntime?.sources.groupGrants;
+    if (groupGrants === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    const parsedQuery = parseDocumentSourceGroupGrantListQuery(request.query);
+    if (documentSourceId === undefined || parsedQuery === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+    try {
+      const grants = await groupGrants.list({
+        documentSourceId,
+        limit: parsedQuery.limit,
+      });
+      if (grants === undefined) {
+        return reply.code(404).send({ ok: false, error: "document_source_not_found" });
+      }
+      return { ok: true, grants: grants.map(toDocumentSourceGroupGrantResponse) };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "document_source_group_grant_lookup_failed" });
+    }
+  });
+
+  app.post("/internal/document-sync/sources/:id/group-grants", async (request, reply) => {
+    const groupGrants = documentSyncRuntime?.sources.groupGrants;
+    if (groupGrants === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+    const actorRef = readRequiredOperator(request.headers["x-iris-operator"]);
+    if (actorRef === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_operator" });
+    }
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseDocumentSourceGroupGrantRequest(body);
+    if (documentSourceId === undefined || parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+    try {
+      const result = await groupGrants.grant({
+        documentSourceId,
+        ...parsedRequest,
+        actorRef,
+        at: now(),
+      });
+      return {
+        ok: true,
+        outcome: result.outcome,
+        grant: toDocumentSourceGroupGrantResponse(result.grant),
+      };
+    } catch (error) {
+      return sendDocumentSourceGroupGrantError(reply, error, "mutation");
+    }
+  });
+
+  app.post(
+    "/internal/document-sync/sources/:id/group-grants/:grantId/revoke",
+    async (request, reply) => {
+      const groupGrants = documentSyncRuntime?.sources.groupGrants;
+      if (groupGrants === undefined) {
+        return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+      }
+      const actorRef = readRequiredOperator(request.headers["x-iris-operator"]);
+      if (actorRef === undefined) {
+        return reply.code(400).send({ ok: false, error: "invalid_operator" });
+      }
+      const params = request.params as { id?: unknown; grantId?: unknown };
+      const documentSourceId = readNonBlankId(params.id);
+      const grantId = readNonBlankId(params.grantId);
+      const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+      const parsedRequest = parseDocumentSourceGroupGrantRevokeRequest(body);
+      if (
+        documentSourceId === undefined ||
+        grantId === undefined ||
+        parsedRequest === undefined
+      ) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      try {
+        const result = await groupGrants.revoke({
+          documentSourceId,
+          grantId,
+          ...parsedRequest,
+          actorRef,
+          at: now(),
+        });
+        return {
+          ok: true,
+          outcome: result.outcome,
+          grant: toDocumentSourceGroupGrantResponse(result.grant),
+        };
+      } catch (error) {
+        return sendDocumentSourceGroupGrantError(reply, error, "revoke");
+      }
+    },
+  );
 
   app.get("/internal/document-sync/sources/:id", async (request, reply) => {
     if (documentSyncRuntime === undefined) {
@@ -3190,6 +3303,123 @@ function parseDocumentSourcePolicyUpdateRequest(
       ? { canUseForKnowledgeDrafts: value.canUseForKnowledgeDrafts as boolean }
       : {}),
   };
+}
+
+function parseDocumentSourceGroupGrantListQuery(
+  value: unknown,
+): { limit: number } | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) {
+    return undefined;
+  }
+  const limit = parseDeadLetterLimit(value.limit);
+  return limit === undefined ? undefined : { limit };
+}
+
+function parseDocumentSourceGroupGrantRequest(value: unknown): {
+  grantorGroupId: string;
+  granteeGroupId: string;
+  expectedVersion: number;
+  operationKey: string;
+} | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "grantorGroupId",
+      "granteeGroupId",
+      "expectedVersion",
+      "operationKey",
+    ])
+  ) {
+    return undefined;
+  }
+  const grantorGroupId = readExactNonBlankId(value.grantorGroupId);
+  const granteeGroupId = readExactNonBlankId(value.granteeGroupId);
+  const operationKey = readExactNonBlankId(value.operationKey);
+  if (
+    grantorGroupId === undefined ||
+    granteeGroupId === undefined ||
+    grantorGroupId === granteeGroupId ||
+    operationKey === undefined ||
+    !Number.isSafeInteger(value.expectedVersion) ||
+    (value.expectedVersion as number) < 0
+  ) {
+    return undefined;
+  }
+  return {
+    grantorGroupId,
+    granteeGroupId,
+    expectedVersion: value.expectedVersion as number,
+    operationKey,
+  };
+}
+
+function parseDocumentSourceGroupGrantRevokeRequest(value: unknown): {
+  expectedVersion: number;
+  operationKey: string;
+} | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ["expectedVersion", "operationKey"])) {
+    return undefined;
+  }
+  const operationKey = readExactNonBlankId(value.operationKey);
+  if (
+    operationKey === undefined ||
+    !Number.isSafeInteger(value.expectedVersion) ||
+    (value.expectedVersion as number) < 1
+  ) {
+    return undefined;
+  }
+  return { expectedVersion: value.expectedVersion as number, operationKey };
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  return keys.length === expected.length &&
+    [...expected].sort().every((key, index) => keys[index] === key);
+}
+
+function readExactNonBlankId(value: unknown): string | undefined {
+  const normalized = readNonBlankId(value);
+  return typeof value === "string" && value === normalized ? normalized : undefined;
+}
+
+function readRequiredOperator(value: unknown): string | undefined {
+  const parsed = parseOperatorHint(value);
+  return parsed.ok ? parsed.value : undefined;
+}
+
+function toDocumentSourceGroupGrantResponse(grant: DocumentSourceGroupGrant) {
+  return {
+    id: grant.id,
+    documentSourceId: grant.documentSourceId,
+    grantorGroupId: grant.grantorGroupId,
+    granteeGroupId: grant.granteeGroupId,
+    state: grant.state,
+    version: grant.version,
+    createdAt: grant.createdAt,
+    updatedAt: grant.updatedAt,
+  };
+}
+
+function sendDocumentSourceGroupGrantError(
+  reply: FastifyReply,
+  error: unknown,
+  operation: "mutation" | "revoke",
+) {
+  if (error instanceof DocumentSourceGroupGrantValidationError) {
+    return reply.code(400).send({ ok: false, error: "invalid_request" });
+  }
+  if (error instanceof DocumentSourceGroupGrantNotFoundError) {
+    return reply.code(404).send({ ok: false, error: "document_source_group_grant_not_found" });
+  }
+  if (error instanceof DocumentSourceGroupGrantConflictError) {
+    return reply.code(409).send({ ok: false, error: "document_source_group_grant_conflict" });
+  }
+  return reply.code(500).send({
+    ok: false,
+    error: operation === "revoke"
+      ? "document_source_group_grant_revoke_failed"
+      : "document_source_group_grant_mutation_failed",
+  });
 }
 
 function parseRuntimeEnabledRequest(value: unknown): { enabled: boolean } | undefined {

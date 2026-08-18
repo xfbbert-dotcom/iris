@@ -19,6 +19,16 @@ const knowledgeCardAcceptanceRunbook = readFileSync(
   "docs/runbooks/iris-knowledge-card-confirmation-acceptance.md",
   "utf8",
 );
+const crossGroupGrantAcceptanceRunbookPath =
+  "docs/runbooks/iris-cross-group-document-grants-acceptance.md";
+
+test("cross-group document grants remain database-default-deny and private", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptanceRunbookPath, "utf8");
+  assert.match(runbook, /0051_document_source_group_grants\.sql/u);
+  assert.match(runbook, /activePilotGrantCount/u);
+  assert.doesNotMatch(JSON.stringify(compose.services.core.environment), /CROSS_GROUP.*(?:true|\*)/iu);
+  assert.doesNotMatch(caddyfile, /internal\/document-sync\/sources\/.*group-grants/iu);
+});
 const wikiSpaceSyncRunbook = readFileSync(
   "docs/runbooks/iris-wiki-space-sync.md",
   "utf8",

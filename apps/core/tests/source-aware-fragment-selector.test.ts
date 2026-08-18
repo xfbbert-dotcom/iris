@@ -115,6 +115,34 @@ describe("selectSourceAwareFragments", () => {
 
     expect(selected.map(({ id }) => id)).toEqual(["seed", "useful"]);
   });
+
+  it("copies the seed's exact cross-group grant binding to bounded neighbors", async () => {
+    const seed = {
+      ...fragment("seed", "source", 1, "Granted source"),
+      crossGroupGrantId: "grant-1",
+      crossGroupGrantVersion: 4,
+      crossGroupGrantorGroupId: "group-source",
+      crossGroupGranteeGroupId: "group-reader",
+    } satisfies RetrievedDocumentFragment;
+
+    const selected = await selectSourceAwareFragments({
+      queryText: "Granted source",
+      fragmentLimit: 2,
+      rankedFragments: [seed],
+      listFragmentsForSnapshot: async () => [
+        fragment("neighbor", "source", 0, "Ignored local metadata"),
+        seed,
+      ],
+    });
+
+    expect(selected[1]).toMatchObject({
+      id: "neighbor",
+      crossGroupGrantId: "grant-1",
+      crossGroupGrantVersion: 4,
+      crossGroupGrantorGroupId: "group-source",
+      crossGroupGranteeGroupId: "group-reader",
+    });
+  });
 });
 
 function fragment(

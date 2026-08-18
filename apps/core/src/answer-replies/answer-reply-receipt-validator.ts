@@ -90,6 +90,10 @@ export function createAnswerReplySemanticFingerprint(input: {
       sourceTitle: trace.sourceTitle,
       contentHash: trace.contentHash,
       embeddingProfileId: trace.embeddingProfileId,
+      crossGroupGrantId: trace.crossGroupGrantId,
+      crossGroupGrantVersion: trace.crossGroupGrantVersion,
+      crossGroupGrantorGroupId: trace.crossGroupGrantorGroupId,
+      crossGroupGranteeGroupId: trace.crossGroupGranteeGroupId,
     })),
   });
 }
@@ -171,6 +175,7 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
     && isFingerprint(source.contentHash)
     && isBoundedString(source.embeddingProfileId, MAX_REFERENCE_CHARS)
     && isValidDate(source.initialPermissionCheckedAt)
+    && isValidCrossGroupGrantShape(source)
   ))) {
     throw new Error();
   }
@@ -204,6 +209,7 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
   }
 
   const receipt = value as AnswerReplyReceipt;
+  requireSourceGrantBindingContract(receipt.sources);
   requireDeliveryContract(receipt.delivery);
   requireFingerprintContract(receipt);
   requireLedgerContract(receipt);
@@ -546,6 +552,39 @@ function isBoundedString(value: unknown, maxChars: number): value is string {
 
 function isOptionalBoundedString(value: unknown, maxChars: number): boolean {
   return value === undefined || isBoundedString(value, maxChars);
+}
+
+function isValidCrossGroupGrantShape(source: Record<string, unknown>): boolean {
+  const values = [
+    source.crossGroupGrantId,
+    source.crossGroupGrantVersion,
+    source.crossGroupGrantorGroupId,
+    source.crossGroupGranteeGroupId,
+  ];
+  if (values.every((value) => value === undefined)) return true;
+  return source.sourceType === "feishu_group_document"
+    && isBoundedString(source.crossGroupGrantId, MAX_REFERENCE_CHARS)
+    && isPositiveSafeInteger(source.crossGroupGrantVersion)
+    && isBoundedString(source.crossGroupGrantorGroupId, MAX_REFERENCE_CHARS)
+    && isBoundedString(source.crossGroupGranteeGroupId, MAX_REFERENCE_CHARS)
+    && source.crossGroupGrantorGroupId !== source.crossGroupGranteeGroupId;
+}
+
+function requireSourceGrantBindingContract(
+  sources: readonly AnswerReplyReceipt["sources"][number][],
+): void {
+  const bindingBySource = new Map<string, string>();
+  for (const source of sources) {
+    const binding = JSON.stringify([
+      source.crossGroupGrantId,
+      source.crossGroupGrantVersion,
+      source.crossGroupGrantorGroupId,
+      source.crossGroupGranteeGroupId,
+    ]);
+    const existing = bindingBySource.get(source.documentSourceId);
+    if (existing !== undefined && existing !== binding) throw new Error();
+    bindingBySource.set(source.documentSourceId, binding);
+  }
 }
 
 function isOptionalExactReference(value: unknown, maxChars: number): boolean {
