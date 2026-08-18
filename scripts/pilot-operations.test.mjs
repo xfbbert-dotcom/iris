@@ -260,6 +260,28 @@ test("cross-group grant acceptance reruns from a revoked projection and drains i
   }
 });
 
+test("cross-group rollback treats empty Compose service output as stopped and command errors as unavailable", () => {
+  const stoppedCommand = [
+    "function docker { $global:LASTEXITCODE = 0; return '' }",
+    "$running = Test-CrossGroupCaddyRunning",
+    "if ($running) { throw 'empty Compose output must mean stopped' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(stoppedCommand, {}, true, crossGroupGrantAcceptancePath);
+
+  const runningCommand = [
+    "function docker { $global:LASTEXITCODE = 0; return 'caddy' }",
+    "$running = Test-CrossGroupCaddyRunning",
+    "if (-not $running) { throw 'named Compose service must mean running' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(runningCommand, {}, true, crossGroupGrantAcceptancePath);
+
+  const unavailableCommand = [
+    "function docker { $global:LASTEXITCODE = 17; return '' }",
+    "$null = Test-CrossGroupCaddyRunning",
+  ].join("; ");
+  assertPowerShellRunbookGate(unavailableCommand, {}, false, crossGroupGrantAcceptancePath);
+});
+
 test("cross-group document grant CI executes real migration and concurrency coverage", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   for (const testFile of [

@@ -253,6 +253,15 @@ function Invoke-Compose {
   if ($LASTEXITCODE -ne 0) { throw "Compose command failed" }
 }
 
+function Test-CrossGroupCaddyRunning {
+  $services = @(& docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml `
+    ps --status running --services caddy)
+  if ($LASTEXITCODE -ne 0) { throw "Caddy runtime status is unavailable" }
+  return @($services | Where-Object {
+    -not [string]::IsNullOrWhiteSpace([string]$_)
+  }).Count -ne 0
+}
+
 function Get-PilotEnv {
   $entries = Get-Content -LiteralPath .env.pilot | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=' }
   return ConvertFrom-StringData ($entries -join "`n")
@@ -694,7 +703,7 @@ function Invoke-CrossGroupDocumentGrantRollback {
     $fingerprintAfter = Get-CrossGroupMutableFingerprint $Context
     $appendAfter = Get-AppendOnlyEventCount
     $activeGrantCount = [int64](Invoke-PilotSql -Sql "SELECT count(*) FROM document_source_group_grants WHERE document_source_id='$($Context.DocumentSourceId)' AND grantee_group_id='$($Context.GranteeGroupId)' AND state='active'")
-    $caddyRunning = @(docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml ps --status running --services caddy).Count -ne 0
+    $caddyRunning = Test-CrossGroupCaddyRunning
     $disabledCount = @($script:KnownGroupIds | Where-Object { $runtime.disabledGroupIds -contains $_ }).Count
     $capabilityNames = @(
       "readGroupContext", "replyWhenMentioned", "readGroupDocuments", "retrieveKnowledgeBase",
