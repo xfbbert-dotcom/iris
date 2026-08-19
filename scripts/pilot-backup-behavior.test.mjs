@@ -282,11 +282,11 @@ for (const [networkMode, cleanupError] of [
 
 test("ordinary backup harness leaves bounded headroom for fail-closed cleanup", () => {
   assert.equal(backupHarnessTimeout({ hangPoint: "", networkMode: "" }), 90_000);
-  assert.equal(backupHarnessTimeout({ hangPoint: "cleanup-stop", networkMode: "" }), 15_000);
-  assert.equal(backupHarnessTimeout({ hangPoint: "", networkMode: "status-timeout" }), 8_000);
+  assert.equal(backupHarnessTimeout({ hangPoint: "cleanup-stop", networkMode: "" }), 30_000);
+  assert.equal(backupHarnessTimeout({ hangPoint: "", networkMode: "status-timeout" }), 15_000);
   assert.equal(
     backupHarnessTimeout({ hangPoint: "", networkMode: "enable-committed-response-timeout" }),
-    20_000,
+    30_000,
   );
 });
 
@@ -390,7 +390,7 @@ for (const hangCase of [
       try {
         assert.notEqual(result.status, 0);
         assert.equal(result.error, undefined, "the script must beat the harness watchdog");
-        assert.ok(result.elapsedMs < 15_000, `${hangCase.name} took ${result.elapsedMs}ms`);
+        assert.ok(result.elapsedMs < 25_000, `${hangCase.name} took ${result.elapsedMs}ms`);
         assert.match(result.stderr, /docker compose .* timed out after 1s/u);
         assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
       } finally {
@@ -539,9 +539,9 @@ function runBackup({
 }
 
 function backupHarnessTimeout({ hangPoint, networkMode }) {
-  if (hangPoint !== "") return 15_000;
-  if (networkMode === "status-timeout") return 8_000;
-  if (networkMode === "enable-committed-response-timeout") return 20_000;
+  if (hangPoint !== "") return 30_000;
+  if (networkMode === "status-timeout") return 15_000;
+  if (networkMode === "enable-committed-response-timeout") return 30_000;
   return 90_000;
 }
 

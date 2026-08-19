@@ -416,15 +416,29 @@ test("cross-group document grant rollback rejects residual or lost durable facts
   }
 });
 
-test("cross-group document grant PR remains pending and metadata-only", () => {
+test("cross-group document grant PR records metadata-only live acceptance and default-deny rollback", () => {
   assert.equal(existsSync(crossGroupGrantPrPath), true);
   const template = readFileSync(crossGroupGrantPrPath, "utf8");
-  assert.match(template, /## Release Status\s+Pending live acceptance/iu);
-  assert.match(template, /首个跨群文档回答闭环代码完成，真实验收待执行/u);
-  for (const marker of ["IDs", "versions", "hashes", "counts", "timestamps", "pass/fail", "default-deny", "rollback"]) {
+  assert.match(template, /## Release Status\s+Live acceptance passed/iu);
+  assert.match(template, /首个跨群文档回答闭环已实现（默认拒绝）/u);
+  for (const marker of [
+    "exact reviewed build",
+    "SHA-256",
+    "result=pass",
+    "rollbackPass=true",
+    "default-deny",
+    "active pilot grants",
+    "unresolved deliveries",
+    "mutable fingerprint stable",
+    "Cross-group memory and cross-group knowledge drafts remain missing",
+    "wildcard grants",
+  ]) {
     assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
   }
-  assert.doesNotMatch(template, /document body|answer body|message body|access token|credential value/iu);
+  assert.doesNotMatch(
+    template,
+    /document body|answer body|message body|access token|credential value|oc_[0-9a-f]{32}|IRIS_USER_DOC_/iu,
+  );
 });
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
