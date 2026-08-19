@@ -19,9 +19,37 @@ describe("fuseRetrievedDocumentFragments", () => {
 
     expect(fused).toEqual([expect.objectContaining({ id: "shared" })]);
   });
+
+  it("rejects conflicting grant bindings for the same fragment", () => {
+    expect(() => fuseRetrievedDocumentFragments({
+      primary: [fragment("shared", {
+        crossGroupGrantId: "grant-1",
+        crossGroupGrantVersion: 1,
+        crossGroupGrantorGroupId: "group-source",
+        crossGroupGranteeGroupId: "group-reader",
+      })],
+      supplemental: [fragment("shared")],
+    })).toThrow(/grant binding/iu);
+  });
+
+  it("deduplicates identical exact grant bindings", () => {
+    const grant = {
+      crossGroupGrantId: "grant-1",
+      crossGroupGrantVersion: 2,
+      crossGroupGrantorGroupId: "group-source",
+      crossGroupGranteeGroupId: "group-reader",
+    } as const;
+    expect(fuseRetrievedDocumentFragments({
+      primary: [fragment("shared", grant)],
+      supplemental: [fragment("shared", grant)],
+    })).toEqual([expect.objectContaining(grant)]);
+  });
 });
 
-function fragment(id: string): RetrievedDocumentFragment {
+function fragment(
+  id: string,
+  overrides: Partial<RetrievedDocumentFragment> = {},
+): RetrievedDocumentFragment {
   return {
     id,
     documentSourceId: `source-${id}`,
@@ -34,5 +62,6 @@ function fragment(id: string): RetrievedDocumentFragment {
     embeddingProfileId: "static-dev-6d",
     createdAt: new Date("2026-08-11T00:00:00.000Z"),
     sourceType: "feishu_wiki",
+    ...overrides,
   };
 }

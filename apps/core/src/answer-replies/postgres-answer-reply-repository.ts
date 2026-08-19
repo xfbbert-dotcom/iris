@@ -1,4 +1,10 @@
 import { normalizeFeishuDocumentSourceUri } from "../documents/feishu-document-body-fetcher.js";
+import {
+  KnowledgeConflictNotFoundError,
+  KnowledgeConflictStaleEvidenceError,
+  KnowledgeConflictVersionConflictError,
+  lockCurrentKnowledgeConflictCandidateForAnswerSend,
+} from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import {
   createAnswerReplyEventId,
@@ -8,6 +14,7 @@ import {
   requireValidAnswerReplyReceipt,
 } from "./answer-reply-receipt-validator.js";
 import {
+  AnswerReplyGrantStaleError,
   AnswerReplyPreparationConflictError,
   AnswerReplyVersionConflictError,
   createAnswerReplyDeliveryId,
@@ -42,6 +49,7 @@ export type PostgresAnswerReplyDataSource = AnswerReplyQueryable & {
 const DELIVERY_COLUMNS = `
   id, provider, incoming_message_id, chat_id, reply_uuid, safe_notice_uuid,
   state, prepared_reply_text, rendered_reply_fingerprint, semantic_fingerprint,
+  knowledge_conflict_candidate_id,
   reply_message_id, safe_notice_message_id, attempt_count,
   safe_notice_attempt_count, version, created_at, updated_at,
   last_send_started_at, sent_at, permission_blocked_at,
@@ -58,6 +66,7 @@ const DELIVERY_STATES: readonly AnswerReplyDeliveryState[] = [
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
 ];
 const EVENT_TYPES: readonly AnswerReplyDeliveryEventType[] = [
   "prepared",
@@ -65,6 +74,7 @@ const EVENT_TYPES: readonly AnswerReplyDeliveryEventType[] = [
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
   "safe_notice_send_started",
   "safe_notice_sent",
 ];
@@ -81,6 +91,7 @@ type DeliveryRow = {
   prepared_reply_text: unknown;
   rendered_reply_fingerprint: unknown;
   semantic_fingerprint: unknown;
+  knowledge_conflict_candidate_id: unknown;
   reply_message_id: unknown;
   safe_notice_message_id: unknown;
   attempt_count: unknown;
@@ -110,6 +121,10 @@ type SourceTraceRow = {
   content_hash: unknown;
   embedding_profile_id: unknown;
   initial_permission_checked_at: unknown;
+  cross_group_grant_id: unknown;
+  cross_group_grant_version: unknown;
+  cross_group_grantor_group_id: unknown;
+  cross_group_grantee_group_id: unknown;
 };
 
 type EventRow = {
@@ -121,6 +136,12 @@ type EventRow = {
   source_count: unknown;
   document_source_ids: unknown;
   created_at: unknown;
+};
+
+type KnowledgeConflictBindingRow = {
+  delivery_id: string;
+  candidate_id: string;
+  candidate_version: string | number;
 };
 
 type NormalizedPrepareInput = {
@@ -136,6 +157,7 @@ type NormalizedPrepareInput = {
   deliveryId: string;
   renderedReplyFingerprint: string;
   semanticFingerprint: string;
+  knowledgeConflictCandidateId?: string;
 };
 
 class AnswerReplyPersistenceError extends Error {
@@ -145,14 +167,14 @@ class AnswerReplyPersistenceError extends Error {
   }
 }
 
-class AnswerReplyTransitionError extends Error {
+export class AnswerReplyTransitionError extends Error {
   constructor() {
     super("answer reply transition invalid");
     this.name = "AnswerReplyTransitionError";
   }
 }
 
-class AnswerReplyNotFoundError extends Error {
+export class AnswerReplyNotFoundError extends Error {
   constructor() {
     super("answer reply delivery not found");
     this.name = "AnswerReplyNotFoundError";
@@ -192,6 +214,18 @@ export function createPostgresAnswerReplyRepository(input: {
           client,
           `${normalized.provider}:${normalized.incomingMessageId}`,
         );
+        await lockCurrentSourceGrantBindings(
+          client,
+          normalized.sourceTraces,
+          normalized.chatId,
+        );
+        const lockedCandidate = normalized.knowledgeConflictCandidateId === undefined
+          ? undefined
+          : await requireCurrentAnswerCandidate(client, {
+              candidateId: normalized.knowledgeConflictCandidateId,
+              expectedGroupId: normalized.chatId,
+              errorKind: "preparation",
+            });
         const existingResult = await client.query<DeliveryRow>(
           `SELECT ${DELIVERY_COLUMNS}
            FROM answer_reply_deliveries
@@ -257,13 +291,14 @@ export function createPostgresAnswerReplyRepository(input: {
              id, provider, incoming_message_id, chat_id, reply_uuid,
              safe_notice_uuid, state, prepared_reply_text,
              rendered_reply_fingerprint, semantic_fingerprint,
+             knowledge_conflict_candidate_id,
              reply_message_id, safe_notice_message_id, attempt_count,
              safe_notice_attempt_count, version, created_at, updated_at,
              last_send_started_at, sent_at, permission_blocked_at,
              reconciliation_required_at, safe_notice_sent_at
            ) VALUES (
-             $1, $2, $3, $4, $5, $6, 'prepared', $7, $8, $9,
-             NULL, NULL, 0, 0, 1, $10, $10, NULL, NULL, NULL, NULL, NULL
+             $1, $2, $3, $4, $5, $6, 'prepared', $7, $8, $9, $10,
+             NULL, NULL, 0, 0, 1, $11, $11, NULL, NULL, NULL, NULL, NULL
            )`,
           [
             normalized.deliveryId,
@@ -275,9 +310,25 @@ export function createPostgresAnswerReplyRepository(input: {
             normalized.renderedText,
             normalized.renderedReplyFingerprint,
             normalized.semanticFingerprint,
+            normalized.knowledgeConflictCandidateId ?? null,
             normalized.at,
           ],
         );
+
+        if (normalized.knowledgeConflictCandidateId !== undefined) {
+          if (lockedCandidate === undefined) throw new AnswerReplyPreparationConflictError();
+          await client.query(
+            `INSERT INTO answer_reply_knowledge_conflicts (
+               delivery_id, candidate_id, candidate_version, created_at
+             ) VALUES ($1, $2, $3, $4)`,
+            [
+              normalized.deliveryId,
+              normalized.knowledgeConflictCandidateId,
+              lockedCandidate.candidateVersion,
+              normalized.at,
+            ],
+          );
+        }
 
         for (const trace of normalized.sourceTraces) {
           await insertSourceTrace(client, normalized.deliveryId, trace);
@@ -311,7 +362,31 @@ export function createPostgresAnswerReplyRepository(input: {
 
     async beginAnswerSend(transitionInput) {
       const normalized = normalizeTransitionInput(transitionInput);
-      return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
+      return withTransaction(dataSource, async (client) => {
+        await acquireAdvisoryLock(client, normalized.deliveryId);
+        const prelockedSources = await loadSources(client, normalized.deliveryId);
+        await lockCurrentSourceGrantBindings(client, prelockedSources);
+        const binding = await loadKnowledgeConflictBinding(client, normalized.deliveryId);
+        const lockedCandidate = binding === undefined
+          ? undefined
+          : await requireCurrentAnswerCandidate(client, {
+              candidateId: binding.candidate_id,
+              expectedVersion: requireDatabaseInteger(binding.candidate_version, 1),
+              errorKind: "transition",
+            });
+        const { delivery, sources } = await lockDeliveryInTransaction(client, normalized);
+        requireSameSourceGrantBindings(prelockedSources, sources, delivery.chatId);
+        if ((delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)) {
+          throw new AnswerReplyTransitionError();
+        }
+        if (binding !== undefined && (
+          lockedCandidate === undefined
+          || binding.delivery_id !== delivery.id
+          || binding.candidate_id !== delivery.knowledgeConflictCandidateId
+          || lockedCandidate.groupId !== delivery.chatId
+        )) {
+          throw new AnswerReplyTransitionError();
+        }
         if (delivery.state !== "prepared" && delivery.state !== "sending") {
           throw new AnswerReplyTransitionError();
         }
@@ -423,6 +498,38 @@ export function createPostgresAnswerReplyRepository(input: {
       });
     },
 
+    async reconcileNotSent(transitionInput) {
+      const normalized = normalizeTransitionInput(transitionInput);
+      return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
+        if (
+          delivery.state !== "sending"
+          || delivery.attemptCount < 1
+          || delivery.replyMessageId !== undefined
+        ) {
+          throw new AnswerReplyTransitionError();
+        }
+        const nextVersion = delivery.version + 1;
+        await requireSingleRow(client.query<{ id: string }>(
+          `UPDATE answer_reply_deliveries
+           SET state = 'not_sent_reconciled', prepared_reply_text = NULL,
+               version = version + 1, updated_at = $3
+           WHERE id = $1 AND version = $2 AND state = 'sending'
+             AND attempt_count > 0 AND reply_message_id IS NULL
+           RETURNING id`,
+          [delivery.id, delivery.version, normalized.at],
+        ));
+        await insertEvent(client, {
+          deliveryId: delivery.id,
+          sequence: nextVersion,
+          eventType: "not_sent_reconciled",
+          sourceCount: sources.length,
+          documentSourceIds: uniqueDocumentSourceIds(sources),
+          at: normalized.at,
+        });
+        return loadReceiptById(client, delivery.id);
+      });
+    },
+
     async beginSafeNoticeSend(transitionInput) {
       const normalized = normalizeTransitionInput(transitionInput);
       return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
@@ -434,7 +541,7 @@ export function createPostgresAnswerReplyRepository(input: {
            SET safe_notice_attempt_count = safe_notice_attempt_count + 1,
                version = version + 1, updated_at = $3
            WHERE id = $1 AND version = $2
-             AND state IN ('permission_blocked', 'reconciliation_required')
+             AND state IN ('permission_blocked', 'reconciliation_required', 'not_sent_reconciled')
              AND safe_notice_sent_at IS NULL
            RETURNING id`,
           [delivery.id, delivery.version, normalized.at],
@@ -469,7 +576,7 @@ export function createPostgresAnswerReplyRepository(input: {
            SET safe_notice_message_id = $3, safe_notice_sent_at = $4,
                version = version + 1, updated_at = $4
            WHERE id = $1 AND version = $2
-             AND state IN ('permission_blocked', 'reconciliation_required')
+             AND state IN ('permission_blocked', 'reconciliation_required', 'not_sent_reconciled')
              AND safe_notice_attempt_count > 0 AND safe_notice_sent_at IS NULL
            RETURNING id`,
           [delivery.id, delivery.version, safeNoticeMessageId ?? null, normalized.at],
@@ -496,7 +603,7 @@ export function createPostgresAnswerReplyRepository(input: {
           `SELECT
              COUNT(*) FILTER (WHERE state IN ('prepared', 'sending')) AS unresolved_count,
              COUNT(*) FILTER (
-               WHERE state IN ('permission_blocked', 'reconciliation_required')
+               WHERE state IN ('permission_blocked', 'reconciliation_required', 'not_sent_reconciled')
                  AND safe_notice_sent_at IS NULL
              ) AS pending_safe_notice_count,
              COUNT(*) FILTER (
@@ -533,24 +640,27 @@ async function withLockedDelivery<T>(
 ): Promise<T> {
   return withTransaction(dataSource, async (client) => {
     await acquireAdvisoryLock(client, input.deliveryId);
-    const result = await client.query<DeliveryRow>(
-      `SELECT ${DELIVERY_COLUMNS}
-       FROM answer_reply_deliveries
-       WHERE id = $1
-       FOR UPDATE`,
-      [input.deliveryId],
-    );
-    const row = result.rows[0];
-    if (row === undefined) {
-      throw new AnswerReplyNotFoundError();
-    }
-    const delivery = mapDelivery(row);
-    if (delivery.version !== input.expectedVersion) {
-      throw new AnswerReplyVersionConflictError();
-    }
-    const sources = await loadSources(client, delivery.id);
+    const { delivery, sources } = await lockDeliveryInTransaction(client, input);
     return operation(client, delivery, sources);
   });
+}
+
+async function lockDeliveryInTransaction(
+  client: AnswerReplyTransactionClient,
+  input: VersionedTransitionInput,
+): Promise<{ delivery: AnswerReplyDelivery; sources: AnswerReplySourceTrace[] }> {
+  const result = await client.query<DeliveryRow>(
+    `SELECT ${DELIVERY_COLUMNS}
+     FROM answer_reply_deliveries
+     WHERE id = $1
+     FOR UPDATE`,
+    [input.deliveryId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new AnswerReplyNotFoundError();
+  const delivery = mapDelivery(row);
+  if (delivery.version !== input.expectedVersion) throw new AnswerReplyVersionConflictError();
+  return { delivery, sources: await loadSources(client, delivery.id) };
 }
 
 async function loadReceiptById(
@@ -574,11 +684,206 @@ async function loadReceipt(
   queryable: AnswerReplyQueryable,
   delivery: AnswerReplyDelivery,
 ): Promise<AnswerReplyReceipt> {
-  const [sources, events] = await Promise.all([
+  const [sources, events, binding] = await Promise.all([
     loadSources(queryable, delivery.id),
     loadEvents(queryable, delivery.id),
+    loadKnowledgeConflictBinding(queryable, delivery.id),
   ]);
+  if (
+    (delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)
+    || (binding !== undefined && (
+      binding.delivery_id !== delivery.id
+      || binding.candidate_id !== delivery.knowledgeConflictCandidateId
+      || requireDatabaseInteger(binding.candidate_version, 1) < 1
+    ))
+  ) throw new Error("answer reply knowledge conflict binding is invalid");
   return requireValidAnswerReplyReceipt({ delivery, sources, events });
+}
+
+async function loadKnowledgeConflictBinding(
+  queryable: AnswerReplyQueryable,
+  deliveryId: string,
+): Promise<KnowledgeConflictBindingRow | undefined> {
+  const result = await queryable.query<KnowledgeConflictBindingRow>(
+    `SELECT delivery_id, candidate_id, candidate_version
+     FROM answer_reply_knowledge_conflicts
+     WHERE delivery_id = $1`,
+    [deliveryId],
+  );
+  if (result.rows.length > 1) throw new Error("answer reply knowledge conflict binding is invalid");
+  return result.rows[0];
+}
+
+async function requireCurrentAnswerCandidate(
+  client: AnswerReplyTransactionClient,
+  input: {
+    candidateId: string;
+    expectedVersion?: number;
+    expectedGroupId?: string;
+    errorKind: "preparation" | "transition";
+  },
+) {
+  try {
+    return await lockCurrentKnowledgeConflictCandidateForAnswerSend(client, input);
+  } catch (error) {
+    if (
+      error instanceof KnowledgeConflictNotFoundError
+      || error instanceof KnowledgeConflictStaleEvidenceError
+      || error instanceof KnowledgeConflictVersionConflictError
+    ) {
+      if (input.errorKind === "preparation") throw new AnswerReplyPreparationConflictError();
+      throw new AnswerReplyTransitionError();
+    }
+    throw error;
+  }
+}
+
+type SourceGrantBinding = {
+  grantId: string;
+  version: number;
+  documentSourceId: string;
+  grantorGroupId: string;
+  granteeGroupId: string;
+};
+
+async function lockCurrentSourceGrantBindings(
+  client: AnswerReplyTransactionClient,
+  sources: readonly AnswerReplySourceTraceInput[],
+  expectedGranteeGroupId?: string,
+): Promise<void> {
+  const bindings = collectSourceGrantBindings(sources);
+  if (
+    expectedGranteeGroupId !== undefined &&
+    bindings.some((binding) => binding.granteeGroupId !== expectedGranteeGroupId)
+  ) {
+    throw new AnswerReplyGrantStaleError();
+  }
+
+  const documentSourceIds = [...new Set(
+    bindings.map(({ documentSourceId }) => documentSourceId),
+  )].sort();
+  for (const documentSourceId of documentSourceIds) {
+    const sourceLock = await client.query<{ id: string }>(
+      `SELECT id FROM document_sources WHERE id = $1 FOR KEY SHARE`,
+      [documentSourceId],
+    );
+    if (sourceLock.rows.length !== 1) throw new AnswerReplyGrantStaleError();
+  }
+
+  for (const binding of [...bindings].sort((left, right) =>
+    left.grantId.localeCompare(right.grantId))) {
+    const result = await client.query<{ id: string }>(
+      `SELECT group_grant.id
+       FROM document_source_group_grants group_grant
+       JOIN document_sources source ON source.id = group_grant.document_source_id
+       WHERE group_grant.id = $1
+         AND group_grant.version = $2
+         AND group_grant.document_source_id = $3
+         AND group_grant.grantor_group_id = $4
+         AND group_grant.grantee_group_id = $5
+         AND group_grant.state = 'active'
+         AND source.source_type = 'group_visible_document'
+         AND (
+           source.origin_group_id = group_grant.grantor_group_id
+           OR EXISTS (
+             SELECT 1 FROM document_source_evidence evidence
+             WHERE evidence.document_source_id = source.id
+               AND evidence.kind = 'group_message'
+               AND evidence.group_id = group_grant.grantor_group_id
+           )
+         )
+       FOR UPDATE OF group_grant`,
+      [
+        binding.grantId,
+        binding.version,
+        binding.documentSourceId,
+        binding.grantorGroupId,
+        binding.granteeGroupId,
+      ],
+    );
+    if (result.rows.length !== 1) throw new AnswerReplyGrantStaleError();
+  }
+}
+
+function collectSourceGrantBindings(
+  sources: readonly AnswerReplySourceTraceInput[],
+): SourceGrantBinding[] {
+  requireConsistentSourceGrantBindings(sources);
+  const byGrantId = new Map<string, SourceGrantBinding>();
+  for (const source of sources) {
+    if (source.crossGroupGrantId === undefined) continue;
+    const binding: SourceGrantBinding = {
+      grantId: source.crossGroupGrantId,
+      version: source.crossGroupGrantVersion!,
+      documentSourceId: source.documentSourceId,
+      grantorGroupId: source.crossGroupGrantorGroupId!,
+      granteeGroupId: source.crossGroupGranteeGroupId!,
+    };
+    const existing = byGrantId.get(binding.grantId);
+    if (existing !== undefined && sourceGrantSignature(existing) !== sourceGrantSignature(binding)) {
+      throw new AnswerReplyGrantStaleError();
+    }
+    byGrantId.set(binding.grantId, binding);
+  }
+  return [...byGrantId.values()];
+}
+
+function requireConsistentSourceGrantBindings(
+  sources: readonly AnswerReplySourceTraceInput[],
+): void {
+  const byDocumentSourceId = new Map<string, string>();
+  for (const source of sources) {
+    const signature = JSON.stringify([
+      source.crossGroupGrantId,
+      source.crossGroupGrantVersion,
+      source.crossGroupGrantorGroupId,
+      source.crossGroupGranteeGroupId,
+    ]);
+    const existing = byDocumentSourceId.get(source.documentSourceId);
+    if (existing !== undefined && existing !== signature) {
+      throw new Error("sourceTrace cross-group grant is inconsistent");
+    }
+    byDocumentSourceId.set(source.documentSourceId, signature);
+  }
+}
+
+function requireSameSourceGrantBindings(
+  left: readonly AnswerReplySourceTraceInput[],
+  right: readonly AnswerReplySourceTraceInput[],
+  expectedGranteeGroupId: string,
+): void {
+  if (
+    left.length !== right.length ||
+    left.some((source, index) => {
+      const candidate = right[index];
+      return candidate === undefined ||
+        source.documentSourceId !== candidate.documentSourceId ||
+        sourceGrantTraceSignature(source) !== sourceGrantTraceSignature(candidate);
+    }) ||
+    right.some((source) =>
+      source.crossGroupGranteeGroupId !== undefined &&
+      source.crossGroupGranteeGroupId !== expectedGranteeGroupId)
+  ) {
+    throw new AnswerReplyGrantStaleError();
+  }
+}
+
+function sourceGrantTraceSignature(source: AnswerReplySourceTraceInput): string {
+  return JSON.stringify([
+    source.crossGroupGrantId,
+    source.crossGroupGrantVersion,
+    source.crossGroupGrantorGroupId,
+    source.crossGroupGranteeGroupId,
+  ]);
+}
+
+function sourceGrantSignature(binding: SourceGrantBinding): string {
+  return JSON.stringify([
+    binding.version,
+    binding.documentSourceId,
+    binding.grantorGroupId,
+    binding.granteeGroupId,
+  ]);
 }
 
 async function loadSources(
@@ -590,7 +895,9 @@ async function loadSources(
        id, delivery_id, prompt_rank, citation_rank, document_source_id,
        document_snapshot_id, fragment_id, chunk_index, source_type,
        source_uri, source_title, content_hash, embedding_profile_id,
-       initial_permission_checked_at
+       initial_permission_checked_at, cross_group_grant_id,
+       cross_group_grant_version, cross_group_grantor_group_id,
+       cross_group_grantee_group_id
      FROM answer_reply_source_traces
      WHERE delivery_id = $1
      ORDER BY prompt_rank ASC`,
@@ -625,9 +932,12 @@ async function insertSourceTrace(
        id, delivery_id, prompt_rank, citation_rank, document_source_id,
        document_snapshot_id, fragment_id, chunk_index, source_type,
        source_uri, source_title, content_hash, embedding_profile_id,
-       initial_permission_checked_at
+       initial_permission_checked_at, cross_group_grant_id,
+       cross_group_grant_version, cross_group_grantor_group_id,
+       cross_group_grantee_group_id
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+       $15, $16, $17, $18
      )`,
     [
       createAnswerReplySourceTraceId(deliveryId, trace.promptRank),
@@ -644,6 +954,10 @@ async function insertSourceTrace(
       trace.contentHash,
       trace.embeddingProfileId,
       trace.initialPermissionCheckedAt,
+      trace.crossGroupGrantId ?? null,
+      trace.crossGroupGrantVersion ?? null,
+      trace.crossGroupGrantorGroupId ?? null,
+      trace.crossGroupGranteeGroupId ?? null,
     ],
   );
 }
@@ -796,6 +1110,10 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     throw new Error("safeNoticeUuid is invalid");
   }
   const renderedText = requireExactString("renderedText", input.renderedText, MAX_REPLY_CHARS);
+  const knowledgeConflictCandidateId = normalizeOptionalExactReference(
+    "knowledgeConflictCandidateId",
+    input.knowledgeConflictCandidateId,
+  );
   const sourceTraces = normalizeSourceTraces(input.sourceTraces);
   const blockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
     input.blockedDocumentSourceIds,
@@ -808,6 +1126,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     incomingMessageId,
     chatId,
     renderedReplyFingerprint,
+    knowledgeConflictCandidateId,
     sourceTraces,
   });
   return {
@@ -817,6 +1136,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     replyUuid,
     safeNoticeUuid,
     renderedText,
+    ...(knowledgeConflictCandidateId === undefined ? {} : { knowledgeConflictCandidateId }),
     sourceTraces,
     blockedDocumentSourceIds,
     at,
@@ -876,7 +1196,8 @@ function hasSamePrepareIdentity(
     && delivery.incomingMessageId === input.incomingMessageId
     && delivery.chatId === input.chatId
     && delivery.replyUuid === input.replyUuid
-    && delivery.safeNoticeUuid === input.safeNoticeUuid;
+    && delivery.safeNoticeUuid === input.safeNoticeUuid
+    && delivery.knowledgeConflictCandidateId === input.knowledgeConflictCandidateId;
 }
 
 function normalizeSourceTraces(
@@ -885,7 +1206,7 @@ function normalizeSourceTraces(
   if (!Array.isArray(value) || value.length > MAX_SOURCE_TRACES) {
     throw new Error("sourceTraces is invalid");
   }
-  return value.map((trace, index) => {
+  const normalized = value.map((trace, index) => {
     if (trace === null || typeof trace !== "object" || trace.promptRank !== index + 1) {
       throw new Error("sourceTrace promptRank is invalid");
     }
@@ -896,6 +1217,7 @@ function normalizeSourceTraces(
     if (!SOURCE_TYPES.includes(sourceType)) {
       throw new Error("sourceTrace sourceType is invalid");
     }
+    const grantBinding = normalizeSourceGrantBinding(trace, sourceType);
     return {
       promptRank: index + 1,
       ...(citationRank === undefined ? {} : { citationRank }),
@@ -923,8 +1245,53 @@ function normalizeSourceTraces(
         trace.embeddingProfileId,
       ),
       initialPermissionCheckedAt: requireDate(trace.initialPermissionCheckedAt),
+      ...grantBinding,
     };
   });
+  requireConsistentSourceGrantBindings(normalized);
+  return normalized;
+}
+
+function normalizeSourceGrantBinding(
+  trace: AnswerReplySourceTraceInput,
+  sourceType: AnswerReplySourceTraceInput["sourceType"],
+): Pick<
+  AnswerReplySourceTraceInput,
+  | "crossGroupGrantId"
+  | "crossGroupGrantVersion"
+  | "crossGroupGrantorGroupId"
+  | "crossGroupGranteeGroupId"
+> {
+  const values = [
+    trace.crossGroupGrantId,
+    trace.crossGroupGrantVersion,
+    trace.crossGroupGrantorGroupId,
+    trace.crossGroupGranteeGroupId,
+  ];
+  if (values.every((value) => value === undefined)) return {};
+  const grantId = requireReference("sourceTrace crossGroupGrantId", trace.crossGroupGrantId);
+  const version = requireInteger(
+    "sourceTrace crossGroupGrantVersion",
+    trace.crossGroupGrantVersion,
+    1,
+  );
+  const grantorGroupId = requireReference(
+    "sourceTrace crossGroupGrantorGroupId",
+    trace.crossGroupGrantorGroupId,
+  );
+  const granteeGroupId = requireReference(
+    "sourceTrace crossGroupGranteeGroupId",
+    trace.crossGroupGranteeGroupId,
+  );
+  if (sourceType !== "feishu_group_document" || grantorGroupId === granteeGroupId) {
+    throw new Error("sourceTrace cross-group grant is invalid");
+  }
+  return {
+    crossGroupGrantId: grantId,
+    crossGroupGrantVersion: version,
+    crossGroupGrantorGroupId: grantorGroupId,
+    crossGroupGranteeGroupId: granteeGroupId,
+  };
 }
 
 function normalizeTransitionInput(input: VersionedTransitionInput): VersionedTransitionInput {
@@ -965,7 +1332,9 @@ function requireAuthoritativeDocumentSourceIds(
 
 function requireSafeNoticePending(delivery: AnswerReplyDelivery): void {
   if (
-    (delivery.state !== "permission_blocked" && delivery.state !== "reconciliation_required")
+    (delivery.state !== "permission_blocked"
+      && delivery.state !== "reconciliation_required"
+      && delivery.state !== "not_sent_reconciled")
     || delivery.safeNoticeSentAt !== undefined
   ) {
     throw new AnswerReplyTransitionError();
@@ -997,6 +1366,14 @@ function mapDelivery(row: DeliveryRow): AnswerReplyDelivery {
         }),
     renderedReplyFingerprint: requireDatabaseFingerprint(row.rendered_reply_fingerprint),
     semanticFingerprint: requireDatabaseFingerprint(row.semantic_fingerprint),
+    ...(row.knowledge_conflict_candidate_id === null
+      ? {}
+      : {
+          knowledgeConflictCandidateId: requireDatabaseBoundedString(
+            row.knowledge_conflict_candidate_id,
+            MAX_REFERENCE_CHARS,
+          ),
+        }),
     ...(row.reply_message_id === null
       ? {}
       : {
@@ -1041,6 +1418,40 @@ function mapDelivery(row: DeliveryRow): AnswerReplyDelivery {
 
 function mapSourceTrace(row: SourceTraceRow): AnswerReplySourceTrace {
   const sourceType = requireDatabaseEnum(row.source_type, SOURCE_TYPES);
+  const grantFields = [
+    row.cross_group_grant_id,
+    row.cross_group_grant_version,
+    row.cross_group_grantor_group_id,
+    row.cross_group_grantee_group_id,
+  ];
+  const hasGrantBinding = grantFields.every((value) => value !== null);
+  if (!hasGrantBinding && !grantFields.every((value) => value === null)) {
+    throw new Error("answer reply database row is invalid");
+  }
+  const grantBinding = hasGrantBinding
+    ? {
+        crossGroupGrantId: requireDatabaseBoundedString(
+          row.cross_group_grant_id,
+          MAX_REFERENCE_CHARS,
+        ),
+        crossGroupGrantVersion: requireDatabaseInteger(row.cross_group_grant_version, 1),
+        crossGroupGrantorGroupId: requireDatabaseBoundedString(
+          row.cross_group_grantor_group_id,
+          MAX_REFERENCE_CHARS,
+        ),
+        crossGroupGranteeGroupId: requireDatabaseBoundedString(
+          row.cross_group_grantee_group_id,
+          MAX_REFERENCE_CHARS,
+        ),
+      }
+    : {};
+  if (
+    hasGrantBinding &&
+    (sourceType !== "feishu_group_document" ||
+      grantBinding.crossGroupGrantorGroupId === grantBinding.crossGroupGranteeGroupId)
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
   return {
     id: requireDatabaseBoundedString(row.id, MAX_REFERENCE_CHARS),
     deliveryId: requireDatabaseBoundedString(row.delivery_id, MAX_REFERENCE_CHARS),
@@ -1074,6 +1485,7 @@ function mapSourceTrace(row: SourceTraceRow): AnswerReplySourceTrace {
       MAX_REFERENCE_CHARS,
     ),
     initialPermissionCheckedAt: requireDatabaseDate(row.initial_permission_checked_at),
+    ...grantBinding,
   };
 }
 
@@ -1133,6 +1545,24 @@ function requireReference(name: string, value: unknown): string {
 
 function normalizeOptionalReference(name: string, value: unknown): string | undefined {
   return value === undefined ? undefined : requireReference(name, value);
+}
+
+function normalizeOptionalExactReference(
+  name: string,
+  value: unknown,
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > MAX_REFERENCE_CHARS
+    || value.trim() !== value
+  ) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value;
 }
 
 function requireBoundedString(name: string, value: unknown, maxChars: number): string {
@@ -1291,6 +1721,7 @@ function requireDatabaseDocumentSourceIds(
 function isContentFreeDomainError(error: unknown): boolean {
   return error instanceof AnswerReplyPreparationConflictError
     || error instanceof AnswerReplyVersionConflictError
+    || error instanceof AnswerReplyGrantStaleError
     || error instanceof AnswerReplyTransitionError
     || error instanceof AnswerReplyNotFoundError;
 }

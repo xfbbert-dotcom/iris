@@ -14,6 +14,7 @@ import {
   createAnswerDraftRuntime as createProductionAnswerDraftRuntime,
 } from "../src/runtime/answer-draft-runtime.js";
 import {
+  createCompanyFactReasoningDoubles,
   createCompanyFactReasoningRuntimeDependencies,
   createDirectTaskReasoningDoubles,
 } from "./answer-reasoning-test-doubles.js";
@@ -123,6 +124,137 @@ describe("createAnswerDraftRuntime", () => {
 
     await runtime?.close();
     expect(pool.end).toHaveBeenCalled();
+  });
+
+  it("keeps persisted conflict lookup out of ordinary answers unless a gated provider is supplied", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const persistedConflictProvider = {
+      findConflictPlan: vi.fn(async () => undefined),
+      validateForSend: vi.fn(async () => ({
+        status: "current" as const,
+        permissionAttestedAt: new Date("2026-08-15T08:00:00.000Z"),
+      })),
+    };
+    const reasoning = createCompanyFactReasoningDoubles();
+    const runtime = createProductionAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createGroupMemoryRepository: vi.fn(() => ({
+          listActiveByGroup: vi.fn(async () => []),
+        }) as unknown as GroupMemoryRepository),
+        createGroupMemoryService: vi.fn(() => ({ service: true }) as unknown as GroupMemoryService),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => ({ findSourceById: vi.fn() })),
+        createConversationMessageRepository: vi.fn(() => ({ listRecentByChat: vi.fn(async () => []) })),
+        createLiveChatContextProvider: vi.fn(() => ({ loadRecentMessages: vi.fn(async () => []) })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Ordinary answer" })),
+        })),
+        createEvidencePlanner: vi.fn(() => reasoning.planner),
+        createGroundedAnswerRenderer: vi.fn(() => reasoning.renderer),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+        createFeishuTenantAccessTokenProvider: vi.fn(() => ({
+          getTenantAccessToken: vi.fn(async () => "tenant-token"),
+        })),
+        createFeishuDocumentPermissionChecker: vi.fn(() => ({
+          canReadSource: vi.fn(async () => true),
+        })),
+        createKnowledgeConflictRepository: vi.fn(() => ({ persistedCandidate: true }) as never),
+        createKnowledgeConflictAnswerProvider: vi.fn(() => persistedConflictProvider),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is the current company policy?",
+      chatId: "group-outside-conflict-allowlist",
+      liveChatMessages: [],
+    });
+
+    expect(result?.knowledgeConflictCandidateId).toBeUndefined();
+    expect(reasoning.planner.plan).toHaveBeenCalledOnce();
+    expect(persistedConflictProvider.findConflictPlan).not.toHaveBeenCalled();
+    await expect(runtime!.answerDraftOrchestrator.validateKnowledgeConflictForSend!({
+      candidateId: "persisted-current-candidate",
+      groupId: "group-outside-conflict-allowlist",
+      sources: [],
+    })).resolves.toEqual({ status: "blocked" });
+    expect(persistedConflictProvider.validateForSend).not.toHaveBeenCalled();
+
+    await runtime?.close();
+  });
+
+  it("keeps standalone conflict composition behind an explicit opt-in", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const validateForSend = vi.fn(async () => ({
+      status: "current" as const,
+      permissionAttestedAt: new Date("2026-08-15T08:00:00.000Z"),
+    }));
+    const runtime = createProductionAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+      },
+      enableStandaloneKnowledgeConflictAnswerProvider: true,
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => ({ findSourceById: vi.fn() })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Ordinary answer" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+        createFeishuTenantAccessTokenProvider: vi.fn(() => ({
+          getTenantAccessToken: vi.fn(async () => "tenant-token"),
+        })),
+        createFeishuDocumentPermissionChecker: vi.fn(() => ({
+          canReadSource: vi.fn(async () => true),
+        })),
+        createKnowledgeConflictRepository: vi.fn(() => ({ persistedCandidate: true }) as never),
+        createKnowledgeConflictAnswerProvider: vi.fn(() => ({
+          findConflictPlan: vi.fn(async () => undefined),
+          validateForSend,
+        })),
+      },
+    });
+
+    await expect(runtime!.answerDraftOrchestrator.validateKnowledgeConflictForSend!({
+      candidateId: "persisted-current-candidate",
+      groupId: "standalone-test-group",
+      sources: [],
+    })).resolves.toEqual({
+      status: "current",
+      permissionAttestedAt: new Date("2026-08-15T08:00:00.000Z"),
+    });
+    expect(validateForSend).toHaveBeenCalledOnce();
+    await runtime?.close();
   });
 
   it("exposes a group memory service when the Postgres pool supports transactions", async () => {
@@ -324,11 +456,13 @@ describe("createAnswerDraftRuntime", () => {
         },
       ]),
     };
+    const createDocumentSourceGroupGrantRepository = vi.fn();
     const runtime = createAnswerDraftRuntime({
       env: enabledEnv(),
       dependencies: {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
         createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceGroupGrantRepository,
         createModelProvider: vi.fn(() => model),
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(async () => profile()),
@@ -350,6 +484,7 @@ describe("createAnswerDraftRuntime", () => {
       limit: 24,
     });
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(createDocumentSourceGroupGrantRepository).not.toHaveBeenCalled();
   });
 
   it("recovers production-ranked Quello evidence and returns planner-owned citations", async () => {
@@ -1012,6 +1147,108 @@ describe("createAnswerDraftRuntime", () => {
     expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalledWith("chat-other");
   });
 
+  it("uses an exact cross-group document grant while rejecting redundant local bindings", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-cross-group",
+          documentSourceId: "source-cross-group",
+          text: "Explicitly granted cross-group document text",
+          sourceType: "feishu_group_document",
+          crossGroupGrantId: "grant-cross-group",
+          crossGroupGrantVersion: 4,
+          crossGroupGrantorGroupId: "chat-owner",
+          crossGroupGranteeGroupId: "chat-reader",
+        }),
+        fragment({
+          id: "fragment-local-redundant",
+          documentSourceId: "source-local-redundant",
+          text: "Local document with redundant grant text",
+          sourceType: "feishu_group_document",
+          crossGroupGrantId: "grant-local-redundant",
+          crossGroupGrantVersion: 2,
+          crossGroupGrantorGroupId: "chat-other",
+          crossGroupGranteeGroupId: "chat-reader",
+        }),
+      ]),
+    };
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-cross-group": source({
+        id: "source-cross-group",
+        sourceType: "group_visible_document",
+        originGroupId: "chat-owner",
+        permissionState: "readable",
+      }),
+      "source-local-redundant": source({
+        id: "source-local-redundant",
+        sourceType: "group_visible_document",
+        originGroupId: "chat-reader",
+        permissionState: "readable",
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => sources[id]),
+    };
+    const validateExact = vi.fn(async () => true);
+    const createDocumentSourceGroupGrantRepository = vi.fn(() => ({ validateExact }));
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          connect: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createDocumentSourceGroupGrantRepository,
+        createGroupMemoryRepository: vi.fn(() => ({
+          listActiveByGroup: vi.fn(async () => []),
+        }) as unknown as GroupMemoryRepository),
+        createLiveChatContextProvider: vi.fn(() => ({
+          loadRecentMessages: vi.fn(async () => []),
+        })),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What was explicitly shared with this group?",
+      chatId: "chat-reader",
+      liveChatMessages: [],
+    });
+
+    expect(result?.promptContext).toContain("Explicitly granted cross-group document text");
+    expect(result?.promptContext).not.toContain("Local document with redundant grant text");
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-cross-group"]);
+    expect(result?.deniedDocumentIds).toEqual(["source-local-redundant"]);
+    expect(createDocumentSourceGroupGrantRepository).toHaveBeenCalledTimes(1);
+    expect(validateExact).toHaveBeenCalledWith({
+      grantId: "grant-cross-group",
+      version: 4,
+      documentSourceId: "source-cross-group",
+      grantorGroupId: "chat-owner",
+      granteeGroupId: "chat-reader",
+    });
+  });
+
   it.each([
     { label: "missing", chatId: undefined },
     { label: "blank", chatId: "   " },
@@ -1397,6 +1634,70 @@ describe("createAnswerDraftRuntime", () => {
       }),
     ).resolves.toEqual([{ documentSourceId: "source-group", outcome: "denied" }]);
     expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalled();
+
+    await runtime?.close();
+  });
+
+  it("allows a receipt-bound cross-group source recheck for the exact grantee only", async () => {
+    const groupSource = source({
+      id: "source-group-granted",
+      sourceType: "group_visible_document",
+      originGroupId: "oc_owner",
+      permissionState: "readable",
+    });
+    const sourceRegistry = { findSourceById: vi.fn(async () => groupSource) };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(runtime!.answerSourcePermissionVerifier.verify({
+      chatId: "oc_reader",
+      documentSourceIds: ["source-group-granted"],
+      crossGroupGrantBindings: [{
+        documentSourceId: "source-group-granted",
+        grantId: "grant-a",
+        version: 2,
+        grantorGroupId: "oc_owner",
+        granteeGroupId: "oc_reader",
+      }],
+    })).resolves.toEqual([{ documentSourceId: "source-group-granted", outcome: "allowed" }]);
+
+    await expect(runtime!.answerSourcePermissionVerifier.verify({
+      chatId: "oc_other",
+      documentSourceIds: ["source-group-granted"],
+      crossGroupGrantBindings: [{
+        documentSourceId: "source-group-granted",
+        grantId: "grant-a",
+        version: 2,
+        grantorGroupId: "oc_owner",
+        granteeGroupId: "oc_reader",
+      }],
+    })).resolves.toEqual([{ documentSourceId: "source-group-granted", outcome: "error" }]);
+    expect(sourceRegistry.findSourceById).toHaveBeenCalledTimes(1);
 
     await runtime?.close();
   });

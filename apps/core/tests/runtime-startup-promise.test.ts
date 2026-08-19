@@ -174,6 +174,7 @@ function eventWorkerDependencies({ connect }: { connect: ReturnType<typeof vi.fn
     createConversationMessageRepository: vi.fn(() => ({
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     })),
     createDocumentSourceRegistry: vi.fn(() => ({
       registerGroupVisibleDocument: vi.fn(),
@@ -221,6 +222,17 @@ function documentSyncDependencies({ connect }: { connect: ReturnType<typeof vi.f
       markSyncState: vi.fn(),
       registerAuthorizedWikiDocument: vi.fn(),
       registerUserSubmittedDocument: vi.fn(),
+    })),
+    createDocumentSourceGroupGrantRepository: vi.fn(() => ({
+      getStatus: vi.fn(async () => ({
+        migration0051Applied: true,
+        active: 0,
+        revoked: 0,
+      })),
+      listForSource: vi.fn(async () => []),
+      findById: vi.fn(async () => undefined),
+      grant: vi.fn(),
+      revoke: vi.fn(),
     })),
     createDocumentSnapshotRepository: vi.fn(() => ({
       insertSucceededSnapshot: vi.fn(),

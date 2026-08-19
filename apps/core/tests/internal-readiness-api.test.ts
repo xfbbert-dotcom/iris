@@ -4,6 +4,7 @@ import { buildApp } from "../src/app.js";
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import type { EnvLike } from "../src/config/env.js";
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
+import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
 import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runtime.js";
 import type { ActionReviewRuntime } from "../src/runtime/action-review-runtime.js";
@@ -20,6 +21,54 @@ afterEach(() => {
 });
 
 describe("GET /internal/readiness", () => {
+  it("uses live content-free cross-group grant counts and fails closed when they are unreadable", async () => {
+    const runtime = fakeDocumentSyncRuntimeForReadiness({
+      migration0051Applied: true,
+      active: 1,
+      revoked: 2,
+      latestUpdatedAt: new Date("2026-08-18T05:00:00.000Z"),
+    });
+    const app = await buildApp({
+      readinessEnv: readyRolloutEnv(),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const status = (await app.inject({ method: "GET", url: "/internal/status" })).json();
+    expect(status.components.documentSync.groupGrants).toEqual({
+      migration0051Applied: true,
+      active: 1,
+      revoked: 2,
+      latestUpdatedAt: "2026-08-18T05:00:00.000Z",
+    });
+    const readiness = (await app.inject({ method: "GET", url: "/internal/readiness" })).json();
+    expect(readiness.checks).toContainEqual(expect.objectContaining({
+      id: "documentSourceGroupGrants",
+      status: "pass",
+    }));
+    await app.close();
+
+    const unavailableApp = await buildApp({
+      readinessEnv: readyRolloutEnv(),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntimeForReadiness(undefined, true),
+      createReindexWorkerRuntime: () => undefined,
+    });
+    const unavailable = (await unavailableApp.inject({
+      method: "GET",
+      url: "/internal/readiness",
+    })).json();
+    expect(unavailable).toMatchObject({ ok: false, status: "blocked" });
+    expect(unavailable.checks).toContainEqual(expect.objectContaining({
+      id: "documentSourceGroupGrants",
+      status: "fail",
+    }));
+    await unavailableApp.close();
+  });
+
   it("returns the internal rollout readiness report for the configured environment", async () => {
     const app = await buildApp({
       readinessEnv: readyRolloutEnv(),
@@ -135,14 +184,15 @@ describe("memory extraction internal API", () => {
       "eventWorker",
       "documentSync",
       "reindex",
+      "knowledgeConflicts",
       "actionApprovals",
       "proactiveSignals",
     ]);
     expect(consolidated.json().summary).toMatchObject({
-      componentCount: 11,
+      componentCount: 12,
       healthyComponentCount: 3,
       enabledComponentCount: 3,
-      disabledComponentCount: 8,
+      disabledComponentCount: 9,
       disabledComponents: [
         "answerDraft",
         "agentExecutionLedger",
@@ -150,12 +200,13 @@ describe("memory extraction internal API", () => {
         "eventWorker",
         "documentSync",
         "reindex",
+        "knowledgeConflicts",
         "actionApprovals",
         "proactiveSignals",
       ],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 8,
+        disabled: 9,
         degraded: 0,
         stopped: 0,
       },
@@ -677,6 +728,39 @@ function fakeMemoryExtractionRuntime(
     start: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,
+  };
+}
+
+function fakeDocumentSyncRuntimeForReadiness(
+  groupGrants?: {
+    migration0051Applied: boolean;
+    active?: number;
+    revoked?: number;
+    latestUpdatedAt?: Date;
+  },
+  rejectStatus = false,
+): DocumentSyncRuntime {
+  return {
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    getStatus: vi.fn(async () => {
+      if (rejectStatus) throw new Error("sensitive database failure");
+      return {
+        enabled: true as const,
+        running: true,
+        intervalMs: 1_000,
+        batchLimit: 20,
+        pendingJobCount: 0,
+        deadLetterJobCount: 0,
+        ...(groupGrants === undefined ? {} : { groupGrants }),
+      };
+    }),
+    sources: {} as DocumentSyncRuntime["sources"],
+    enqueueSource: vi.fn(),
+    registerAuthorizedWikiDocument: vi.fn(),
+    registerUserSubmittedDocument: vi.fn(),
+    deadLetters: {} as DocumentSyncRuntime["deadLetters"],
+    wikiSpaces: {} as DocumentSyncRuntime["wikiSpaces"],
   };
 }
 

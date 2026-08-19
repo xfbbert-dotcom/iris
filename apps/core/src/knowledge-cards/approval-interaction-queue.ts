@@ -7,6 +7,8 @@ export const APPROVAL_INTERACTION_FAILURE_CODES = [
   "outcome_unknown",
   "membership_unavailable",
   "repository_unavailable",
+  "validation_unavailable",
+  "presentation_unavailable",
   "redis_unavailable",
   "invalid_queue_payload",
   "internal_error",

@@ -1,5 +1,6 @@
 import type {
   ConversationMessage,
+  ConversationMessageEvidence,
   ConversationMessageMention,
   ConversationMessageRepository,
 } from "./conversation-message-repository.js";
@@ -24,6 +25,7 @@ type ConversationMessageRow = {
   raw_event_idempotency_key: string;
   created_at: Date;
   mentions?: unknown;
+  tombstoned?: boolean;
 };
 
 export const MAX_CONVERSATION_MESSAGE_ID_CHARS = 512;
@@ -177,7 +179,64 @@ export function createPostgresConversationMessageRepository({
 
       return result.rows.map(mapRow);
     },
+
+    async findByIds(input) {
+      const chatId = requireBoundedIdentifier("chatId", input.chatId);
+      const ids = normalizeMessageIds(input.ids);
+      if (ids.length === 0) {
+        return [];
+      }
+      const result = await queryable.query<ConversationMessageRow>(
+        `
+        SELECT
+          conversation_messages.*,
+          EXISTS (
+            SELECT 1
+            FROM conversation_message_deletion_tombstones tombstone
+            WHERE tombstone.conversation_message_id = conversation_messages.id
+          ) AS tombstoned,
+          COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'key',
+                conversation_message_mentions.mention_key,
+                'openId',
+                conversation_message_mentions.mentioned_open_id
+              )
+              ORDER BY
+                conversation_message_mentions.mention_key,
+                conversation_message_mentions.mentioned_open_id
+            ) FILTER (WHERE conversation_message_mentions.conversation_message_id IS NOT NULL),
+            '[]'::jsonb
+          ) AS mentions
+        FROM conversation_messages
+        LEFT JOIN conversation_message_mentions
+          ON conversation_message_mentions.conversation_message_id = conversation_messages.id
+        WHERE conversation_messages.chat_id = $1
+          AND conversation_messages.id = ANY($2::text[])
+        GROUP BY conversation_messages.id
+        ORDER BY conversation_messages.id ASC
+        `,
+        [chatId, ids],
+      );
+
+      return result.rows
+        .map(mapEvidenceRow)
+        .sort((left, right) => compareStrings(left.id, right.id));
+    },
   };
+}
+
+function normalizeMessageIds(ids: readonly string[]): string[] {
+  if (ids.length > MAX_CONVERSATION_MESSAGE_LIST_LIMIT) {
+    throw new Error(`conversation message ids must include at most ${MAX_CONVERSATION_MESSAGE_LIST_LIMIT} entries`);
+  }
+  return [...new Set(ids.map((id) => requireBoundedIdentifier("message id", id)))]
+    .sort(compareStrings);
+}
+
+function compareStrings(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
 }
 
 function requireBoundedIdentifier(fieldName: string, value: string): string {
@@ -241,6 +300,13 @@ function mapRow(row: ConversationMessageRow): ConversationMessage {
     sentAt: row.sent_at,
     rawEventIdempotencyKey: row.raw_event_idempotency_key,
     createdAt: row.created_at,
+  };
+}
+
+function mapEvidenceRow(row: ConversationMessageRow): ConversationMessageEvidence {
+  return {
+    ...mapRow(row),
+    tombstoned: row.tombstoned === true,
   };
 }
 

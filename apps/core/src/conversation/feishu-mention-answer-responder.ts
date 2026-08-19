@@ -5,6 +5,8 @@ import {
   createAnswerReplyUuid,
 } from "../answer-replies/answer-reply-repository.js";
 import { renderAnswerWithSourceCitations } from "../answer-replies/answer-source-citation-renderer.js";
+import type { RetrievedDocumentFragment } from
+  "../documents/document-fragment-repository.js";
 import type { RegisterUserSubmittedDocumentInput } from "../documents/document-source-registry.js";
 import type { FeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
 import type { FeishuMessageReplier } from "../feishu/feishu-message-replier.js";
@@ -45,7 +47,10 @@ export type FeishuMentionAnswerResponder = {
 export type FeishuMentionAnswerResponderDependencies = {
   botOpenId: string;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
-    & Partial<Pick<AnswerDraftOrchestrator, "inspectPromptPermissions">>;
+    & Partial<Pick<
+      AnswerDraftOrchestrator,
+      "inspectPromptPermissions" | "validateKnowledgeConflictForSend"
+    >>;
   answerReplyDeliveryService: Pick<AnswerReplyDeliveryService, "respond">;
   replier: Pick<FeishuMessageReplier, "replyText">;
   now?: () => Date;
@@ -321,6 +326,8 @@ export function createFeishuMentionAnswerResponder({
           }],
         };
         try {
+          const validateKnowledgeConflictForSend =
+            answerDraftOrchestrator.validateKnowledgeConflictForSend;
           const result = toRepliedResult(
             await answerReplyDeliveryService.respond({
               provider: "feishu",
@@ -328,6 +335,12 @@ export function createFeishuMentionAnswerResponder({
               chatId: input.chatId,
               replyUuid,
               safeNoticeUuid: createAnswerReplySafeNoticeUuid(input.messageId),
+              ...(validateKnowledgeConflictForSend === undefined
+                ? {}
+                : {
+                    validateKnowledgeConflictForSend: (validationInput) =>
+                      validateKnowledgeConflictForSend(validationInput),
+                  }),
               inspectPromptPermissions: async () => {
                 if (answerDraftOrchestrator.inspectPromptPermissions === undefined) {
                   throw new Error("answer prompt permission inspection is unavailable");
@@ -351,16 +364,23 @@ export function createFeishuMentionAnswerResponder({
                   throw error;
                 }
                 const preparedAt = now();
+                const deliveryEvidence = selectDeliveryEvidence(answer);
                 return {
                   ...renderAnswerWithSourceCitations({
                     answerText: answer.answerText,
-                    citedSourceRefs: answer.citedSourceRefs ?? [],
-                    allowedFragments: answer.allowedFragments,
+                    citedSourceRefs: deliveryEvidence.citedSourceRefs,
+                    allowedFragments: deliveryEvidence.allowedFragments,
                     initialPermissionCheckedAt: preparedAt,
                   }),
                   ...(answer.deniedDocumentIds.length === 0
                     ? {}
                     : { blockedDocumentSourceIds: [...answer.deniedDocumentIds] }),
+                  ...(answer.knowledgeConflictCandidateId === undefined
+                    ? {}
+                    : {
+                        knowledgeConflictCandidateId:
+                          answer.knowledgeConflictCandidateId,
+                      }),
                   preparedAt,
                 };
               },
@@ -392,6 +412,35 @@ export function createFeishuMentionAnswerResponder({
         throw error;
       }
     },
+  };
+}
+
+function selectDeliveryEvidence(answer: {
+  citedSourceRefs?: readonly string[];
+  allowedFragments: readonly RetrievedDocumentFragment[];
+  knowledgeConflictCandidateId?: string;
+}): {
+  citedSourceRefs: string[];
+  allowedFragments: RetrievedDocumentFragment[];
+} {
+  if (answer.knowledgeConflictCandidateId === undefined) {
+    return {
+      citedSourceRefs: [...(answer.citedSourceRefs ?? [])],
+      allowedFragments: [...answer.allowedFragments],
+    };
+  }
+
+  const citedSourceRefs = answer.citedSourceRefs ?? [];
+  if (citedSourceRefs.length !== 1 || !/^D(?:[1-9]|1[0-2])$/u.test(citedSourceRefs[0]!)) {
+    throw new Error("knowledge-conflict answer must cite exactly one document source");
+  }
+  const fragment = answer.allowedFragments[Number(citedSourceRefs[0]!.slice(1)) - 1];
+  if (fragment === undefined) {
+    throw new Error("knowledge-conflict answer citation is outside the allowed prompt window");
+  }
+  return {
+    citedSourceRefs: ["D1"],
+    allowedFragments: [fragment],
   };
 }
 

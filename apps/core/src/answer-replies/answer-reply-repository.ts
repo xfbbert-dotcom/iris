@@ -7,7 +7,8 @@ export type AnswerReplyDeliveryState =
   | "sending"
   | "sent"
   | "permission_blocked"
-  | "reconciliation_required";
+  | "reconciliation_required"
+  | "not_sent_reconciled";
 
 export type AnswerReplyProvider = "feishu";
 
@@ -22,6 +23,7 @@ export type AnswerReplyDelivery = {
   preparedReplyText?: string;
   renderedReplyFingerprint: string;
   semanticFingerprint: string;
+  knowledgeConflictCandidateId?: string;
   replyMessageId?: string;
   safeNoticeMessageId?: string;
   attemptCount: number;
@@ -47,6 +49,7 @@ export type AnswerReplyDeliveryEventType =
   | "sent"
   | "permission_blocked"
   | "reconciliation_required"
+  | "not_sent_reconciled"
   | "safe_notice_send_started"
   | "safe_notice_sent";
 
@@ -76,6 +79,7 @@ export type PrepareAnswerReplyInput = {
   renderedText: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
   blockedDocumentSourceIds?: readonly string[];
+  knowledgeConflictCandidateId?: string;
   at: Date;
 };
 
@@ -107,6 +111,7 @@ export interface AnswerReplyRepository {
   blockForPermission(input: VersionedTransitionInput & {
     documentSourceIds: string[];
   }): Promise<AnswerReplyReceipt>;
+  reconcileNotSent(input: VersionedTransitionInput): Promise<AnswerReplyReceipt>;
   beginSafeNoticeSend(input: VersionedTransitionInput): Promise<AnswerReplyReceipt>;
   completeSafeNoticeSend(input: VersionedTransitionInput & {
     safeNoticeMessageId?: string;
@@ -125,6 +130,13 @@ export class AnswerReplyVersionConflictError extends Error {
   constructor() {
     super("answer reply version conflict");
     this.name = "AnswerReplyVersionConflictError";
+  }
+}
+
+export class AnswerReplyGrantStaleError extends Error {
+  constructor() {
+    super("answer reply cross-group grant stale");
+    this.name = "AnswerReplyGrantStaleError";
   }
 }
 

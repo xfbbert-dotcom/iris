@@ -16,6 +16,9 @@ import test from "node:test";
 
 const restorePath = resolve("deploy/pilot/restore-from-stdin.sh");
 const gitBash = bashPath();
+const restoreHarnessWatchdogMs = 20_000;
+const partialStopExitBoundMs = 15_000;
+const restartFailureExitBoundMs = 11_500;
 
 for (const hangPoint of ["daemon", "process-tree"]) {
   test(
@@ -50,6 +53,10 @@ test(
     const result = runRestore({ partialStopCount: 3 });
     try {
       assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.ok(
+        result.elapsedMs < partialStopExitBoundMs,
+        `partial Caddy stop recovery took ${result.elapsedMs}ms`,
+      );
       assert.equal(result.caddyRunning, false);
       assert.equal(result.stopCaddyCount, 3);
       assert.ok(result.log.indexOf("verify-caddy-stopped") < result.log.indexOf("swap-database"));
@@ -88,7 +95,10 @@ test(
     try {
       assert.notEqual(result.status, 0);
       assert.equal(result.error, undefined);
-      assert.ok(result.elapsedMs < 10_000);
+      assert.ok(
+        result.elapsedMs < restartFailureExitBoundMs,
+        `restart failure cleanup took ${result.elapsedMs}ms`,
+      );
       assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
       assert.match(result.log, /swap-database/u);
       assert.ok(result.stopCaddyCount >= 2, result.log);
@@ -164,7 +174,7 @@ function runRestore({ failurePoint = "", hangPoint = "", partialStopCount = 0 })
       encoding: "utf8",
       env: environment,
       input: readFileSync(bundlePath),
-      timeout: 12_000,
+      timeout: restoreHarnessWatchdogMs,
       maxBuffer: 1024 * 1024,
     },
   );

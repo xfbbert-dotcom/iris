@@ -71,6 +71,12 @@ import {
   type DocumentSourceType,
 } from "./documents/document-source-registry.js";
 import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
+import type { DocumentSourceGroupGrant } from "./documents/document-source-group-grant.js";
+import {
+  DocumentSourceGroupGrantConflictError,
+  DocumentSourceGroupGrantNotFoundError,
+  DocumentSourceGroupGrantValidationError,
+} from "./documents/postgres-document-source-group-grant-repository.js";
 import {
   normalizeFeishuDocumentSourceUri,
   parseFeishuWikiNodeToken,
@@ -107,8 +113,14 @@ import {
 } from "./runtime/knowledge-draft-runtime.js";
 import {
   createKnowledgeCardRuntime as createDefaultKnowledgeCardRuntime,
+  createKnowledgeCardStatusReader as createDefaultKnowledgeCardStatusReader,
   type KnowledgeCardRuntime,
+  type KnowledgeCardStatusReader,
 } from "./runtime/knowledge-card-runtime.js";
+import {
+  createKnowledgeConflictRuntime as createDefaultKnowledgeConflictRuntime,
+  type KnowledgeConflictRuntime,
+} from "./runtime/knowledge-conflict-runtime.js";
 import {
   createActionApprovalRuntime as createDefaultActionApprovalRuntime,
   type ActionApprovalRuntime,
@@ -130,6 +142,10 @@ import { registerActionProposalApi } from "./action-approvals/action-proposal-ap
 import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
 import { registerAgentExecutionLedgerApi } from "./agent-runtime/agent-execution-ledger-api.js";
 import { registerAnswerReplyApi } from "./answer-replies/answer-reply-api.js";
+import {
+  registerKnowledgeConflictApi,
+  type KnowledgeConflictApiRuntime,
+} from "./knowledge-conflicts/knowledge-conflict-api.js";
 import {
   createAgentExecutionLedgerRuntime as createDefaultAgentExecutionLedgerRuntime,
   type AgentExecutionLedgerRuntime,
@@ -196,6 +212,12 @@ export type BuildAppDependencies = {
   createKnowledgeCardRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
   ) => KnowledgeCardRuntime | undefined;
+  createKnowledgeCardStatusReader?: (
+    input?: Parameters<typeof createDefaultKnowledgeCardStatusReader>[0],
+  ) => KnowledgeCardStatusReader | undefined;
+  createKnowledgeConflictRuntime?: (
+    input: Parameters<typeof createDefaultKnowledgeConflictRuntime>[0],
+  ) => KnowledgeConflictRuntime | undefined;
   createActionApprovalRuntime?: (
     input?: Parameters<typeof createDefaultActionApprovalRuntime>[0],
   ) => ActionApprovalRuntime | undefined;
@@ -208,6 +230,7 @@ export type BuildAppDependencies = {
   createProactiveSignalPlannerRuntime?: (
     input?: Parameters<typeof createDefaultProactiveSignalPlannerRuntime>[0],
   ) => ProactiveSignalPlannerRuntime | undefined;
+  knowledgeConflictRuntime?: KnowledgeConflictApiRuntime;
 };
 
 export type StartServerOptions = {
@@ -353,6 +376,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     dependencies.runtimeControl?.service ??
     createInMemoryRuntimeControlService(runtimeController, now);
   let agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
+  let composedKnowledgeConflictRuntime: KnowledgeConflictRuntime | undefined;
   let answerDraftRuntime: AnswerDraftRuntime | undefined;
   let answerDraftOrchestrator = dependencies.answerDraftOrchestrator;
   let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
@@ -363,12 +387,14 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   let proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  let knowledgeCardStatusReader: KnowledgeCardStatusReader | undefined;
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
   let actionReviewRuntime: ActionReviewRuntime | undefined;
   let proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
   let proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
   let knowledgeCardStartup: Promise<void> | undefined;
   let actionApprovalStartup: Promise<void> | undefined;
+  let knowledgeConflictStartup: Promise<void> | undefined;
   let proactiveSignalPlannerStartup: Promise<void> | undefined;
   let proactiveSignalDeliveryStartup: Promise<void> | undefined;
   let eventWorkerStartup: Promise<void> | undefined;
@@ -380,6 +406,19 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       dependencies.createAgentExecutionLedgerRuntime ??
       createDefaultAgentExecutionLedgerRuntime
     )({ now });
+    composedKnowledgeConflictRuntime = dependencies.knowledgeConflictRuntime === undefined
+      ? (dependencies.createKnowledgeConflictRuntime ?? createDefaultKnowledgeConflictRuntime)({
+          runtimeController,
+          getKnowledgeCardPresentationRuntime: () => knowledgeCardRuntime,
+          ...(dependencies.onRuntimeStartupCleanup === undefined
+            ? {}
+            : {
+                dependencies: {
+                  onStartupCleanup: dependencies.onRuntimeStartupCleanup,
+                },
+              }),
+        })
+      : undefined;
     answerDraftRuntime =
       answerDraftOrchestrator === undefined
         ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
@@ -388,6 +427,8 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
             ...(agentExecutionLedgerRuntime === undefined
               ? {}
               : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
+            knowledgeConflictAnswerProvider:
+              composedKnowledgeConflictRuntime?.answerProvider ?? null,
           })
         : undefined;
     answerDraftOrchestrator ??= answerDraftRuntime?.answerDraftOrchestrator;
@@ -418,6 +459,17 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       proactiveSignalRepository:
         dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
     });
+    knowledgeCardStatusReader = knowledgeCardRuntime === undefined
+      ? (dependencies.createKnowledgeCardStatusReader ?? createDefaultKnowledgeCardStatusReader)()
+      : undefined;
+    if (composedKnowledgeConflictRuntime !== undefined) {
+      if (knowledgeCardRuntime === undefined) {
+        throw new Error("knowledge conflict runtime requires the knowledge-card runtime");
+      }
+      knowledgeCardRuntime.bindKnowledgeConflictInteractionWorker(
+        composedKnowledgeConflictRuntime.interactionWorker,
+      );
+    }
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
     )({
@@ -427,6 +479,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         ? {}
         : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
     });
+    if (composedKnowledgeConflictRuntime !== undefined && actionApprovalRuntime === undefined) {
+      throw new Error("knowledge conflict runtime requires the action-approval runtime");
+    }
     const chatKnowledgeDraftCommand =
       answerDraftRuntime?.chatKnowledgeDraftGenerator !== undefined &&
         knowledgeDraftRuntime !== undefined &&
@@ -469,10 +524,16 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       : observeStartupPromise(
           (knowledgeCardStartup ?? Promise.resolve()).then(() => actionApprovalRuntime!.start()),
         );
-    proactiveSignalPlannerStartup = proactiveSignalPlannerRuntime === undefined
+    knowledgeConflictStartup = composedKnowledgeConflictRuntime === undefined
       ? undefined
       : observeStartupPromise(
           (actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
+            .then(() => composedKnowledgeConflictRuntime!.start()),
+        );
+    proactiveSignalPlannerStartup = proactiveSignalPlannerRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (knowledgeConflictStartup ?? actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
             .then(() => proactiveSignalPlannerRuntime!.start()),
         );
     proactiveSignalDeliveryStartup = proactiveSignalDeliveryRuntime === undefined
@@ -504,6 +565,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     const eventWorkerPrerequisite =
       proactiveSignalDeliveryStartup ??
       proactiveSignalPlannerStartup ??
+      knowledgeConflictStartup ??
       actionApprovalStartup ??
       knowledgeCardStartup;
     if (eventWorkerPrerequisite === undefined) {
@@ -551,6 +613,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   if (
     knowledgeCardStartup !== undefined ||
     actionApprovalStartup !== undefined ||
+    knowledgeConflictStartup !== undefined ||
     proactiveSignalPlannerStartup !== undefined ||
     proactiveSignalDeliveryStartup !== undefined ||
     eventWorkerStartup !== undefined
@@ -558,6 +621,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     app.addHook("onReady", async () => {
       await knowledgeCardStartup;
       await actionApprovalStartup;
+      await knowledgeConflictStartup;
       await proactiveSignalPlannerStartup;
       await proactiveSignalDeliveryStartup;
       await eventWorkerStartup;
@@ -601,7 +665,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   if (eventWorkerRuntime?.answerReplies !== undefined) {
-    registerAnswerReplyApi(app, eventWorkerRuntime.answerReplies);
+    registerAnswerReplyApi(app, eventWorkerRuntime.answerReplies, { now });
   }
   registerGroupMemoryApi(app, groupMemoryService, {
     authenticationConfigured: internalApiToken !== undefined,
@@ -629,6 +693,14 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
   registerActionReviewApi(app, actionReviewRuntime, { now });
   registerAgentExecutionLedgerApi(app, agentExecutionLedgerRuntime);
+  registerKnowledgeConflictApi(
+    app,
+    dependencies.knowledgeConflictRuntime ?? composedKnowledgeConflictRuntime,
+    {
+      authenticationConfigured: internalApiToken !== undefined,
+      now,
+    },
+  );
 
   app.get("/admin", async (_request, reply) => (
     reply
@@ -704,7 +776,11 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       controller: runtimeController,
       service: runtimeControlService,
     });
-    const knowledgeCards = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const knowledgeCards = await getKnowledgeCardStatus(
+      knowledgeCardRuntime,
+      knowledgeCardStatusReader,
+    );
+    const knowledgeConflicts = await getKnowledgeConflictStatus(composedKnowledgeConflictRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
     const proactiveSignals = await getProactiveSignalsStatus({
       planner: proactiveSignalPlannerRuntime,
@@ -749,6 +825,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
+      knowledgeConflicts,
       actionApprovals: actionApprovals ?? { ok: true, enabled: false, running: false },
       proactiveSignals,
     };
@@ -757,12 +834,27 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.get("/internal/readiness", async () => {
-    const knowledgeCardStatus = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const documentSyncStatus = documentSyncRuntime === undefined
+      ? undefined
+      : await getDocumentSyncStatus(documentSyncRuntime);
+    const knowledgeCardStatus = await getKnowledgeCardStatus(
+      knowledgeCardRuntime,
+      knowledgeCardStatusReader,
+    );
+    const knowledgeConflictStatus = await getKnowledgeConflictStatus(
+      composedKnowledgeConflictRuntime,
+    );
     const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
     const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
-      { knowledgeCardStatus, actionApprovalStatus, actionReviewStatus },
+      {
+        ...(documentSyncStatus === undefined ? {} : { documentSyncStatus }),
+        knowledgeCardStatus,
+        knowledgeConflictStatus,
+        actionApprovalStatus,
+        actionReviewStatus,
+      },
     );
   });
 
@@ -1515,6 +1607,104 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/document-sync/sources/:id/group-grants", async (request, reply) => {
+    const groupGrants = documentSyncRuntime?.sources.groupGrants;
+    if (groupGrants === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    const parsedQuery = parseDocumentSourceGroupGrantListQuery(request.query);
+    if (documentSourceId === undefined || parsedQuery === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+    try {
+      const grants = await groupGrants.list({
+        documentSourceId,
+        limit: parsedQuery.limit,
+      });
+      if (grants === undefined) {
+        return reply.code(404).send({ ok: false, error: "document_source_not_found" });
+      }
+      return { ok: true, grants: grants.map(toDocumentSourceGroupGrantResponse) };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "document_source_group_grant_lookup_failed" });
+    }
+  });
+
+  app.post("/internal/document-sync/sources/:id/group-grants", async (request, reply) => {
+    const groupGrants = documentSyncRuntime?.sources.groupGrants;
+    if (groupGrants === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+    const actorRef = readRequiredOperator(request.headers["x-iris-operator"]);
+    if (actorRef === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_operator" });
+    }
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseDocumentSourceGroupGrantRequest(body);
+    if (documentSourceId === undefined || parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+    try {
+      const result = await groupGrants.grant({
+        documentSourceId,
+        ...parsedRequest,
+        actorRef,
+        at: now(),
+      });
+      return {
+        ok: true,
+        outcome: result.outcome,
+        grant: toDocumentSourceGroupGrantResponse(result.grant),
+      };
+    } catch (error) {
+      return sendDocumentSourceGroupGrantError(reply, error, "mutation");
+    }
+  });
+
+  app.post(
+    "/internal/document-sync/sources/:id/group-grants/:grantId/revoke",
+    async (request, reply) => {
+      const groupGrants = documentSyncRuntime?.sources.groupGrants;
+      if (groupGrants === undefined) {
+        return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+      }
+      const actorRef = readRequiredOperator(request.headers["x-iris-operator"]);
+      if (actorRef === undefined) {
+        return reply.code(400).send({ ok: false, error: "invalid_operator" });
+      }
+      const params = request.params as { id?: unknown; grantId?: unknown };
+      const documentSourceId = readNonBlankId(params.id);
+      const grantId = readNonBlankId(params.grantId);
+      const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+      const parsedRequest = parseDocumentSourceGroupGrantRevokeRequest(body);
+      if (
+        documentSourceId === undefined ||
+        grantId === undefined ||
+        parsedRequest === undefined
+      ) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      try {
+        const result = await groupGrants.revoke({
+          documentSourceId,
+          grantId,
+          ...parsedRequest,
+          actorRef,
+          at: now(),
+        });
+        return {
+          ok: true,
+          outcome: result.outcome,
+          grant: toDocumentSourceGroupGrantResponse(result.grant),
+        };
+      } catch (error) {
+        return sendDocumentSourceGroupGrantError(reply, error, "revoke");
+      }
+    },
+  );
+
   app.get("/internal/document-sync/sources/:id", async (request, reply) => {
     if (documentSyncRuntime === undefined) {
       return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
@@ -1846,8 +2036,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       () => actionReviewRuntime?.close(),
       () => proactiveSignalDeliveryRuntime?.close(),
       () => proactiveSignalPlannerRuntime?.close(),
-      () => actionApprovalRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
+      () => knowledgeCardStatusReader?.close(),
+      () => composedKnowledgeConflictRuntime?.close(),
+      () => actionApprovalRuntime?.close(),
       () => proactiveSignalRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
       () => agentExecutionLedgerRuntime?.close(),
@@ -1870,7 +2062,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       conversationStateInspectionRuntime,
       proactiveSignalRuntime,
       proactiveSignalPlannerRuntime,
+      composedKnowledgeConflictRuntime,
       knowledgeCardRuntime,
+      knowledgeCardStatusReader,
       actionApprovalRuntime,
       actionReviewRuntime,
       proactiveSignalDeliveryRuntime,
@@ -1916,16 +2110,43 @@ function getAgentExecutionLedgerStatus(
   };
 }
 
-async function getKnowledgeCardStatus(runtime: KnowledgeCardRuntime | undefined) {
-  if (runtime === undefined) return undefined;
+async function getKnowledgeCardStatus(
+  runtime: KnowledgeCardRuntime | undefined,
+  statusReader: KnowledgeCardStatusReader | undefined,
+) {
+  const statusSource = runtime ?? statusReader;
+  if (statusSource === undefined) return undefined;
   try {
-    return { ok: true, ...(await runtime.getStatus()) };
+    return { ok: true, ...(await statusSource.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: runtime !== undefined,
+      running: false,
+      degradedReason: "knowledge_card_status_unavailable" as const,
+    };
+  }
+}
+
+async function getKnowledgeConflictStatus(runtime: KnowledgeConflictRuntime | undefined) {
+  if (runtime === undefined) return { ok: true, enabled: false, running: false };
+  try {
+    const status = await runtime.getStatus();
+    const ok = status.running &&
+      status.migration0046Applied &&
+      status.migration0047Applied &&
+      status.migration0048Applied;
+    return {
+      ok,
+      ...status,
+      ...(!ok ? { degradedReason: "knowledge_conflict_runtime_degraded" as const } : {}),
+    };
   } catch {
     return {
       ok: false,
       enabled: true,
       running: false,
-      degradedReason: "knowledge_card_status_unavailable" as const,
+      degradedReason: "knowledge_conflict_status_unavailable" as const,
     };
   }
 }
@@ -2128,7 +2349,9 @@ function scheduleRuntimeStartupCleanup({
   conversationStateInspectionRuntime,
   proactiveSignalRuntime,
   proactiveSignalPlannerRuntime,
+  composedKnowledgeConflictRuntime,
   knowledgeCardRuntime,
+  knowledgeCardStatusReader,
   actionApprovalRuntime,
   actionReviewRuntime,
   proactiveSignalDeliveryRuntime,
@@ -2145,7 +2368,9 @@ function scheduleRuntimeStartupCleanup({
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
+  composedKnowledgeConflictRuntime: KnowledgeConflictRuntime | undefined;
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  knowledgeCardStatusReader: KnowledgeCardStatusReader | undefined;
   actionApprovalRuntime: ActionApprovalRuntime | undefined;
   actionReviewRuntime: ActionReviewRuntime | undefined;
   proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
@@ -2162,8 +2387,10 @@ function scheduleRuntimeStartupCleanup({
     () => actionReviewRuntime?.close(),
     () => proactiveSignalDeliveryRuntime?.close(),
     () => proactiveSignalPlannerRuntime?.close(),
-    () => actionApprovalRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
+    () => knowledgeCardStatusReader?.close(),
+    () => composedKnowledgeConflictRuntime?.close(),
+    () => actionApprovalRuntime?.close(),
     () => proactiveSignalRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),
     () => agentExecutionLedgerRuntime?.close(),
@@ -3076,6 +3303,123 @@ function parseDocumentSourcePolicyUpdateRequest(
       ? { canUseForKnowledgeDrafts: value.canUseForKnowledgeDrafts as boolean }
       : {}),
   };
+}
+
+function parseDocumentSourceGroupGrantListQuery(
+  value: unknown,
+): { limit: number } | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) {
+    return undefined;
+  }
+  const limit = parseDeadLetterLimit(value.limit);
+  return limit === undefined ? undefined : { limit };
+}
+
+function parseDocumentSourceGroupGrantRequest(value: unknown): {
+  grantorGroupId: string;
+  granteeGroupId: string;
+  expectedVersion: number;
+  operationKey: string;
+} | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "grantorGroupId",
+      "granteeGroupId",
+      "expectedVersion",
+      "operationKey",
+    ])
+  ) {
+    return undefined;
+  }
+  const grantorGroupId = readExactNonBlankId(value.grantorGroupId);
+  const granteeGroupId = readExactNonBlankId(value.granteeGroupId);
+  const operationKey = readExactNonBlankId(value.operationKey);
+  if (
+    grantorGroupId === undefined ||
+    granteeGroupId === undefined ||
+    grantorGroupId === granteeGroupId ||
+    operationKey === undefined ||
+    !Number.isSafeInteger(value.expectedVersion) ||
+    (value.expectedVersion as number) < 0
+  ) {
+    return undefined;
+  }
+  return {
+    grantorGroupId,
+    granteeGroupId,
+    expectedVersion: value.expectedVersion as number,
+    operationKey,
+  };
+}
+
+function parseDocumentSourceGroupGrantRevokeRequest(value: unknown): {
+  expectedVersion: number;
+  operationKey: string;
+} | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ["expectedVersion", "operationKey"])) {
+    return undefined;
+  }
+  const operationKey = readExactNonBlankId(value.operationKey);
+  if (
+    operationKey === undefined ||
+    !Number.isSafeInteger(value.expectedVersion) ||
+    (value.expectedVersion as number) < 1
+  ) {
+    return undefined;
+  }
+  return { expectedVersion: value.expectedVersion as number, operationKey };
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  return keys.length === expected.length &&
+    [...expected].sort().every((key, index) => keys[index] === key);
+}
+
+function readExactNonBlankId(value: unknown): string | undefined {
+  const normalized = readNonBlankId(value);
+  return typeof value === "string" && value === normalized ? normalized : undefined;
+}
+
+function readRequiredOperator(value: unknown): string | undefined {
+  const parsed = parseOperatorHint(value);
+  return parsed.ok ? parsed.value : undefined;
+}
+
+function toDocumentSourceGroupGrantResponse(grant: DocumentSourceGroupGrant) {
+  return {
+    id: grant.id,
+    documentSourceId: grant.documentSourceId,
+    grantorGroupId: grant.grantorGroupId,
+    granteeGroupId: grant.granteeGroupId,
+    state: grant.state,
+    version: grant.version,
+    createdAt: grant.createdAt,
+    updatedAt: grant.updatedAt,
+  };
+}
+
+function sendDocumentSourceGroupGrantError(
+  reply: FastifyReply,
+  error: unknown,
+  operation: "mutation" | "revoke",
+) {
+  if (error instanceof DocumentSourceGroupGrantValidationError) {
+    return reply.code(400).send({ ok: false, error: "invalid_request" });
+  }
+  if (error instanceof DocumentSourceGroupGrantNotFoundError) {
+    return reply.code(404).send({ ok: false, error: "document_source_group_grant_not_found" });
+  }
+  if (error instanceof DocumentSourceGroupGrantConflictError) {
+    return reply.code(409).send({ ok: false, error: "document_source_group_grant_conflict" });
+  }
+  return reply.code(500).send({
+    ok: false,
+    error: operation === "revoke"
+      ? "document_source_group_grant_revoke_failed"
+      : "document_source_group_grant_mutation_failed",
+  });
 }
 
 function parseRuntimeEnabledRequest(value: unknown): { enabled: boolean } | undefined {

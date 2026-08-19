@@ -419,10 +419,16 @@ describe("FeishuMentionAnswerResponder", () => {
   it("prepares a cited ordinary answer lazily through the durable delivery service", async () => {
     const preparedAt = new Date("2026-08-02T04:05:06.000Z");
     const allowedFragment = answerFragment();
+    const validateKnowledgeConflictForSend = vi.fn(async () => ({
+      status: "current" as const,
+      permissionAttestedAt: preparedAt,
+    }));
     const answerDraftOrchestrator = {
+      validateKnowledgeConflictForSend,
       generateDraft: vi.fn(async () => ({
         answerText: "Grounded answer.",
         citedSourceRefs: ["D1"],
+        knowledgeConflictCandidateId: "candidate-answer-a",
         promptContext: "<document_context></document_context>",
         allowedFragments: [allowedFragment],
         deniedDocumentIds: ["source-revoked"],
@@ -472,8 +478,22 @@ describe("FeishuMentionAnswerResponder", () => {
       chatId: "oc_group_1",
       replyUuid: "iris-1d3e446e24c6a2c7bfd8e1004e7c26b2d0d901c9d367a",
       safeNoticeUuid: "iris-safe-1d3e446e24c6a2c7bfd8e1004e7c26b2d0d901c9",
+      validateKnowledgeConflictForSend: expect.any(Function),
       prepareAnswer: expect.any(Function),
     });
+    const validationInput = {
+      candidateId: "candidate-answer-a",
+      groupId: "oc_group_1",
+      sources: [{
+        documentSourceId: "source-wiki-a",
+        documentSnapshotId: "snapshot-a",
+        fragmentId: "fragment-a-2",
+        contentHash: "a".repeat(64),
+      }],
+    };
+    await expect(deliveryRequest?.validateKnowledgeConflictForSend?.(validationInput))
+      .resolves.toEqual({ status: "current", permissionAttestedAt: preparedAt });
+    expect(validateKnowledgeConflictForSend).toHaveBeenCalledWith(validationInput);
     expect(preparedAnswer).toEqual({
       renderedText:
         "Grounded answer.\n\n" +
@@ -495,8 +515,76 @@ describe("FeishuMentionAnswerResponder", () => {
         initialPermissionCheckedAt: preparedAt,
       }],
       blockedDocumentSourceIds: ["source-revoked"],
+      knowledgeConflictCandidateId: "candidate-answer-a",
       preparedAt,
     });
+  });
+
+  it("binds a conflict answer receipt only to its exact cited candidate source", async () => {
+    const preparedAt = new Date("2026-08-02T04:05:06.000Z");
+    const unrelatedFragment = answerFragment({
+      id: "fragment-unrelated",
+      documentSourceId: "source-unrelated",
+      documentSnapshotId: "snapshot-unrelated",
+      sourceUri: "https://tenant.feishu.cn/wiki/wikiUnrelated",
+      chunkIndex: 0,
+      contentHash: "hash-fragment-unrelated",
+      sourceTitle: "Unrelated source",
+    });
+    const candidateFragment = answerFragment();
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "The knowledge base and group conclusion differ; no winner is selected.",
+        citedSourceRefs: ["D2"],
+        knowledgeConflictCandidateId: "candidate-answer-a",
+        promptContext: "<document_context></document_context>",
+        allowedFragments: [unrelatedFragment, candidateFragment],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 2,
+        usedGroupMemories: [],
+      })),
+    };
+    let preparedAnswer: Awaited<ReturnType<AnswerReplyDeliveryRequest["prepareAnswer"]>>
+      | undefined;
+    const answerReplyDeliveryService = {
+      respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async (request) => {
+        preparedAnswer = await request.prepareAnswer();
+        return { replyMessageId: "reply-conflict" };
+      }),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      answerReplyDeliveryService,
+      replier: { replyText: vi.fn() },
+      now: () => preparedAt,
+    });
+
+    await expect(responder.maybeRespond({
+      messageId: "om_conflict_answer",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 compare the current decisions",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    })).resolves.toEqual({ status: "replied", replyMessageId: "reply-conflict" });
+
+    expect(preparedAnswer?.sourceTraces).toEqual([{
+      promptRank: 1,
+      citationRank: 1,
+      documentSourceId: "source-wiki-a",
+      documentSnapshotId: "snapshot-a",
+      fragmentId: "fragment-a-2",
+      chunkIndex: 2,
+      sourceType: "feishu_wiki",
+      sourceUri: "https://tenant.feishu.cn/wiki/wikiA",
+      sourceTitle: "Quello Life Engine",
+      contentHash: "hash-fragment-a-2",
+      embeddingProfileId: "profile-1",
+      initialPermissionCheckedAt: preparedAt,
+    }]);
+    expect(preparedAnswer?.renderedText).toContain("[1] [\u77e5\u8bc6\u5e93] Quello Life Engine");
+    expect(preparedAnswer?.renderedText).not.toContain("Unrelated source");
+    expect(preparedAnswer?.knowledgeConflictCandidateId).toBe("candidate-answer-a");
   });
 
   it("resumes a durable ordinary answer without generating another draft", async () => {

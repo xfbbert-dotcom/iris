@@ -8,6 +8,10 @@ import {
 
 const MAX_FRAGMENT_SEARCH_LIMIT = 100;
 const MAX_GROUP_ID_CHARS = 512;
+const SOURCE_USAGE_COLUMN = {
+  answering: "can_use_for_answering",
+  knowledge_drafts: "can_use_for_knowledge_drafts",
+} as const;
 const RETRIEVED_SOURCE_TYPE_BY_PERSISTED_SOURCE_TYPE: Record<
   DocumentSourceType,
   RetrievedDocumentSourceType
@@ -61,7 +65,16 @@ export type RetrievedDocumentFragment = DocumentFragment & {
   sourceTitle?: string;
   sourceType: RetrievedDocumentSourceType;
   distance?: number;
+  crossGroupGrantId?: string;
+  crossGroupGrantVersion?: number;
+  crossGroupGrantorGroupId?: string;
+  crossGroupGranteeGroupId?: string;
 };
+
+export type RetrievedDocumentFragmentCandidate = Omit<
+  RetrievedDocumentFragment,
+  "text" | "embedding"
+>;
 
 export type ReplaceFragmentsInput = {
   documentSourceId: string;
@@ -78,6 +91,11 @@ export type SearchSimilarFragmentsInput = {
   limit: number;
   sourceTypes?: DocumentSourceType[];
   groupId?: string;
+  usage?: "answering" | "knowledge_drafts";
+};
+
+export type SearchSimilarFragmentCandidatesInput = SearchSimilarFragmentsInput & {
+  authorizedSpaceId?: string;
 };
 
 export type DocumentFragmentRepositoryDependencies = {
@@ -92,6 +110,10 @@ export interface DocumentFragmentRepository {
   listFragmentsForSource(documentSourceId: string): Promise<DocumentFragment[]>;
   listFragmentsForSnapshot(documentSnapshotId: string): Promise<DocumentFragment[]>;
   searchSimilarFragments(input: SearchSimilarFragmentsInput): Promise<RetrievedDocumentFragment[]>;
+  searchSimilarFragmentCandidates(
+    input: SearchSimilarFragmentCandidatesInput,
+  ): Promise<RetrievedDocumentFragmentCandidate[]>;
+  findFragmentsByIds(input: { ids: readonly string[] }): Promise<DocumentFragment[]>;
   hasFragmentsForSnapshotProfile(input: {
     documentSnapshotId: string;
     embeddingProfileId: string;
@@ -115,6 +137,20 @@ type RetrievedDocumentFragmentRow = DocumentFragmentRow & {
   source_title: string | null;
   source_type: DocumentSourceType;
   distance?: number | string;
+  cross_group_grant_id?: string | null;
+  cross_group_grant_version?: number | string | null;
+  cross_group_grantor_group_id?: string | null;
+  cross_group_grantee_group_id?: string | null;
+};
+
+type RetrievedDocumentFragmentCandidateRow = Omit<DocumentFragmentRow, "text" | "embedding"> & {
+  source_title: string | null;
+  source_type: DocumentSourceType;
+  distance?: number | string;
+  cross_group_grant_id?: string | null;
+  cross_group_grant_version?: number | string | null;
+  cross_group_grantor_group_id?: string | null;
+  cross_group_grantee_group_id?: string | null;
 };
 
 export function createDocumentFragmentRepository(
@@ -213,32 +249,14 @@ order by chunk_index asc, id asc
         return [];
       }
       const groupId = sanitizeGroupId(input.groupId);
+      const usage = resolveSourceUsage(input.usage);
+      const usageColumn = SOURCE_USAGE_COLUMN[usage];
 
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
       validateVectorDimension(input.embedding, profile.dimensions);
       const values: unknown[] = [input.embeddingProfileId, serializeVector(input.embedding), limit];
-      let sourceTypeClause = "";
-      if (sourceTypes !== undefined) {
-        values.push(sourceTypes);
-        sourceTypeClause = `  and ds.source_type = any($${values.length}::text[])\n`;
-      }
-      let groupScopeClause = "";
-      if (groupId !== undefined) {
-        values.push(groupId);
-        const groupIdParameter = `$${values.length}`;
-        groupScopeClause = `  and (
-    ds.source_type <> 'group_visible_document'
-    or ds.origin_group_id = ${groupIdParameter}
-    or exists (
-      select 1
-      from document_source_evidence evidence
-      where evidence.document_source_id = ds.id
-        and evidence.group_id = ${groupIdParameter}
-    )
-  )
-`;
-      }
+      const filters = buildSourceFilterClauses({ sourceTypes, groupId, usage, values });
 
       const result = await dependencies.queryable.query<RetrievedDocumentFragmentRow>(
         `
@@ -252,6 +270,7 @@ select
   f.*,
   ds.title as source_title,
   ds.source_type,
+${filters.grantSelectClause}
   e.embedding,
   e.embedding <=> $2::vector as distance
 from document_fragments f
@@ -259,12 +278,13 @@ join latest_snapshots
   on f.document_snapshot_id = latest_snapshots.id
 join document_sources ds
   on ds.id = f.document_source_id
-  and ds.can_use_for_answering = true
+  and ds.${usageColumn} = true
   and ds.permission_state in ('unknown', 'readable')
-${sourceTypeClause}${groupScopeClause}join ${embeddingTable} e
+${filters.sourceTypeClause}${filters.grantJoinClause}join ${embeddingTable} e
   on e.document_fragment_id = f.id
 where f.embedding_profile_id = $1
   and e.embedding_profile_id = $1
+${filters.groupScopeClause}
 order by e.embedding <=> $2::vector asc, f.document_source_id asc, f.chunk_index asc, f.id asc
 limit $3
 `,
@@ -272,6 +292,107 @@ limit $3
       );
 
       return result.rows.map(mapRetrievedFragmentRow);
+    },
+
+    async searchSimilarFragmentCandidates(input) {
+      const limit = sanitizeLimit(input.limit);
+      if (limit === 0) return [];
+      const sourceTypes = sanitizeSourceTypes(input.sourceTypes);
+      if (sourceTypes !== undefined && sourceTypes.length === 0) return [];
+      const groupId = sanitizeGroupId(input.groupId);
+      const usage = resolveSourceUsage(input.usage);
+      const usageColumn = SOURCE_USAGE_COLUMN[usage];
+      const authorizedSpaceId = sanitizeAuthorizedSpaceId(input.authorizedSpaceId);
+      if (input.usage === "knowledge_drafts" && authorizedSpaceId === undefined) {
+        throw new Error("authorizedSpaceId is required for knowledge-draft fragment candidates");
+      }
+      const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
+      const embeddingTable = resolveEmbeddingTable(profile.dimensions);
+      validateVectorDimension(input.embedding, profile.dimensions);
+      const values: unknown[] = [input.embeddingProfileId, serializeVector(input.embedding), limit];
+      const filters = buildSourceFilterClauses({ sourceTypes, groupId, usage, values });
+      let knowledgeEligibilityClause = "";
+      if (input.usage === "knowledge_drafts") {
+        values.push(authorizedSpaceId!);
+        knowledgeEligibilityClause = `    and ds.sync_state = 'synced'
+    and ds.authorized_space_id = $${values.length}
+`;
+      }
+      const result = await dependencies.queryable.query<RetrievedDocumentFragmentCandidateRow>(
+        `
+with latest_snapshots as (
+  select distinct on (document_source_id) id
+  from document_snapshots
+  where fetch_status = 'succeeded'
+  order by document_source_id asc, fetched_at desc, id asc
+),
+ranked_candidates as (
+  select
+    f.id,
+    f.document_source_id,
+    f.document_snapshot_id,
+    f.source_uri,
+    f.chunk_index,
+    f.content_hash,
+    f.embedding_profile_id,
+    f.created_at,
+    ds.title as source_title,
+    ds.source_type,
+${filters.grantSelectClause}
+    e.embedding <=> $2::vector as distance,
+    row_number() over (
+      partition by f.document_source_id
+      order by e.embedding <=> $2::vector asc, f.chunk_index asc, f.id asc
+    ) as source_rank
+  from document_fragments f
+  join latest_snapshots
+    on f.document_snapshot_id = latest_snapshots.id
+  join document_sources ds
+    on ds.id = f.document_source_id
+    and ds.${usageColumn} = true
+    and ds.permission_state in ('unknown', 'readable')
+${knowledgeEligibilityClause}${filters.sourceTypeClause}${filters.grantJoinClause}  join ${embeddingTable} e
+    on e.document_fragment_id = f.id
+  where f.embedding_profile_id = $1
+    and e.embedding_profile_id = $1
+${filters.groupScopeClause}
+)
+select
+  id,
+  document_source_id,
+  document_snapshot_id,
+  source_uri,
+  chunk_index,
+  content_hash,
+  embedding_profile_id,
+  created_at,
+  source_title,
+  source_type,
+${filters.grantOuterSelectClause}
+  distance
+from ranked_candidates
+where source_rank <= 3
+order by distance asc, document_source_id asc, chunk_index asc, id asc
+limit $3
+`,
+        values,
+      );
+      return result.rows.map(mapRetrievedFragmentCandidateRow);
+    },
+
+    async findFragmentsByIds(input) {
+      const ids = sanitizeFragmentIds(input.ids);
+      if (ids.length === 0) return [];
+      const result = await dependencies.queryable.query<DocumentFragmentRow>(
+        `
+select *
+from document_fragments
+where id = any($1::text[])
+order by id asc
+`,
+        [ids],
+      );
+      return result.rows.map(mapFragmentRow).sort((left, right) => compareStrings(left.id, right.id));
     },
 
     async hasFragmentsForSnapshotProfile(input) {
@@ -374,6 +495,117 @@ function sanitizeGroupId(groupId: string | undefined): string | undefined {
   return normalized;
 }
 
+function sanitizeAuthorizedSpaceId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (normalized.length === 0) throw new Error("authorizedSpaceId must not be blank");
+  if (normalized.length > MAX_GROUP_ID_CHARS) {
+    throw new Error(`authorizedSpaceId must be at most ${MAX_GROUP_ID_CHARS} characters`);
+  }
+  return normalized;
+}
+
+function resolveSourceUsage(
+  usage: SearchSimilarFragmentsInput["usage"],
+): keyof typeof SOURCE_USAGE_COLUMN {
+  const resolved = usage ?? "answering";
+  if (resolved !== "answering" && resolved !== "knowledge_drafts") {
+    throw new Error("fragment search usage is invalid");
+  }
+  return resolved;
+}
+
+function buildSourceFilterClauses(input: {
+  sourceTypes: DocumentSourceType[] | undefined;
+  groupId: string | undefined;
+  usage: keyof typeof SOURCE_USAGE_COLUMN;
+  values: unknown[];
+}): {
+  sourceTypeClause: string;
+  groupScopeClause: string;
+  grantJoinClause: string;
+  grantSelectClause: string;
+  grantOuterSelectClause: string;
+} {
+  let sourceTypeClause = "";
+  if (input.sourceTypes !== undefined) {
+    input.values.push(input.sourceTypes);
+    sourceTypeClause = `  and ds.source_type = any($${input.values.length}::text[])\n`;
+  }
+  let groupScopeClause = "";
+  let grantJoinClause = "";
+  let grantSelectClause = "";
+  let grantOuterSelectClause = "";
+  if (input.groupId !== undefined) {
+    input.values.push(input.groupId);
+    const parameter = `$${input.values.length}`;
+    const localScope = `(
+      ds.origin_group_id = ${parameter}
+      or exists (
+        select 1
+        from document_source_evidence evidence
+        where evidence.document_source_id = ds.id
+          and evidence.kind = 'group_message'
+          and evidence.group_id = ${parameter}
+      )
+    )`;
+    if (input.usage === "answering") {
+      grantJoinClause = `left join document_source_group_grants current_scope_grant
+  on current_scope_grant.document_source_id = ds.id
+  and current_scope_grant.grantee_group_id = ${parameter}
+  and current_scope_grant.state = 'active'
+  and (
+    ds.origin_group_id = current_scope_grant.grantor_group_id
+    or exists (
+      select 1
+      from document_source_evidence evidence
+      where evidence.document_source_id = ds.id
+        and evidence.kind = 'group_message'
+        and evidence.group_id = current_scope_grant.grantor_group_id
+    )
+  )
+`;
+      const grantedValue = (column: string, alias: string): string =>
+        `  case when ds.source_type = 'group_visible_document' and not ${localScope}
+    then current_scope_grant.${column} else null end as ${alias}`;
+      grantSelectClause = `${grantedValue("id", "cross_group_grant_id")},
+${grantedValue("version", "cross_group_grant_version")},
+${grantedValue("grantor_group_id", "cross_group_grantor_group_id")},
+${grantedValue("grantee_group_id", "cross_group_grantee_group_id")},`;
+      grantOuterSelectClause = `  cross_group_grant_id,
+  cross_group_grant_version,
+  cross_group_grantor_group_id,
+  cross_group_grantee_group_id,`;
+    }
+    groupScopeClause = `  and (
+    ds.source_type <> 'group_visible_document'
+    or ${localScope}
+${input.usage === "answering" ? "    or current_scope_grant.id is not null\n" : ""}
+  )
+`;
+  }
+  return {
+    sourceTypeClause,
+    groupScopeClause,
+    grantJoinClause,
+    grantSelectClause,
+    grantOuterSelectClause,
+  };
+}
+
+function sanitizeFragmentIds(ids: readonly string[]): string[] {
+  if (ids.length > MAX_FRAGMENT_SEARCH_LIMIT) {
+    throw new Error(`fragment ids must include at most ${MAX_FRAGMENT_SEARCH_LIMIT} entries`);
+  }
+  return [...new Set(ids.map((id) => {
+    const normalized = id.trim();
+    if (normalized.length === 0 || normalized.length > DOCUMENT_SOURCE_METADATA_MAX_CHARS) {
+      throw new Error("fragment id is invalid");
+    }
+    return normalized;
+  }))].sort(compareStrings);
+}
+
 async function insertFragment(
   queryable: Queryable,
   fragment: DocumentFragment,
@@ -462,7 +694,96 @@ function mapRetrievedFragmentRow(row: RetrievedDocumentFragmentRow): RetrievedDo
     ...(sourceTitle === undefined || sourceTitle.length === 0 ? {} : { sourceTitle }),
     sourceType: mapRetrievedSourceType(row.source_type),
     distance: row.distance === undefined ? undefined : Number(row.distance),
+    ...mapCrossGroupGrantBinding(row),
   };
+}
+
+function mapRetrievedFragmentCandidateRow(
+  row: RetrievedDocumentFragmentCandidateRow,
+): RetrievedDocumentFragmentCandidate {
+  const sourceTitle = row.source_title?.trim();
+  if (sourceTitle !== undefined && sourceTitle.length > DOCUMENT_SOURCE_METADATA_MAX_CHARS) {
+    throw new Error(
+      `source title must be at most ${DOCUMENT_SOURCE_METADATA_MAX_CHARS} characters`,
+    );
+  }
+  return {
+    id: row.id,
+    documentSourceId: row.document_source_id,
+    documentSnapshotId: row.document_snapshot_id,
+    sourceUri: row.source_uri,
+    chunkIndex: row.chunk_index,
+    contentHash: row.content_hash,
+    embeddingProfileId: row.embedding_profile_id,
+    createdAt: row.created_at,
+    ...(sourceTitle === undefined || sourceTitle.length === 0 ? {} : { sourceTitle }),
+    sourceType: mapRetrievedSourceType(row.source_type),
+    distance: row.distance === undefined ? undefined : Number(row.distance),
+    ...mapCrossGroupGrantBinding(row),
+  };
+}
+
+function mapCrossGroupGrantBinding(row: {
+  source_type: DocumentSourceType;
+  cross_group_grant_id?: string | null;
+  cross_group_grant_version?: number | string | null;
+  cross_group_grantor_group_id?: string | null;
+  cross_group_grantee_group_id?: string | null;
+}): Pick<
+  RetrievedDocumentFragment,
+  | "crossGroupGrantId"
+  | "crossGroupGrantVersion"
+  | "crossGroupGrantorGroupId"
+  | "crossGroupGranteeGroupId"
+> {
+  const values = [
+    row.cross_group_grant_id,
+    row.cross_group_grant_version,
+    row.cross_group_grantor_group_id,
+    row.cross_group_grantee_group_id,
+  ];
+  if (values.every((value) => value === null || value === undefined)) return {};
+  if (values.some((value) => value === null || value === undefined)) {
+    throw new Error("cross-group grant binding must be all present or all absent");
+  }
+  if (row.source_type !== "group_visible_document") {
+    throw new Error("cross-group grant binding requires a group-visible document");
+  }
+  const crossGroupGrantId = requireGrantReference("cross-group grant id", row.cross_group_grant_id);
+  const crossGroupGrantorGroupId = requireGrantReference(
+    "cross-group grantor group id",
+    row.cross_group_grantor_group_id,
+  );
+  const crossGroupGranteeGroupId = requireGrantReference(
+    "cross-group grantee group id",
+    row.cross_group_grantee_group_id,
+  );
+  if (crossGroupGrantorGroupId === crossGroupGranteeGroupId) {
+    throw new Error("cross-group grant groups must be distinct");
+  }
+  const crossGroupGrantVersion = Number(row.cross_group_grant_version);
+  if (!Number.isSafeInteger(crossGroupGrantVersion) || crossGroupGrantVersion < 1) {
+    throw new Error("cross-group grant version must be a positive integer");
+  }
+  return {
+    crossGroupGrantId,
+    crossGroupGrantVersion,
+    crossGroupGrantorGroupId,
+    crossGroupGranteeGroupId,
+  };
+}
+
+function requireGrantReference(name: string, value: unknown): string {
+  if (typeof value !== "string") throw new Error(`${name} must be a string`);
+  const normalized = value.trim();
+  if (normalized.length === 0 || normalized.length > MAX_GROUP_ID_CHARS) {
+    throw new Error(`${name} must contain between 1 and ${MAX_GROUP_ID_CHARS} characters`);
+  }
+  return normalized;
+}
+
+function compareStrings(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
 }
 
 function mapRetrievedSourceType(value: unknown): RetrievedDocumentSourceType {

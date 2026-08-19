@@ -78,6 +78,54 @@ describe("parseFeishuCardAction", () => {
     expect(withoutForm).toMatchObject({ kind: "proactive_signal_feedback", action: "helpful" });
   });
 
+  it("parses an exact knowledge conflict callback without trusting card actor or reason fields", () => {
+    expect(parseFeishuCardAction(cardAction({
+      event: {
+        action: {
+          name: "create_update_draft",
+          value: conflictActionValue(),
+          form_value: { reason: undefined },
+        },
+      },
+    }))).toEqual({
+      kind: "knowledge_conflict_confirmation",
+      eventId: "event-1",
+      appId: "cli_approval",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_approval",
+      messageId: "om_approval",
+      presentationId: "candidate-1",
+      candidateId: "candidate-1",
+      candidateVersion: 3,
+      groupId: "oc_approval",
+      nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+      action: "create_update_draft",
+    });
+  });
+
+  it.each([
+    ["unknown callback field", { unexpected: true }, {}],
+    ["fake actor", { actorOpenId: "ou_fake" }, {}],
+    ["reason in callback", { reason: "fake reason" }, {}],
+    ["noncanonical version", { candidateVersion: "03" }, {}],
+    ["numeric version", { candidateVersion: 3 }, {}],
+    ["mismatched group", { groupId: "oc_other" }, {}],
+    ["oversized nonce", { nonce: "n".repeat(129) }, {}],
+    ["unrecognized action", { action: "approve" }, { name: "approve" }],
+    ["form reason", {}, { form_value: { reason: "not allowed" } }],
+  ])("rejects conflict callback %s", (_label, valueMutation, actionMutation) => {
+    expect(parseFeishuCardAction(cardAction({
+      event: {
+        action: {
+          name: "create_update_draft",
+          value: conflictActionValue(valueMutation),
+          form_value: {},
+          ...actionMutation,
+        },
+      },
+    }))).toBeUndefined();
+  });
+
   it("requires the exact callback event and bounded identifiers", () => {
     expect(parseFeishuCardAction(cardAction({ header: { event_type: "im.message.receive_v1" } }))).toBeUndefined();
     expect(parseFeishuCardAction(cardAction({ header: { event_id: " " } }))).toBeUndefined();
@@ -207,6 +255,22 @@ function feedbackActionValue(overrides: Record<string, unknown> = {}): Record<st
     deliveryId: "delivery-1",
     candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
     entityVersion: "2",
+    ...overrides,
+  };
+}
+
+function conflictActionValue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    presentationId: undefined,
+    draftId: undefined,
+    revisionNumber: undefined,
+    draftVersion: undefined,
+    kind: "knowledge_conflict_confirmation",
+    action: "create_update_draft",
+    candidateId: "candidate-1",
+    candidateVersion: "3",
+    groupId: "oc_approval",
+    nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
     ...overrides,
   };
 }

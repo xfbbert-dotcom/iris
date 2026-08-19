@@ -1,4 +1,4 @@
-import { createClient } from "redis";
+import { ClientClosedError, createClient } from "redis";
 
 import type { RuntimeController } from "../admin/runtime-controller.js";
 import {
@@ -8,7 +8,7 @@ import {
   readProactiveFeedbackConfig,
   type EnvLike,
 } from "../config/env.js";
-import type { DatabaseConfig } from "../database/database-config.js";
+import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 import {
   createFeishuRequestVerifier,
@@ -44,6 +44,8 @@ import {
 import {
   createPostgresApprovalInteractionIntentStore,
 } from "../knowledge-cards/postgres-approval-interaction-intent-store.js";
+import { createPostgresKnowledgeConflictCallbackIdentityStore } from
+  "../knowledge-conflicts/postgres-knowledge-conflict-callback-identity-store.js";
 import {
   createApprovalInteractionWorkerLoop,
   type ApprovalInteractionWorkerLoop,
@@ -85,6 +87,30 @@ type KnowledgeCardRedisClient = RedisApprovalInteractionQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
 };
+type KnowledgeCardStatusRedisClient = RedisApprovalInteractionQueueClient & {
+  readonly isOpen: boolean;
+  readonly isReady: boolean;
+  connect(): Promise<unknown>;
+  destroy(): void;
+  on?(event: "error", listener: (error: Error) => void): unknown;
+  on?(event: "connect", listener: () => void): unknown;
+  off?(event: "error", listener: (error: Error) => void): unknown;
+  off?(event: "connect", listener: () => void): unknown;
+};
+type KnowledgeCardStatusRedisGeneration = {
+  client: KnowledgeCardStatusRedisClient;
+  state: "idle" | "connecting" | "ready" | "failed" | "closed";
+  connection?: Promise<KnowledgeCardStatusRedisClient>;
+  connectionSettlement?: Promise<void>;
+  releaseConnectionTerminal?(): void;
+  transportConnected: boolean;
+  transportObserved: Promise<void>;
+  resolveTransportObserved(): void;
+  destroyAttempted: boolean;
+  listenersDetached: boolean;
+  onError(error: Error): void;
+  onConnect(): void;
+};
 type KnowledgeCardRuntimeGate = Pick<
   RuntimeController,
   "canGenerateKnowledgeDrafts" | "canProactivelySpeak"
@@ -109,6 +135,25 @@ export type KnowledgeCardRuntimeStatus = {
   outbox: KnowledgeCardOutboxStatusCounts;
 };
 
+export type KnowledgeCardStatusReaderStatus = {
+  enabled: false;
+  running: false;
+  enabledGroupCount: 0;
+  queue: {
+    pending: number;
+    processing: number;
+    delayed: number;
+    deadLetter: number;
+  };
+  presentations: KnowledgeCardStatusCounts;
+  outbox: KnowledgeCardOutboxStatusCounts;
+};
+
+export type KnowledgeCardStatusReader = {
+  getStatus(): Promise<KnowledgeCardStatusReaderStatus>;
+  close(): Promise<void>;
+};
+
 export type KnowledgeCardRuntime = {
   gateway: ReturnType<typeof createFeishuCardActionGateway>;
   repository: KnowledgeCardRuntimeRepository;
@@ -125,6 +170,11 @@ export type KnowledgeCardRuntime = {
   };
   bindActionApprovalWorker(
     worker: NonNullable<ApprovalInteractionWorkerDependencies["actionApprovalWorker"]>,
+  ): void;
+  bindKnowledgeConflictInteractionWorker(
+    worker: NonNullable<
+      ApprovalInteractionWorkerDependencies["knowledgeConflictInteractionWorker"]
+    >,
   ): void;
   start(): Promise<void>;
   getStatus(): Promise<KnowledgeCardRuntimeStatus>;
@@ -144,6 +194,8 @@ export type KnowledgeCardRuntimeDependencies = {
     client: RedisApprovalInteractionQueueClient;
   }) => ApprovalInteractionQueue;
   createApprovalInteractionIntentStore?: typeof createPostgresApprovalInteractionIntentStore;
+  createKnowledgeConflictCallbackIdentityStore?:
+    typeof createPostgresKnowledgeConflictCallbackIdentityStore;
   createInteractionWorker?: typeof createApprovalInteractionWorker;
   createFeishuTenantAccessTokenProvider?: typeof createFeishuTenantAccessTokenProvider;
   createFeishuInteractiveCardClient?: typeof createFeishuInteractiveCardClient;
@@ -154,6 +206,259 @@ export type KnowledgeCardRuntimeDependencies = {
   onCardAuthenticationDiagnostic?: (diagnostic: FeishuCallbackAuthenticationDiagnostic) => void;
   onStartupCleanup?: (cleanup: Promise<void>) => void;
 };
+
+export type KnowledgeCardStatusReaderDependencies = {
+  createPostgresPool?: (config: DatabaseConfig) => KnowledgeCardPool;
+  createRedisClient?: (url: string) => KnowledgeCardStatusRedisClient;
+  createKnowledgeCardRepository?: (input: {
+    dataSource: PostgresKnowledgeDraftDataSource;
+  }) => Pick<KnowledgeCardRepository, "getStatusCounts" | "getOutboxStatusCounts">;
+  createApprovalInteractionQueue?: (input: {
+    client: RedisApprovalInteractionQueueClient;
+  }) => Pick<ApprovalInteractionQueue, "getCounts">;
+  onStartupCleanup?: (cleanup: Promise<void>) => void;
+};
+
+export function createKnowledgeCardStatusReader({
+  env = process.env,
+  dependencies = {},
+}: {
+  env?: EnvLike;
+  dependencies?: KnowledgeCardStatusReaderDependencies;
+} = {}): KnowledgeCardStatusReader | undefined {
+  const config = readKnowledgeCardStatusResourceConfig(env);
+  if (config === undefined) return undefined;
+  const createPool = dependencies.createPostgresPool ?? createPostgresPool;
+  const createRedis = dependencies.createRedisClient ??
+    ((url: string) => createClient({
+      url,
+      socket: { reconnectStrategy: false },
+    }) as unknown as KnowledgeCardStatusRedisClient);
+  const createRepository = dependencies.createKnowledgeCardRepository ??
+    createPostgresKnowledgeCardRepository;
+  const createQueue = dependencies.createApprovalInteractionQueue ??
+    createRedisApprovalInteractionQueue;
+
+  let pool: KnowledgeCardPool | undefined;
+  let closeRedis: (() => Promise<void>) | undefined;
+  try {
+    pool = createPool({ databaseUrl: config.databaseUrl });
+    let lifecycle: "open" | "closing" | "closed" = "open";
+    const generations = new Set<KnowledgeCardStatusRedisGeneration>();
+    const detachGenerationListeners = (generation: KnowledgeCardStatusRedisGeneration) => {
+      if (generation.listenersDetached) return;
+      generation.listenersDetached = true;
+      generation.client.off?.("error", generation.onError);
+      generation.client.off?.("connect", generation.onConnect);
+    };
+    const releaseClosedGeneration = (generation: KnowledgeCardStatusRedisGeneration) => {
+      if (generation.client.isOpen) return;
+      detachGenerationListeners(generation);
+      generations.delete(generation);
+    };
+    const destroyGenerationIfOpen = (generation: KnowledgeCardStatusRedisGeneration) => {
+      if (!generation.client.isOpen) return;
+      if (generation.destroyAttempted) {
+        throw new Error("knowledge-card status Redis client remained open after destroy");
+      }
+      generation.destroyAttempted = true;
+      try {
+        generation.client.destroy();
+      } catch (error) {
+        if (error instanceof ClientClosedError && !generation.client.isOpen) return;
+        throw error;
+      }
+      if (generation.client.isOpen) {
+        throw new Error("knowledge-card status Redis client remained open after destroy");
+      }
+    };
+    const createGeneration = (): KnowledgeCardStatusRedisGeneration => {
+      const client = createRedis(config.redisUrl);
+      let resolveTransportObserved!: () => void;
+      const transportObserved = new Promise<void>((resolve) => {
+        resolveTransportObserved = resolve;
+      });
+      let generation!: KnowledgeCardStatusRedisGeneration;
+      const onError = () => {
+        queueMicrotask(() => {
+          if (client.isOpen) return;
+          if (generation.state === "connecting" || generation.state === "ready") {
+            generation.state = "failed";
+          }
+          releaseClosedGeneration(generation);
+        });
+      };
+      const onConnect = () => {
+        generation.transportConnected = true;
+        if (lifecycle !== "closing") {
+          resolveTransportObserved();
+          return;
+        }
+        // Node Redis assigns its private socket immediately before emitting `connect`,
+        // then queues protocol startup commands after listeners return. Destroy on the
+        // close continuation after the next microtask so both are cancellable.
+        queueMicrotask(resolveTransportObserved);
+      };
+      generation = {
+        client,
+        state: "idle",
+        transportConnected: false,
+        transportObserved,
+        resolveTransportObserved,
+        destroyAttempted: false,
+        listenersDetached: false,
+        onError,
+        onConnect,
+      };
+      client.on?.("error", onError);
+      client.on?.("connect", onConnect);
+      generations.add(generation);
+      return generation;
+    };
+    let currentGeneration = createGeneration();
+    const connectGeneration = (
+      generation: KnowledgeCardStatusRedisGeneration,
+    ): Promise<KnowledgeCardStatusRedisClient> => {
+      generation.state = "connecting";
+      let connectResult: Promise<unknown>;
+      try {
+        connectResult = generation.client.connect();
+      } catch (error) {
+        connectResult = Promise.reject(error);
+      }
+      const connectOutcome = observeStartupPromise(Promise.resolve(connectResult).then(
+        () => {
+          if (lifecycle !== "open") {
+            throw new Error("knowledge-card status Redis client closed during connect");
+          }
+          generation.state = "ready";
+          return generation.client;
+        },
+        (error: unknown) => {
+          generation.state = lifecycle === "open" ? "failed" : "closed";
+          releaseClosedGeneration(generation);
+          throw error;
+        },
+      ));
+      generation.connectionSettlement = connectOutcome.then(
+        () => undefined,
+        () => undefined,
+      );
+      let connectionTerminalSettled = false;
+      let resolveConnectionTerminal!: () => void;
+      const connectionTerminal = new Promise<void>((resolve) => {
+        resolveConnectionTerminal = resolve;
+      });
+      const releaseConnectionTerminal = () => {
+        if (connectionTerminalSettled) return;
+        connectionTerminalSettled = true;
+        generation.releaseConnectionTerminal = undefined;
+        resolveConnectionTerminal();
+      };
+      generation.releaseConnectionTerminal = releaseConnectionTerminal;
+      generation.connection = observeStartupPromise(Promise.race([
+        connectOutcome,
+        connectionTerminal.then<never>(() => {
+          throw new Error("knowledge-card status Redis client is closed");
+        }),
+      ]));
+      void generation.connection.then(
+        releaseConnectionTerminal,
+        releaseConnectionTerminal,
+      );
+      return generation.connection;
+    };
+    const getRedisClient = (): Promise<KnowledgeCardStatusRedisClient> => {
+      if (lifecycle !== "open") {
+        return observeStartupPromise(Promise.reject(
+          new Error("knowledge-card status Redis client is closed"),
+        ));
+      }
+      if (currentGeneration.state === "connecting") {
+        return currentGeneration.connection!;
+      }
+      if (currentGeneration.state === "ready" && currentGeneration.client.isReady) {
+        return Promise.resolve(currentGeneration.client);
+      }
+      if (currentGeneration.state !== "idle") {
+        currentGeneration.releaseConnectionTerminal?.();
+        destroyGenerationIfOpen(currentGeneration);
+        detachGenerationListeners(currentGeneration);
+        generations.delete(currentGeneration);
+        currentGeneration.state = "closed";
+        currentGeneration = createGeneration();
+      }
+      return connectGeneration(currentGeneration);
+    };
+    const closeGeneration = async (generation: KnowledgeCardStatusRedisGeneration) => {
+      try {
+        generation.releaseConnectionTerminal?.();
+        if (generation.state === "idle") return;
+        if (generation.state === "connecting" && !generation.transportConnected) {
+          await Promise.race([
+            generation.connectionSettlement!,
+            generation.transportObserved,
+          ]);
+        }
+        destroyGenerationIfOpen(generation);
+        if (generation.connectionSettlement !== undefined) {
+          await generation.connectionSettlement;
+        }
+      } finally {
+        generation.state = "closed";
+        detachGenerationListeners(generation);
+        generations.delete(generation);
+      }
+    };
+    closeRedis = async () => {
+      lifecycle = "closing";
+      try {
+        await closeRuntimeResources(Array.from(
+          generations,
+          (generation) => () => closeGeneration(generation),
+        ));
+      } finally {
+        lifecycle = "closed";
+      }
+    };
+    const queue = createQueue({ client: createDeferredRedisQueueClient(getRedisClient) });
+    const repository = createRepository({ dataSource: pool });
+    let closePromise: Promise<void> | undefined;
+    return {
+      async getStatus() {
+        const [queueCounts, presentations, outbox] = await Promise.all([
+          queue.getCounts(),
+          repository.getStatusCounts(),
+          repository.getOutboxStatusCounts(),
+        ]);
+        return {
+          enabled: false,
+          running: false,
+          enabledGroupCount: 0,
+          queue: queueCounts,
+          presentations,
+          outbox,
+        };
+      },
+      close() {
+        closePromise ??= observeStartupPromise(closeRuntimeResources([
+          () => closeRedis!(),
+          () => pool!.end(),
+        ]));
+        return closePromise;
+      },
+    };
+  } catch (error) {
+    const cleanup = observeStartupPromise(closeRuntimeResources([
+      ...(closeRedis === undefined
+        ? []
+        : [() => closeRedis!()]),
+      ...(pool === undefined ? [] : [() => pool!.end()]),
+    ]));
+    dependencies.onStartupCleanup?.(cleanup);
+    throw error;
+  }
+}
 
 export function createKnowledgeCardRuntime({
   env = process.env,
@@ -186,6 +491,8 @@ export function createKnowledgeCardRuntime({
     createRedisApprovalInteractionQueue;
   const createIntentStore = dependencies.createApprovalInteractionIntentStore ??
     createPostgresApprovalInteractionIntentStore;
+  const createCallbackIdentityStore = dependencies.createKnowledgeConflictCallbackIdentityStore ??
+    createPostgresKnowledgeConflictCallbackIdentityStore;
   const createInteractionWorker = dependencies.createInteractionWorker ??
     createApprovalInteractionWorker;
   const createTokenProvider = dependencies.createFeishuTenantAccessTokenProvider ??
@@ -213,6 +520,7 @@ export function createKnowledgeCardRuntime({
     }));
     const queue = createQueue({ client: createLazyRedisQueueClient(redisConnection) });
     const intentStore = createIntentStore({ dataSource: pool });
+    const callbackIdentityStore = createCallbackIdentityStore({ dataSource: pool });
     const cardRepository = createRepository({ dataSource: pool });
     const drafts = createDrafts({ dataSource: pool });
     const repository: KnowledgeCardRuntimeRepository = {
@@ -262,11 +570,24 @@ export function createKnowledgeCardRuntime({
     let boundActionApprovalWorker:
       | NonNullable<ApprovalInteractionWorkerDependencies["actionApprovalWorker"]>
       | undefined;
+    let boundKnowledgeConflictInteractionWorker:
+      | NonNullable<ApprovalInteractionWorkerDependencies["knowledgeConflictInteractionWorker"]>
+      | undefined;
     const actionApprovalWorker: NonNullable<
       ApprovalInteractionWorkerDependencies["actionApprovalWorker"]
     > = {
       processActionApproval(job, intent) {
         return boundActionApprovalWorker?.processActionApproval(job, intent) ?? Promise.resolve({
+          status: "denied" as const,
+          code: "runtime_disabled" as const,
+        });
+      },
+    };
+    const knowledgeConflictInteractionWorker: NonNullable<
+      ApprovalInteractionWorkerDependencies["knowledgeConflictInteractionWorker"]
+    > = {
+      processInteraction(job) {
+        return boundKnowledgeConflictInteractionWorker?.processInteraction(job) ?? Promise.resolve({
           status: "denied" as const,
           code: "runtime_disabled" as const,
         });
@@ -282,8 +603,10 @@ export function createKnowledgeCardRuntime({
       workerId: INTERACTION_WORKER_ID,
       leaseMs: EXTERNAL_LEASE_MS,
       intentStore,
+      callbackIdentityStore,
       actionApprovalWorker,
       proactiveSignalFeedbackWorker,
+      knowledgeConflictInteractionWorker,
     });
     dispatcherLoop = createDispatcherPollingLoop({
       worker: dispatcher,
@@ -319,6 +642,7 @@ export function createKnowledgeCardRuntime({
     const gateway = createFeishuCardActionGateway({
       queue,
       intentStore,
+      callbackIdentityStore,
       verifyRequest: verifyFeishuEnvelopeWithDiagnostics,
       allowUnsignedEncryptedUrlVerification: feishuAuthConfig.encryptKey !== undefined,
       onDiagnostic: dependencies.onCardCallbackDiagnostic ?? reportCardCallbackDiagnostic,
@@ -367,6 +691,15 @@ export function createKnowledgeCardRuntime({
           throw new Error("action approval worker must be bound before runtime start");
         }
         boundActionApprovalWorker = worker;
+      },
+      bindKnowledgeConflictInteractionWorker(worker) {
+        if (boundKnowledgeConflictInteractionWorker !== undefined) {
+          throw new Error("knowledge conflict interaction worker is already bound");
+        }
+        if (lifecycle !== "idle") {
+          throw new Error("knowledge conflict interaction worker must be bound before runtime start");
+        }
+        boundKnowledgeConflictInteractionWorker = worker;
       },
       start() {
         if (lifecycle === "closed") {
@@ -491,6 +824,36 @@ function createLazyRedisQueueClient(
       return redis.eval(script, options);
     },
   };
+}
+
+function createDeferredRedisQueueClient(
+  getRedisClient: () => Promise<KnowledgeCardStatusRedisClient>,
+): RedisApprovalInteractionQueueClient {
+  return {
+    async eval(script, options) {
+      const redis = await getRedisClient();
+      return redis.eval(script, options);
+    },
+  };
+}
+
+function readKnowledgeCardStatusResourceConfig(
+  env: EnvLike,
+): { databaseUrl: string; redisUrl: string } | undefined {
+  const databaseUrl = env.DATABASE_URL?.trim();
+  const redisUrl = env.REDIS_URL?.trim();
+  if (!databaseUrl || !redisUrl) return undefined;
+  let parsedRedisUrl: URL;
+  const databaseConfig = readDatabaseConfig(env);
+  try {
+    parsedRedisUrl = new URL(redisUrl);
+  } catch {
+    throw new Error("REDIS_URL must be a redis URL");
+  }
+  if (parsedRedisUrl.protocol !== "redis:" && parsedRedisUrl.protocol !== "rediss:") {
+    throw new Error("REDIS_URL must be a redis URL");
+  }
+  return { databaseUrl: databaseConfig.databaseUrl, redisUrl };
 }
 
 function readCallbackAppId(request: FeishuCardActionCallbackRequest): string | undefined {

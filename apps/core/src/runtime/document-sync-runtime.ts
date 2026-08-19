@@ -55,6 +55,17 @@ import type {
   DocumentSource,
   DocumentSourceType,
 } from "../documents/document-source-registry.js";
+import type {
+  DocumentSourceGroupGrant,
+  DocumentSourceGroupGrantMutationResult,
+  DocumentSourceGroupGrantRepository,
+  DocumentSourceGroupGrantStatus,
+} from "../documents/document-source-group-grant.js";
+import {
+  DocumentSourceGroupGrantNotFoundError,
+  createPostgresDocumentSourceGroupGrantRepository,
+  type PostgresDocumentSourceGroupGrantDataSource,
+} from "../documents/postgres-document-source-group-grant-repository.js";
 import {
   createRedisDocumentSyncQueue,
   type RedisDocumentSyncQueueClient,
@@ -117,6 +128,20 @@ export type DocumentSyncRuntime = {
     getLatestSnapshots(
       input: DocumentSourceLatestSnapshotsInput,
     ): Promise<Map<string, DocumentSnapshot>>;
+    groupGrants?: {
+      list(input: {
+        documentSourceId: string;
+        limit: number;
+      }): Promise<DocumentSourceGroupGrant[] | undefined>;
+      grant(input: Parameters<DocumentSourceGroupGrantRepository["grant"]>[0]): Promise<
+        DocumentSourceGroupGrantMutationResult
+      >;
+      revoke(input: Parameters<DocumentSourceGroupGrantRepository["revoke"]>[0] & {
+        documentSourceId: string;
+      }): Promise<
+        DocumentSourceGroupGrantMutationResult
+      >;
+    };
   };
   enqueueSource(input: { documentSourceId: string }): Promise<ManualDocumentSyncEnqueueResult>;
   registerAuthorizedWikiDocument(
@@ -196,6 +221,7 @@ export type DocumentSyncRuntimeStatus = {
   deadLetterJobCount: number;
   latestBatch?: DocumentSyncWorkerBatchSnapshot;
   wikiSpaces?: WikiSpaceSyncRuntimeStatus;
+  groupGrants?: DocumentSourceGroupGrantStatus;
 };
 
 export type WikiSpaceSyncRuntimeStatus = {
@@ -264,6 +290,12 @@ export type DocumentSyncRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => PostgresPool;
   createRedisClient?: (url: string) => RedisClient;
   createDocumentSourceRegistry?: (pool: PostgresPool) => DocumentSyncRuntimeDocumentSources;
+  createDocumentSourceGroupGrantRepository?: (dependencies: {
+    dataSource: PostgresDocumentSourceGroupGrantDataSource;
+  }) => Pick<
+    DocumentSourceGroupGrantRepository,
+    "listForSource" | "findById" | "grant" | "revoke"
+  > & Partial<Pick<DocumentSourceGroupGrantRepository, "getStatus">>;
   createDocumentSnapshotRepository?: (dependencies: {
     queryable: Queryable;
   }) => DocumentSyncRuntimeSnapshots;
@@ -356,6 +388,9 @@ function createEnabledDocumentSyncRuntime({
     ((url: string) => createClient({ url }) as unknown as RedisClient);
   const createDocumentSources =
     dependencies.createDocumentSourceRegistry ?? createDefaultDocumentSourceRegistry;
+  const createSourceGroupGrants =
+    dependencies.createDocumentSourceGroupGrantRepository ??
+    createPostgresDocumentSourceGroupGrantRepository;
   const createSnapshots =
     dependencies.createDocumentSnapshotRepository ?? createDocumentSnapshotRepository;
   const createTokenProvider =
@@ -408,6 +443,9 @@ function createEnabledDocumentSyncRuntime({
   };
 
   const documentSources = constructRuntimeComponent(() => createDocumentSources(pool));
+  const sourceGroupGrants = constructRuntimeComponent(() => createSourceGroupGrants({
+    dataSource: pool as unknown as PostgresDocumentSourceGroupGrantDataSource,
+  }));
   const snapshots = constructRuntimeComponent(() => createSnapshots({ queryable: pool }));
   const tokenProvider = constructRuntimeComponent(() =>
     createTokenProvider({
@@ -494,6 +532,9 @@ function createEnabledDocumentSyncRuntime({
       const loopSnapshot = loop.getSnapshot();
       const pendingJobCount = await queue.getPendingCount();
       const deadLetterJobCount = await queue.getDeadLetterCount();
+      const groupGrantStatus = sourceGroupGrants.getStatus === undefined
+        ? undefined
+        : await sourceGroupGrants.getStatus();
       const wikiSpaceStatus = await getWikiSpaceRuntimeStatus({
         repository: wikiSpaceRepository,
         loop: wikiSpaceLoop,
@@ -509,6 +550,7 @@ function createEnabledDocumentSyncRuntime({
         ...(loopSnapshot.latestBatch === undefined
           ? {}
           : { latestBatch: loopSnapshot.latestBatch }),
+        ...(groupGrantStatus === undefined ? {} : { groupGrants: groupGrantStatus }),
         ...(wikiSpaceStatus === undefined ? {} : { wikiSpaces: wikiSpaceStatus }),
       };
     },
@@ -586,6 +628,27 @@ function createEnabledDocumentSyncRuntime({
         return new Map(
           latestSnapshots.map((snapshot) => [snapshot.documentSourceId, snapshot]),
         );
+      },
+      groupGrants: {
+        async list(input) {
+          const limit = sanitizeLimit(input.limit);
+          const source = await documentSources.findSourceById(input.documentSourceId);
+          if (source === undefined) return undefined;
+          return sourceGroupGrants.listForSource({
+            documentSourceId: input.documentSourceId,
+            limit,
+          });
+        },
+        grant(input) {
+          return sourceGroupGrants.grant(input);
+        },
+        async revoke({ documentSourceId, ...input }) {
+          const grant = await sourceGroupGrants.findById(input.grantId);
+          if (grant === undefined || grant.documentSourceId !== documentSourceId) {
+            throw new DocumentSourceGroupGrantNotFoundError();
+          }
+          return sourceGroupGrants.revoke(input);
+        },
       },
     },
     async registerAuthorizedWikiDocument(input) {

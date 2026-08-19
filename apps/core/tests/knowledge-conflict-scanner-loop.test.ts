@@ -1,0 +1,254 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  createKnowledgeConflictScannerLoop,
+} from "../src/knowledge-conflicts/knowledge-conflict-scanner-loop.js";
+import type { KnowledgeConflictScannerBatchResult } from
+  "../src/knowledge-conflicts/knowledge-conflict-scanner.js";
+
+describe("KnowledgeConflictScannerLoop", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("surfaces startup failure with a content-free snapshot", async () => {
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { throw new Error("raw denied document text and token"); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now: fixedClock(),
+    });
+
+    await expect(loop.start()).rejects.toThrow("knowledge conflict scanner startup failed");
+    expect(loop.getSnapshot()).toMatchObject({
+      running: false,
+      latestBatch: { status: "failed", errorCode: "scanner_failed", failed: true },
+    });
+    expect(JSON.stringify(loop.getSnapshot())).not.toContain("denied document");
+  });
+
+  it("surfaces a startup clock failure through the same safe boundary", async () => {
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now() { throw new Error("clock secret"); },
+    });
+
+    await expect(loop.start()).rejects.toThrow("knowledge conflict scanner startup failed");
+    expect(loop.getSnapshot()).toMatchObject({
+      running: false,
+      latestBatch: { status: "failed", errorCode: "scanner_failed" },
+    });
+    expect(JSON.stringify(loop.getSnapshot())).not.toContain("clock secret");
+  });
+
+  it("surfaces startup scheduler failure with a stopped content-free failed snapshot", async () => {
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now: fixedClock(),
+      setTimeout: (() => { throw new Error("raw scheduler internals"); }) as unknown as typeof setTimeout,
+    });
+
+    await expect(loop.start()).rejects.toThrow("knowledge conflict scanner startup failed");
+    expect(loop.getSnapshot()).toMatchObject({
+      running: false,
+      latestBatch: { status: "failed", errorCode: "scanner_failed", failed: true },
+    });
+    expect(JSON.stringify(loop.getSnapshot())).not.toContain("scheduler internals");
+  });
+
+  it("serializes scheduled batches and stop awaits the in-flight batch", async () => {
+    vi.useFakeTimers();
+    let resolveSecond: (() => void) | undefined;
+    let calls = 0;
+    const scanner = {
+      async scanBatch() {
+        calls += 1;
+        if (calls === 2) {
+          await new Promise<void>((resolve) => { resolveSecond = resolve; });
+        }
+        return batch({ claimed: calls, insufficientEvidence: calls });
+      },
+    };
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner,
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now: fixedClock(),
+    });
+
+    await loop.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toBe(2);
+
+    let stopped = false;
+    const stop = loop.stop().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    resolveSecond?.();
+    await stop;
+    expect(stopped).toBe(true);
+  });
+
+  it("accepts a bounded maintenance-only batch without counting it as a claim", async () => {
+    vi.useFakeTimers();
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch({ superseded: 1 }); } },
+      intervalMs: 1_000,
+      batchLimit: 1,
+      now: fixedClock(),
+    });
+
+    await expect(loop.start()).resolves.toBeUndefined();
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "succeeded", claimed: 0, superseded: 1,
+    });
+    await loop.stop();
+  });
+
+  it("keeps later failures safe, reports a stable observer error, and continues polling", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const onErrorMessages: string[] = [];
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: {
+        async scanBatch() {
+          calls += 1;
+          if (calls === 2) throw new Error("raw provider response body");
+          return batch({ claimed: 1, conflict: 1 });
+        },
+      },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now: fixedClock(),
+      onError(error) { onErrorMessages.push((error as Error).message); },
+    });
+
+    await loop.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "failed", errorCode: "scanner_failed", failed: true,
+    });
+    expect(onErrorMessages).toEqual(["knowledge conflict scanner batch failed"]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toBe(3);
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "succeeded", conflict: 1, failed: false,
+    });
+    await loop.stop();
+  });
+
+  it("contains a scheduled clock failure and keeps polling without an unhandled rejection", async () => {
+    vi.useFakeTimers();
+    let clockReads = 0;
+    const errors: string[] = [];
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now() {
+        clockReads += 1;
+        if (clockReads > 2) throw new Error("later clock secret");
+        return new Date("2026-08-13T02:00:00.000Z");
+      },
+      onError(error) { errors.push((error as Error).message); },
+    });
+
+    await loop.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "failed", errorCode: "scanner_failed",
+    });
+    expect(errors).toEqual(["knowledge conflict scanner batch failed"]);
+    await loop.stop();
+  });
+
+  it("contains a reschedule failure, reports it once, and stops coherently", async () => {
+    let callback: (() => void) | undefined;
+    let scheduleCalls = 0;
+    const errors: string[] = [];
+    const schedule = ((next: () => void) => {
+      scheduleCalls += 1;
+      if (scheduleCalls === 2) throw new Error("raw reschedule internals");
+      callback = next;
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now: fixedClock(),
+      setTimeout: schedule,
+      clearTimeout: (() => undefined) as typeof clearTimeout,
+      onError(error) { errors.push((error as Error).message); },
+    });
+
+    await loop.start();
+    callback?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(loop.getSnapshot()).toMatchObject({
+      running: false,
+      latestBatch: { status: "failed", errorCode: "scanner_failed", failed: true },
+    });
+    expect(errors).toEqual(["knowledge conflict scanner batch failed"]);
+    expect(JSON.stringify(loop.getSnapshot())).not.toContain("reschedule internals");
+    await loop.stop();
+  });
+
+  it("starts idempotently, returns cloned bounded snapshots, and cannot restart after close", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: {
+        async scanBatch() {
+          calls += 1;
+          return batch({ discovered: 50, claimed: 50, insufficientEvidence: 50 });
+        },
+      },
+      intervalMs: 1_000,
+      batchLimit: 50,
+      now: fixedClock(),
+    });
+
+    const firstStart = loop.start();
+    const secondStart = loop.start();
+    await Promise.all([firstStart, secondStart]);
+    expect(calls).toBe(1);
+    const snapshot = loop.getSnapshot();
+    expect(snapshot).toMatchObject({
+      running: true,
+      intervalMs: 1_000,
+      batchLimit: 50,
+      latestBatch: { status: "succeeded", discovered: 50, claimed: 50 },
+    });
+    snapshot.latestBatch?.startedAt.setUTCFullYear(2030);
+    expect(loop.getSnapshot().latestBatch?.startedAt.getUTCFullYear()).toBe(2026);
+
+    await loop.stop();
+    await loop.stop();
+    await expect(loop.start()).rejects.toThrow("knowledge conflict scanner loop is closed");
+  });
+});
+
+function batch(overrides: Partial<KnowledgeConflictScannerBatchResult> = {}): KnowledgeConflictScannerBatchResult {
+  return {
+    discovered: 0,
+    claimed: 0,
+    conflict: 0,
+    noConflict: 0,
+    insufficientEvidence: 0,
+    permissionBlocked: 0,
+    retrying: 0,
+    deadLettered: 0,
+    superseded: 0,
+    ...overrides,
+  };
+}
+
+function fixedClock(): () => Date {
+  return () => new Date("2026-08-13T02:00:00.000Z");
+}

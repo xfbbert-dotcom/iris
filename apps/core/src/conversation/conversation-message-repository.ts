@@ -35,7 +35,15 @@ export type UpsertConversationMessageInput = {
   rawEventIdempotencyKey: string;
 };
 
+export type ConversationMessageEvidence = ConversationMessage & {
+  tombstoned: boolean;
+};
+
 export interface ConversationMessageRepository {
   upsertMessage(input: UpsertConversationMessageInput): Promise<ConversationMessage>;
   listRecentByChat(input: { chatId: string; limit: number }): Promise<ConversationMessage[]>;
+  findByIds(input: {
+    chatId: string;
+    ids: readonly string[];
+  }): Promise<ConversationMessageEvidence[]>;
 }

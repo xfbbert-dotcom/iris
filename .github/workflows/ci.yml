@@ -59,6 +59,9 @@ jobs:
           npm --workspace apps/core test -- postgres-document-source-registry.test.ts
           npm --workspace apps/core test -- document-snapshot-repository.test.ts
           npm --workspace apps/core test -- document-fragment-repository.test.ts
+          npm --workspace apps/core test -- migration-runner.test.ts
+          npm --workspace apps/core test -- postgres-document-source-group-grant-repository.test.ts
+          npm --workspace apps/core test -- postgres-answer-reply-repository.test.ts
           npm --workspace apps/core test -- postgres-group-memory-repository.test.ts
           npm --workspace apps/core test -- agent-execution-ledger.test.ts
 
@@ -98,8 +101,27 @@ jobs:
 
       - name: Drill paired pilot backup and restore
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes age
+          age_archive="$RUNNER_TEMP/age-v1.2.1-linux-amd64.tar.gz"
+          age_dir="$RUNNER_TEMP/age-v1.2.1"
+          mkdir -p "$age_dir"
+          timeout --kill-after=10s 120s curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --retry 2 \
+            --retry-all-errors \
+            --output "$age_archive" \
+            "https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-linux-amd64.tar.gz"
+          printf '%s  %s\n' \
+            '7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50' \
+            "$age_archive" \
+            | sha256sum --check
+          tar --extract --gzip --file "$age_archive" --directory "$age_dir"
+          export PATH="$age_dir/age:$PATH"
+          age --version
           age-keygen --output "$RUNNER_TEMP/iris-backup-key.txt"
           age-keygen -y "$RUNNER_TEMP/iris-backup-key.txt" \
             > "$RUNNER_TEMP/iris-backup-recipient"

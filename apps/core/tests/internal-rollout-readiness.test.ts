@@ -4,6 +4,43 @@ import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollo
 import type { EnvLike } from "../src/config/env.js";
 
 describe("buildInternalRolloutReadinessReport", () => {
+  it("requires readable cross-group grant facts when live document status is supplied", () => {
+    const healthy = buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      documentSyncStatus: {
+        ok: true,
+        groupGrants: {
+          migration0051Applied: true,
+          active: 1,
+          revoked: 2,
+          latestUpdatedAt: "2026-08-18T05:00:00.000Z",
+        },
+      },
+    });
+    expect(checksById(healthy).documentSourceGroupGrants).toMatchObject({
+      status: "pass",
+      detail: "Cross-group document grants are readable with migration 0051 applied.",
+    });
+
+    const missingMigration = buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      documentSyncStatus: {
+        ok: true,
+        groupGrants: { migration0051Applied: false },
+      },
+    });
+    expect(checksById(missingMigration).documentSourceGroupGrants).toMatchObject({
+      status: "fail",
+      detail: "Cross-group document grant migration 0051 is not applied.",
+    });
+
+    const unreadable = buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      documentSyncStatus: { ok: false },
+    });
+    expect(checksById(unreadable).documentSourceGroupGrants).toMatchObject({
+      status: "fail",
+      detail: "Cross-group document grant counts are unavailable.",
+    });
+  });
+
   it("treats action reviews as disabled without requiring review credentials", () => {
     const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
 
@@ -87,6 +124,45 @@ describe("buildInternalRolloutReadinessReport", () => {
       status: "pass",
       detail: "Action approvals are safely disabled.",
     });
+  });
+
+  it("treats knowledge conflicts as safely disabled by default", () => {
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv())).knowledgeConflicts)
+      .toMatchObject({
+        status: "pass",
+        detail: "Knowledge conflicts are safely disabled.",
+      });
+  });
+
+  it("passes enabled knowledge conflicts only with migration, loops, and safe durable counts", () => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeConflictEnabledEnv(),
+      { knowledgeConflictStatus: knowledgeConflictStatus() },
+    );
+
+    expect(checksById(report).knowledgeConflicts).toMatchObject({
+      status: "pass",
+      detail: "Knowledge-conflict scanner and dispatcher are running with safe durable state.",
+    });
+  });
+
+  it.each([
+    [undefined, "Knowledge-conflict runtime status is unavailable."],
+    [{ ...knowledgeConflictStatus(), ok: false }, "Knowledge-conflict runtime status is unreadable."],
+    [{ ...knowledgeConflictStatus(), ok: false, migration0046Applied: false }, "Knowledge-conflict migration 0046 is not applied."],
+    [{ ...knowledgeConflictStatus(), ok: false, migration0047Applied: false }, "Knowledge-conflict migration 0047 is not applied."],
+    [{ ...knowledgeConflictStatus(), ok: false, migration0048Applied: false }, "Knowledge-conflict migration 0048 is not applied."],
+    [{ ...knowledgeConflictStatus(), scanner: { running: false }, running: false }, "Knowledge-conflict scanner and dispatcher must both be running."],
+    [{ ...knowledgeConflictStatus(), scans: { ...knowledgeConflictStatus().scans, deadLettered: 1 } }, "Knowledge-conflict scans have dead-lettered rows."],
+    [{ ...knowledgeConflictStatus(), deliveries: { ...knowledgeConflictStatus().deliveries, failed: 1, terminalFailed: 1 }, reconciliation: { terminalFailed: 1, outcomeUnknown: 0 } }, "Knowledge-conflict delivery has terminal failed rows."],
+    [{ ...knowledgeConflictStatus(), deliveries: { ...knowledgeConflictStatus().deliveries, outcomeUnknown: 1 }, reconciliation: { terminalFailed: 0, outcomeUnknown: 1 } }, "Knowledge-conflict delivery has unresolved outcome-unknown rows."],
+  ])("fails enabled knowledge-conflict readiness for unsafe runtime state %#", (status, detail) => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeConflictEnabledEnv(),
+      status === undefined ? {} : { knowledgeConflictStatus: status },
+    );
+
+    expect(checksById(report).knowledgeConflicts).toMatchObject({ status: "fail", detail });
   });
 
   it("blocks enabled action approvals when loops or durable outbox facts are unsafe", () => {
@@ -418,6 +494,67 @@ describe("buildInternalRolloutReadinessReport", () => {
     });
   });
 
+  it("passes disabled knowledge cards only when real durable counts are empty", () => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv(),
+      { knowledgeCardStatus: disabledKnowledgeCardStatus() },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "pass",
+      detail: "Knowledge cards are safely disabled with empty durable work.",
+    });
+  });
+
+  it.each([
+    [
+      "Redis interaction job",
+      disabledKnowledgeCardStatus({
+        queue: { pending: 1, processing: 0, delayed: 0, deadLetter: 0 },
+      }),
+    ],
+    [
+      "active PostgreSQL presentation",
+      disabledKnowledgeCardStatus({
+        presentations: {
+          pending_send: 0,
+          active: 1,
+          superseded: 0,
+          closed: 0,
+          send_failed: 0,
+          pendingSend: 0,
+        },
+      }),
+    ],
+  ])("blocks disabled knowledge cards with a residual %s", (_case, status) => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv(),
+      { knowledgeCardStatus: status },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card disabled state has unresolved durable work.",
+    });
+  });
+
+  it("blocks disabled knowledge cards when real count reads fail", () => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv(),
+      { knowledgeCardStatus: {
+        ok: false,
+        enabled: false,
+        running: false,
+        degradedReason: "knowledge_card_status_unavailable",
+      } },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card disabled status is unreadable.",
+    });
+  });
+
   it("passes enabled knowledge cards only while both loops and status are healthy", () => {
     const report = buildInternalRolloutReadinessReport(
       knowledgeCardEnabledEnv(),
@@ -582,6 +719,64 @@ function actionReviewStatus(overrides: Record<string, unknown> = {}) {
     migration0034Applied: true,
     ...overrides,
   };
+}
+
+function knowledgeConflictEnabledEnv(): EnvLike {
+  return readyRolloutEnv({
+    IRIS_KNOWLEDGE_CONFLICT_ENABLED: "true",
+    IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "oc_pilot",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+    IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    FEISHU_ENCRYPT_KEY: "knowledge-conflict-encrypt-key",
+  });
+}
+
+function knowledgeConflictStatus() {
+  return {
+    ok: true,
+    enabled: true as const,
+    running: true,
+    migration0046Applied: true,
+    migration0047Applied: true,
+    migration0048Applied: true,
+    enabledGroupCount: 1,
+    scanner: { running: true },
+    dispatcher: { running: true },
+    scans: { pending: 0, processing: 0, retry: 0, completed: 1, deadLettered: 0 },
+    candidates: {
+      pending_review: 0,
+      dismissed: 0,
+      approved_for_delivery: 0,
+      delivered: 1,
+      draft_created: 0,
+      superseded: 0,
+    },
+    deliveries: {
+      pending: 0,
+      processing: 0,
+      externalAttempting: 0,
+      sent: 1,
+      failed: 0,
+      terminalFailed: 0,
+      outcomeUnknown: 0,
+      cancelled: 0,
+    },
+    interactions: { applied: 0, alreadyApplied: 0, rejected: 0 },
+    reconciliation: { terminalFailed: 0, outcomeUnknown: 0 },
+  };
+}
+
+function disabledKnowledgeCardStatus(overrides: Record<string, unknown> = {}) {
+  return knowledgeCardStatus({
+    enabled: false,
+    running: false,
+    enabledGroupCount: 0,
+    dispatcher: undefined,
+    worker: undefined,
+    ...overrides,
+  });
 }
 
 function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {

@@ -34,6 +34,7 @@ export const KNOWLEDGE_DRAFT_EVIDENCE_TYPES = [
   "conversation_message",
   "discussion_thread",
   "action_item",
+  "group_memory",
   "document_source",
 ] as const;
 
@@ -69,9 +70,17 @@ type DocumentEvidence = {
   expectedUpdatedAt: Date;
 };
 
+type GroupMemoryEvidence = {
+  type: "group_memory";
+  id: string;
+  groupId: string;
+  expectedUpdatedAt: Date;
+};
+
 export type KnowledgeDraftEvidenceReference =
   | GroupEvidence
   | VersionedGroupEvidence
+  | GroupMemoryEvidence
   | DocumentEvidence;
 
 export type KnowledgeDraftReviewer = {
@@ -171,6 +180,17 @@ function normalizeEvidenceReference(
   if (groupId !== sourceGroupId) throw validationError("evidence group does not match sourceGroupId");
   if (evidenceType === "conversation_message") {
     return { type: "conversation_message", id, groupId };
+  }
+  if (evidenceType === "group_memory") {
+    if (!(value.expectedUpdatedAt instanceof Date) || !Number.isFinite(value.expectedUpdatedAt.getTime())) {
+      throw validationError("group memory evidence timestamp is invalid");
+    }
+    return {
+      type: "group_memory",
+      id,
+      groupId,
+      expectedUpdatedAt: new Date(value.expectedUpdatedAt),
+    };
   }
   if (!Number.isSafeInteger(value.entityVersion) || Number(value.entityVersion) < 1) {
     throw validationError("evidence entityVersion is invalid");

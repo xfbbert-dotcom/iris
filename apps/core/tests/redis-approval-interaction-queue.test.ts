@@ -744,6 +744,44 @@ describe("Redis approval interaction queue", () => {
     expect(JSON.stringify(job)).not.toMatch(/reason|intentId|evidence text/iu);
   });
 
+  it("round-trips and dead-letters a content-free knowledge conflict job", async () => {
+    const job = normalizeApprovalInteractionJob({
+      kind: "knowledge_conflict_confirmation",
+      idempotencyKey: "feishu-card:cli_conflict:event-conflict",
+      callbackIdentityId: "callback-identity-1",
+      presentationId: "candidate-1",
+      candidateId: "candidate-1",
+      candidateVersion: 3,
+      groupId: "oc_group",
+      nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+      action: "create_update_draft",
+      receivedAt: new Date("2026-08-13T00:00:00.000Z"),
+      attempts: 0,
+    });
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client, { maxAttempts: 1 });
+
+    expect(parseApprovalInteractionJob(serializeApprovalInteractionJob(job))).toEqual(job);
+    await queue.enqueue(job);
+    const [claimed] = await claim(queue, {
+      now: "2026-08-13T00:00:00.000Z",
+      leaseUntil: "2026-08-13T00:01:00.000Z",
+    });
+    await queue.handleFailure({
+      job: claimed!,
+      workerId: "worker-a",
+      errorCode: "validation_unavailable",
+      at: new Date("2026-08-13T00:00:01.000Z"),
+    });
+    const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+    const stored = [serializeApprovalInteractionJob(job), JSON.stringify(deadLetter)].join("\n");
+    expect(stored).toContain("callback-identity-1");
+    expect(stored).not.toContain("ou_member");
+    expect(stored).not.toContain("actorOpenId");
+    expect(stored).not.toMatch(/current synchronized knowledge|newer group conclusion|proposed update|reason/iu);
+    expect(stored).not.toContain("private conflict content");
+  });
+
   it("serializes a sensitive action and its replayable DLQ record with only an opaque intent id", async () => {
     const sampleReason = "Private sample reason that must remain in PostgreSQL.";
     const durableIntent = { reason: sampleReason };

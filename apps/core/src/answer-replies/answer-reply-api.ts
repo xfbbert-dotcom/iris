@@ -4,13 +4,24 @@ import type {
   AnswerReplyReceipt,
   AnswerReplyRepository,
 } from "./answer-reply-repository.js";
+import { AnswerReplyVersionConflictError } from "./answer-reply-repository.js";
+import {
+  AnswerReplyNotFoundError,
+  AnswerReplyTransitionError,
+} from "./postgres-answer-reply-repository.js";
 
 const MAX_INCOMING_MESSAGE_ID_CHARS = 512;
+type AnswerReplyOperatorRepository = Pick<
+  AnswerReplyRepository,
+  "findByIncomingMessage" | "reconcileNotSent"
+>;
 
 export function registerAnswerReplyApi(
   app: FastifyInstance,
-  repository: Pick<AnswerReplyRepository, "findByIncomingMessage"> | undefined,
+  repository: AnswerReplyOperatorRepository | undefined,
+  options: { now?: () => Date } = {},
 ): void {
+  const now = options.now ?? (() => new Date());
   app.get<{ Params: { provider?: string; incomingMessageId?: string } }>(
     "/internal/answer-replies/:provider/:incomingMessageId",
     (request, reply) => handleFind(request.params, reply, repository),
@@ -19,6 +30,63 @@ export function registerAnswerReplyApi(
     "/internal/answer-replies/*",
     (request, reply) => handleFind(parseWildcardParams(request.params["*"]), reply, repository),
   );
+  app.post<{
+    Params: { provider?: string; incomingMessageId?: string };
+    Body: unknown;
+  }>(
+    "/internal/answer-replies/:provider/:incomingMessageId/reconcile-not-sent",
+    (request, reply) => handleReconcileNotSent(
+      request.params,
+      request.body,
+      reply,
+      repository,
+      now,
+    ),
+  );
+}
+
+async function handleReconcileNotSent(
+  params: { provider?: string; incomingMessageId?: string },
+  rawBody: unknown,
+  reply: FastifyReply,
+  repository: AnswerReplyOperatorRepository | undefined,
+  now: () => Date,
+) {
+  const input = parseFindInput(params);
+  const body = readParsedBody(rawBody);
+  const expectedVersion = readExpectedVersion(
+    isRecord(body) ? body.expectedVersion : undefined,
+  );
+  if (input === undefined || expectedVersion === undefined) {
+    return invalidRequest(reply);
+  }
+  if (repository === undefined) {
+    return unavailable(reply);
+  }
+
+  try {
+    const current = await repository.findByIncomingMessage(input);
+    if (current === undefined) {
+      return notFound(reply);
+    }
+    const receipt = await repository.reconcileNotSent({
+      deliveryId: current.delivery.id,
+      expectedVersion,
+      at: now(),
+    });
+    return toResponse(receipt);
+  } catch (error) {
+    if (
+      error instanceof AnswerReplyVersionConflictError
+      || error instanceof AnswerReplyTransitionError
+    ) {
+      return reply.code(409).send({ ok: false, error: "answer_reply_reconciliation_conflict" });
+    }
+    if (error instanceof AnswerReplyNotFoundError) {
+      return notFound(reply);
+    }
+    return reply.code(500).send({ ok: false, error: "answer_reply_reconciliation_failed" });
+  }
 }
 
 async function handleFind(
@@ -75,6 +143,22 @@ function readIncomingMessageId(value: unknown): string | undefined {
     : undefined;
 }
 
+function readExpectedVersion(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1
+    ? value
+    : undefined;
+}
+
+function readParsedBody(value: unknown): unknown {
+  return isRecord(value) && Object.hasOwn(value, "parsedBody")
+    ? value.parsedBody
+    : value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function toResponse(receipt: AnswerReplyReceipt) {
   return {
     ok: true as const,
@@ -86,6 +170,7 @@ function toResponse(receipt: AnswerReplyReceipt) {
       state: receipt.delivery.state,
       renderedReplyFingerprint: receipt.delivery.renderedReplyFingerprint,
       semanticFingerprint: receipt.delivery.semanticFingerprint,
+      knowledgeConflictCandidateId: receipt.delivery.knowledgeConflictCandidateId,
       replyMessageId: receipt.delivery.replyMessageId,
       safeNoticeMessageId: receipt.delivery.safeNoticeMessageId,
       attemptCount: receipt.delivery.attemptCount,
@@ -113,6 +198,10 @@ function toResponse(receipt: AnswerReplyReceipt) {
       contentHash: source.contentHash,
       embeddingProfileId: source.embeddingProfileId,
       initialPermissionCheckedAt: source.initialPermissionCheckedAt,
+      crossGroupGrantId: source.crossGroupGrantId,
+      crossGroupGrantVersion: source.crossGroupGrantVersion,
+      crossGroupGrantorGroupId: source.crossGroupGrantorGroupId,
+      crossGroupGranteeGroupId: source.crossGroupGranteeGroupId,
     })),
     events: receipt.events.map((event) => ({
       id: event.id,

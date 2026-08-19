@@ -19,6 +19,8 @@ export interface DocumentSnapshot {
   createdAt: Date;
 }
 
+export type DocumentSnapshotMetadata = Omit<DocumentSnapshot, "bodyText" | "errorMessage">;
+
 export type Queryable = {
   query: <T = unknown>(sql: string, values?: unknown[]) => Promise<{ rows: T[] }>;
 };
@@ -51,6 +53,9 @@ export interface DocumentSnapshotRepository {
   listSnapshotsForSource(documentSourceId: string): Promise<DocumentSnapshot[]>;
   findLatestSnapshotForSource(documentSourceId: string): Promise<DocumentSnapshot | undefined>;
   findLatestSnapshotsForSources(documentSourceIds: string[]): Promise<DocumentSnapshot[]>;
+  findLatestSnapshotMetadataForSources(
+    documentSourceIds: string[],
+  ): Promise<DocumentSnapshotMetadata[]>;
   findSnapshotById(id: string): Promise<DocumentSnapshot | undefined>;
   listSuccessfulSnapshotsMissingProfile(input: {
     embeddingProfileId: string;
@@ -70,6 +75,8 @@ type DocumentSnapshotRow = {
   error_message: string | null;
   created_at: Date;
 };
+
+type DocumentSnapshotMetadataRow = Omit<DocumentSnapshotRow, "body_text" | "error_message">;
 
 type NextDocumentSnapshot = {
   id: string;
@@ -160,6 +167,28 @@ order by document_source_id asc, fetched_at desc, id asc
       );
 
       return result.rows.map(mapSnapshotRow);
+    },
+
+    async findLatestSnapshotMetadataForSources(documentSourceIds) {
+      if (documentSourceIds.length === 0) return [];
+      const result = await dependencies.queryable.query<DocumentSnapshotMetadataRow>(
+        `
+select distinct on (document_source_id)
+  id,
+  document_source_id,
+  source_uri,
+  fetch_status,
+  content_hash,
+  source_version,
+  fetched_at,
+  created_at
+from document_snapshots
+where document_source_id = any($1::text[])
+order by document_source_id asc, fetched_at desc, id asc
+`,
+        [documentSourceIds],
+      );
+      return result.rows.map(mapSnapshotMetadataRow);
     },
 
     async findSnapshotById(id) {
@@ -291,6 +320,19 @@ function mapSnapshotRow(row: DocumentSnapshotRow): DocumentSnapshot {
       row.error_message === null
         ? undefined
         : normalizeDocumentSnapshotErrorMessage(row.error_message),
+    createdAt: row.created_at,
+  };
+}
+
+function mapSnapshotMetadataRow(row: DocumentSnapshotMetadataRow): DocumentSnapshotMetadata {
+  return {
+    id: row.id,
+    documentSourceId: row.document_source_id,
+    sourceUri: row.source_uri,
+    fetchStatus: row.fetch_status,
+    contentHash: row.content_hash ?? undefined,
+    sourceVersion: row.source_version ?? undefined,
+    fetchedAt: row.fetched_at,
     createdAt: row.created_at,
   };
 }

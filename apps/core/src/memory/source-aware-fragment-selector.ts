@@ -110,6 +110,7 @@ async function appendBoundedNeighbors(
         ...neighbor,
         sourceTitle: seed.sourceTitle,
         sourceType: seed.sourceType,
+        ...copyGrantBinding(seed),
       });
       selectedKeys.add(key);
       selectedBySource.set(neighbor.documentSourceId, sourceCount + 1);
@@ -117,6 +118,31 @@ async function appendBoundedNeighbors(
   }
 
   return selected;
+}
+
+function copyGrantBinding(fragment: RetrievedDocumentFragment): Pick<
+  RetrievedDocumentFragment,
+  | "crossGroupGrantId"
+  | "crossGroupGrantVersion"
+  | "crossGroupGrantorGroupId"
+  | "crossGroupGranteeGroupId"
+> {
+  const values = [
+    fragment.crossGroupGrantId,
+    fragment.crossGroupGrantVersion,
+    fragment.crossGroupGrantorGroupId,
+    fragment.crossGroupGranteeGroupId,
+  ];
+  if (values.every((value) => value === undefined)) return {};
+  if (values.some((value) => value === undefined)) {
+    throw new Error("neighbor seed grant binding must be all present or all absent");
+  }
+  return {
+    crossGroupGrantId: fragment.crossGroupGrantId!,
+    crossGroupGrantVersion: fragment.crossGroupGrantVersion!,
+    crossGroupGrantorGroupId: fragment.crossGroupGrantorGroupId!,
+    crossGroupGranteeGroupId: fragment.crossGroupGranteeGroupId!,
+  };
 }
 
 function createFragmentKey(

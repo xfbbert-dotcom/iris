@@ -48,6 +48,22 @@ describe("KnowledgeCardRuntime", () => {
     expect(actionWorker.processActionApproval).toHaveBeenCalledOnce();
     expect(() => runtime.bindActionApprovalWorker(actionWorker)).toThrow(/already bound/iu);
 
+    await expect(interactionDependencies?.knowledgeConflictInteractionWorker?.processInteraction(
+      {} as never,
+    )).resolves.toEqual({ status: "denied", code: "runtime_disabled" });
+    const conflictWorker = {
+      processInteraction: vi.fn(async () => ({
+        status: "applied" as const,
+        code: "conflict_dismissed" as const,
+      })),
+    };
+    runtime.bindKnowledgeConflictInteractionWorker(conflictWorker);
+    await expect(interactionDependencies?.knowledgeConflictInteractionWorker?.processInteraction(
+      {} as never,
+    )).resolves.toEqual({ status: "applied", code: "conflict_dismissed" });
+    expect(conflictWorker.processInteraction).toHaveBeenCalledOnce();
+    expect(() => runtime.bindKnowledgeConflictInteractionWorker(conflictWorker)).toThrow(/already bound/iu);
+
     await runtime.close();
   });
 

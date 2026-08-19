@@ -226,6 +226,16 @@ function toDeadLetterResponse(deadLetter: ApprovalInteractionDeadLetter) {
   if (deadLetter.job.kind === "proactive_signal_feedback") {
     return { kind: deadLetter.job.kind };
   }
+  if (deadLetter.job.kind === "knowledge_conflict_confirmation") {
+    return {
+      ...common,
+      kind: deadLetter.job.kind,
+      candidateId: deadLetter.job.candidateId,
+      candidateVersion: deadLetter.job.candidateVersion,
+      groupId: deadLetter.job.groupId,
+      nonce: deadLetter.job.nonce,
+    };
+  }
   return {
     ...common,
     kind: deadLetter.job.kind,

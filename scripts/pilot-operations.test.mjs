@@ -16,6 +16,430 @@ const proactiveFeedbackAutoclosePath = "deploy/pilot/proactive-feedback-autoclos
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
+const knowledgeConflictAcceptancePath =
+  "docs/runbooks/iris-knowledge-conflict-acceptance.md";
+const knowledgeConflictPrPath =
+  "docs/pull-requests/2026-08-13-iris-knowledge-conflict-candidate.md";
+const crossGroupGrantAcceptancePath =
+  "docs/runbooks/iris-cross-group-document-grants-acceptance.md";
+const crossGroupGrantPrPath =
+  "docs/pull-requests/2026-08-18-iris-cross-group-document-grants.md";
+
+test("cross-group document grant acceptance is executable and default-deny", () => {
+  assert.equal(existsSync(crossGroupGrantAcceptancePath), true);
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  for (let step = 1; step <= 8; step += 1) {
+    assert.match(runbook, new RegExp(`## Step ${step}:`, "u"), `missing grant step ${step}`);
+  }
+  for (const marker of [
+    "APPROVED_COMMIT_SHA",
+    "IRIS_APPROVED_IMAGE_DIGEST",
+    "$SourceGroupId",
+    "$GranteeGroupId",
+    "$ControlGroupId",
+    "0051_document_source_group_grants.sql",
+    "pre-grant denial",
+    "answer_reply_source_traces",
+    "permission_blocked",
+    "begin-send/revoke",
+    "Invoke-CrossGroupDocumentGrantAcceptance",
+    "Invoke-CrossGroupDocumentGrantRollback",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "iu"));
+  }
+  const rollbackStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantRollback");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance");
+  assert.ok(rollbackStart >= 0 && acceptanceStart > rollbackStart);
+  const rollback = runbook.slice(rollbackStart, acceptanceStart);
+  assertMarkersInOrder(rollback, [
+    "stop caddy",
+    "/group-grants/",
+    "/internal/runtime-control/groups/",
+    "/internal/runtime-control/global",
+    "/internal/runtime-control/capabilities",
+    "Wait-CrossGroupDrain",
+    "Assert-CrossGroupRollbackAttestation",
+  ]);
+  assert.doesNotMatch(rollback, /\b(?:DELETE|TRUNCATE|DROP)\b/iu);
+  const acceptance = runbook.slice(acceptanceStart);
+  assertMarkersInOrder(acceptance, [
+    "Invoke-Compose @(\"stop\", \"caddy\")",
+    "Assert-ReviewedBuild $context",
+    "Invoke-ReviewedPilotBackup $context",
+    "$enableAttempted = $true",
+    "Get-KnownGroupIds $context",
+    "preflight group disable",
+  ]);
+  assert.match(acceptance, /finally\s*\{[\s\S]*Invoke-CrossGroupDocumentGrantRollback/u);
+  assert.match(runbook, /function Wait-CrossGroupDrain[\s\S]*Attempts = 60[\s\S]*DelayMilliseconds = 500/iu);
+  assert.match(runbook, /gh run view[\s\S]*headSha[\s\S]*Test Postgres integrations/iu);
+  assert.match(runbook, /docker image inspect[\s\S]*ApprovedImageDigest/iu);
+  assert.match(runbook, /Invoke-JsonSql/u);
+  assert.match(runbook, /Get-FreshCrossGroupEvidence/u);
+  assert.doesNotMatch(runbook, /\$artifact\.facts/iu);
+});
+
+test("cross-group document grant source binding accepts live-checked unknown permission", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const sourceBindingStart = runbook.indexOf("function Assert-SourceBinding");
+  const denialStageStart = runbook.indexOf("function Assert-DenialStage", sourceBindingStart);
+  assert.ok(sourceBindingStart >= 0 && denialStageStart > sourceBindingStart);
+  const sourceBinding = runbook.slice(sourceBindingStart, denialStageStart);
+
+  assert.match(sourceBinding, /permission_state\s+IN\s*\(\s*'unknown'\s*,\s*'readable'\s*\)/iu);
+  assert.doesNotMatch(sourceBinding, /permission_state\s*=\s*'readable'/iu);
+  assert.match(sourceBinding, /source_type='group_visible_document'/u);
+  assert.match(sourceBinding, /sync_state='synced'/u);
+  assert.match(sourceBinding, /can_use_for_answering=TRUE/u);
+});
+
+test("cross-group ingress window preserves the live runtime activation", () => {
+  const valid = {
+    runtime: {
+      ok: true,
+      globalEnabled: true,
+      desiredGlobalEnabled: true,
+      activationRequired: false,
+      disabledGroupIds: ["oc_other"],
+      capabilities: {
+        readGroupContext: true,
+        replyWhenMentioned: true,
+        readGroupDocuments: true,
+        retrieveKnowledgeBase: true,
+        proactiveSpeech: false,
+        generateKnowledgeDrafts: false,
+        writeKnowledgeBase: false,
+        callExternalTools: false,
+      },
+      persistence: { storage: "postgres", ok: true },
+    },
+  };
+  const contextCommand = [
+    "$context = [pscustomobject]@{ SourceGroupId='oc_source'; GranteeGroupId='oc_grantee'; ControlGroupId='oc_control' }",
+    "$known = @('oc_source','oc_grantee','oc_control','oc_other')",
+  ];
+  const startCommand = [
+    ...contextCommand,
+    "$script:composeCalls = @()",
+    "function Invoke-Compose { param([string[]]$Arguments) $script:composeCalls += ,@($Arguments); if ($Arguments -notcontains '--no-deps') { $inputValue.runtime.globalEnabled = $false; $inputValue.runtime.activationRequired = $true } }",
+    "function Invoke-CoreJson { param([string]$Method, [string]$Path, [object]$Body) return $inputValue.runtime }",
+    "Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $known",
+    "if ($script:composeCalls.Count -ne 1 -or ($script:composeCalls[0] -join ' ') -cne 'up --detach --wait --wait-timeout 120 --no-deps caddy') { throw 'ingress window did not isolate Caddy startup' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(startCommand, structuredClone(valid), true, crossGroupGrantAcceptancePath);
+
+  const activationCommand = [
+    ...contextCommand,
+    "Assert-CrossGroupLiveActivation -Runtime $inputValue.runtime -Context $context -KnownGroupIds $known",
+  ].join("; ");
+  for (const invalidRuntime of [
+    { ...valid.runtime, globalEnabled: false, activationRequired: true },
+    { ...valid.runtime, desiredGlobalEnabled: false },
+    { ...valid.runtime, activationRequired: true },
+    { ...valid.runtime, disabledGroupIds: ["oc_grantee", "oc_other"] },
+    { ...valid.runtime, disabledGroupIds: [] },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, readGroupContext: false } },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, replyWhenMentioned: false } },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, readGroupDocuments: false } },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, retrieveKnowledgeBase: false } },
+    { ...valid.runtime, persistence: { storage: "postgres", ok: false } },
+  ]) {
+    assertPowerShellRunbookGate(
+      activationCommand,
+      { runtime: invalidRuntime },
+      false,
+      crossGroupGrantAcceptancePath,
+    );
+  }
+});
+
+test("cross-group stage evidence uses provider message IDs and rollback closes every read gate", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const denialStart = runbook.indexOf("function Assert-DenialStage");
+  const projectionStart = runbook.indexOf("function Assert-GrantProjection", denialStart);
+  const grantedStart = runbook.indexOf("function Assert-GrantedAnswerStage", projectionStart);
+  const fingerprintStart = runbook.indexOf("function Get-CrossGroupMutableFingerprint", grantedStart);
+  const rollbackStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantRollback");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance", rollbackStart);
+  assert.ok(
+    denialStart >= 0 && projectionStart > denialStart && grantedStart > projectionStart &&
+      fingerprintStart > grantedStart && rollbackStart > fingerprintStart && acceptanceStart > rollbackStart,
+  );
+
+  for (const stage of [
+    runbook.slice(denialStart, projectionStart),
+    runbook.slice(grantedStart, fingerprintStart),
+  ]) {
+    assert.match(stage, /conversation_messages\s+WHERE\s+provider_message_id='\$granteeMessage'/u);
+    assert.match(stage, /conversation_messages\s+WHERE\s+provider_message_id='\$controlMessage'/u);
+    assert.doesNotMatch(stage, /conversation_messages\s+WHERE\s+id='\$(?:grantee|control)Message'/u);
+  }
+
+  const rollback = runbook.slice(rollbackStart, acceptanceStart);
+  const acceptance = runbook.slice(acceptanceStart);
+  assert.match(rollback, /readGroupContext\s*=\s*\$false/u);
+  assert.match(
+    acceptance,
+    /"PATCH"\s+"\/internal\/runtime-control\/capabilities"\s+@\{\s*readGroupContext\s*=\s*\$false;?\s*replyWhenMentioned\s*=\s*\$false/u,
+  );
+  assert.match(
+    acceptance,
+    /"PATCH"\s+"\/internal\/runtime-control\/capabilities"\s+@\{\s*readGroupContext\s*=\s*\$true\s+replyWhenMentioned\s*=\s*\$true/u,
+  );
+  assert.match(runbook, /throw \("rollback failed: " \+ \(\$script:RollbackErrors -join "; "\)\)/u);
+});
+
+test("cross-group grant acceptance reruns from a revoked projection and drains in-flight replies", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance");
+  const rollbackStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantRollback");
+  assert.ok(acceptanceStart >= 0 && rollbackStart >= 0);
+  const acceptance = runbook.slice(acceptanceStart);
+  const rollback = runbook.slice(rollbackStart, acceptanceStart);
+
+  assert.match(runbook, /function Get-CrossGroupGrantBaseline/u);
+  assert.match(runbook, /function Get-CrossGroupGrantVersionSequence/u);
+  assert.match(acceptance, /\$grantBaseline\s*=\s*Get-CrossGroupGrantBaseline\s+\$context/u);
+  assert.match(acceptance, /\$grantVersions\s*=\s*Get-CrossGroupGrantVersionSequence\s+\$grantBaseline\.version/u);
+  assert.match(acceptance, /expectedVersion\s*=\s*\$grantBaseline\.version/u);
+  assert.match(acceptance, /expectedVersion\s*=\s*\$grantVersions\.initial/u);
+  assert.match(acceptance, /expectedVersion\s*=\s*\$grantVersions\.revoked/u);
+  assert.doesNotMatch(acceptance, /expectedVersion\s*=\s*0/u);
+  assert.doesNotMatch(acceptance, /grant\.version\s+-ne\s+1/u);
+  assert.match(runbook, /\$Label failed: \$\(\$_\.Exception\.Message\)/u);
+  assert.match(
+    runbook,
+    /state\s+IN\s*\('prepared','sending','reconciliation_required'\)[\s\S]*safe_notice_sent_at\s+IS\s+NULL/iu,
+  );
+
+  const command = [
+    "$fresh = Get-CrossGroupGrantVersionSequence 0",
+    "if ($fresh.initial -ne 1 -or $fresh.revoked -ne 2 -or $fresh.regranted -ne 3) { throw 'fresh version sequence failed' }",
+    "$rerun = Get-CrossGroupGrantVersionSequence 2",
+    "if ($rerun.initial -ne 3 -or $rerun.revoked -ne 4 -or $rerun.regranted -ne 5) { throw 'rerun version sequence failed' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(command, {}, true, crossGroupGrantAcceptancePath);
+
+  const baselineCommand = [
+    "function Invoke-JsonSql { param([string]$Sql) return $inputValue }",
+    "$context = [pscustomobject]@{ DocumentSourceId='source-a'; SourceGroupId='group-a'; GranteeGroupId='group-b' }",
+    "$baseline = Get-CrossGroupGrantBaseline $context",
+    "if ($baseline.version -ne $expectedVersion -or [string]$baseline.grantId -cne $expectedGrantId) { throw 'grant baseline mismatch' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(
+    `$expectedVersion=0; $expectedGrantId=''; ${baselineCommand}`,
+    { projectionCount: 0, grantId: null, grantorGroupId: null, state: null, version: null },
+    true,
+    crossGroupGrantAcceptancePath,
+  );
+  const revokedBaseline = {
+    projectionCount: 1,
+    grantId: "grant-existing",
+    grantorGroupId: "group-a",
+    state: "revoked",
+    version: 4,
+  };
+  assertPowerShellRunbookGate(
+    `$expectedVersion=4; $expectedGrantId='grant-existing'; ${baselineCommand}`,
+    revokedBaseline,
+    true,
+    crossGroupGrantAcceptancePath,
+  );
+  for (const invalid of [
+    { ...revokedBaseline, projectionCount: 2 },
+    { ...revokedBaseline, state: "active" },
+    { ...revokedBaseline, grantorGroupId: "group-other" },
+    { ...revokedBaseline, version: 0 },
+  ]) {
+    assertPowerShellRunbookGate(
+      `$expectedVersion=4; $expectedGrantId='grant-existing'; ${baselineCommand}`,
+      invalid,
+      false,
+      crossGroupGrantAcceptancePath,
+    );
+  }
+});
+
+test("cross-group rollback treats empty Compose service output as stopped and command errors as unavailable", () => {
+  const stoppedCommand = [
+    "function docker { $global:LASTEXITCODE = 0; return '' }",
+    "$running = Test-CrossGroupCaddyRunning",
+    "if ($running) { throw 'empty Compose output must mean stopped' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(stoppedCommand, {}, true, crossGroupGrantAcceptancePath);
+
+  const runningCommand = [
+    "function docker { $global:LASTEXITCODE = 0; return 'caddy' }",
+    "$running = Test-CrossGroupCaddyRunning",
+    "if (-not $running) { throw 'named Compose service must mean running' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(runningCommand, {}, true, crossGroupGrantAcceptancePath);
+
+  const unavailableCommand = [
+    "function docker { $global:LASTEXITCODE = 17; return '' }",
+    "$null = Test-CrossGroupCaddyRunning",
+  ].join("; ");
+  assertPowerShellRunbookGate(unavailableCommand, {}, false, crossGroupGrantAcceptancePath);
+});
+
+test("cross-group backup stays on the reviewed checkout and reattests the running image", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const backupStart = runbook.indexOf("function Invoke-ReviewedPilotBackup");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance");
+  assert.ok(backupStart >= 0 && acceptanceStart > backupStart);
+  const backup = runbook.slice(backupStart, acceptanceStart);
+  const acceptance = runbook.slice(acceptanceStart);
+
+  assert.match(backup, /\$reviewedRoot\s*=\s*\(Get-Location\)\.Path/iu);
+  assert.match(backup, /IRIS_REPOSITORY_DIR\s*=\s*\$reviewedRoot/iu);
+  assert.match(backup, /IRIS_ENV_FILE[\s\S]*\.env\.pilot/iu);
+  assert.match(backup, /IRIS_COMPOSE_FILE[\s\S]*deploy[\\/]pilot[\\/]docker-compose\.yml/iu);
+  assert.match(backup, /IRIS_BACKUP_DIR[\s\S]*\/opt\/iris\/repository\/backups/iu);
+  assert.match(backup, /\.\/deploy\/pilot\/backup\.sh/iu);
+  assert.match(backup, /finally[\s\S]*SetEnvironmentVariable/iu);
+  assert.match(backup, /Assert-ReviewedBuild\s+\$Context/iu);
+  assert.match(acceptance, /Assert-ReviewedBuild\s+\$context[\s\S]*Invoke-ReviewedPilotBackup\s+\$context/iu);
+  assert.doesNotMatch(acceptance, /&\s+\.\/deploy\/pilot\/backup\.sh/iu);
+});
+
+test("cross-group document grant CI executes real migration and concurrency coverage", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  for (const testFile of [
+    "migration-runner.test.ts",
+    "postgres-document-source-group-grant-repository.test.ts",
+    "postgres-answer-reply-repository.test.ts",
+  ]) {
+    assert.match(workflow, new RegExp(escapeRegExp(testFile), "u"));
+  }
+});
+
+test("cross-group document grant evidence is exact-SHA, image, stage, and time bound", () => {
+  const commitSha = "a".repeat(40);
+  const imageDigest = `sha256:${"b".repeat(64)}`;
+  const valid = {
+    stage: "preGrant",
+    recordedAt: "2026-08-18T02:00:01.000Z",
+    approvedCommitSha: commitSha,
+    approvedImageDigest: imageDigest,
+    observations: {
+      granteeIncomingMessageId: "om_grantee_pregrant",
+      controlIncomingMessageId: "om_control_pregrant",
+      granteeDisclosedSource: false,
+      controlDisclosedSource: false,
+    },
+  };
+  const command = [
+    "$notBefore = [DateTimeOffset]'2026-08-18T02:00:00.000Z'",
+    "$notAfter = [DateTimeOffset]'2026-08-18T02:01:00.000Z'",
+    `Assert-FreshCrossGroupEvidence -Evidence $inputValue -ExpectedStage 'preGrant' -ExpectedCommitSha '${commitSha}' -ExpectedImageDigest '${imageDigest}' -NotBefore $notBefore -NotAfter $notAfter`,
+  ].join("; ");
+  assertPowerShellRunbookGate(command, valid, true, crossGroupGrantAcceptancePath);
+  for (const invalid of [
+    { ...valid, stage: "granted" },
+    { ...valid, recordedAt: "2026-08-18T01:59:59.000Z" },
+    { ...valid, recordedAt: "2026-08-18T02:01:01.000Z" },
+    { ...valid, approvedCommitSha: "c".repeat(40) },
+    { ...valid, approvedImageDigest: `sha256:${"d".repeat(64)}` },
+    { ...valid, observations: { ...valid.observations, nested: { replyText: "forbidden" } } },
+  ]) {
+    assertPowerShellRunbookGate(command, invalid, false, crossGroupGrantAcceptancePath);
+  }
+});
+
+test("cross-group document grant gates reject false-positive facts", () => {
+  const valid = {
+    baselineVersion: 0,
+    preGrant: { granteeTraceCount: 0, controlTraceCount: 0, promptGrantCount: 0 },
+    grant: { state: "active", version: 1, grantedEventCount: 1 },
+    grantee: { deliveryCount: 1, traceCount: 1, exactGrantBindingCount: 1 },
+    control: { traceCount: 0, sourceDisclosureCount: 0 },
+    revocation: {
+      version: 2,
+      preparedCount: 1,
+      permissionBlockedCount: 1,
+      sendStartedCount: 0,
+      sentCount: 0,
+    },
+    regrant: { version: 3, grantedEventCount: 1, replayEventDelta: 0, deliveryCount: 1 },
+    race: { safeOutcomeCount: 1, sendAfterRevokeCount: 0 },
+  };
+  const command = "Assert-CrossGroupGrantFacts -Facts $inputValue";
+  assertPowerShellRunbookGate(command, valid, true, crossGroupGrantAcceptancePath);
+  for (const invalid of [
+    { ...valid, preGrant: { ...valid.preGrant, granteeTraceCount: 1 } },
+    { ...valid, grant: { ...valid.grant, grantedEventCount: 2 } },
+    { ...valid, grantee: { ...valid.grantee, exactGrantBindingCount: 0 } },
+    { ...valid, control: { ...valid.control, sourceDisclosureCount: 1 } },
+    { ...valid, revocation: { ...valid.revocation, sendStartedCount: 1 } },
+    { ...valid, revocation: { ...valid.revocation, version: 4 } },
+    { ...valid, regrant: { ...valid.regrant, replayEventDelta: 1 } },
+    { ...valid, race: { ...valid.race, sendAfterRevokeCount: 1 } },
+  ]) {
+    assertPowerShellRunbookGate(command, invalid, false, crossGroupGrantAcceptancePath);
+  }
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    baselineVersion: 2,
+    grant: { ...valid.grant, version: 3 },
+    revocation: { ...valid.revocation, version: 4 },
+    regrant: { ...valid.regrant, version: 5 },
+  }, true, crossGroupGrantAcceptancePath);
+});
+
+test("cross-group document grant rollback rejects residual or lost durable facts", () => {
+  const valid = {
+    caddyRunning: false,
+    globalEnabled: false,
+    desiredGlobalEnabled: false,
+    capabilitiesDisabled: true,
+    disabledGroupCount: 3,
+    activePilotGrantCount: 0,
+    pendingCount: 0,
+    deadLetterCount: 0,
+    unresolvedDeliveryCount: 0,
+    mutableFingerprintBefore: "a".repeat(64),
+    mutableFingerprintAfter: "a".repeat(64),
+    appendOnlyEventCountBefore: 2,
+    appendOnlyEventCountAfter: 2,
+  };
+  const command = "Assert-CrossGroupRollbackAttestation -Facts $inputValue";
+  assertPowerShellRunbookGate(command, valid, true, crossGroupGrantAcceptancePath);
+  for (const invalid of [
+    { ...valid, caddyRunning: true },
+    { ...valid, capabilitiesDisabled: false },
+    { ...valid, activePilotGrantCount: 1 },
+    { ...valid, unresolvedDeliveryCount: 1 },
+    { ...valid, mutableFingerprintAfter: "b".repeat(64) },
+    { ...valid, appendOnlyEventCountAfter: 1 },
+  ]) {
+    assertPowerShellRunbookGate(command, invalid, false, crossGroupGrantAcceptancePath);
+  }
+});
+
+test("cross-group document grant PR records metadata-only live acceptance and default-deny rollback", () => {
+  assert.equal(existsSync(crossGroupGrantPrPath), true);
+  const template = readFileSync(crossGroupGrantPrPath, "utf8");
+  assert.match(template, /## Release Status\s+Live acceptance passed/iu);
+  assert.match(template, /首个跨群文档回答闭环已实现（默认拒绝）/u);
+  for (const marker of [
+    "exact reviewed build",
+    "SHA-256",
+    "result=pass",
+    "rollbackPass=true",
+    "default-deny",
+    "active pilot grants",
+    "unresolved deliveries",
+    "mutable fingerprint stable",
+    "Cross-group memory and cross-group knowledge drafts remain missing",
+    "wildcard grants",
+  ]) {
+    assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
+  }
+  assert.doesNotMatch(
+    template,
+    /document body|answer body|message body|access token|credential value|oc_[0-9a-f]{32}|IRIS_USER_DOC_/iu,
+  );
+});
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
   for (const scriptPath of [
@@ -32,6 +456,655 @@ test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined 
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   }
+});
+
+test("knowledge-conflict acceptance runbook is executable and covers all twelve gates", () => {
+  assert.equal(existsSync(knowledgeConflictAcceptancePath), true);
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (let step = 1; step <= 12; step += 1) {
+    assert.match(runbook, new RegExp(`## Step ${step}:`, "u"), `missing acceptance step ${step}`);
+  }
+  for (const marker of [
+    "APPROVED_COMMIT_SHA",
+    "IRIS_APPROVED_IMAGE_DIGEST",
+    "$PilotGroupId",
+    "$ControlGroupIds",
+    "knowledge_conflict",
+    "medium",
+    "governed update draft",
+    "does not edit the existing Wiki page in place",
+    "Invoke-KnowledgeConflictAcceptance",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+  assert.doesNotMatch(runbook, /https:\/\/[^\s`]*(?:wiki|docx)[^\s`]*/iu);
+});
+
+test("knowledge-conflict clean-worktree gate is safe under strict PowerShell mode", () => {
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  assert.match(
+    runbook,
+    /if \(@\(git status --porcelain --untracked-files=all\)\.Count -ne 0\) \{ throw "Reviewed checkout is not clean" \}/u,
+  );
+});
+
+test("knowledge-conflict rollback is unconditional after enablement and preserves facts", () => {
+  assert.equal(existsSync(knowledgeConflictAcceptancePath), true);
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  const rollbackStart = runbook.indexOf("function Invoke-KnowledgeConflictRollback");
+  const rollbackEnd = runbook.indexOf("function Invoke-KnowledgeConflictAcceptance", rollbackStart);
+  assert.ok(rollbackStart >= 0 && rollbackEnd > rollbackStart, "rollback helper must be executable");
+  const rollback = runbook.slice(rollbackStart, rollbackEnd);
+  assertMarkersInOrder(rollback, [
+    "stop caddy",
+    "IRIS_KNOWLEDGE_CONFLICT_ENABLED=false",
+    "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST=",
+    "/internal/runtime-control/groups/",
+    "/internal/runtime-control/global",
+    "/internal/runtime-control/capabilities",
+    "--force-recreate --wait --wait-timeout 120 core",
+    "Get-DurableActivityFingerprint",
+    "Assert-FingerprintUnchanged",
+    "Assert-CountsUnchanged",
+    "Assert-AppendOnlyFactsPreserved",
+  ]);
+  assert.doesNotMatch(rollback, /\b(?:DELETE|TRUNCATE|DROP)\b/iu);
+
+  const wrapper = runbook.slice(rollbackEnd);
+  assert.match(wrapper, /\$EnableAttempted\s*=\s*\$true/u);
+  assert.match(wrapper, /try\s*\{/u);
+  assert.match(wrapper, /finally\s*\{[\s\S]*Invoke-KnowledgeConflictRollback/u);
+});
+
+test("knowledge-conflict enabled readiness tolerates bounded startup convergence", () => {
+  assertPowerShellRunbookGate(
+    `
+$script:readinessAttempt = 0
+function Start-Sleep { param([int]$Milliseconds) }
+function Invoke-RestMethod {
+  param([hashtable]$Headers, [string]$Uri)
+  if ($Uri -like '*/internal/readiness') {
+    $script:readinessAttempt += 1
+    return @{ ok = ($script:readinessAttempt -ge 2) }
+  }
+  if ($Uri -like '*/internal/status') {
+    return @{ status = 'healthy'; components = @{ knowledgeConflicts = @{ running = ($script:readinessAttempt -ge 2) } } }
+  }
+  if ($Uri -like '*/internal/runtime-control/status') {
+    return @{ globalEnabled = $true; desiredGlobalEnabled = $true; disabledGroupIds = @('control-group') }
+  }
+  throw "unexpected URI"
+}
+$result = Wait-EnabledConflictRuntimeReady -Headers @{} -PilotGroupId 'pilot-group' -NonPilotGroupIds @('control-group') -MaxAttempts 3 -PollIntervalMilliseconds 1
+if ($script:readinessAttempt -ne 2 -or $result.status.components.knowledgeConflicts.running -ne $true) { throw 'bounded readiness did not converge' }
+`,
+    {},
+    true,
+  );
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  assert.match(runbook, /Wait-EnabledConflictRuntimeReady[\s\S]*-MaxAttempts 60[\s\S]*-PollIntervalMilliseconds 500/u);
+  assert.doesNotMatch(
+    runbook,
+    /\$enabledReadiness\s*=\s*Invoke-RestMethod[\s\S]{0,500}Enabled conflict runtime is not ready/u,
+  );
+});
+
+test("knowledge-conflict PR evidence records metadata-only live acceptance and default-off rollback", () => {
+  assert.equal(existsSync(knowledgeConflictPrPath), true);
+  const template = readFileSync(knowledgeConflictPrPath, "utf8");
+  assert.match(template, /## Release Status\s+Live acceptance passed/iu);
+  for (const marker of [
+    "exact commit SHA",
+    "image digest",
+    "IDs",
+    "versions",
+    "hashes",
+    "counts",
+    "timestamps",
+    "pass/fail",
+    "governed update draft",
+    "does not edit the existing Wiki page in place",
+    "default-off",
+    "rollback",
+  ]) {
+    assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
+  }
+  assert.doesNotMatch(template, /message body|document body|credential value|access token/iu);
+});
+
+test("knowledge-conflict exact evidence gate rejects duplicate and unrelated rows", () => {
+  const snapshotHash = "0".repeat(64);
+  const fragmentHash = "1".repeat(64);
+  const row = (overrides) => ({
+    evidenceType: "conversation_message",
+    referenceId: "C1",
+    groupId: null,
+    conversationMessageId: null,
+    groupMemoryId: null,
+    sourceUpdatedAt: null,
+    documentSourceId: null,
+    documentSnapshotId: null,
+    documentFragmentId: null,
+    snapshotContentHash: null,
+    contentHash: null,
+    ...overrides,
+  });
+  const exactEvidence = {
+    pilotMessageIds: ["message_id"],
+    memoryId: "memory_id",
+    memoryUpdatedAt: "2026-08-15T01:02:03.000Z",
+    documentSourceId: "source_id",
+    documentSourceUpdatedAt: "2026-08-15T01:02:02.000Z",
+    snapshotId: "snapshot_id",
+    contentHash: snapshotHash,
+    documentFragments: [{ referenceId: "D1", id: "fragment_id", contentHash: fragmentHash }],
+    exactEvidenceRows: [
+      row({ groupId: "pilot_group", conversationMessageId: "message_id" }),
+      row({
+        evidenceType: "group_memory",
+        referenceId: "M1",
+        groupId: "pilot_group",
+        groupMemoryId: "memory_id",
+        sourceUpdatedAt: "2026-08-15T01:02:03.000Z",
+      }),
+      row({
+        evidenceType: "document_source",
+        referenceId: "D1",
+        documentSourceId: "source_id",
+        sourceUpdatedAt: "2026-08-15T01:02:02.000Z",
+      }),
+      row({
+        evidenceType: "document_snapshot",
+        referenceId: "D1",
+        documentSourceId: "source_id",
+        documentSnapshotId: "snapshot_id",
+        snapshotContentHash: snapshotHash,
+        contentHash: snapshotHash,
+      }),
+      row({
+        evidenceType: "document_fragment",
+        referenceId: "D1",
+        documentSourceId: "source_id",
+        documentSnapshotId: "snapshot_id",
+        documentFragmentId: "fragment_id",
+        snapshotContentHash: snapshotHash,
+        contentHash: fragmentHash,
+      }),
+    ],
+  };
+  const rowsCommand = `$rows = @(Get-ExpectedEvidenceSqlRows -Rows @($inputValue.exactEvidenceRows) -Evidence $inputValue -PilotGroupId 'pilot_group'); if ($rows.Count -ne 5 -or @($rows | Where-Object { $_ -notmatch '^\\(.*\\)$' }).Count -ne 0) { throw 'wrong SQL row shape' }`;
+  assertPowerShellRunbookGate(rowsCommand, exactEvidence, true);
+  assertPowerShellRunbookGate(rowsCommand, {
+    ...exactEvidence,
+    exactEvidenceRows: [
+      ...exactEvidence.exactEvidenceRows,
+      exactEvidence.exactEvidenceRows[0],
+    ],
+  }, false);
+  assertPowerShellRunbookGate(rowsCommand, {
+    ...exactEvidence,
+    exactEvidenceRows: exactEvidence.exactEvidenceRows.map((item, index) =>
+      index === 0 ? { ...item, conversationMessageId: "unrelated_message_id" } : item),
+  }, false);
+
+  const valid = {
+    scanCount: 1,
+    candidateCount: 1,
+    expectedEvidenceCount: 5,
+    actualEvidenceCount: 5,
+    missingEvidenceCount: 0,
+    unexpectedEvidenceCount: 0,
+    duplicateExpectedCount: 0,
+  };
+  assertPowerShellRunbookGate(
+    `Assert-ExactEvidenceBindingFacts -Facts $inputValue`,
+    valid,
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-ExactEvidenceBindingFacts -Facts $inputValue`,
+    { ...valid, duplicateExpectedCount: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-ExactEvidenceBindingFacts -Facts $inputValue`,
+    { ...valid, unexpectedEvidenceCount: 1 },
+    false,
+  );
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (const marker of [
+    "conversation_message_id",
+    "group_memory_id",
+    "source_updated_at",
+    "document_source_id",
+    "document_snapshot_id",
+    "document_fragment_id",
+    "snapshot_content_hash",
+    "content_hash",
+    "EXCEPT ALL",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+});
+
+test("knowledge-conflict chronology proves every exact pilot message is strictly later", () => {
+  const valid = {
+    sourceSnapshotCount: 1,
+    sourceUpdatedAt: "2026-08-15T01:02:03.000Z",
+    snapshotFetchedAt: "2026-08-15T01:02:03.500Z",
+    messages: [
+      {
+        id: "message_c1",
+        sentAt: "2026-08-15T01:02:04.000Z",
+        createdAt: "2026-08-15T01:02:05.000Z",
+        rowCount: 1,
+        pilotCount: 1,
+        strictlyLaterCount: 1,
+      },
+      {
+        id: "message_c2",
+        sentAt: "2026-08-15T01:02:04.500Z",
+        createdAt: "2026-08-15T01:02:06.000Z",
+        rowCount: 1,
+        pilotCount: 1,
+        strictlyLaterCount: 1,
+      },
+    ],
+  };
+  const command = `Assert-MultiMessageChronologyFacts -Facts $inputValue.facts -ExpectedMessageIds @($inputValue.expectedMessageIds)`;
+  assertPowerShellRunbookGate(command, {
+    facts: valid,
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, true);
+  assertPowerShellRunbookGate(command, {
+    facts: {
+      ...valid,
+      messages: [
+        valid.messages[0],
+        {
+          ...valid.messages[1],
+          sentAt: "2026-08-15T01:02:02.000Z",
+          createdAt: "2026-08-15T01:02:06.000Z",
+          strictlyLaterCount: 1,
+        },
+      ],
+    },
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    facts: {
+      ...valid,
+      messages: [valid.messages[0], { ...valid.messages[1], pilotCount: 0 }],
+    },
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    facts: valid,
+    expectedMessageIds: ["message_c1", "message_c1"],
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    facts: { ...valid, messages: valid.messages.slice(0, 1) },
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, false);
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (const marker of [
+    "Assert-MultiMessageChronologyFacts",
+    "message.sent_at > source_snapshot.updated_at",
+    "message.sent_at > source_snapshot.fetched_at",
+    "json_agg",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+  assert.doesNotMatch(runbook, /message\.created_at\s*>\s*source_snapshot\./u);
+});
+
+test("knowledge-conflict source-version binding accepts exact nullable production facts", () => {
+  const command = `$actual = ConvertTo-SqlNullableReference -Name 'sourceVersion' -Value $inputValue.value; if ($actual -cne $inputValue.expected) { throw 'unexpected source-version SQL value' }`;
+  assertPowerShellRunbookGate(command, { value: null, expected: "NULL::text" }, true);
+  assertPowerShellRunbookGate(command, { value: "v123", expected: "'v123'::text" }, true);
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  assert.equal(
+    (runbook.match(/source_version IS NOT DISTINCT FROM \$sourceVersionSql/gu) ?? []).length,
+    2,
+  );
+  assert.doesNotMatch(runbook, /source_version\s*=\s*'\$\([^\n]*sourceVersion[^\n]*\)'/u);
+  assert.match(runbook, /"sourceVersion": null/u);
+});
+
+test("knowledge-conflict approved-card gate rejects false or missing metadata proof", () => {
+  const hash = "a".repeat(64);
+  const valid = {
+    candidateId: "candidate_id",
+    deliveryId: "delivery_id",
+    messageId: "message_id",
+    cardHash: hash,
+    currentKnowledgeShown: true,
+    newerGroupConclusionShown: true,
+    materialDifferenceShown: true,
+    proposedUpdateShown: true,
+    uncertaintyLabelShown: true,
+    currentKnowledgeEvidenceCount: 1,
+    newerGroupEvidenceCount: 1,
+    safeReadableCurrentLinkCount: 1,
+    unsafeOrDeniedLinkCount: 0,
+  };
+  const command = `Assert-ApprovedCardProof -Proof $inputValue -CandidateId 'candidate_id' -DeliveryId 'delivery_id' -MessageId 'message_id'`;
+  assertPowerShellRunbookGate(command, valid, true);
+  assertPowerShellRunbookGate(
+    command,
+    { ...valid, proposedUpdateShown: false },
+    false,
+  );
+  const missingProof = { ...valid };
+  delete missingProof.materialDifferenceShown;
+  assertPowerShellRunbookGate(command, missingProof, false);
+  assertPowerShellRunbookGate(
+    command,
+    { ...valid, unsafeOrDeniedLinkCount: 1 },
+    false,
+  );
+});
+
+test("knowledge-conflict revocation gate requires six exact stage/cause facts", () => {
+  const stages = ["pre_answer", "pre_delivery", "pre_callback"];
+  const causes = ["permission", "snapshot"];
+  const valid = stages.flatMap((stage) => causes.map((cause) => ({
+    stage,
+    cause,
+    candidateId: `${cause}_${stage}_candidate`,
+    operationKey: `${cause}_${stage}_operation`,
+    draftId: `${cause}_${stage}_draft`,
+    revokedAt: "2026-08-15T01:02:03.000Z",
+    exactCandidateCount: 1,
+    revocationEventCount: cause === "snapshot" ? 1 : 0,
+    operationRejectedCount: 1,
+    operationResultCode: cause === "permission"
+      ? "permission_blocked"
+      : stage === "pre_answer" ? "snapshot_stale"
+        : stage === "pre_delivery" ? "stale_candidate" : "evidence_invalidated",
+    answerConflictBindingCount: 0,
+    answerDisclosureCount: 0,
+    deliveryCreatedCount: 0,
+    sentMessageCount: 0,
+    appliedInteractionCount: 0,
+    draftMutationCount: 0,
+    callbackRejectedCount: stage === "pre_callback" ? 1 : 0,
+    callbackIdentityCount: stage === "pre_callback" ? 1 : 0,
+  })));
+  assertPowerShellRunbookGate(
+    `Assert-RevocationFacts -Facts @($inputValue)`,
+    valid,
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-RevocationFacts -Facts @($inputValue)`,
+    valid.map((item, index) => index === 0 ? { ...item, sentMessageCount: 1 } : item),
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-RevocationFacts -Facts @($inputValue)`,
+    valid.slice(1),
+    false,
+  );
+});
+
+test("knowledge-conflict final drain includes answer and governed-action durable states", () => {
+  const valid = {
+    answerPrepared: 0,
+    answerSending: 0,
+    answerReconciliationRequired: 0,
+    draftPresentationUnresolved: 0,
+    draftPresentationActive: 0,
+    draftOutboxUnresolved: 0,
+    actionProposalUnresolved: 0,
+    actionRequirementPending: 0,
+    actionPresentationUnresolved: 0,
+    actionPresentationActive: 0,
+    actionOutboxUnresolved: 0,
+    actionExecutionUnresolved: 0,
+    actionExecutionFailed: 4,
+    publishedDraftMissingPublication: 0,
+    succeededProposalMissingPublication: 0,
+    succeededExecutionMissingPublication: 0,
+    publicationBindingMismatch: 0,
+  };
+  assertPowerShellRunbookGate(`Assert-DrainedDurableStates -Counts $inputValue`, valid, true);
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, answerPrepared: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, actionExecutionUnresolved: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, actionRequirementPending: 0, actionPresentationActive: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, draftPresentationActive: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, publishedDraftMissingPublication: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, publicationBindingMismatch: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-TerminalGovernedCountsUnchanged -Before $inputValue.before -After $inputValue.after`,
+    {
+      before: { actionExecutionFailed: 4 },
+      after: { actionExecutionFailed: 4 },
+    },
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-TerminalGovernedCountsUnchanged -Before $inputValue.before -After $inputValue.after`,
+    {
+      before: { actionExecutionFailed: 4 },
+      after: { actionExecutionFailed: 5 },
+    },
+    false,
+  );
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (const marker of [
+    "answer_reply_deliveries",
+    "knowledge_draft_presentation_outbox",
+    "action_proposals",
+    "action_approval_requirements",
+    "action_approval_presentations",
+    "action_approval_presentation_outbox",
+    "action_executions",
+    "knowledge_publications",
+    "publishedDraftMissingPublication",
+    "reconciliation_required",
+    "outcome_unknown",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+  assert.match(
+    runbook,
+    /knowledge_draft_presentation_outbox outbox[\s\S]*JOIN knowledge_draft_presentations presentation[\s\S]*presentation\.state IN \('pending_send','active','send_failed'\)/u,
+  );
+  assert.match(
+    runbook,
+    /action_approval_presentation_outbox outbox[\s\S]*JOIN action_approval_presentations presentation[\s\S]*presentation\.state IN \('pending_send','active','send_failed'\)/u,
+  );
+});
+
+test("knowledge-conflict rollback rejects enabled groups, allowlists, and same-count transitions", () => {
+  const validAttestation = {
+    runtime: {
+      globalEnabled: false,
+      desiredGlobalEnabled: false,
+      activationRequired: false,
+      disabledGroupIds: ["group_a", "group_b"],
+      capabilities: {
+        readGroupDocuments: false,
+        retrieveKnowledgeBase: false,
+        proactiveSpeech: false,
+        generateKnowledgeDrafts: false,
+        writeKnowledgeBase: false,
+      },
+      persistence: { ok: true, storage: "postgres" },
+    },
+    status: {
+      components: {
+        knowledgeConflicts: { ok: true, enabled: false, running: false },
+        actionApprovals: { ok: true, enabled: false, running: false },
+      },
+      knowledgeCards: {
+        ok: true,
+        enabled: false,
+        running: false,
+        enabledGroupCount: 0,
+        queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+        presentations: { pending_send: 0, active: 0, send_failed: 0, pendingSend: 0 },
+        outbox: {
+          pending: 0,
+          processing: 0,
+          external_attempting: 0,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
+      },
+    },
+    environment: {
+      IRIS_KNOWLEDGE_CONFLICT_ENABLED: "false",
+      IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+      IRIS_APPROVAL_ACTIONS_ENABLED: "false",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "",
+    },
+    expectedGroupIds: ["group_a", "group_b"],
+  };
+  const attestationCommand = `Assert-RollbackRuntimeAttestation -Runtime $inputValue.runtime -Status $inputValue.status -Environment $inputValue.environment -ExpectedGroupIds @($inputValue.expectedGroupIds)`;
+  assertPowerShellRunbookGate(attestationCommand, validAttestation, true);
+  assertPowerShellRunbookGate(attestationCommand, {
+    ...validAttestation,
+    runtime: { ...validAttestation.runtime, disabledGroupIds: ["group_a"] },
+  }, false);
+  assertPowerShellRunbookGate(attestationCommand, {
+    ...validAttestation,
+    environment: {
+      ...validAttestation.environment,
+      IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "group_a",
+    },
+  }, false);
+  const missingKnowledgeCards = {
+    ...validAttestation,
+    status: { components: validAttestation.status.components },
+  };
+  assertPowerShellRunbookGate(attestationCommand, missingKnowledgeCards, false);
+  assertPowerShellRunbookGate(attestationCommand, {
+    ...validAttestation,
+    status: {
+      ...validAttestation.status,
+      knowledgeCards: {
+        ...validAttestation.status.knowledgeCards,
+        queue: { ...validAttestation.status.knowledgeCards.queue, pending: 1 },
+      },
+    },
+  }, false);
+
+  assertPowerShellRunbookGate(
+    `Assert-FingerprintUnchanged -Before $inputValue.before -After $inputValue.after -Label 'quietness'`,
+    {
+      before: { scanInbox: { count: 1, stateHash: "aaa" } },
+      after: { scanInbox: { count: 1, stateHash: "aaa" } },
+    },
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-FingerprintUnchanged -Before $inputValue.before -After $inputValue.after -Label 'quietness'`,
+    {
+      before: { scanInbox: { count: 1, stateHash: "aaa" } },
+      after: { scanInbox: { count: 1, stateHash: "bbb" } },
+    },
+    false,
+  );
+});
+
+test("knowledge-conflict disabled baseline attests every feature flag, allowlist, and runtime", () => {
+  const valid = {
+    runtime: {
+      globalEnabled: false,
+      desiredGlobalEnabled: false,
+      activationRequired: false,
+      disabledGroupIds: ["group_a", "group_b"],
+      capabilities: {
+        readGroupDocuments: false,
+        retrieveKnowledgeBase: false,
+        proactiveSpeech: false,
+        generateKnowledgeDrafts: false,
+        writeKnowledgeBase: false,
+      },
+      persistence: { ok: true, storage: "postgres" },
+    },
+    status: {
+      components: {
+        knowledgeConflicts: { ok: true, enabled: false, running: false },
+        actionApprovals: { ok: true, enabled: false, running: false },
+      },
+      knowledgeCards: {
+        ok: true,
+        enabled: false,
+        running: false,
+        enabledGroupCount: 0,
+        queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+        presentations: { pending_send: 0, active: 0, send_failed: 0, pendingSend: 0 },
+        outbox: {
+          pending: 0,
+          processing: 0,
+          external_attempting: 0,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
+      },
+    },
+    environment: {
+      IRIS_KNOWLEDGE_CONFLICT_ENABLED: "false",
+      IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+      IRIS_APPROVAL_ACTIONS_ENABLED: "false",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "",
+    },
+    expectedGroupIds: ["group_a", "group_b"],
+  };
+  const command = `Assert-DisabledBaselineAttestation -Runtime $inputValue.runtime -Status $inputValue.status -Environment $inputValue.environment -ExpectedGroupIds @($inputValue.expectedGroupIds)`;
+  assertPowerShellRunbookGate(command, valid, true);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_KNOWLEDGE_CARD_ENABLED: "true" },
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_KNOWLEDGE_CARD_GROUP_IDS: "group_a" },
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_APPROVAL_ACTIONS_ENABLED: "true" },
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_APPROVAL_ACTION_GROUP_IDS: "group_a" },
+  }, false);
 });
 
 test("pilot shell scripts use LF endings for direct Linux execution", () => {
@@ -905,6 +1978,34 @@ test("CI keeps the pilot queues empty before the backup drill", () => {
   );
 });
 
+test("CI installs a pinned and verified age binary without APT", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  const backupDrillStart = workflow.indexOf(
+    "- name: Drill paired pilot backup and restore",
+  );
+  const backupDrillEnd = workflow.indexOf(
+    "- name: Reject callbacks while Redis ingress is unavailable",
+    backupDrillStart,
+  );
+  const backupDrill = workflow.slice(backupDrillStart, backupDrillEnd);
+
+  assert.ok(backupDrillStart >= 0);
+  assert.ok(backupDrillEnd > backupDrillStart);
+  assert.doesNotMatch(backupDrill, /apt-get/u);
+  assert.match(backupDrill, /age-v1\.2\.1-linux-amd64\.tar\.gz/u);
+  assert.match(
+    backupDrill,
+    /7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50/u,
+  );
+  assert.match(backupDrill, /--connect-timeout 10/u);
+  assert.match(backupDrill, /--max-time 60/u);
+  assert.match(backupDrill, /--retry 2/u);
+  assert.match(backupDrill, /--retry-all-errors/u);
+  assert.match(backupDrill, /timeout --kill-after=10s 120s curl/u);
+  assert.match(backupDrill, /sha256sum --check/u);
+  assert.match(backupDrill, /export PATH="\$age_dir\/age:\$PATH"/u);
+});
+
 test("CI waits for queue drain after Redis recovery before ordinary smoke", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   const redisRecovery = workflow.indexOf(
@@ -988,6 +2089,34 @@ test("restore proves Caddy stopped before stopping Core or swapping databases", 
   assert.ok(stopCore < swapDatabase);
 });
 
+function assertPowerShellRunbookGate(
+  command,
+  input,
+  expectedSuccess,
+  runbookPath = knowledgeConflictAcceptancePath,
+) {
+  const runbook = readFileSync(runbookPath, "utf8");
+  const controllerStart = runbook.indexOf('$ErrorActionPreference = "Stop"');
+  const controllerEnd = runbook.indexOf("$acceptanceResult = $null", controllerStart);
+  assert.ok(controllerStart >= 0 && controllerEnd > controllerStart, "missing controller source");
+  const inputJson = JSON.stringify(input).replaceAll("'", "''");
+  const script = [
+    runbook.slice(controllerStart, controllerEnd),
+    `$inputValue = '${inputJson}' | ConvertFrom-Json`,
+    command,
+  ].join("\n");
+  const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"], {
+    encoding: "utf8",
+    input: script,
+    timeout: 10_000,
+  });
+  assert.equal(
+    result.status === 0,
+    expectedSuccess,
+    result.stderr || result.stdout || `PowerShell exited ${result.status}`,
+  );
+}
+
 function bashPath() {
   if (process.platform !== "win32") {
     return "bash";
@@ -995,4 +2124,17 @@ function bashPath() {
 
   const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
   return existsSync(gitBash) ? gitBash : undefined;
+}
+
+function assertMarkersInOrder(value, markers) {
+  let previousIndex = -1;
+  for (const marker of markers) {
+    const markerIndex = value.indexOf(marker, previousIndex + 1);
+    assert.ok(markerIndex > previousIndex, `${marker} must appear in order`);
+    previousIndex = markerIndex;
+  }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

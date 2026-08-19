@@ -79,7 +79,10 @@ export type EventWorkerRuntime = {
     delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
     replayBatch(input: { ids: string[] }): Promise<ReplayRawEventDeadLettersResult>;
   };
-  answerReplies?: Pick<AnswerReplyRepository, "findByIncomingMessage">;
+  answerReplies?: Pick<
+    AnswerReplyRepository,
+    "findByIncomingMessage" | "reconcileNotSent"
+  >;
   getStatus(): Promise<EventWorkerRuntimeStatus>;
   start(): void;
   close(): Promise<void>;
@@ -141,6 +144,12 @@ export type EventWorkerRuntimeDependencies = {
   createWorkerLoop?: typeof createRawEventWorkerLoop;
 };
 
+type MentionAnswerDraftOrchestrator = Pick<AnswerDraftOrchestrator, "generateDraft">
+  & Partial<Pick<
+    AnswerDraftOrchestrator,
+    "inspectPromptPermissions" | "validateKnowledgeConflictForSend"
+  >>;
+
 export async function createEventWorkerRuntime({
   env = process.env,
   dependencies = {},
@@ -154,7 +163,7 @@ export async function createEventWorkerRuntime({
   env?: EnvLike;
   dependencies?: EventWorkerRuntimeDependencies;
   runtimeController?: RuntimeGate;
-  answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  answerDraftOrchestrator?: MentionAnswerDraftOrchestrator;
   answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
@@ -193,7 +202,7 @@ async function createEnabledEventWorkerRuntime({
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
   dependencies: EventWorkerRuntimeDependencies;
   runtimeController: RuntimeGate | undefined;
-  answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  answerDraftOrchestrator: MentionAnswerDraftOrchestrator | undefined;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
   memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
@@ -322,6 +331,9 @@ async function createEnabledEventWorkerRuntime({
         findByIncomingMessage(input) {
           return answerReplyRepository.findByIncomingMessage(input);
         },
+        reconcileNotSent(input) {
+          return answerReplyRepository.reconcileNotSent(input);
+        },
       },
       deadLetters: {
         list(input) {
@@ -400,7 +412,7 @@ function createOptionalMentionAnswerResponder({
   createMentionResponder,
 }: {
   env: EnvLike;
-  answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  answerDraftOrchestrator: MentionAnswerDraftOrchestrator | undefined;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   runtimeController: RuntimeGate | undefined;

@@ -58,6 +58,9 @@ describe("OpenAICompatibleEvidencePlanner", () => {
                 taskMode: expect.objectContaining({
                   enum: ["company_fact"],
                 }),
+                evidenceState: expect.objectContaining({
+                  enum: ["explicit", "complete_inference", "partial", "none", null],
+                }),
                 premises: expect.objectContaining({
                   type: "array",
                   items: expect.objectContaining({

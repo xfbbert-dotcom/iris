@@ -740,6 +740,182 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.allowedFragments.map((item) => item.id)).toEqual(["useful-fragment"]);
   });
 
+  it("validates one exact cross-group grant per source before live permission and prompt use", async () => {
+    const validateExact = vi.fn(async () => true);
+    const canReadDocument = vi.fn(async () => true);
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: {
+        searchSimilarFragments: vi.fn(async () => [
+          fragment({
+            id: "granted-fragment-1",
+            documentSourceId: "source-granted",
+            chunkIndex: 0,
+            text: "Granted document context one",
+            sourceType: "feishu_group_document",
+            crossGroupGrantId: "grant-1",
+            crossGroupGrantVersion: 3,
+            crossGroupGrantorGroupId: "group-owner",
+            crossGroupGranteeGroupId: "group-reader",
+          }),
+          fragment({
+            id: "granted-fragment-2",
+            documentSourceId: "source-granted",
+            chunkIndex: 1,
+            text: "Granted document context two",
+            sourceType: "feishu_group_document",
+            crossGroupGrantId: "grant-1",
+            crossGroupGrantVersion: 3,
+            crossGroupGrantorGroupId: "group-owner",
+            crossGroupGranteeGroupId: "group-reader",
+          }),
+        ]),
+      },
+      groupId: "group-reader",
+      crossGroupGrantValidator: { validateExact },
+      canReadDocument,
+    });
+
+    const result = await builder.buildContext({
+      queryText: "granted context",
+      liveChatMessages: [],
+    });
+
+    expect(validateExact).toHaveBeenCalledTimes(1);
+    expect(validateExact).toHaveBeenCalledWith({
+      grantId: "grant-1",
+      version: 3,
+      documentSourceId: "source-granted",
+      grantorGroupId: "group-owner",
+      granteeGroupId: "group-reader",
+    });
+    expect(canReadDocument).toHaveBeenCalledWith("source-granted", {
+      hasCrossGroupGrantBinding: true,
+      crossGroupGrantValidated: true,
+    });
+    expect(result.allowedFragments).toHaveLength(2);
+    expect(result.promptContext).toContain("Granted document context one");
+    expect(result.promptContext).toContain("Granted document context two");
+  });
+
+  it.each([
+    {
+      label: "revoked",
+      fragmentOverrides: {},
+      groupId: "group-reader",
+      validator: vi.fn(async () => false),
+    },
+    {
+      label: "validator failure",
+      fragmentOverrides: {},
+      groupId: "group-reader",
+      validator: vi.fn(async () => { throw new Error("database unavailable"); }),
+    },
+    {
+      label: "wrong grantee",
+      fragmentOverrides: { crossGroupGranteeGroupId: "group-other" },
+      groupId: "group-reader",
+      validator: vi.fn(async () => true),
+    },
+    {
+      label: "partial binding",
+      fragmentOverrides: { crossGroupGrantVersion: undefined },
+      groupId: "group-reader",
+      validator: vi.fn(async () => true),
+    },
+    {
+      label: "non-group source",
+      fragmentOverrides: { sourceType: "feishu_wiki" as const },
+      groupId: "group-reader",
+      validator: vi.fn(async () => true),
+    },
+    {
+      label: "missing current group",
+      fragmentOverrides: {},
+      groupId: undefined,
+      validator: vi.fn(async () => true),
+    },
+  ])("fails closed before live permission for a $label grant binding", async ({
+    fragmentOverrides,
+    groupId,
+    validator,
+  }) => {
+    const canReadDocument = vi.fn(async () => true);
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: {
+        searchSimilarFragments: vi.fn(async () => [
+          fragment({
+            id: "secret-fragment",
+            documentSourceId: "source-secret",
+            chunkIndex: 0,
+            text: "SECRET CROSS GROUP BODY",
+            sourceType: "feishu_group_document",
+            crossGroupGrantId: "grant-secret",
+            crossGroupGrantVersion: 2,
+            crossGroupGrantorGroupId: "group-owner",
+            crossGroupGranteeGroupId: "group-reader",
+            ...fragmentOverrides,
+          }),
+        ]),
+      },
+      ...(groupId === undefined ? {} : { groupId }),
+      crossGroupGrantValidator: { validateExact: validator },
+      canReadDocument,
+    });
+
+    const result = await builder.buildContext({ queryText: "secret", liveChatMessages: [] });
+
+    expect(result.allowedFragments).toEqual([]);
+    expect(result.deniedDocumentIds).toEqual(["source-secret"]);
+    expect(result.promptContext).not.toContain("SECRET CROSS GROUP BODY");
+    expect(canReadDocument).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixed bound and unbound fragments for the same source", async () => {
+    const validateExact = vi.fn(async () => true);
+    const canReadDocument = vi.fn(async () => true);
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: {
+        searchSimilarFragments: vi.fn(async () => [
+          fragment({
+            id: "bound-fragment",
+            documentSourceId: "source-mixed",
+            chunkIndex: 0,
+            text: "BOUND SECRET BODY",
+            sourceType: "feishu_group_document",
+            crossGroupGrantId: "grant-mixed",
+            crossGroupGrantVersion: 1,
+            crossGroupGrantorGroupId: "group-owner",
+            crossGroupGranteeGroupId: "group-reader",
+          }),
+          fragment({
+            id: "unbound-fragment",
+            documentSourceId: "source-mixed",
+            chunkIndex: 1,
+            text: "UNBOUND SECRET BODY",
+            sourceType: "feishu_group_document",
+          }),
+        ]),
+      },
+      groupId: "group-reader",
+      crossGroupGrantValidator: { validateExact },
+      canReadDocument,
+    });
+
+    const result = await builder.buildContext({ queryText: "mixed", liveChatMessages: [] });
+
+    expect(result.allowedFragments).toEqual([]);
+    expect(result.deniedDocumentIds).toEqual(["source-mixed"]);
+    expect(result.promptContext).not.toContain("SECRET BODY");
+    expect(validateExact).not.toHaveBeenCalled();
+    expect(canReadDocument).not.toHaveBeenCalled();
+  });
+
   it("rejects missing query embedding", async () => {
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",
@@ -788,6 +964,11 @@ function fragment(overrides: {
   chunkIndex: number;
   text?: string;
   sourceTitle?: string;
+  sourceType?: "feishu_group_document" | "feishu_wiki" | "manual_upload";
+  crossGroupGrantId?: string;
+  crossGroupGrantVersion?: number;
+  crossGroupGrantorGroupId?: string;
+  crossGroupGranteeGroupId?: string;
 }) {
   return {
     documentSnapshotId: "snapshot-1",

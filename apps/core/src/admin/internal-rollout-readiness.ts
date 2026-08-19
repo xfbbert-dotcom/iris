@@ -8,6 +8,7 @@ import {
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
   readKnowledgeCardRuntimeConfig,
+  readKnowledgeConflictRuntimeConfig,
   readModelProviderConfig,
   readOptionalFeishuBotOpenId,
   readReindexWorkerRuntimeConfig,
@@ -52,6 +53,20 @@ type KnowledgeCardOutboxReadinessStatus = {
   outcome_unknown: number;
   terminalFailed: number;
 };
+type KnowledgeCardQueueReadinessStatus = {
+  pending: number;
+  processing: number;
+  delayed: number;
+  deadLetter: number;
+};
+type KnowledgeCardPresentationReadinessStatus = {
+  pending_send: number;
+  active: number;
+  superseded: number;
+  closed: number;
+  send_failed: number;
+  pendingSend: number;
+};
 type ActionApprovalOutboxReadinessStatus = {
   pending: number;
   processing: number;
@@ -61,13 +76,62 @@ type ActionApprovalOutboxReadinessStatus = {
   outcome_unknown: number;
   terminalFailed: number;
 };
+type KnowledgeConflictReadinessStatus = {
+  ok: boolean;
+  enabled: boolean;
+  running: boolean;
+  migration0046Applied?: boolean;
+  migration0047Applied?: boolean;
+  migration0048Applied?: boolean;
+  scanner?: { running: boolean };
+  dispatcher?: { running: boolean };
+  scans?: {
+    pending: number;
+    processing: number;
+    retry: number;
+    completed: number;
+    deadLettered: number;
+  };
+  candidates?: {
+    pending_review: number;
+    dismissed: number;
+    approved_for_delivery: number;
+    delivered: number;
+    draft_created: number;
+    superseded: number;
+  };
+  deliveries?: {
+    pending: number;
+    processing: number;
+    externalAttempting: number;
+    sent: number;
+    failed: number;
+    terminalFailed: number;
+    outcomeUnknown: number;
+    cancelled: number;
+  };
+  interactions?: { applied: number; alreadyApplied: number; rejected: number };
+  reconciliation?: { terminalFailed: number; outcomeUnknown: number };
+  degradedReason?: string;
+};
 export type InternalRolloutReadinessContext = {
+  documentSyncStatus?: {
+    ok: boolean;
+    groupGrants?: {
+      migration0051Applied: boolean;
+      active?: number;
+      revoked?: number;
+      latestUpdatedAt?: Date | string;
+    };
+  };
   knowledgeCardStatus?: {
     ok: boolean;
     enabled: boolean;
     running: boolean;
     dispatcher?: { running: boolean };
     worker?: { running: boolean };
+    queue?: KnowledgeCardQueueReadinessStatus;
+    presentations?: KnowledgeCardPresentationReadinessStatus;
     outbox?: KnowledgeCardOutboxReadinessStatus;
     degradedReason?: string;
   };
@@ -80,6 +144,7 @@ export type InternalRolloutReadinessContext = {
     outbox?: ActionApprovalOutboxReadinessStatus;
     degradedReason?: string;
   };
+  knowledgeConflictStatus?: KnowledgeConflictReadinessStatus;
   actionReviewStatus?: {
     configured: boolean;
     running: boolean;
@@ -356,7 +421,36 @@ const checkDefinitions: CheckDefinition[] = [
     evaluate(env, context) {
       const config = readKnowledgeCardRuntimeConfig(env);
       if (!config.enabled) {
-        return pass("Knowledge cards are safely disabled.");
+        const status = context.knowledgeCardStatus;
+        if (status === undefined) return pass("Knowledge cards are safely disabled.");
+        if (!status.ok) return fail("Knowledge-card disabled status is unreadable.");
+        if (status.enabled || status.running) {
+          return fail("Knowledge-card runtime is enabled while configured disabled.");
+        }
+        if (
+          !isValidKnowledgeCardQueueStatus(status.queue) ||
+          !isValidKnowledgeCardPresentationStatus(status.presentations) ||
+          !isValidKnowledgeCardOutboxStatus(status.outbox)
+        ) return fail("Knowledge-card disabled status counts are unavailable.");
+        const unresolvedCounts = [
+          status.queue.pending,
+          status.queue.processing,
+          status.queue.delayed,
+          status.queue.deadLetter,
+          status.presentations.pending_send,
+          status.presentations.active,
+          status.presentations.send_failed,
+          status.presentations.pendingSend,
+          status.outbox.pending,
+          status.outbox.processing,
+          status.outbox.external_attempting,
+          status.outbox.outcome_unknown,
+          status.outbox.terminalFailed,
+        ];
+        if (unresolvedCounts.some((count) => count !== 0)) {
+          return fail("Knowledge-card disabled state has unresolved durable work.");
+        }
+        return pass("Knowledge cards are safely disabled with empty durable work.");
       }
       const status = context.knowledgeCardStatus;
       if (status === undefined) {
@@ -433,6 +527,124 @@ const checkDefinitions: CheckDefinition[] = [
     },
   },
   {
+    id: "documentSourceGroupGrants",
+    title: "Cross-group document grants",
+    envVars: ["DATABASE_URL", "IRIS_DOCUMENT_SYNC_WORKER_ENABLED"],
+    evaluate(_env, context) {
+      const status = context.documentSyncStatus;
+      if (status === undefined) {
+        return pass("Cross-group document grant facts require live runtime verification.");
+      }
+      if (!status.ok || status.groupGrants === undefined) {
+        return fail("Cross-group document grant counts are unavailable.");
+      }
+      if (!status.groupGrants.migration0051Applied) {
+        return fail("Cross-group document grant migration 0051 is not applied.");
+      }
+      if (
+        !Number.isSafeInteger(status.groupGrants.active) ||
+        (status.groupGrants.active ?? -1) < 0 ||
+        !Number.isSafeInteger(status.groupGrants.revoked) ||
+        (status.groupGrants.revoked ?? -1) < 0
+      ) {
+        return fail("Cross-group document grant counts are unavailable.");
+      }
+      return pass("Cross-group document grants are readable with migration 0051 applied.");
+    },
+  },
+  {
+    id: "knowledgeConflicts",
+    title: "Knowledge-conflict candidate runtime",
+    envVars: [
+      "IRIS_KNOWLEDGE_CONFLICT_ENABLED",
+      "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST",
+      "IRIS_KNOWLEDGE_CONFLICT_SCANNER_INTERVAL_MS",
+      "IRIS_KNOWLEDGE_CONFLICT_SCANNER_BATCH_LIMIT",
+      "IRIS_KNOWLEDGE_CONFLICT_SCAN_LEASE_MS",
+      "IRIS_KNOWLEDGE_CONFLICT_SCAN_MAX_ATTEMPTS",
+      "IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_INTERVAL_MS",
+      "IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_BATCH_LIMIT",
+      "DATABASE_URL",
+      "REDIS_URL",
+      "IRIS_MODEL_PROVIDER",
+      "IRIS_EMBEDDING_PROVIDER",
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "IRIS_KNOWLEDGE_CARD_ENABLED",
+      "IRIS_APPROVAL_ACTIONS_ENABLED",
+    ],
+    evaluate(env, context) {
+      const config = readKnowledgeConflictRuntimeConfig(env);
+      if (!config.enabled) return pass("Knowledge conflicts are safely disabled.");
+      const status = context.knowledgeConflictStatus;
+      if (status === undefined) {
+        return fail("Knowledge-conflict runtime status is unavailable.");
+      }
+      if (status.migration0046Applied === false) {
+        return fail("Knowledge-conflict migration 0046 is not applied.");
+      }
+      if (status.migration0047Applied === false) {
+        return fail("Knowledge-conflict migration 0047 is not applied.");
+      }
+      if (status.migration0048Applied === false) {
+        return fail("Knowledge-conflict migration 0048 is not applied.");
+      }
+      if (!status.ok) return fail("Knowledge-conflict runtime status is unreadable.");
+      if (!status.enabled) {
+        return fail("Knowledge-conflict runtime is not available while configured enabled.");
+      }
+      if (status.migration0046Applied !== true) {
+        return fail("Knowledge-conflict migration 0046 is not applied.");
+      }
+      if (status.migration0047Applied !== true) {
+        return fail("Knowledge-conflict migration 0047 is not applied.");
+      }
+      if (status.migration0048Applied !== true) {
+        return fail("Knowledge-conflict migration 0048 is not applied.");
+      }
+      if (
+        !status.running ||
+        status.scanner?.running !== true ||
+        status.dispatcher?.running !== true
+      ) {
+        return fail("Knowledge-conflict scanner and dispatcher must both be running.");
+      }
+      if (!isValidKnowledgeConflictScanStatus(status.scans)) {
+        return fail("Knowledge-conflict scan status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictCandidateStatus(status.candidates)) {
+        return fail("Knowledge-conflict candidate status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictDeliveryStatus(status.deliveries)) {
+        return fail("Knowledge-conflict delivery status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictInteractionStatus(status.interactions)) {
+        return fail("Knowledge-conflict interaction status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictReconciliationStatus(status.reconciliation)) {
+        return fail("Knowledge-conflict reconciliation status is unavailable.");
+      }
+      if (
+        status.reconciliation.terminalFailed !== status.deliveries.terminalFailed ||
+        status.reconciliation.outcomeUnknown !== status.deliveries.outcomeUnknown
+      ) {
+        return fail("Knowledge-conflict reconciliation status is inconsistent.");
+      }
+      if (status.scans.deadLettered > 0) {
+        return fail("Knowledge-conflict scans have dead-lettered rows.");
+      }
+      if (status.deliveries.terminalFailed > 0) {
+        return fail("Knowledge-conflict delivery has terminal failed rows.");
+      }
+      if (status.deliveries.outcomeUnknown > 0) {
+        return fail("Knowledge-conflict delivery has unresolved outcome-unknown rows.");
+      }
+      return pass(
+        "Knowledge-conflict scanner and dispatcher are running with safe durable state.",
+      );
+    },
+  },
+  {
     id: "actionReviews",
     title: "Public action-review runtime",
     envVars: [
@@ -501,6 +713,82 @@ function isValidKnowledgeCardOutboxStatus(
   ];
   return counts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
     value.terminalFailed <= value.failed;
+}
+
+function isValidKnowledgeCardQueueStatus(
+  value: KnowledgeCardQueueReadinessStatus | undefined,
+): value is KnowledgeCardQueueReadinessStatus {
+  return value !== undefined &&
+    [value.pending, value.processing, value.delayed, value.deadLetter].every(isSafeCount);
+}
+
+function isValidKnowledgeCardPresentationStatus(
+  value: KnowledgeCardPresentationReadinessStatus | undefined,
+): value is KnowledgeCardPresentationReadinessStatus {
+  return value !== undefined && [
+    value.pending_send,
+    value.active,
+    value.superseded,
+    value.closed,
+    value.send_failed,
+    value.pendingSend,
+  ].every(isSafeCount) && value.pendingSend === value.pending_send;
+}
+
+function isValidKnowledgeConflictScanStatus(
+  value: KnowledgeConflictReadinessStatus["scans"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["scans"]> {
+  if (value === undefined) return false;
+  return [value.pending, value.processing, value.retry, value.completed, value.deadLettered]
+    .every(isSafeCount);
+}
+
+function isValidKnowledgeConflictDeliveryStatus(
+  value: KnowledgeConflictReadinessStatus["deliveries"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["deliveries"]> {
+  if (value === undefined) return false;
+  return [
+    value.pending,
+    value.processing,
+    value.externalAttempting,
+    value.sent,
+    value.failed,
+    value.terminalFailed,
+    value.outcomeUnknown,
+    value.cancelled,
+  ].every(isSafeCount) && value.terminalFailed <= value.failed;
+}
+
+function isValidKnowledgeConflictCandidateStatus(
+  value: KnowledgeConflictReadinessStatus["candidates"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["candidates"]> {
+  if (value === undefined) return false;
+  return [
+    value.pending_review,
+    value.dismissed,
+    value.approved_for_delivery,
+    value.delivered,
+    value.draft_created,
+    value.superseded,
+  ].every(isSafeCount);
+}
+
+function isValidKnowledgeConflictInteractionStatus(
+  value: KnowledgeConflictReadinessStatus["interactions"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["interactions"]> {
+  return value !== undefined &&
+    [value.applied, value.alreadyApplied, value.rejected].every(isSafeCount);
+}
+
+function isValidKnowledgeConflictReconciliationStatus(
+  value: KnowledgeConflictReadinessStatus["reconciliation"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["reconciliation"]> {
+  return value !== undefined &&
+    [value.terminalFailed, value.outcomeUnknown].every(isSafeCount);
+}
+
+function isSafeCount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 export function buildInternalRolloutReadinessReport(

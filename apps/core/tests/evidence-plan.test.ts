@@ -3,8 +3,59 @@ import { describe, expect, it } from "vitest";
 import {
   EvidencePlanValidationError,
   citedRefsForEvidencePlan,
+  createConflictEvidencePlan,
   parseEvidencePlanContent,
 } from "../src/agent/evidence-plan.js";
+
+describe("createConflictEvidencePlan", () => {
+  it("creates conflict only through an exact candidate-bound deterministic wrapper", () => {
+    expect(createConflictEvidencePlan({
+      candidateId: "candidate-1",
+      knowledgePremise: {
+        citationRef: "D1",
+        statement: "Current KB threshold is 5,000.",
+      },
+      groupPremise: {
+        citationRef: "M1",
+        statement: "New group threshold is 10,000.",
+      },
+      proposedAnswer:
+        "Possible conflict: the KB says 5,000; the newer group conclusion says 10,000.",
+      confidence: "high",
+    })).toEqual({
+      candidateId: "candidate-1",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "conflict",
+        premises: [
+          { citationRef: "M1", statement: "New group threshold is 10,000." },
+          { citationRef: "D1", statement: "Current KB threshold is 5,000." },
+        ],
+        proposedAnswer:
+          "Possible conflict: the KB says 5,000; the newer group conclusion says 10,000.",
+        missingInformation: [],
+        confidence: "high",
+      },
+    });
+  });
+
+  it.each([
+    ["blank candidate", { candidateId: " " }],
+    ["non-document premise", { knowledgePremise: { citationRef: "M2", statement: "KB" } }],
+    ["non-group premise", { groupPremise: { citationRef: "D2", statement: "Group" } }],
+    ["low confidence", { confidence: "low" }],
+    ["blank explanation", { proposedAnswer: " " }],
+  ])("rejects %s", (_label, override) => {
+    expect(() => createConflictEvidencePlan({
+      candidateId: "candidate-1",
+      knowledgePremise: { citationRef: "D1", statement: "KB" },
+      groupPremise: { citationRef: "M1", statement: "Group" },
+      proposedAnswer: "Possible conflict.",
+      confidence: "medium",
+      ...override,
+    } as Parameters<typeof createConflictEvidencePlan>[0])).toThrow(EvidencePlanValidationError);
+  });
+});
 
 describe("parseEvidencePlanContent", () => {
   it.each([
@@ -65,6 +116,20 @@ describe("parseEvidencePlanContent", () => {
       evidenceState: "none",
       proposedAnswer: null,
     }));
+  });
+
+  it("rejects model-originated conflict state", () => {
+    expect(() => parseEvidencePlanContent(JSON.stringify({
+      taskMode: "company_fact",
+      evidenceState: "conflict",
+      premises: [
+        { citationRef: "M1", statement: "New group conclusion" },
+        { citationRef: "D1", statement: "Current KB statement" },
+      ],
+      proposedAnswer: "Possible conflict.",
+      missingInformation: [],
+      confidence: "high",
+    }), ["M1", "D1"])).toThrow("evidence plan state is invalid");
   });
 
   it("rejects partial conjecture without a real allowed premise", () => {

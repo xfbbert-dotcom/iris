@@ -67,6 +67,7 @@ let publicCallbackBoundaries;
 
 try {
   assertKnowledgeCardDefaults();
+  assertKnowledgeConflictDefaults();
   if (postRestore) {
     await assertCaddyRunning(false);
   } else {
@@ -84,6 +85,7 @@ try {
   assertPilotActivationReady(internalStatus);
   const knowledgeCardOutbox = assertKnowledgeCardOutboxReady(internalStatus.knowledgeCards);
   const knowledgeCardReadiness = await assertKnowledgeCardReadiness();
+  const knowledgeConflictReadiness = await assertKnowledgeConflictReadiness();
   const ingressReadinessResponse = await expectStatus(
     `${coreBaseUrl}/internal/ingress-readiness`,
     200,
@@ -134,6 +136,7 @@ try {
     publicInternalReadiness: 404,
     publicIngressReadiness: 404,
     publicAnswerReply: 404,
+    publicKnowledgeConflictStatus: 404,
     privateInternalStatusWithoutToken: 401,
     privateInternalStatusWithWrongToken: 401,
     privateInternalStatusWithToken: 200,
@@ -143,6 +146,8 @@ try {
     knowledgeCardReadiness,
     knowledgeCardStatus: "unavailable-while-disabled",
     knowledgeCardOutbox,
+    knowledgeConflictDefaults: "disabled-empty-allowlist",
+    knowledgeConflictReadiness,
     runtimeStartup: "disabled",
     runtimeEnablement: "explicit",
     smokeMode: postRestore ? "post-restore" : "ordinary",
@@ -246,6 +251,25 @@ function assertKnowledgeCardDefaults() {
   }
 }
 
+function assertKnowledgeConflictDefaults() {
+  const envFileValues = readComposeEnvFile(composeEnvFile);
+  const enabled = readEffectiveComposeEnvValue(
+    "IRIS_KNOWLEDGE_CONFLICT_ENABLED",
+    envFileValues,
+    "false",
+  );
+  const groupIds = readEffectiveComposeEnvValue(
+    "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST",
+    envFileValues,
+    "",
+  );
+  if (enabled !== "false" || groupIds !== "") {
+    throw new Error(
+      "Pilot smoke requires IRIS_KNOWLEDGE_CONFLICT_ENABLED=false and an empty IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST",
+    );
+  }
+}
+
 function readComposeEnvFile(path) {
   let contents;
   try {
@@ -283,7 +307,7 @@ async function assertKnowledgeCardReadiness() {
     readiness?.ok !== true ||
     readiness?.status !== "ready" ||
     knowledgeCards?.status !== "pass" ||
-    knowledgeCards?.detail !== "Knowledge cards are safely disabled."
+    knowledgeCards?.detail !== "Knowledge cards are safely disabled with empty durable work."
   ) {
     throw new Error("Expected knowledge-card readiness to prove the default-off configuration");
   }
@@ -302,6 +326,29 @@ async function assertKnowledgeCardReadiness() {
     throw new Error("Expected the disabled knowledge-card status route to remain content-free");
   }
   assertContentFreeKnowledgeCardResponse(status, "knowledge-card status");
+  return "safe-disabled";
+}
+
+async function assertKnowledgeConflictReadiness() {
+  const readinessResponse = await expectStatus(`${coreBaseUrl}/internal/readiness`, 200, {
+    authorization: `Bearer ${internalApiToken}`,
+  });
+  const readiness = await readinessResponse.json();
+  const knowledgeConflicts = readiness?.checks?.find?.(
+    (check) => check?.id === "knowledgeConflicts",
+  );
+  if (
+    readiness?.ok !== true ||
+    readiness?.status !== "ready" ||
+    knowledgeConflicts?.status !== "pass" ||
+    knowledgeConflicts?.detail !== "Knowledge conflicts are safely disabled."
+  ) {
+    throw new Error("Expected knowledge-conflict readiness to prove the default-off configuration");
+  }
+  assertContentFreeKnowledgeCardResponse(
+    { ok: readiness.ok, status: readiness.status, knowledgeConflicts },
+    "knowledge-conflict readiness",
+  );
   return "safe-disabled";
 }
 
@@ -339,6 +386,7 @@ async function runPublicBoundaryChecks() {
     `${publicBaseUrl}/internal/answer-replies/feishu/public-boundary-probe`,
     404,
   );
+  await expectStatus(`${publicBaseUrl}/internal/knowledge-conflicts/status`, 404);
   return {
     feishuEventsBoundary: events,
     feishuCardActionsBoundary: cardActions,

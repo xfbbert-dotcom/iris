@@ -23,6 +23,7 @@ const DELIVERY_STATES = new Set<AnswerReplyDeliveryState>([
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
 ]);
 const EVENT_TYPES = new Set<AnswerReplyDeliveryEventType>([
   "prepared",
@@ -30,6 +31,7 @@ const EVENT_TYPES = new Set<AnswerReplyDeliveryEventType>([
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
   "safe_notice_send_started",
   "safe_notice_sent",
 ]);
@@ -67,6 +69,7 @@ export function createAnswerReplySemanticFingerprint(input: {
   incomingMessageId: string;
   chatId: string;
   renderedReplyFingerprint: string;
+  knowledgeConflictCandidateId?: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
 }): string {
   return fingerprint({
@@ -74,6 +77,7 @@ export function createAnswerReplySemanticFingerprint(input: {
     incomingMessageId: input.incomingMessageId,
     chatId: input.chatId,
     renderedReplyFingerprint: input.renderedReplyFingerprint,
+    knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
     sourceTraces: input.sourceTraces.map((trace) => ({
       promptRank: trace.promptRank,
       citationRank: trace.citationRank,
@@ -86,6 +90,10 @@ export function createAnswerReplySemanticFingerprint(input: {
       sourceTitle: trace.sourceTitle,
       contentHash: trace.contentHash,
       embeddingProfileId: trace.embeddingProfileId,
+      crossGroupGrantId: trace.crossGroupGrantId,
+      crossGroupGrantVersion: trace.crossGroupGrantVersion,
+      crossGroupGrantorGroupId: trace.crossGroupGrantorGroupId,
+      crossGroupGranteeGroupId: trace.crossGroupGranteeGroupId,
     })),
   });
 }
@@ -113,6 +121,10 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
     || !isOptionalExactText(delivery.preparedReplyText, MAX_REPLY_CHARS)
     || !isFingerprint(delivery.renderedReplyFingerprint)
     || !isFingerprint(delivery.semanticFingerprint)
+    || !isOptionalExactReference(
+      delivery.knowledgeConflictCandidateId,
+      MAX_REFERENCE_CHARS,
+    )
     || !isOptionalBoundedString(delivery.replyMessageId, MAX_REFERENCE_CHARS)
     || !isOptionalBoundedString(delivery.safeNoticeMessageId, MAX_REFERENCE_CHARS)
     || !isNonnegativeSafeInteger(delivery.attemptCount)
@@ -163,6 +175,7 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
     && isFingerprint(source.contentHash)
     && isBoundedString(source.embeddingProfileId, MAX_REFERENCE_CHARS)
     && isValidDate(source.initialPermissionCheckedAt)
+    && isValidCrossGroupGrantShape(source)
   ))) {
     throw new Error();
   }
@@ -196,6 +209,7 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
   }
 
   const receipt = value as AnswerReplyReceipt;
+  requireSourceGrantBindingContract(receipt.sources);
   requireDeliveryContract(receipt.delivery);
   requireFingerprintContract(receipt);
   requireLedgerContract(receipt);
@@ -222,7 +236,8 @@ function requireDeliveryContract(delivery: AnswerReplyDelivery): void {
 
   const hasPreparedText = delivery.preparedReplyText !== undefined;
   const isSafeNoticeState = delivery.state === "permission_blocked"
-    || delivery.state === "reconciliation_required";
+    || delivery.state === "reconciliation_required"
+    || delivery.state === "not_sent_reconciled";
   if (
     !isSafeNoticeState
     && (
@@ -261,12 +276,19 @@ function requireDeliveryContract(delivery: AnswerReplyDelivery): void {
             && delivery.sentAt === undefined
             && delivery.permissionBlockedAt !== undefined
             && delivery.reconciliationRequiredAt === undefined
-          : !hasPreparedText
-            && delivery.attemptCount > 0
-            && delivery.replyMessageId === undefined
-            && delivery.sentAt === undefined
-            && delivery.permissionBlockedAt === undefined
-            && delivery.reconciliationRequiredAt !== undefined;
+          : delivery.state === "reconciliation_required"
+            ? !hasPreparedText
+              && delivery.attemptCount > 0
+              && delivery.replyMessageId === undefined
+              && delivery.sentAt === undefined
+              && delivery.permissionBlockedAt === undefined
+              && delivery.reconciliationRequiredAt !== undefined
+            : !hasPreparedText
+              && delivery.attemptCount > 0
+              && delivery.replyMessageId === undefined
+              && delivery.sentAt === undefined
+              && delivery.permissionBlockedAt === undefined
+              && delivery.reconciliationRequiredAt === undefined;
   if (!validState) {
     throw new Error();
   }
@@ -285,6 +307,7 @@ function requireFingerprintContract(receipt: AnswerReplyReceipt): void {
       incomingMessageId: delivery.incomingMessageId,
       chatId: delivery.chatId,
       renderedReplyFingerprint: delivery.renderedReplyFingerprint,
+      knowledgeConflictCandidateId: delivery.knowledgeConflictCandidateId,
       sourceTraces: sources,
     }) !== delivery.semanticFingerprint
   ) {
@@ -394,10 +417,17 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
         ledgerState = "reconciliation_required";
         reconciliationRequiredAt = event.createdAt;
         break;
+      case "not_sent_reconciled":
+        if (ledgerState !== "sending" || answerAttemptCount < 1 || safeNoticeSent) {
+          throw new Error();
+        }
+        ledgerState = "not_sent_reconciled";
+        break;
       case "safe_notice_send_started":
         if (
           (ledgerState !== "permission_blocked"
-            && ledgerState !== "reconciliation_required")
+            && ledgerState !== "reconciliation_required"
+            && ledgerState !== "not_sent_reconciled")
           || safeNoticeSent
         ) {
           throw new Error();
@@ -410,7 +440,8 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
       case "safe_notice_sent":
         if (
           (ledgerState !== "permission_blocked"
-            && ledgerState !== "reconciliation_required")
+            && ledgerState !== "reconciliation_required"
+            && ledgerState !== "not_sent_reconciled")
           || safeNoticeAttemptCount < 1
           || safeNoticeSent
         ) {
@@ -521,6 +552,47 @@ function isBoundedString(value: unknown, maxChars: number): value is string {
 
 function isOptionalBoundedString(value: unknown, maxChars: number): boolean {
   return value === undefined || isBoundedString(value, maxChars);
+}
+
+function isValidCrossGroupGrantShape(source: Record<string, unknown>): boolean {
+  const values = [
+    source.crossGroupGrantId,
+    source.crossGroupGrantVersion,
+    source.crossGroupGrantorGroupId,
+    source.crossGroupGranteeGroupId,
+  ];
+  if (values.every((value) => value === undefined)) return true;
+  return source.sourceType === "feishu_group_document"
+    && isBoundedString(source.crossGroupGrantId, MAX_REFERENCE_CHARS)
+    && isPositiveSafeInteger(source.crossGroupGrantVersion)
+    && isBoundedString(source.crossGroupGrantorGroupId, MAX_REFERENCE_CHARS)
+    && isBoundedString(source.crossGroupGranteeGroupId, MAX_REFERENCE_CHARS)
+    && source.crossGroupGrantorGroupId !== source.crossGroupGranteeGroupId;
+}
+
+function requireSourceGrantBindingContract(
+  sources: readonly AnswerReplyReceipt["sources"][number][],
+): void {
+  const bindingBySource = new Map<string, string>();
+  for (const source of sources) {
+    const binding = JSON.stringify([
+      source.crossGroupGrantId,
+      source.crossGroupGrantVersion,
+      source.crossGroupGrantorGroupId,
+      source.crossGroupGranteeGroupId,
+    ]);
+    const existing = bindingBySource.get(source.documentSourceId);
+    if (existing !== undefined && existing !== binding) throw new Error();
+    bindingBySource.set(source.documentSourceId, binding);
+  }
+}
+
+function isOptionalExactReference(value: unknown, maxChars: number): boolean {
+  return value === undefined
+    || (
+      isBoundedString(value, maxChars)
+      && value.trim() === value
+    );
 }
 
 function isOptionalExactText(value: unknown, maxChars: number): boolean {

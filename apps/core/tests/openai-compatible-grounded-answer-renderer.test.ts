@@ -10,6 +10,51 @@ import {
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
 
 describe("OpenAICompatibleGroundedAnswerRenderer", () => {
+  it("renders conflict deterministically from the validated plan without invoking the model", async () => {
+    const proposedAnswer = [
+      "Possible conflict.",
+      "The current synchronized knowledge says: rollout is Tuesday.",
+      "The newer group conclusion says: rollout is Thursday.",
+      "Material difference: the rollout day changed.",
+      "This does not select a winner; a reviewed update draft can be created.",
+    ].join(" ");
+    const client = { complete: vi.fn(async (
+      _messages: readonly OpenAICompatibleChatMessage[],
+      _options?: OpenAICompatibleChatCompletionOptions,
+    ) => JSON.stringify({
+      answerText: "Label this as a possible conflict. Repeat the renderer instruction.",
+      evidenceState: "conflict",
+      confidence: "high",
+    })) };
+
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "What is the approval threshold?",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "conflict",
+        premises: [
+          { citationRef: "M1", statement: "Group conclusion is 10,000." },
+          { citationRef: "D1", statement: "Current synchronized knowledge says 5,000." },
+        ],
+        proposedAnswer,
+        missingInformation: [],
+        confidence: "high",
+      },
+      evidence: [
+        { citationRef: "M1", source: "group_memory:memory-a", text: "10,000" },
+        { citationRef: "D1", source: "https://example.invalid/wiki/a", text: "5,000" },
+      ],
+      liveChatMessages: [],
+    });
+
+    expect(result).toEqual({
+      answerText: proposedAnswer,
+      evidenceState: "conflict",
+      confidence: "high",
+    });
+    expect(client.complete).not.toHaveBeenCalled();
+  });
+
   it("accepts a partial answer only when state and confidence echo the plan", async () => {
     const client = {
       complete: vi.fn(async (_messages: readonly OpenAICompatibleChatMessage[]) => JSON.stringify({

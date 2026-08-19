@@ -19,6 +19,7 @@ import type {
   VersionedTransitionInput,
 } from "../src/answer-replies/answer-reply-repository.js";
 import {
+  AnswerReplyGrantStaleError,
   createAnswerReplyDeliveryId,
   createAnswerReplySafeNoticeUuid,
   createAnswerReplyUuid,
@@ -39,6 +40,140 @@ const preparedReplyUuid = createAnswerReplyUuid(incomingMessageId);
 const safeNoticeUuid = createAnswerReplySafeNoticeUuid(incomingMessageId);
 
 describe("AnswerReplyDeliveryService", () => {
+  it("binds the knowledge-conflict candidate to preparation and receipt identity", async () => {
+    const harness = createHarness();
+    const validateKnowledgeConflictForSend = vi.fn(async () => ({
+      status: "current" as const,
+      permissionAttestedAt: transitionAt,
+    }));
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+    })), { validateKnowledgeConflictForSend }));
+
+    expect(harness.repository.prepare).toHaveBeenCalledWith(expect.objectContaining({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+    }));
+    expect(harness.repository.receipt?.delivery.knowledgeConflictCandidateId)
+      .toBe("candidate-answer-a");
+  });
+
+  it("does not let an unrelated denied source starve an exact candidate-bound answer", async () => {
+    const harness = createHarness();
+    const validateKnowledgeConflictForSend = vi.fn(async () => ({
+      status: "current" as const,
+      permissionAttestedAt: transitionAt,
+    }));
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+      blockedDocumentSourceIds: ["source-denied-unrelated"],
+    })), { validateKnowledgeConflictForSend }));
+
+    expect(harness.repository.prepare).toHaveBeenCalledWith(
+      expect.not.objectContaining({ blockedDocumentSourceIds: expect.anything() }),
+    );
+    expect(validateKnowledgeConflictForSend).toHaveBeenCalledOnce();
+    expect(harness.repository.receipt?.delivery.state).toBe("sent");
+    expect(harness.replier.replyText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: preparedText }),
+    );
+  });
+
+  it.each([
+    "dismissed candidate",
+    "superseded candidate",
+    "updated group memory",
+    "updated source",
+    "changed latest snapshot",
+    "changed fragment",
+    "permission revoked immediately before send",
+  ])("withholds prepared conflict text when the final gate reports %s", async () => {
+    const harness = createHarness();
+    const validateKnowledgeConflictForSend = vi.fn(async () => ({
+      status: "blocked" as const,
+    }));
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+    })), { validateKnowledgeConflictForSend }));
+
+    expect(validateKnowledgeConflictForSend).toHaveBeenCalledWith({
+      candidateId: "candidate-answer-a",
+      groupId: "oc_1",
+      sources: [{
+        documentSourceId: "source-a",
+        documentSnapshotId: "snapshot-a",
+        fragmentId: "fragment-a",
+        contentHash: "a".repeat(64),
+      }],
+    });
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: preparedText }),
+    );
+    expect(harness.repository.receipt?.delivery.state).toBe("permission_blocked");
+  });
+
+  it("runs the candidate gate after source permission and immediately before send-start", async () => {
+    const harness = createHarness();
+    const validateKnowledgeConflictForSend = vi.fn(async () => ({
+      status: "current" as const,
+      permissionAttestedAt: transitionAt,
+    }));
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+    })), { validateKnowledgeConflictForSend }));
+
+    const permissionOrder = harness.verifier.verify.mock.invocationCallOrder.at(-1)!;
+    const candidateOrder = validateKnowledgeConflictForSend.mock.invocationCallOrder[0]!;
+    const beginOrder = harness.repository.beginAnswerSend.mock.invocationCallOrder[0]!;
+    const sendOrder = harness.replier.replyText.mock.invocationCallOrder[0]!;
+    expect(permissionOrder).toBeLessThan(candidateOrder);
+    expect(candidateOrder).toBeLessThan(beginOrder);
+    expect(beginOrder).toBeLessThan(sendOrder);
+  });
+
+  it.each([
+    ["missing", {}],
+    ["throwing", {
+      validateKnowledgeConflictForSend: vi.fn(async () => {
+        throw new Error("private candidate validation failure");
+      }),
+    }],
+    ["malformed", {
+      validateKnowledgeConflictForSend: vi.fn(async () => ({ status: "foreign" } as never)),
+    }],
+  ] as const)("fails closed when the final candidate gate is %s", async (_label, overrides) => {
+    const harness = createHarness();
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+    })), overrides));
+
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expectOnlySafeNoticeWasSent(harness);
+  });
+
+  it("does not run the candidate gate for an ordinary answer", async () => {
+    const harness = createHarness();
+    const validateKnowledgeConflictForSend = vi.fn(async () => ({
+      status: "blocked" as const,
+    }));
+
+    await harness.service.respond(request(
+      vi.fn(async () => preparedAnswer()),
+      { validateKnowledgeConflictForSend },
+    ));
+
+    expect(validateKnowledgeConflictForSend).not.toHaveBeenCalled();
+    expect(harness.repository.beginAnswerSend).toHaveBeenCalledOnce();
+    expect(harness.replier.replyText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: preparedText }),
+    );
+  });
+
   it("persists the prepared payload exactly and retries the stored answer and UUID", async () => {
     const harness = createHarness({
       replyResults: [new Error("Feishu unavailable"), { replyMessageId: "reply-1" }],
@@ -822,6 +957,71 @@ describe("AnswerReplyDeliveryService", () => {
     },
   );
 
+  it("resumes a confirmed-not-sent receipt with the existing safe notice flow", async () => {
+    const harness = createHarness();
+    const reconciled = notSentReconciledReceipt(
+      beginAnswerReceipt(receipt(), preparedAt),
+      transitionAt,
+    );
+    harness.repository.receipt = reconciled;
+
+    await expect(harness.service.respond(request(vi.fn()))).resolves.toEqual({
+      replyMessageId: "reply-default",
+    });
+
+    expect(harness.repository.beginSafeNoticeSend).toHaveBeenCalledWith({
+      deliveryId: reconciled.delivery.id,
+      expectedVersion: reconciled.delivery.version,
+      at: transitionAt,
+    });
+    expect(harness.replier.replyText).toHaveBeenCalledWith({
+      messageId: reconciled.delivery.incomingMessageId,
+      text: ANSWER_PERMISSION_CHANGED_NOTICE,
+      uuid: reconciled.delivery.safeNoticeUuid,
+      replyInThread: true,
+    });
+  });
+
+  it("maps an atomic stale-grant send rejection to the permission-blocked notice", async () => {
+    const harness = createHarness();
+    harness.repository.beginAnswerSend.mockRejectedValueOnce(
+      new AnswerReplyGrantStaleError(),
+    );
+
+    const response = harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      sourceTraces: [sourceTrace({
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+        crossGroupGrantVersion: 1,
+        crossGroupGrantorGroupId: "group-owner",
+        crossGroupGranteeGroupId: "oc_1",
+      })],
+    }))));
+    await expect(response).resolves.toEqual({ replyMessageId: "reply-default" });
+
+    expect(harness.verifier.verify).toHaveBeenCalledWith({
+      chatId: "oc_1",
+      documentSourceIds: ["source-a"],
+      crossGroupGrantBindings: [{
+        documentSourceId: "source-a",
+        grantId: "grant-a",
+        version: 1,
+        grantorGroupId: "group-owner",
+        granteeGroupId: "oc_1",
+      }],
+    });
+    expect(harness.repository.blockForPermission).toHaveBeenCalledWith({
+      deliveryId: preparedDeliveryId,
+      expectedVersion: 1,
+      documentSourceIds: ["source-a"],
+      at: transitionAt,
+    });
+    expect(harness.replier.replyText).toHaveBeenCalledOnce();
+    expect(harness.replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: ANSWER_PERMISSION_CHANGED_NOTICE,
+    }));
+  });
+
   it.each([
     ["prepared answer attempts", () => receipt({ attemptCount: 1 })],
     ["prepared safe-notice attempts", () => receipt({ safeNoticeAttemptCount: 1 })],
@@ -1302,6 +1502,7 @@ function receipt(
       incomingMessageId: receiptIncomingMessageId,
       chatId: receiptChatId,
       renderedReplyFingerprint,
+      knowledgeConflictCandidateId: deliveryOverrides.knowledgeConflictCandidateId,
       sourceTraces,
     });
   return {
@@ -1402,6 +1603,19 @@ function blockedReceipt(
       : { reconciliationRequiredAt: at }),
   });
   return appendEvent(updated, prior, state, at, { documentSourceIds });
+}
+
+function notSentReconciledReceipt(
+  prior: AnswerReplyReceipt,
+  at = transitionAt,
+): AnswerReplyReceipt {
+  const updated = withDelivery(prior, {
+    state: "not_sent_reconciled",
+    preparedReplyText: undefined,
+    version: prior.delivery.version + 1,
+    updatedAt: at,
+  });
+  return appendEvent(updated, prior, "not_sent_reconciled", at);
 }
 
 function beginSafeNoticeReceipt(
@@ -1613,6 +1827,7 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
         safeNoticeUuid: input.safeNoticeUuid,
         preparedReplyText: input.renderedText,
         renderedReplyFingerprint: createAnswerReplyRenderedFingerprint(input.renderedText),
+        knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
         createdAt: input.at,
         updatedAt: input.at,
       }, [...input.sourceTraces]);
@@ -1658,6 +1873,15 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
   ): Promise<AnswerReplyReceipt> => {
     const current = this.requireReceipt(input.deliveryId);
     const updated = blockedReceipt(current, input.documentSourceIds, input.at);
+    this.storeReceipt(updated);
+    return updated;
+  });
+
+  reconcileNotSent = vi.fn(async (
+    input: VersionedTransitionInput,
+  ): Promise<AnswerReplyReceipt> => {
+    const current = this.requireReceipt(input.deliveryId);
+    const updated = notSentReconciledReceipt(current, input.at);
     this.storeReceipt(updated);
     return updated;
   });

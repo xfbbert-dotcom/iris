@@ -382,4 +382,48 @@ describe("buildInternalStatusSnapshot", () => {
       /draft body|evidence|reason|actorOpenId|token-secret/u,
     );
   });
+
+  it("keeps knowledge-conflict lifecycle and counts content-free", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-08-15T08:00:00.000Z"),
+      components: {
+        knowledgeConflicts: {
+          ok: true,
+          enabled: true,
+          running: true,
+          migration0046Applied: true,
+          migration0047Applied: true,
+          migration0048Applied: true,
+          enabledGroupCount: 1,
+          scans: { pending: 1, processing: 0, retry: 0, completed: 2, deadLettered: 0 },
+          candidates: {
+            pending_review: 1,
+            dismissed: 0,
+            approved_for_delivery: 0,
+            delivered: 1,
+            draft_created: 0,
+            superseded: 0,
+          },
+          deliveries: {
+            pending: 0,
+            processing: 0,
+            externalAttempting: 0,
+            sent: 1,
+            failed: 0,
+            terminalFailed: 0,
+            outcomeUnknown: 0,
+            cancelled: 0,
+          },
+          interactions: { applied: 1, alreadyApplied: 0, rejected: 0 },
+          reconciliation: { terminalFailed: 0, outcomeUnknown: 0 },
+        },
+      },
+    });
+
+    expect(snapshot.components.knowledgeConflicts.status).toBe("healthy");
+    expect(snapshot.components.knowledgeConflicts.scans.completed).toBe(2);
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /statement|sourceText|prompt|actorOpenId|token|secret|candidate-id|group-id/u,
+    );
+  });
 });

@@ -14,6 +14,7 @@ import {
 } from "./knowledge-draft.js";
 import {
   findInvalidKnowledgeDraftEvidence,
+  KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
   KnowledgeDraftEvidenceError,
   type KnowledgeDraftEvidenceQueryable,
   validateCurrentKnowledgeDraftEvidence,
@@ -23,6 +24,7 @@ import {
   type KnowledgeDraft,
   type KnowledgeDraftEvent,
   type KnowledgeDraftMutationResult,
+  type KnowledgeConflictDraftGovernanceAttestation,
   type KnowledgeDraftRepository,
   type KnowledgeDraftRevisionView,
   type KnowledgeDraftStatusCounts,
@@ -71,7 +73,7 @@ type DraftHeaderRow = Pick<
 >;
 
 type EvidenceRow = {
-  evidence_type: "conversation_message" | "discussion_thread" | "action_item" | "document_source";
+  evidence_type: "conversation_message" | "discussion_thread" | "action_item" | "group_memory" | "document_source";
   reference_id: string;
   source_group_id: string | null;
   entity_version: string | number | null;
@@ -90,6 +92,23 @@ type EventRow = {
   reason: string | null;
   revision_number: string | number;
   created_at: Date;
+};
+
+type ReplayEvent = {
+  draftId: string;
+  operationFingerprint: string;
+  revisionNumber: number;
+  eventType: EventRow["event_type"];
+  toVersion: number;
+  actor: string;
+  createdAt: Date;
+};
+
+type LegacyConflictGovernanceRow = {
+  document_source_id: string;
+  permission_attested_at: Date;
+  target_policy_id: string;
+  target_policy_version: string | number;
 };
 
 type CountRow = { status: KnowledgeDraftStatus; count: string | number };
@@ -124,12 +143,19 @@ export class KnowledgeDraftTransitionError extends Error {
 
 export function createPostgresKnowledgeDraftRepository({
   dataSource,
+  knowledgeConflictPermissionAttestationMaxAgeMs =
+    KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
 }: {
   dataSource: PostgresKnowledgeDraftDataSource;
+  knowledgeConflictPermissionAttestationMaxAgeMs?: number;
 }): KnowledgeDraftRepository {
+  const permissionAgeMs = requireNonnegativeInteger(
+    "knowledgeConflictPermissionAttestationMaxAgeMs",
+    knowledgeConflictPermissionAttestationMaxAgeMs,
+  );
   return {
     createDraft(input) {
-      return createDraft(dataSource, input);
+      return createDraft(dataSource, permissionAgeMs, input);
     },
     reviseDraft(input) {
       return reviseDraft(dataSource, input);
@@ -141,7 +167,7 @@ export function createPostgresKnowledgeDraftRepository({
       return transitionDraft(dataSource, input, "rejected");
     },
     getDraft(id) {
-      return loadDraft(dataSource, requireReference("id", id));
+      return loadDraft(dataSource, requireReference("id", id), new Date(), permissionAgeMs);
     },
     async listDrafts(input) {
       const sourceGroupId = normalizeOptionalReference("sourceGroupId", input.sourceGroupId);
@@ -157,7 +183,9 @@ export function createPostgresKnowledgeDraftRepository({
          LIMIT $4`,
         [sourceGroupId ?? null, statuses ?? null, riskLevels ?? null, limit],
       );
-      return await Promise.all(result.rows.map((row) => mapDraft(dataSource, row)));
+      const validationAt = new Date();
+      return await Promise.all(result.rows.map((row) =>
+        mapDraft(dataSource, row, validationAt, permissionAgeMs)));
     },
     async listEvents(id) {
       const result = await dataSource.query<EventRow>(
@@ -182,6 +210,7 @@ export function createPostgresKnowledgeDraftRepository({
 
 async function createDraft(
   dataSource: PostgresKnowledgeDraftDataSource,
+  permissionAgeMs: number,
   input: CreateKnowledgeDraftInput,
 ): Promise<KnowledgeDraftMutationResult> {
   const id = requireReference("id", input.id);
@@ -190,27 +219,104 @@ async function createDraft(
   const at = requireDate(input.at);
   const originKind = requireOriginKind(input.originKind);
   const revision = normalizeKnowledgeDraftRevisionInput(input.revision);
-  const fingerprint = operationFingerprint({
-    operation: "create",
-    id,
-    operationKey,
+  const knowledgeConflictGovernance = normalizeKnowledgeConflictGovernance({
     originKind,
-    createdBy,
-    at,
+    governance: input.knowledgeConflictGovernance,
     revision,
+    at,
+    maxAgeMs: permissionAgeMs,
   });
+  const fingerprint = knowledgeConflictGovernance === undefined
+    ? operationFingerprint({
+        operation: "create",
+        id,
+        operationKey,
+        originKind,
+        createdBy,
+        at,
+        revision,
+      })
+    : operationFingerprint({
+        operation: "create_knowledge_conflict_v2",
+        id,
+        operationKey,
+        originKind,
+        createdBy,
+        revision,
+        knowledgeConflictGovernance: {
+          permission: {
+            documentSourceIds: knowledgeConflictGovernance.permission.documentSourceIds,
+          },
+          publicationTarget: knowledgeConflictGovernance.publicationTarget,
+        },
+      });
 
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, operationKey);
-    const replay = await replayOperation(client, operationKey, fingerprint);
-    if (replay !== undefined) return replay;
+    const replay = await findReplayEvent(
+      client,
+      operationKey,
+      fingerprint,
+      knowledgeConflictGovernance === undefined
+        ? undefined
+        : (event) => isExactLegacyKnowledgeConflictCreate({
+            client,
+            event,
+            id,
+            operationKey,
+            originKind,
+            createdBy,
+            revision,
+            governance: knowledgeConflictGovernance,
+          }),
+    );
+    if (replay !== undefined) {
+      if (knowledgeConflictGovernance !== undefined) {
+        await validateCurrentKnowledgeDraftEvidence({
+          queryable: client,
+          sourceGroupId: revision.sourceGroupId,
+          evidence: revision.evidence,
+          knowledgeConflictPermission: {
+            documentSourceIds: knowledgeConflictGovernance.permission.documentSourceIds,
+            attestedAt: knowledgeConflictGovernance.permission.attestedAt,
+            validationAt: at,
+            maxAgeMs: permissionAgeMs,
+          },
+        });
+        await validateKnowledgeConflictTargetPolicy(client, knowledgeConflictGovernance, revision);
+        await insertKnowledgeConflictGovernanceAttestations(
+          client,
+          replay.draftId,
+          replay.revisionNumber,
+          at,
+          knowledgeConflictGovernance,
+        );
+      }
+      const draft = await requireDraft(client, replay.draftId, at, permissionAgeMs);
+      if (knowledgeConflictGovernance !== undefined &&
+        !isExactKnowledgeConflictCreationDraft(draft, id, createdBy, revision)) {
+        throw new KnowledgeDraftOperationConflictError();
+      }
+      return { outcome: "already_applied", draft };
+    }
     const existing = await client.query("SELECT 1 FROM knowledge_drafts WHERE id = $1", [id]);
     if (existing.rows.length > 0) throw new KnowledgeDraftOperationConflictError();
     await validateCurrentKnowledgeDraftEvidence({
       queryable: client,
       sourceGroupId: revision.sourceGroupId,
       evidence: revision.evidence,
+      ...(knowledgeConflictGovernance === undefined ? {} : {
+        knowledgeConflictPermission: {
+          documentSourceIds: knowledgeConflictGovernance.permission.documentSourceIds,
+          attestedAt: knowledgeConflictGovernance.permission.attestedAt,
+          validationAt: at,
+          maxAgeMs: permissionAgeMs,
+        },
+      }),
     });
+    if (knowledgeConflictGovernance !== undefined) {
+      await validateKnowledgeConflictTargetPolicy(client, knowledgeConflictGovernance, revision);
+    }
     const status = initialKnowledgeDraftStatus({ sourceGroupId: revision.sourceGroupId });
     await client.query(
       `INSERT INTO knowledge_drafts (
@@ -220,6 +326,15 @@ async function createDraft(
       [id, revision.sourceGroupId ?? null, originKind, status, createdBy, at],
     );
     await insertRevision(client, id, 1, createdBy, at, revision);
+    if (knowledgeConflictGovernance !== undefined) {
+      await insertKnowledgeConflictGovernanceAttestations(
+        client,
+        id,
+        1,
+        at,
+        knowledgeConflictGovernance,
+      );
+    }
     await insertEvent(client, {
       draftId: id,
       eventType: "created",
@@ -230,7 +345,7 @@ async function createDraft(
       revisionNumber: 1,
       at,
     });
-    return { outcome: "applied", draft: await requireDraft(client, id) };
+    return { outcome: "applied", draft: await requireDraft(client, id, at, permissionAgeMs) };
   });
 }
 
@@ -441,14 +556,138 @@ async function replayOperation(
   operationKey: string,
   fingerprint: string,
 ): Promise<KnowledgeDraftMutationResult | undefined> {
-  const result = await client.query<Pick<EventRow, "draft_id" | "operation_fingerprint">>(
-    "SELECT draft_id, operation_fingerprint FROM knowledge_draft_events WHERE operation_key = $1",
+  const event = await findReplayEvent(client, operationKey, fingerprint);
+  return event === undefined
+    ? undefined
+    : { outcome: "already_applied", draft: await requireDraft(client, event.draftId) };
+}
+
+async function findReplayEvent(
+  client: KnowledgeDraftEvidenceQueryable,
+  operationKey: string,
+  fingerprint: string,
+  acceptLegacy?: (event: ReplayEvent) => Promise<boolean>,
+): Promise<ReplayEvent | undefined> {
+  const result = await client.query<Pick<
+    EventRow,
+    "draft_id" | "operation_fingerprint" | "revision_number" | "event_type" | "to_version" |
+    "actor" | "created_at"
+  >>(
+    `SELECT draft_id, operation_fingerprint, revision_number, event_type,
+       to_version, actor, created_at
+     FROM knowledge_draft_events WHERE operation_key = $1`,
     [operationKey],
   );
   const event = result.rows[0];
   if (event === undefined) return undefined;
-  if (event.operation_fingerprint !== fingerprint) throw new KnowledgeDraftOperationConflictError();
-  return { outcome: "already_applied", draft: await requireDraft(client, event.draft_id) };
+  const normalized: ReplayEvent = {
+    draftId: event.draft_id,
+    operationFingerprint: event.operation_fingerprint,
+    revisionNumber: requirePositiveInteger("event revision number", Number(event.revision_number)),
+    eventType: event.event_type,
+    toVersion: requirePositiveInteger("event version", Number(event.to_version)),
+    actor: requireReference("event actor", event.actor),
+    createdAt: requireDate(event.created_at),
+  };
+  if (event.operation_fingerprint !== fingerprint &&
+    (acceptLegacy === undefined || !(await acceptLegacy(normalized)))) {
+    throw new KnowledgeDraftOperationConflictError();
+  }
+  return normalized;
+}
+
+async function isExactLegacyKnowledgeConflictCreate(input: {
+  client: KnowledgeDraftEvidenceQueryable;
+  event: ReplayEvent;
+  id: string;
+  operationKey: string;
+  originKind: KnowledgeDraftOriginKind;
+  createdBy: string;
+  revision: ReturnType<typeof normalizeKnowledgeDraftRevisionInput>;
+  governance: KnowledgeConflictDraftGovernanceAttestation;
+}): Promise<boolean> {
+  if (input.originKind !== "knowledge_conflict" ||
+    input.event.draftId !== input.id ||
+    input.event.eventType !== "created" ||
+    input.event.toVersion !== 1 ||
+    input.event.revisionNumber !== 1 ||
+    input.event.actor !== input.createdBy) {
+    return false;
+  }
+  const result = await input.client.query<LegacyConflictGovernanceRow>(
+    `SELECT DISTINCT ON (document_source_id)
+       document_source_id, permission_attested_at, target_policy_id, target_policy_version
+     FROM knowledge_conflict_draft_governance_attestations
+     WHERE draft_id = $1 AND revision_number = $2
+     ORDER BY document_source_id ASC, created_at ASC, permission_attested_at ASC`,
+    [input.id, 1],
+  );
+  const rows = [...result.rows].sort((left, right) =>
+    left.document_source_id.localeCompare(right.document_source_id));
+  const expectedSourceIds = input.governance.permission.documentSourceIds;
+  if (rows.length !== expectedSourceIds.length || rows.length < 1 ||
+    rows.some((row, index) => row.document_source_id !== expectedSourceIds[index] ||
+      row.target_policy_id !== input.governance.publicationTarget.id ||
+      Number(row.target_policy_version) !== input.governance.publicationTarget.version)) {
+    return false;
+  }
+  const originalAttestedAt = requireDate(rows[0]?.permission_attested_at);
+  if (rows.some((row) => requireDate(row.permission_attested_at).getTime() !==
+    originalAttestedAt.getTime())) {
+    return false;
+  }
+  const legacyFingerprint = operationFingerprint({
+    operation: "create",
+    id: input.id,
+    operationKey: input.operationKey,
+    originKind: input.originKind,
+    createdBy: input.createdBy,
+    at: input.event.createdAt,
+    revision: input.revision,
+    knowledgeConflictGovernance: {
+      permission: {
+        documentSourceIds: expectedSourceIds,
+        attestedAt: originalAttestedAt,
+      },
+      publicationTarget: input.governance.publicationTarget,
+    },
+  });
+  return input.event.operationFingerprint === legacyFingerprint;
+}
+
+function isExactKnowledgeConflictCreationDraft(
+  draft: KnowledgeDraft,
+  id: string,
+  createdBy: string,
+  revision: ReturnType<typeof normalizeKnowledgeDraftRevisionInput>,
+): boolean {
+  return draft.id === id &&
+    draft.sourceGroupId === revision.sourceGroupId &&
+    draft.originKind === "knowledge_conflict" &&
+    draft.createdBy === createdBy &&
+    draft.status === "pending_confirmation" &&
+    draft.version === 1 &&
+    draft.currentRevisionNumber === 1 &&
+    draft.currentRevision.revisionNumber === 1 &&
+    "content" in draft.currentRevision &&
+    draft.currentRevision.author === createdBy &&
+    draft.currentRevision.riskLevel === revision.riskLevel &&
+    draft.currentRevision.title === revision.title &&
+    draft.currentRevision.content === revision.content &&
+    canonicalValue(draft.currentRevision.reviewer) === canonicalValue(revision.reviewer) &&
+    canonicalValue(draft.currentRevision.suggestedPublication) ===
+      canonicalValue(revision.suggestedPublication) &&
+    canonicalEvidence(draft.currentRevision.evidence) === canonicalEvidence(revision.evidence);
+}
+
+function canonicalEvidence(evidence: readonly KnowledgeDraftEvidenceReference[]): string {
+  return canonicalValue([...evidence].sort((left, right) =>
+    left.type.localeCompare(right.type) || left.id.localeCompare(right.id)));
+}
+
+function canonicalValue(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => item instanceof Date ? item.toISOString() : item) ??
+    "undefined";
 }
 
 async function lockOperation(
@@ -475,20 +714,124 @@ async function lockDraft(
 async function loadDraft(
   queryable: KnowledgeDraftEvidenceQueryable,
   id: string,
+  validationAt = new Date(),
+  permissionAgeMs = KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
 ): Promise<KnowledgeDraft | undefined> {
   const result = await queryable.query<DraftRevisionRow>(
     `${draftRevisionSelect()} WHERE draft.id = $1`,
     [id],
   );
   const row = result.rows[0];
-  return row === undefined ? undefined : await mapDraft(queryable, row);
+  return row === undefined ? undefined : await mapDraft(queryable, row, validationAt, permissionAgeMs);
+}
+
+function normalizeKnowledgeConflictGovernance(input: {
+  originKind: KnowledgeDraftOriginKind;
+  governance: KnowledgeConflictDraftGovernanceAttestation | undefined;
+  revision: ReturnType<typeof normalizeKnowledgeDraftRevisionInput>;
+  at: Date;
+  maxAgeMs: number;
+}): KnowledgeConflictDraftGovernanceAttestation | undefined {
+  const documentSourceIds = input.revision.evidence
+    .filter((evidence) => evidence.type === "document_source")
+    .map((evidence) => requireReference("documentSourceId", evidence.id))
+    .sort();
+  if (input.governance === undefined) {
+    if (input.originKind === "knowledge_conflict" && documentSourceIds.length > 0) {
+      throw new KnowledgeDraftEvidenceError("document_permission_unavailable");
+    }
+    return undefined;
+  }
+  if (input.originKind !== "knowledge_conflict"
+    || input.revision.sourceGroupId === undefined
+    || input.revision.riskLevel !== "medium") {
+    throw new KnowledgeDraftEvidenceError("document_permission_unavailable");
+  }
+  const attestedIds = [...new Set(input.governance.permission.documentSourceIds.map((id) =>
+    requireReference("attested document source id", id)))].sort();
+  if (attestedIds.length !== documentSourceIds.length
+    || attestedIds.some((id, index) => id !== documentSourceIds[index])) {
+    throw new KnowledgeDraftEvidenceError("document_permission_unavailable");
+  }
+  const attestedAt = requireDate(input.governance.permission.attestedAt);
+  if (attestedAt.getTime() > input.at.getTime()
+    || input.at.getTime() - attestedAt.getTime() > input.maxAgeMs) {
+    throw new KnowledgeDraftEvidenceError("document_permission_unavailable");
+  }
+  return {
+    permission: { documentSourceIds: attestedIds, attestedAt },
+    publicationTarget: {
+      id: requireReference("publication target id", input.governance.publicationTarget.id),
+      version: requirePositiveInteger(
+        "publication target version",
+        input.governance.publicationTarget.version,
+      ),
+    },
+  };
+}
+
+async function validateKnowledgeConflictTargetPolicy(
+  queryable: KnowledgeDraftEvidenceQueryable,
+  governance: KnowledgeConflictDraftGovernanceAttestation,
+  revision: ReturnType<typeof normalizeKnowledgeDraftRevisionInput>,
+): Promise<void> {
+  const result = await queryable.query<{
+    id: string;
+    space_id: string;
+    parent_node_token: string | null;
+    allowed_group_ids: string[];
+    allowed_risk_levels: KnowledgeDraftRiskLevel[];
+    enabled: boolean;
+    version: string | number;
+  }>(
+    `SELECT id, space_id, parent_node_token, allowed_group_ids,
+       allowed_risk_levels, enabled, version
+     FROM knowledge_publication_target_policies
+     WHERE id = $1
+     FOR UPDATE`,
+    [governance.publicationTarget.id],
+  );
+  const row = result.rows[0];
+  const suggestion = revision.suggestedPublication;
+  if (row === undefined
+    || !row.enabled
+    || Number(row.version) !== governance.publicationTarget.version
+    || revision.sourceGroupId === undefined
+    || !row.allowed_group_ids.includes(revision.sourceGroupId)
+    || !row.allowed_risk_levels.includes("medium")
+    || suggestion?.spaceId !== row.space_id
+    || suggestion?.parentNodeToken !== (row.parent_node_token ?? undefined)) {
+    throw new KnowledgeDraftEvidenceError("document_draft_use_disabled");
+  }
+}
+
+async function insertKnowledgeConflictGovernanceAttestations(
+  queryable: KnowledgeDraftEvidenceQueryable,
+  draftId: string,
+  revisionNumber: number,
+  at: Date,
+  governance: KnowledgeConflictDraftGovernanceAttestation,
+): Promise<void> {
+  for (const documentSourceId of governance.permission.documentSourceIds) {
+    await queryable.query(
+      `INSERT INTO knowledge_conflict_draft_governance_attestations (
+        draft_id, revision_number, document_source_id, permission_attested_at,
+        target_policy_id, target_policy_version, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT DO NOTHING`,
+      [draftId, revisionNumber, documentSourceId, governance.permission.attestedAt,
+        governance.publicationTarget.id, governance.publicationTarget.version, at],
+    );
+  }
 }
 
 async function requireDraft(
   queryable: KnowledgeDraftEvidenceQueryable,
   id: string,
+  validationAt = new Date(),
+  permissionAgeMs = KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
 ): Promise<KnowledgeDraft> {
-  const draft = await loadDraft(queryable, id);
+  const draft = await loadDraft(queryable, id, validationAt, permissionAgeMs);
   if (draft === undefined) throw new KnowledgeDraftNotFoundError();
   return draft;
 }
@@ -516,6 +859,8 @@ function draftRevisionSelect(): string {
 async function mapDraft(
   queryable: KnowledgeDraftEvidenceQueryable,
   row: DraftRevisionRow,
+  validationAt: Date,
+  permissionAgeMs: number,
 ): Promise<KnowledgeDraft> {
   const revisionNumber = Number(row.current_revision_number);
   const evidence = await loadEvidence(queryable, row.id, revisionNumber);
@@ -523,6 +868,14 @@ async function mapDraft(
     queryable,
     sourceGroupId: row.source_group_id ?? undefined,
     evidence,
+    ...(row.origin_kind === "knowledge_conflict" ? {
+      draftIdentity: {
+        draftId: row.id,
+        revisionNumber,
+        validationAt,
+        maxAgeMs: permissionAgeMs,
+      },
+    } : {}),
   });
   const revisionBase = {
     revisionNumber,
@@ -595,6 +948,14 @@ async function loadEvidence(
         id: row.reference_id,
         groupId: requireDatabaseValue(row.source_group_id),
         entityVersion: Number(requireDatabaseValue(row.entity_version)),
+      };
+    }
+    if (row.evidence_type === "group_memory") {
+      return {
+        type: "group_memory",
+        id: row.reference_id,
+        groupId: requireDatabaseValue(row.source_group_id),
+        expectedUpdatedAt: requireDate(requireDatabaseValue(row.source_updated_at)),
       };
     }
     return {
@@ -676,6 +1037,16 @@ function requireOriginKind(value: unknown): KnowledgeDraftOriginKind {
 
 function requireVersion(value: unknown): number {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error("expectedVersion is invalid");
+  return Number(value);
+}
+
+function requirePositiveInteger(name: string, value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error(`${name} is invalid`);
+  return Number(value);
+}
+
+function requireNonnegativeInteger(name: string, value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) throw new Error(`${name} is invalid`);
   return Number(value);
 }
 

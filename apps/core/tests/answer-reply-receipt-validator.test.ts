@@ -24,6 +24,83 @@ const firstSendAt = new Date("2026-08-02T02:01:00.000Z");
 const transitionAt = new Date("2026-08-02T02:02:00.000Z");
 
 describe("AnswerReplyReceiptValidator", () => {
+  it("binds the exact cross-group grant facts into semantic identity", () => {
+    const renderedReplyFingerprint = createAnswerReplyRenderedFingerprint(renderedText);
+    const base = {
+      provider: "feishu" as const,
+      incomingMessageId,
+      chatId,
+      renderedReplyFingerprint,
+    };
+    const unbound = createAnswerReplySemanticFingerprint({
+      ...base,
+      sourceTraces: [sourceTrace()],
+    });
+    const bound = createAnswerReplySemanticFingerprint({
+      ...base,
+      sourceTraces: [sourceTrace({
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+        crossGroupGrantVersion: 5,
+        crossGroupGrantorGroupId: "group-owner",
+        crossGroupGranteeGroupId: "group-reader",
+      })],
+    });
+
+    expect(bound).not.toBe(unbound);
+  });
+
+  it("rejects partial cross-group grant facts in a persisted receipt", () => {
+    const malformed = preparedReceipt();
+    malformed.sources[0]!.crossGroupGrantId = "grant-a";
+    expect(() => requireValidAnswerReplyReceipt(malformed)).toThrow(
+      "answer reply receipt invalid",
+    );
+  });
+
+  it("includes the knowledge-conflict candidate in semantic preparation identity", () => {
+    const trace = sourceTrace();
+    const renderedReplyFingerprint = createAnswerReplyRenderedFingerprint(renderedText);
+    const base = {
+      provider: "feishu" as const,
+      incomingMessageId,
+      chatId,
+      renderedReplyFingerprint,
+      sourceTraces: [trace],
+    };
+
+    expect(createAnswerReplySemanticFingerprint({
+      ...base,
+      knowledgeConflictCandidateId: "candidate-a",
+    })).not.toBe(createAnswerReplySemanticFingerprint({
+      ...base,
+      knowledgeConflictCandidateId: "candidate-b",
+    }));
+    expect(createAnswerReplySemanticFingerprint({
+      ...base,
+      knowledgeConflictCandidateId: "candidate-a",
+    })).not.toBe(createAnswerReplySemanticFingerprint(base));
+  });
+
+  it("validates the persisted candidate ID against the semantic fingerprint", () => {
+    const linked = preparedReceipt();
+    linked.delivery.knowledgeConflictCandidateId = "candidate-a";
+    linked.delivery.semanticFingerprint = createAnswerReplySemanticFingerprint({
+      provider: linked.delivery.provider,
+      incomingMessageId: linked.delivery.incomingMessageId,
+      chatId: linked.delivery.chatId,
+      renderedReplyFingerprint: linked.delivery.renderedReplyFingerprint,
+      knowledgeConflictCandidateId: linked.delivery.knowledgeConflictCandidateId,
+      sourceTraces: linked.sources,
+    });
+    expect(requireValidAnswerReplyReceipt(linked)).toBe(linked);
+
+    linked.delivery.knowledgeConflictCandidateId = "candidate-b";
+    expect(() => requireValidAnswerReplyReceipt(linked)).toThrow(
+      "answer reply receipt invalid",
+    );
+  });
+
   it("accepts complete legal answer and safe-notice ledgers", () => {
     const prepared = preparedReceipt();
     const sending = appendTransition(prepared, "send_started", firstSendAt, 1);
@@ -48,6 +125,11 @@ describe("AnswerReplyReceiptValidator", () => {
       undefined,
       ["source-a"],
     );
+    const notSentReconciled = appendTransition(
+      sending,
+      "not_sent_reconciled",
+      transitionAt,
+    );
 
     for (const receipt of [
       prepared,
@@ -57,6 +139,13 @@ describe("AnswerReplyReceiptValidator", () => {
       permissionNoticeStarted,
       appendTransition(permissionNoticeStarted, "safe_notice_sent", transitionAt),
       reconciliationRequired,
+      notSentReconciled,
+      appendTransition(
+        notSentReconciled,
+        "safe_notice_send_started",
+        new Date("2026-08-02T02:03:00.000Z"),
+        1,
+      ),
     ]) {
       expect(requireValidAnswerReplyReceipt(receipt)).toBe(receipt);
     }
@@ -249,6 +338,12 @@ function appendTransition(
         reconciliationRequiredAt: at,
       });
       break;
+    case "not_sent_reconciled":
+      Object.assign(delivery, {
+        state: "not_sent_reconciled",
+        preparedReplyText: undefined,
+      });
+      break;
     case "safe_notice_send_started":
       delivery.safeNoticeAttemptCount = prior.delivery.safeNoticeAttemptCount + 1;
       break;
@@ -288,7 +383,9 @@ function event(
   };
 }
 
-function sourceTrace(): AnswerReplySourceTraceInput {
+function sourceTrace(
+  overrides: Partial<AnswerReplySourceTraceInput> = {},
+): AnswerReplySourceTraceInput {
   return {
     promptRank: 1,
     citationRank: 1,
@@ -302,6 +399,7 @@ function sourceTrace(): AnswerReplySourceTraceInput {
     contentHash: "a".repeat(64),
     embeddingProfileId: "embedding-profile-a",
     initialPermissionCheckedAt: new Date("2026-08-02T01:59:00.000Z"),
+    ...overrides,
   };
 }
 

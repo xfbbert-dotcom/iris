@@ -92,6 +92,7 @@ describe("createEventWorkerRuntime", () => {
     const messages = {
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     };
     const messageReplayGuard = {
       runUnlessDeleted: vi.fn(),
@@ -242,6 +243,7 @@ describe("createEventWorkerRuntime", () => {
     const messages = {
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     };
     const tokenProvider = { getTenantAccessToken: vi.fn() };
     const replier = { replyText: vi.fn() };
@@ -391,7 +393,10 @@ describe("createEventWorkerRuntime", () => {
       }),
     );
     expect(runtime?.answerReplies).toBeDefined();
-    expect(Object.keys(runtime?.answerReplies ?? {})).toEqual(["findByIncomingMessage"]);
+    expect(Object.keys(runtime?.answerReplies ?? {})).toEqual([
+      "findByIncomingMessage",
+      "reconcileNotSent",
+    ]);
     expect(runtime?.answerReplies).not.toHaveProperty("prepare");
     const status = await runtime?.getStatus();
     expect(status).toMatchObject({
@@ -526,6 +531,7 @@ describe("createEventWorkerRuntime", () => {
       createConversationMessageRepository: vi.fn(() => ({
         upsertMessage: vi.fn(),
         listRecentByChat: vi.fn(),
+        findByIds: vi.fn(),
       })),
       createDocumentSourceRegistry: vi.fn(() => ({
         registerGroupVisibleDocument: vi.fn(),
@@ -624,6 +630,7 @@ function fakeAnswerReplyRepository() {
     beginAnswerSend: vi.fn(),
     completeAnswerSend: vi.fn(),
     blockForPermission: vi.fn(),
+    reconcileNotSent: vi.fn(),
     beginSafeNoticeSend: vi.fn(),
     completeSafeNoticeSend: vi.fn(),
     getStatus: vi.fn(async () => ({
@@ -663,6 +670,7 @@ function createConstructionFailureFixture({
     createConversationMessageRepository: vi.fn(() => ({
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     })),
     createMessageReplayGuard: vi.fn(() => ({ runUnlessDeleted: vi.fn() })),
     createDocumentSourceRegistry: vi.fn(() => ({

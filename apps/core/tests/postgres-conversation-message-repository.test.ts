@@ -351,6 +351,58 @@ describe("PostgresConversationMessageRepository", () => {
     );
   });
 
+  it("finds exact source messages in deterministic id order with tombstone state", async () => {
+    const queryable = fakeQueryable([
+      {
+        id: "feishu:message-2",
+        provider: "feishu",
+        provider_message_id: "message-2",
+        chat_id: "chat-1",
+        sender_id: null,
+        message_type: "text",
+        text: "Second",
+        sent_at: new Date("2026-07-02T01:02:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-2",
+        created_at: new Date("2026-07-02T01:02:01.000Z"),
+        tombstoned: true,
+      },
+      {
+        id: "feishu:message-1",
+        provider: "feishu",
+        provider_message_id: "message-1",
+        chat_id: "chat-1",
+        sender_id: null,
+        message_type: "text",
+        text: "First",
+        sent_at: new Date("2026-07-02T01:01:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-1",
+        created_at: new Date("2026-07-02T01:01:01.000Z"),
+        tombstoned: false,
+      },
+    ]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(repository.findByIds({
+      chatId: "chat-1",
+      ids: ["feishu:message-2", "feishu:message-1", "feishu:message-2"],
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "feishu:message-1", tombstoned: false }),
+      expect.objectContaining({ id: "feishu:message-2", tombstoned: true }),
+    ]);
+    expect(firstQueryParams(queryable)).toEqual([
+      "chat-1",
+      ["feishu:message-1", "feishu:message-2"],
+    ]);
+  });
+
+  it("does not query for an empty exact source-message set", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(repository.findByIds({ chatId: "chat-1", ids: [] })).resolves.toEqual([]);
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized recent chat ids before querying Postgres", async () => {
     const queryable = fakeQueryable([]);
     const repository = createPostgresConversationMessageRepository({ queryable });
@@ -446,6 +498,7 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
   const suffix = randomUUID();
   const providerMessageId = `mention-replacement-${suffix}`;
   const typedIdentityProviderMessageId = `typed-identity-${suffix}`;
+  const evidenceProviderMessageId = `exact-evidence-${suffix}`;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: databaseUrl });
@@ -464,7 +517,7 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
     try {
       await pool.query(
         "DELETE FROM conversation_messages WHERE provider = 'feishu' AND provider_message_id = ANY($1::text[])",
-        [[providerMessageId, typedIdentityProviderMessageId]],
+        [[providerMessageId, typedIdentityProviderMessageId, evidenceProviderMessageId]],
       );
     } finally {
       await pool.end();
@@ -546,6 +599,31 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
         sender_user_id: "user_sender",
       }],
     });
+  });
+
+  it("returns exact group-scoped source evidence with current tombstone state", async () => {
+    const repository = createPostgresConversationMessageRepository({ queryable: pool! });
+    const chatId = `exact-evidence-chat-${suffix}`;
+    const persisted = await repository.upsertMessage({
+      ...baseUpsertInput(),
+      providerMessageId: evidenceProviderMessageId,
+      chatId,
+      rawEventIdempotencyKey: `raw-event:exact-evidence-${suffix}`,
+    });
+    await pool!.query(
+      `insert into conversation_message_deletion_tombstones (
+         provider, provider_message_id, conversation_message_id, chat_id, deleted_at
+       ) values ('feishu', $1, $2, $3, $4)`,
+      [evidenceProviderMessageId, persisted.id, chatId, new Date("2026-08-13T02:00:00.000Z")],
+    );
+
+    await expect(repository.findByIds({ chatId, ids: [persisted.id] })).resolves.toEqual([
+      expect.objectContaining({ id: persisted.id, chatId, tombstoned: true }),
+    ]);
+    await expect(repository.findByIds({
+      chatId: `wrong-${chatId}`,
+      ids: [persisted.id],
+    })).resolves.toEqual([]);
   });
 });
 

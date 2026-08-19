@@ -27,7 +27,12 @@ export type EvidencePlanningDocument = {
   text: string;
 };
 
-export type EvidenceState = "explicit" | "complete_inference" | "partial" | "none";
+export type EvidenceState =
+  | "explicit"
+  | "complete_inference"
+  | "partial"
+  | "none"
+  | "conflict";
 export type EvidenceConfidence = "high" | "medium" | "low";
 export type EvidencePremise = {
   citationRef: string;
@@ -48,6 +53,62 @@ export class EvidencePlanValidationError extends Error {
     super(message);
     this.name = "EvidencePlanValidationError";
   }
+}
+
+export type ConflictEvidencePlan = {
+  candidateId: string;
+  plan: EvidencePlan & {
+    taskMode: "company_fact";
+    evidenceState: "conflict";
+    proposedAnswer: string;
+    confidence: "high" | "medium";
+  };
+};
+
+export function createConflictEvidencePlan(input: {
+  candidateId: string;
+  knowledgePremise: EvidencePremise;
+  groupPremise: EvidencePremise;
+  proposedAnswer: string;
+  confidence: "high" | "medium";
+}): ConflictEvidencePlan {
+  const candidateId = readBoundedString(
+    input.candidateId,
+    512,
+    "conflict evidence candidate id",
+  );
+  if (candidateId !== input.candidateId) {
+    throw new EvidencePlanValidationError("conflict evidence candidate id is invalid");
+  }
+  const knowledgePremise = readConflictPremise(
+    input.knowledgePremise,
+    /^D(?:[1-9]|1[0-2])$/u,
+    "knowledge",
+  );
+  const groupPremise = readConflictPremise(
+    input.groupPremise,
+    /^M[1-8]$/u,
+    "group",
+  );
+  const proposedAnswer = readBoundedString(
+    input.proposedAnswer,
+    MAX_EVIDENCE_PLAN_ANSWER_CHARS,
+    "conflict evidence proposed answer",
+  );
+  if (input.confidence !== "high" && input.confidence !== "medium") {
+    throw new EvidencePlanValidationError("conflict evidence confidence is invalid");
+  }
+
+  const plan: ConflictEvidencePlan["plan"] = {
+    taskMode: "company_fact",
+    evidenceState: "conflict",
+    premises: [groupPremise, knowledgePremise],
+    proposedAnswer,
+    missingInformation: [],
+    confidence: input.confidence,
+  };
+  validateState(plan);
+  return { candidateId, plan };
 }
 
 export function parseEvidencePlanContent(
@@ -166,6 +227,24 @@ function validateState(plan: EvidencePlan): void {
     return;
   }
 
+  if (plan.evidenceState === "conflict") {
+    requirePlanCondition(
+      plan.premises.some(({ citationRef }) => citationRef.startsWith("M"))
+        && plan.premises.some(({ citationRef }) => citationRef.startsWith("D"))
+        && plan.proposedAnswer !== null,
+      "conflict evidence requires group and document premises",
+    );
+    requirePlanCondition(
+      plan.missingInformation.length === 0,
+      "conflict evidence cannot include missing information",
+    );
+    requirePlanCondition(
+      plan.confidence === "high" || plan.confidence === "medium",
+      "conflict evidence confidence is invalid",
+    );
+    return;
+  }
+
   requirePlanCondition(
     plan.premises.length === 0 && plan.proposedAnswer === null,
     "no-evidence plan cannot contain a factual answer",
@@ -174,6 +253,34 @@ function validateState(plan: EvidencePlan): void {
     plan.missingInformation.length > 0 && plan.confidence === "low",
     "no-evidence plan requires a low-confidence gap",
   );
+}
+
+function readConflictPremise(
+  value: EvidencePremise,
+  referencePattern: RegExp,
+  kind: "knowledge" | "group",
+): EvidencePremise {
+  if (typeof value !== "object" || value === null) {
+    throw new EvidencePlanValidationError(`conflict ${kind} premise is invalid`);
+  }
+  const citationRef = readBoundedString(
+    value.citationRef,
+    3,
+    `conflict ${kind} premise citation reference`,
+  );
+  if (!referencePattern.test(citationRef)) {
+    throw new EvidencePlanValidationError(
+      `conflict ${kind} premise citation reference is invalid`,
+    );
+  }
+  return {
+    citationRef,
+    statement: readBoundedString(
+      value.statement,
+      MAX_EVIDENCE_PLAN_ITEM_CHARS,
+      `conflict ${kind} premise statement`,
+    ),
+  };
 }
 
 function readPremises(value: unknown, allowedCitationRefs: ReadonlySet<string>): EvidencePremise[] {

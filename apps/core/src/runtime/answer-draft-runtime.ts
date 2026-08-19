@@ -30,6 +30,12 @@ import {
   type DocumentFragmentRepository,
   type Queryable,
 } from "../documents/document-fragment-repository.js";
+import type { DocumentSourceGroupGrantRepository } from
+  "../documents/document-source-group-grant.js";
+import {
+  createPostgresDocumentSourceGroupGrantRepository,
+  type PostgresDocumentSourceGroupGrantDataSource,
+} from "../documents/postgres-document-source-group-grant-repository.js";
 import {
   createPostgresDocumentSourceRegistry,
   type AsyncDocumentSourceRegistry,
@@ -45,7 +51,10 @@ import {
   type EmbeddingProfileRepository,
 } from "../documents/embedding-profile-repository.js";
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
-import { createDocumentRetrievalContextBuilder } from "../memory/document-retrieval-context.js";
+import {
+  createDocumentRetrievalContextBuilder,
+  type DocumentAccessContext,
+} from "../memory/document-retrieval-context.js";
 import {
   createFeishuDocumentPermissionChecker,
   type FeishuDocumentPermissionChecker,
@@ -104,10 +113,23 @@ import {
   createChatKnowledgeDraftGenerator,
   type ChatKnowledgeDraftGenerator,
 } from "../knowledge-governance/chat-knowledge-draft-generator.js";
+import {
+  createKnowledgeConflictAnswerProvider,
+  type KnowledgeConflictAnswerProvider,
+} from "../knowledge-conflicts/knowledge-conflict-answer-provider.js";
+import type { KnowledgeConflictRepository } from
+  "../knowledge-conflicts/knowledge-conflict-repository.js";
+import {
+  createPostgresKnowledgeConflictRepository,
+  type PostgresKnowledgeConflictDataSource,
+} from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
-    & Partial<Pick<AnswerDraftOrchestrator, "inspectPromptPermissions">>;
+    & Partial<Pick<
+      AnswerDraftOrchestrator,
+      "inspectPromptPermissions" | "validateKnowledgeConflictForSend"
+    >>;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   chatKnowledgeDraftGenerator?: ChatKnowledgeDraftGenerator;
   groupMemoryService?: GroupMemoryService;
@@ -124,6 +146,9 @@ export type AnswerDraftRuntimeDependencies = {
   createDocumentSourceRegistry?: (dependencies: {
     queryable: Queryable;
   }) => Pick<AsyncDocumentSourceRegistry, "findSourceById">;
+  createDocumentSourceGroupGrantRepository?: (dependencies: {
+    dataSource: PostgresDocumentSourceGroupGrantDataSource;
+  }) => Pick<DocumentSourceGroupGrantRepository, "validateExact">;
   createConversationMessageRepository?: (dependencies: {
     queryable: ConversationMessageQueryable;
   }) => Pick<ConversationMessageRepository, "listRecentByChat">;
@@ -163,6 +188,20 @@ export type AnswerDraftRuntimeDependencies = {
   createConversationStateContextProvider?: (dependencies: {
     dataSource: PostgresConversationStateDataSource;
   }) => ConversationStateContextProvider;
+  createKnowledgeConflictRepository?: (dependencies: {
+    dataSource: PostgresKnowledgeConflictDataSource;
+  }) => Pick<
+    KnowledgeConflictRepository,
+    "findCurrentOverlap" | "getCandidate" | "validateCandidateCurrentState"
+  >;
+  createKnowledgeConflictAnswerProvider?: (dependencies: {
+    repository: Pick<
+      KnowledgeConflictRepository,
+      "findCurrentOverlap" | "getCandidate" | "validateCandidateCurrentState"
+    >;
+    documentSources: Pick<AsyncDocumentSourceRegistry, "findSourceById">;
+    permissionChecker: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
+  }) => KnowledgeConflictAnswerProvider;
   auditLog?: AuditLog;
 };
 
@@ -185,11 +224,15 @@ export function createAnswerDraftRuntime({
   dependencies = {},
   runtimeController,
   agentExecutionObserver,
+  knowledgeConflictAnswerProvider: providedKnowledgeConflictAnswerProvider,
+  enableStandaloneKnowledgeConflictAnswerProvider = false,
 }: {
   env?: EnvLike;
   dependencies?: AnswerDraftRuntimeDependencies;
   runtimeController?: RuntimeRetrievalGate;
   agentExecutionObserver?: AgentExecutionObserver;
+  knowledgeConflictAnswerProvider?: KnowledgeConflictAnswerProvider | null;
+  enableStandaloneKnowledgeConflictAnswerProvider?: boolean;
 } = {}): AnswerDraftRuntime | undefined {
   const runtimeConfig = readAnswerDraftRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -209,6 +252,9 @@ export function createAnswerDraftRuntime({
       createPostgresDocumentSourceRegistry(
         queryable as Parameters<typeof createPostgresDocumentSourceRegistry>[0],
       ));
+  const createSourceGroupGrants =
+    dependencies.createDocumentSourceGroupGrantRepository ??
+    createPostgresDocumentSourceGroupGrantRepository;
   const createConversationMessages =
     dependencies.createConversationMessageRepository ?? createPostgresConversationMessageRepository;
   const createLiveChatContext =
@@ -231,6 +277,10 @@ export function createAnswerDraftRuntime({
     dependencies.createGroupMemoryService ?? createGroupMemoryService;
   const createConversationState =
     dependencies.createConversationStateContextProvider ?? createConversationStateContextProvider;
+  const createConflictRepository =
+    dependencies.createKnowledgeConflictRepository ?? createPostgresKnowledgeConflictRepository;
+  const createConflictAnswerProvider =
+    dependencies.createKnowledgeConflictAnswerProvider ?? createKnowledgeConflictAnswerProvider;
 
   const livePermissionChecker =
     runtimeConfig.permissionMode === "source-policy"
@@ -262,6 +312,23 @@ export function createAnswerDraftRuntime({
     runtimeConfig.permissionMode === "source-policy"
       ? createSources({ queryable: pool })
       : undefined;
+  const crossGroupGrantValidator =
+    runtimeConfig.permissionMode === "source-policy" &&
+    isPostgresDocumentSourceGroupGrantDataSource(pool)
+      ? createSourceGroupGrants({ dataSource: pool })
+      : undefined;
+  const knowledgeConflictAnswerProvider = providedKnowledgeConflictAnswerProvider !== undefined
+    ? (providedKnowledgeConflictAnswerProvider ?? undefined)
+    : (enableStandaloneKnowledgeConflictAnswerProvider === true
+      && sourceRegistry !== undefined
+      && livePermissionChecker !== undefined
+      && isPostgresKnowledgeConflictDataSource(pool)
+      ? createConflictAnswerProvider({
+          repository: createConflictRepository({ dataSource: pool }),
+          documentSources: sourceRegistry,
+          permissionChecker: livePermissionChecker,
+        })
+      : undefined);
   const conversationMessages = createConversationMessages({ queryable: pool });
   const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({
     delegate: createLiveChatContext({ repository: conversationMessages }),
@@ -336,6 +403,7 @@ export function createAnswerDraftRuntime({
                 conversationStateGroupId: currentGroupId,
                 conversationStateContextProvider,
               }),
+          ...(crossGroupGrantValidator === undefined ? {} : { crossGroupGrantValidator }),
           canReadDocument: createCanReadDocument({
             permissionMode,
             sourceRegistry,
@@ -356,6 +424,7 @@ export function createAnswerDraftRuntime({
         model,
         planner,
         renderer,
+        knowledgeConflictAnswerProvider,
         liveChatContextProvider,
         agentExecutionObserver,
         provider: modelProvider,
@@ -365,6 +434,12 @@ export function createAnswerDraftRuntime({
   }
 
   const answerDraftOrchestrator: AnswerDraftOrchestrator = {
+    validateKnowledgeConflictForSend(input) {
+      if (knowledgeConflictAnswerProvider?.validateForSend === undefined) {
+        return Promise.resolve({ status: "blocked" });
+      }
+      return knowledgeConflictAnswerProvider.validateForSend(input);
+    },
     generateDraft(input) {
       const scoped = createScopedAnswerDraftOrchestrator(input);
       return scoped.orchestrator.generateDraft({
@@ -509,6 +584,18 @@ function isPostgresConversationStateDataSource(
   return "connect" in value && typeof value.connect === "function";
 }
 
+function isPostgresKnowledgeConflictDataSource(
+  value: Queryable,
+): value is Queryable & PostgresKnowledgeConflictDataSource {
+  return "connect" in value && typeof value.connect === "function";
+}
+
+function isPostgresDocumentSourceGroupGrantDataSource(
+  value: Queryable,
+): value is Queryable & PostgresDocumentSourceGroupGrantDataSource {
+  return "connect" in value && typeof value.connect === "function";
+}
+
 function createRuntimeGatedConversationStateContextProvider({
   delegate,
   runtimeController,
@@ -585,18 +672,23 @@ function createCanReadDocument({
   runtimeController?: RuntimeRetrievalGate;
   livePermissionChecker?: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
   currentGroupId?: string;
-}): (documentSourceId: string, chatId?: string) => Promise<boolean> {
+}): (
+  documentSourceId: string,
+  scope?: string | DocumentAccessContext,
+  explicitAccessContext?: DocumentAccessContext,
+) => Promise<boolean> {
   if (permissionMode === "allow-indexed") {
     return async () => true;
   }
 
-  return (documentSourceId, chatId = currentGroupId) =>
+  return (documentSourceId, scope = currentGroupId, explicitAccessContext) =>
     canReadBySourcePolicy(
       documentSourceId,
       sourceRegistry,
       runtimeController,
       livePermissionChecker,
-      normalizeCurrentGroupId(chatId),
+      normalizeCurrentGroupId(typeof scope === "string" ? scope : currentGroupId),
+      explicitAccessContext ?? (typeof scope === "object" ? scope : undefined),
     );
 }
 
@@ -606,6 +698,7 @@ async function canReadBySourcePolicy(
   runtimeController: RuntimeRetrievalGate | undefined,
   livePermissionChecker: Pick<FeishuDocumentPermissionChecker, "canReadSource"> | undefined,
   currentGroupId: string | undefined,
+  accessContext: DocumentAccessContext | undefined,
 ): Promise<boolean> {
   if (sourceRegistry === undefined) {
     return false;
@@ -619,7 +712,12 @@ async function canReadBySourcePolicy(
   const locallyAllowed =
     source.canUseForAnswering &&
     (source.permissionState === "unknown" || source.permissionState === "readable") &&
-    canUseSourceByRuntimeCapabilities(source, runtimeController, currentGroupId);
+    canUseSourceByRuntimeCapabilities(
+      source,
+      runtimeController,
+      currentGroupId,
+      accessContext,
+    );
   if (!locallyAllowed) {
     return false;
   }
@@ -676,9 +774,15 @@ function canUseSourceByRuntimeCapabilities(
   source: DocumentSource,
   runtimeController: RuntimeRetrievalGate | undefined,
   currentGroupId: string | undefined,
+  accessContext: DocumentAccessContext | undefined,
 ): boolean {
   if (source.sourceType === "group_visible_document") {
-    return canUseGroupVisibleSource(source, runtimeController, currentGroupId);
+    return canUseGroupVisibleSource(
+      source,
+      runtimeController,
+      currentGroupId,
+      accessContext,
+    );
   }
   if (source.sourceType === "authorized_wiki_document") {
     return runtimeController?.canRetrieveKnowledgeBase() ?? true;
@@ -720,6 +824,7 @@ function canUseGroupVisibleSource(
   source: DocumentSource,
   runtimeController: RuntimeRetrievalGate | undefined,
   currentGroupId: string | undefined,
+  accessContext: DocumentAccessContext | undefined,
 ): boolean {
   if (currentGroupId === undefined) {
     return false;
@@ -729,9 +834,12 @@ function canUseGroupVisibleSource(
   }
 
   const sourceGroupIds = collectSourceGroupIds(source);
-  if (!sourceGroupIds.includes(currentGroupId)) {
-    return false;
-  }
+  const isLocalSource = sourceGroupIds.includes(currentGroupId);
+  const isAllowedByGroupBoundary = isLocalSource
+    ? accessContext?.hasCrossGroupGrantBinding !== true
+    : accessContext?.hasCrossGroupGrantBinding === true &&
+      accessContext.crossGroupGrantValidated === true;
+  if (!isAllowedByGroupBoundary) return false;
 
   return runtimeController?.canProcessGroupMessage?.(currentGroupId) ?? true;
 }

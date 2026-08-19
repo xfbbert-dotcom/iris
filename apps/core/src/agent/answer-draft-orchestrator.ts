@@ -20,6 +20,11 @@ import type {
 } from "../memory/context-assembly.js";
 import type { EvidencePlanner } from "../model/openai-compatible-evidence-planner.js";
 import type { GroundedAnswerRenderer } from "../model/openai-compatible-grounded-answer-renderer.js";
+import type {
+  KnowledgeConflictAnswerProvider,
+  KnowledgeConflictAnswerValidationInput,
+  KnowledgeConflictAnswerValidationResult,
+} from "../knowledge-conflicts/knowledge-conflict-answer-provider.js";
 
 export type GenerateAnswerDraftInput = {
   question: string;
@@ -48,6 +53,7 @@ export type AnswerDraftInput = {
 export type AnswerDraftResult = {
   answerText: string;
   citedSourceRefs?: string[];
+  knowledgeConflictCandidateId?: string;
   promptContext: string;
   allowedFragments: RetrievedDocumentFragment[];
   deniedDocumentIds: string[];
@@ -70,6 +76,9 @@ export interface AnswerDraftOrchestrator {
   inspectPromptPermissions(
     input: AnswerDraftInput,
   ): Promise<AnswerDraftPermissionInspectionResult>;
+  validateKnowledgeConflictForSend(
+    input: KnowledgeConflictAnswerValidationInput,
+  ): Promise<KnowledgeConflictAnswerValidationResult>;
 }
 
 type LiveChatContextProvider = {
@@ -98,6 +107,7 @@ export function createAnswerDraftOrchestrator({
   model,
   planner,
   renderer,
+  knowledgeConflictAnswerProvider,
   liveChatContextProvider,
   agentExecutionObserver,
   provider,
@@ -108,6 +118,7 @@ export function createAnswerDraftOrchestrator({
   model: ModelProvider;
   planner: EvidencePlanner;
   renderer: GroundedAnswerRenderer;
+  knowledgeConflictAnswerProvider?: KnowledgeConflictAnswerProvider;
   liveChatContextProvider?: LiveChatContextProvider;
   agentExecutionObserver?: AgentExecutionObserver;
   provider?: string;
@@ -168,6 +179,13 @@ export function createAnswerDraftOrchestrator({
   }
 
   return {
+    async validateKnowledgeConflictForSend(input) {
+      if (knowledgeConflictAnswerProvider?.validateForSend === undefined) {
+        return { status: "blocked" };
+      }
+      return knowledgeConflictAnswerProvider.validateForSend(input);
+    },
+
     async inspectPromptPermissions(input) {
       const normalized = normalizeInput(input);
       if (classifyDirectTask(normalized.question) !== undefined) {
@@ -203,12 +221,30 @@ export function createAnswerDraftOrchestrator({
 
         let answerText: string;
         let citedSourceRefs: string[] = [];
+        let knowledgeConflictCandidateId: string | undefined;
         let reasoningMetadata: {
           taskMode: EvidencePlan["taskMode"];
           evidenceState?: NonNullable<EvidencePlan["evidenceState"]>;
           confidence?: NonNullable<EvidencePlan["confidence"]>;
+          knowledgeConflictCandidateId?: string;
         } | undefined;
-        if (context.deniedDocumentIds.length > 0) {
+        let conflictPlan: Awaited<ReturnType<
+          KnowledgeConflictAnswerProvider["findConflictPlan"]
+        >>;
+        if (directTaskRoute === undefined && input.chatId !== undefined) {
+          try {
+            conflictPlan = await knowledgeConflictAnswerProvider?.findConflictPlan({
+              groupId: input.chatId,
+              usedGroupMemories: context.usedGroupMemories,
+              allowedFragments: context.allowedFragments,
+            });
+          } catch (error) {
+            if (context.deniedDocumentIds.length === 0) {
+              throw error;
+            }
+          }
+        }
+        if (context.deniedDocumentIds.length > 0 && conflictPlan === undefined) {
           answerText = PERMISSION_BLOCKED_ANSWER_DRAFT;
         } else {
           const providerObservation = {
@@ -238,7 +274,7 @@ export function createAnswerDraftOrchestrator({
             citedSourceRefs = [];
           } else {
             const evidence = buildPlanningEvidence(question, context);
-            const plan = await runObservedProviderRequest({
+            const plan = conflictPlan?.plan ?? await runObservedProviderRequest({
               observer: agentExecutionObserver,
               providerObservation,
               executionId,
@@ -253,10 +289,17 @@ export function createAnswerDraftOrchestrator({
             if (plan.taskMode !== "company_fact") {
               throw new Error("company-fact evidence planner returned an invalid task mode");
             }
+            if (conflictPlan === undefined && plan.evidenceState === "conflict") {
+              throw new Error("evidence planner cannot originate a conflict state");
+            }
+            knowledgeConflictCandidateId = conflictPlan?.candidateId;
             reasoningMetadata = {
               taskMode: plan.taskMode,
               ...(plan.evidenceState === null ? {} : { evidenceState: plan.evidenceState }),
               ...(plan.confidence === null ? {} : { confidence: plan.confidence }),
+              ...(knowledgeConflictCandidateId === undefined
+                ? {}
+                : { knowledgeConflictCandidateId }),
             };
             const selectedEvidence = selectEvidenceForPlan(evidence, plan);
             citedSourceRefs = normalizeCitedSourceRefs(
@@ -283,7 +326,12 @@ export function createAnswerDraftOrchestrator({
           }
         }
 
-        const result = toAnswerDraftResult(answerText, context, citedSourceRefs);
+        const result = toAnswerDraftResult(
+          answerText,
+          context,
+          citedSourceRefs,
+          knowledgeConflictCandidateId,
+        );
         await safelyObserve(agentExecutionObserver, {
           ...commonObservation,
           subjectType: "turn",
@@ -667,10 +715,14 @@ function toAnswerDraftResult(
   answerText: string,
   context: DocumentRetrievalContextResult,
   citedSourceRefs: string[],
+  knowledgeConflictCandidateId?: string,
 ): AnswerDraftResult {
   return {
     answerText,
     ...(citedSourceRefs.length === 0 ? {} : { citedSourceRefs: [...citedSourceRefs] }),
+    ...(knowledgeConflictCandidateId === undefined
+      ? {}
+      : { knowledgeConflictCandidateId }),
     promptContext: context.promptContext,
     allowedFragments: context.allowedFragments,
     deniedDocumentIds: context.deniedDocumentIds,
