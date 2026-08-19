@@ -17,6 +17,25 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("reserves one ordered managed knowledge publication update ledger migration", async () => {
+    const migrationNames = await readdir(defaultMigrationsDir());
+    expect(migrationNames.filter((name) => name.startsWith("0052_"))).toEqual([
+      "0052_managed_knowledge_publication_updates.sql",
+    ]);
+    expect(migrationNames.indexOf("0052_managed_knowledge_publication_updates.sql"))
+      .toBeGreaterThan(migrationNames.indexOf("0051_document_source_group_grants.sql"));
+
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0052_managed_knowledge_publication_updates.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+    expect(normalized).toContain("managed_knowledge_updates_one_unresolved_page_idx");
+    expect(normalized).toContain("managed_knowledge_page_events_append_only");
+    expect(normalized).toContain("knowledge_publication_update_execution_events_append_only");
+    expect(normalized).toContain("knowledge_publication_updates_append_only");
+  });
+
   it("reserves exactly one ordered 0046 knowledge-conflict migration", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
     expect(migrationNames.filter((name) => name.startsWith("0046_"))).toEqual([
