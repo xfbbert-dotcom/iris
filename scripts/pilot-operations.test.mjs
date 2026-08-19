@@ -1978,7 +1978,7 @@ test("CI keeps the pilot queues empty before the backup drill", () => {
   );
 });
 
-test("CI bounds and retries the external APT dependency for the backup drill", () => {
+test("CI installs a pinned and verified age binary without APT", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   const backupDrillStart = workflow.indexOf(
     "- name: Drill paired pilot backup and restore",
@@ -1991,12 +1991,19 @@ test("CI bounds and retries the external APT dependency for the backup drill", (
 
   assert.ok(backupDrillStart >= 0);
   assert.ok(backupDrillEnd > backupDrillStart);
-  assert.match(backupDrill, /for attempt in 1 2/u);
-  assert.match(backupDrill, /timeout --kill-after=10s 90s apt-get/u);
-  assert.match(backupDrill, /Acquire::Retries=1/u);
-  assert.match(backupDrill, /Acquire::http::Timeout=15/u);
-  assert.match(backupDrill, /Acquire::https::Timeout=15/u);
-  assert.match(backupDrill, /timeout --kill-after=10s 60s apt-get/u);
+  assert.doesNotMatch(backupDrill, /apt-get/u);
+  assert.match(backupDrill, /age-v1\.2\.1-linux-amd64\.tar\.gz/u);
+  assert.match(
+    backupDrill,
+    /7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50/u,
+  );
+  assert.match(backupDrill, /--connect-timeout 10/u);
+  assert.match(backupDrill, /--max-time 60/u);
+  assert.match(backupDrill, /--retry 2/u);
+  assert.match(backupDrill, /--retry-all-errors/u);
+  assert.match(backupDrill, /timeout --kill-after=10s 120s curl/u);
+  assert.match(backupDrill, /sha256sum --check/u);
+  assert.match(backupDrill, /export PATH="\$age_dir\/age:\$PATH"/u);
 });
 
 test("CI waits for queue drain after Redis recovery before ordinary smoke", () => {
