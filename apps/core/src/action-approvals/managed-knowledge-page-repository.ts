@@ -121,7 +121,7 @@ export interface ManagedKnowledgePageRepository {
   markRemoteRequestDispatched(input: MarkManagedRemoteRequestDispatchedInput): Promise<ManagedExecutionMutationResult>;
   recordRemoteOutcome(input: RecordManagedRemoteOutcomeInput): Promise<ManagedExecutionMutationResult>;
   completeResync(input: CompleteManagedResyncInput): Promise<ManagedExecutionMutationResult>;
-  listReconciliationRequired(input: { limit: number }): Promise<ClaimedManagedKnowledgeUpdate[]>;
+  listReconciliationRequired(input: { limit: number; dispatchedBefore?: Date }): Promise<ClaimedManagedKnowledgeUpdate[]>;
   getSourceAvailability(documentSourceId: string): Promise<"available" | "barred">;
 }
 

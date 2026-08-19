@@ -33,6 +33,15 @@ describe("managed knowledge page migration contract", () => {
     expect(repository.markRemoteRequestDispatched).toBeTypeOf("function");
     expect(repository.getSourceAvailability).toBeTypeOf("function");
   });
+
+  it("keeps only stale dispatched executions eligible for recovery", async () => {
+    const source = await readFile(
+      new URL("../src/action-approvals/postgres-managed-knowledge-page-repository.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toMatch(/state IN \('outcome_unknown','reconciliation_required'\).*remote_request_dispatched/isu);
+    expect(source).toMatch(/remote_request_dispatched_at <= \$2/iu);
+  });
 });
 
 runIfDatabase("PostgresManagedKnowledgePageRepository", () => {

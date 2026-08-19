@@ -305,8 +305,9 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
   });
 }
 
-async function listReconciliationRequired(dataSource: PostgresKnowledgeDraftDataSource, input: { limit: number }): Promise<ClaimedManagedKnowledgeUpdate[]> {
-  const result = await dataSource.query<ExecutionRow>(`${executionSelect()} WHERE state IN ('outcome_unknown','reconciliation_required') ORDER BY created_at ASC, id ASC LIMIT $1`, [limit(input.limit)]);
+async function listReconciliationRequired(dataSource: PostgresKnowledgeDraftDataSource, input: { limit: number; dispatchedBefore?: Date }): Promise<ClaimedManagedKnowledgeUpdate[]> {
+  const cutoff = input.dispatchedBefore === undefined ? null : date("dispatchedBefore", input.dispatchedBefore);
+  const result = await dataSource.query<ExecutionRow>(`${executionSelect()} WHERE state IN ('outcome_unknown','reconciliation_required') OR (state = 'remote_request_dispatched' AND remote_request_dispatched_at <= $2) ORDER BY created_at ASC, id ASC LIMIT $1`, [limit(input.limit), cutoff]);
   const values: ClaimedManagedKnowledgeUpdate[] = []; for (const row of result.rows) { const execution = mapExecution(row); values.push({ outcome: "applied", execution, page: await requirePage(dataSource, execution.managedPageId), target: await requireTarget(dataSource, execution.updateTargetId) }); } return values;
 }
 
