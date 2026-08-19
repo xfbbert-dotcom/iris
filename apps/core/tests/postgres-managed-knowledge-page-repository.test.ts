@@ -30,6 +30,7 @@ describe("managed knowledge page migration contract", () => {
     });
     expect(repository.registerPublication).toBeTypeOf("function");
     expect(repository.claimApprovedUpdate).toBeTypeOf("function");
+    expect(repository.markRemoteRequestDispatched).toBeTypeOf("function");
     expect(repository.getSourceAvailability).toBeTypeOf("function");
   });
 });
@@ -142,6 +143,12 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
           id, document_source_id, source_uri, fetch_status, body_text, content_hash, fetched_at, created_at
         ) VALUES ($1, $2, $3, 'succeeded', 'Snapshot body', repeat('a', 64), $4, $4)
       `, [snapshotId, sourceId, `https://example.test/${sourceId}`, at]);
+      const messageId = `message-${suffix}`;
+      const memoryId = `memory-${suffix}`;
+      const candidateId = `candidate-${suffix}`;
+      await pool.query(`INSERT INTO conversation_messages (id, provider, provider_message_id, chat_id, message_type, sent_at, raw_event_idempotency_key, created_at) VALUES ($1, 'feishu', $2, 'group', 'text', $3, $4, $3)`, [messageId, `provider-${suffix}`, at, `raw-${suffix}`]);
+      await pool.query(`INSERT INTO group_memories (id, group_id, memory_scope, category, content, importance, confidence, status, idempotency_key, origin, created_by, request_fingerprint) VALUES ($1, 'group', 'group', 'decision', 'Current', 1, 0.9, 'active', $2, 'system', 'test', repeat('b', 64))`, [memoryId, `memory-key-${suffix}`]);
+      await pool.query(`INSERT INTO knowledge_conflict_candidates (id,idempotency_key,group_id,group_memory_id,memory_updated_at,source_message_id,target_document_source_id,target_source_updated_at,target_snapshot_id,target_content_hash,detector_contract_version,status,subject,knowledge_base_statement,group_conclusion_statement,difference,suggested_update,target_document_ref,confidence,version,created_at,updated_at) VALUES ($1,$2,'group',$3,$4,$5,$6,$4,$7,repeat('a',64),'v1','pending_review','Subject','Prior','Current','Difference','Update','D1','high',1,$4,$4)`, [candidateId, `candidate-key-${suffix}`, memoryId, at, messageId, sourceId, snapshotId]);
       const linked = await repository.linkSource({
         managedPageId: first.page.id,
         expectedVersion: first.page.version,
@@ -155,7 +162,7 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         draftId,
         draftRevision: 1,
         draftVersion: 1,
-        conflictCandidateId: `candidate-${suffix}`,
+        conflictCandidateId: candidateId,
         conflictCandidateVersion: 1,
         managedPageId: linked.page.id,
         managedPageVersion: linked.page.version,
@@ -180,6 +187,7 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         ) VALUES ($1, 'update_knowledge_publication', 'knowledge_draft', $2, 1, 1, $3, 1,
           'low', 'approved', $4, repeat('b', 64), 1, $5, $5)
       `, [updateProposalId, draftId, policyId, `update-proposal:${suffix}`, at]);
+      await pool.query(`INSERT INTO action_review_attestations (id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version, content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at) VALUES ($1,$2,'reviewer',1,1,1,repeat('c',64),repeat('d',64),$3,repeat('e',64),$4)`, [`attestation-${suffix}`, updateProposalId, `attestation:${suffix}`, at]);
       const claimInput = {
         id: `update-execution-${suffix}`,
         proposalId: updateProposalId,

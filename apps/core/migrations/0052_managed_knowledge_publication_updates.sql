@@ -123,6 +123,10 @@ CREATE TABLE knowledge_publication_update_targets (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   FOREIGN KEY (draft_id, draft_revision)
     REFERENCES knowledge_draft_revisions(draft_id, revision_number) ON DELETE RESTRICT,
+  FOREIGN KEY (conflict_candidate_id)
+    REFERENCES knowledge_conflict_candidates(id) ON DELETE RESTRICT,
+  FOREIGN KEY (managed_page_id)
+    REFERENCES managed_knowledge_pages(id) ON DELETE RESTRICT,
   FOREIGN KEY (target_snapshot_id, linked_document_source_id, target_snapshot_hash)
     REFERENCES document_snapshots(id, document_source_id, content_hash) ON DELETE RESTRICT,
   UNIQUE (draft_id, draft_revision),
@@ -164,6 +168,7 @@ CREATE TABLE knowledge_publication_update_executions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (proposal_id, attempt_number),
   CHECK (state <> 'remote_request_dispatched' OR remote_request_dispatched_at IS NOT NULL),
+  CHECK (state NOT IN ('remote_applied', 'resync_required', 'succeeded') OR response_revision_id IS NOT NULL),
   CHECK (state NOT IN ('outcome_unknown', 'reconciliation_required') OR reconciliation_reason_code IS NOT NULL)
 );
 

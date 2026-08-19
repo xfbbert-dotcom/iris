@@ -34,6 +34,10 @@ describe("runMigrations", () => {
     expect(normalized).toContain("managed_knowledge_page_events_append_only");
     expect(normalized).toContain("knowledge_publication_update_execution_events_append_only");
     expect(normalized).toContain("knowledge_publication_updates_append_only");
+    expect(normalized).toContain("references knowledge_conflict_candidates(id) on delete restrict");
+    expect(normalized).toContain("references managed_knowledge_pages(id) on delete restrict");
+    expect(normalized).toContain("remote_request_dispatched_at is not null");
+    expect(normalized).toContain("response_revision_id is not null");
   });
 
   it("reserves exactly one ordered 0046 knowledge-conflict migration", async () => {

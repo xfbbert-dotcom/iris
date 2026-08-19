@@ -69,6 +69,13 @@ export type RecordManagedRemoteOutcomeInput = {
   actor: string;
   at: Date;
 };
+export type MarkManagedRemoteRequestDispatchedInput = {
+  executionId: string;
+  expectedExecutionVersion: number;
+  operationKey: string;
+  actor: string;
+  at: Date;
+};
 
 export type CompleteManagedResyncInput = {
   executionId: string;
@@ -111,6 +118,7 @@ export interface ManagedKnowledgePageRepository {
   bindConflictDraft(input: BindManagedUpdateTargetInput): Promise<ManagedTargetMutationResult>;
   getTargetForDraft(input: { draftId: string; revision: number }): Promise<ManagedKnowledgeUpdateTarget | undefined>;
   claimApprovedUpdate(input: ClaimManagedUpdateInput): Promise<ClaimedManagedKnowledgeUpdate>;
+  markRemoteRequestDispatched(input: MarkManagedRemoteRequestDispatchedInput): Promise<ManagedExecutionMutationResult>;
   recordRemoteOutcome(input: RecordManagedRemoteOutcomeInput): Promise<ManagedExecutionMutationResult>;
   completeResync(input: CompleteManagedResyncInput): Promise<ManagedExecutionMutationResult>;
   listReconciliationRequired(input: { limit: number }): Promise<ClaimedManagedKnowledgeUpdate[]>;
