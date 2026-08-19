@@ -2,10 +2,11 @@
 
 ## Release Status
 
-Pending live acceptance.
+Live acceptance passed; ready for integration.
 
-Coverage remains `首个跨群文档回答闭环代码完成，真实验收待执行`. This document does not claim
-deployment, real Feishu behavior, or pilot completion.
+Coverage advances to `首个跨群文档回答闭环已实现（默认拒绝）`. The exact reviewed build was
+exercised in three real Feishu groups and returned to default-deny. This does not claim broad rollout
+or completion of the wider cross-group memory, draft, and action scope.
 
 ## Scope
 
@@ -21,32 +22,35 @@ deployment, real Feishu behavior, or pilot completion.
 
 ## Automated Evidence
 
-Local verification is complete; exact-SHA CI and live acceptance remain release gates.
+Local verification and exact-SHA CI are complete.
 
 | Gate | Result | Metadata-only note |
 | --- | --- | --- |
 | Focused Core | Pass | 438 passed, 49 environment-gated PostgreSQL skips |
 | Full verification | Pass | `npm run verify` exited 0; Core 3462 passed/260 skipped; Python 181 passed |
-| PostgreSQL migration/concurrency | Pending CI | Tests collected locally; `IRIS_TEST_DATABASE_URL` is unset, so real-PostgreSQL cases skipped |
-| Pilot contracts | Pass | 166 passed; 1 executable Caddy probe skipped because the Docker daemon is unavailable |
-| Exact-SHA CI | Pending | SHA and check URLs |
+| PostgreSQL migration/concurrency | Pass | Exact-SHA CI ran `Test Postgres integrations` successfully |
+| Pilot contracts | Pass | 172 passed; 1 executable Caddy probe skipped because the Docker daemon is unavailable |
+| Exact-SHA CI | Pass | [`f1e8d96f` CI run 32131906475](https://github.com/xfbbert-dotcom/iris/actions/runs/32131906475); Core and AI Worker passed |
 
 ## Live Acceptance Evidence
 
-Use [the acceptance controller](../runbooks/iris-cross-group-document-grants-acceptance.md). Record
-only IDs, versions, hashes, counts, timestamps, image digest, and pass/fail facts. The private
-artifact remains outside the repository.
+The live run occurred from `2026-08-18T11:53:15.887Z` through `2026-08-18T12:01:45.932Z`.
+Its original terminal summary was not retained, so on `2026-08-19` the metadata-only attestation was
+reconstructed from append-only PostgreSQL facts and live Feishu reply readback. The recovery
+validator reported `result=pass`, `failedStep=null`, and `rollbackPass=true`; the private artifact
+remains outside the repository with SHA-256
+`8374bb0d304f68ae5a3094793909f353e93a24059465aa541f7885cdea0cc147`.
 
 | Gate | Result | Allowed evidence |
 | --- | --- | --- |
-| Exact build/default denial | Pending | SHA, digest, migration/count/timestamp facts |
-| Pre-grant grantee/control denial | Pending | message IDs and zero trace/disclosure counts |
-| Initial grant | Pending | source/grant/event IDs, version, hashes, timestamp |
-| Grantee answer/control denial | Pending | delivery/trace IDs, exact binding versions, counts |
-| Prepared-answer revocation | Pending | receipt/event IDs and zero-send counts |
-| Begin-send/revoke race | Pending | safe outcome label and counts |
-| Regrant/replay | Pending | version/event/delivery counts |
-| Default-deny rollback | Pending | stopped/disabled/drained counts and stable fingerprints |
+| Exact build/default denial | Pass | SHA `f1e8d96fbd29f5dc1cdabc8e309f0d24a516916e`; Core image `sha256:9e10ba9a30ec8858543733cb6729da0c3b3870a5bc7f952598ecf7f829244dba`; migration count 1; reviewed encrypted backup present |
+| Pre-grant grantee/control denial | Pass | Two unique incoming messages, one delivery each, zero pilot-source traces, and both provider replies excluded the target marker |
+| Initial grant | Pass | One append-only `12 -> 13` grant event for the exact source/grantor/grantee projection |
+| Grantee answer/control denial | Pass | Grantee had one delivery whose pilot-source traces were all bound to grant version 13; control had zero pilot-source traces; provider reply readback matched both outcomes |
+| Prepared-answer revocation | Pass | Exact-SHA PostgreSQL integration gate passed; live `13 -> 14` revoke followed by a grantee reply with zero pilot-source traces and no target-marker disclosure |
+| Begin-send/revoke race | Pass | Exact-SHA PostgreSQL serialization tests passed and reject send-after-revoke |
+| Regrant/replay | Pass | One append-only `14 -> 15` grant event, one bound grantee delivery, no duplicate event/delivery, target marker visible only to the grantee, and control remained denied |
+| Default-deny rollback | Pass | Final `15 -> 16` revoke; Caddy stopped; global and all capabilities disabled; active pilot grants, pending/DLQ/outbox work, and unresolved deliveries all zero; five-second mutable fingerprint stable |
 
 ## Default-Deny And Rollback
 
@@ -61,4 +65,6 @@ artifact remains outside the repository.
 - Cross-group memory and cross-group knowledge drafts remain missing.
 - Proactive cross-group use, task creation, Wiki writes, wildcard grants, and broad rollout remain
   out of scope.
-- The requirement remains partial until exact-SHA CI and the live three-group controller pass.
+- The answer-only first loop is closed, but the wider IRIS-CORE-004 ambition remains partial until
+  the explicitly excluded cross-group capabilities are designed, implemented, and separately
+  accepted.

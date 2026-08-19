@@ -416,15 +416,29 @@ test("cross-group document grant rollback rejects residual or lost durable facts
   }
 });
 
-test("cross-group document grant PR remains pending and metadata-only", () => {
+test("cross-group document grant PR records metadata-only live acceptance and default-deny rollback", () => {
   assert.equal(existsSync(crossGroupGrantPrPath), true);
   const template = readFileSync(crossGroupGrantPrPath, "utf8");
-  assert.match(template, /## Release Status\s+Pending live acceptance/iu);
-  assert.match(template, /首个跨群文档回答闭环代码完成，真实验收待执行/u);
-  for (const marker of ["IDs", "versions", "hashes", "counts", "timestamps", "pass/fail", "default-deny", "rollback"]) {
+  assert.match(template, /## Release Status\s+Live acceptance passed/iu);
+  assert.match(template, /首个跨群文档回答闭环已实现（默认拒绝）/u);
+  for (const marker of [
+    "exact reviewed build",
+    "SHA-256",
+    "result=pass",
+    "rollbackPass=true",
+    "default-deny",
+    "active pilot grants",
+    "unresolved deliveries",
+    "mutable fingerprint stable",
+    "Cross-group memory and cross-group knowledge drafts remain missing",
+    "wildcard grants",
+  ]) {
     assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
   }
-  assert.doesNotMatch(template, /document body|answer body|message body|access token|credential value/iu);
+  assert.doesNotMatch(
+    template,
+    /document body|answer body|message body|access token|credential value|oc_[0-9a-f]{32}|IRIS_USER_DOC_/iu,
+  );
 });
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
@@ -1962,6 +1976,34 @@ test("CI keeps the pilot queues empty before the backup drill", () => {
     workflow.slice(startStack, backupDrill),
     /npm run pilot:smoke(?:\s|$)/u,
   );
+});
+
+test("CI installs a pinned and verified age binary without APT", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  const backupDrillStart = workflow.indexOf(
+    "- name: Drill paired pilot backup and restore",
+  );
+  const backupDrillEnd = workflow.indexOf(
+    "- name: Reject callbacks while Redis ingress is unavailable",
+    backupDrillStart,
+  );
+  const backupDrill = workflow.slice(backupDrillStart, backupDrillEnd);
+
+  assert.ok(backupDrillStart >= 0);
+  assert.ok(backupDrillEnd > backupDrillStart);
+  assert.doesNotMatch(backupDrill, /apt-get/u);
+  assert.match(backupDrill, /age-v1\.2\.1-linux-amd64\.tar\.gz/u);
+  assert.match(
+    backupDrill,
+    /7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50/u,
+  );
+  assert.match(backupDrill, /--connect-timeout 10/u);
+  assert.match(backupDrill, /--max-time 60/u);
+  assert.match(backupDrill, /--retry 2/u);
+  assert.match(backupDrill, /--retry-all-errors/u);
+  assert.match(backupDrill, /timeout --kill-after=10s 120s curl/u);
+  assert.match(backupDrill, /sha256sum --check/u);
+  assert.match(backupDrill, /export PATH="\$age_dir\/age:\$PATH"/u);
 });
 
 test("CI waits for queue drain after Redis recovery before ordinary smoke", () => {
