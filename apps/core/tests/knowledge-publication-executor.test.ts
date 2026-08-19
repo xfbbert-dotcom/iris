@@ -175,7 +175,9 @@ describe("KnowledgePublicationExecutor", () => {
             targetPolicyVersion: 2,
             remoteNodeToken: "wikcn_remote",
             remoteDocumentToken: "docx_remote",
+            remoteDocumentType: "docx",
             remoteDocumentVersion: 12,
+            contentHash: "d".repeat(64),
           },
         } as never)),
         failPublicationExecution: vi.fn(),
@@ -210,6 +212,66 @@ describe("KnowledgePublicationExecutor", () => {
     expect(observe).toHaveBeenCalledWith(expect.objectContaining({
       decisionReason: "managed_registration_failed",
     }));
+  });
+
+  it("does not register a replayed durable document with a later publication block", async () => {
+    const proposal = actionProposal();
+    const claim = publicationClaim({ proposal });
+    const managedPages = {
+      registerPublication: vi.fn(async () => ({ outcome: "applied" as const, page: {} as never })),
+    };
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const executor = createKnowledgePublicationExecutor({
+      repository: {
+        listProposals: vi.fn(async () => [proposal]),
+        claimApprovedPublicationExecution: vi.fn(async () => claim),
+        completePublicationExecution: vi.fn(async () => ({
+          outcome: "already_applied" as const,
+          publication: {
+            id: "publication-1",
+            targetPolicyId: "policy-1",
+            targetPolicyVersion: 2,
+            remoteNodeToken: "wikcn_durable",
+            remoteDocumentToken: "docx_durable",
+            remoteDocumentType: "docx",
+            remoteDocumentVersion: 12,
+            contentHash: "d".repeat(64),
+          },
+        } as never)),
+        failPublicationExecution: vi.fn(),
+      },
+      publisher: {
+        publish: vi.fn(async () => ({
+          remoteNodeToken: "wikcn_later",
+          remoteDocumentToken: "docx_later",
+          remoteDocumentType: "docx" as const,
+          remoteDocumentVersion: 13,
+          managedBodyBlockId: "blk_later",
+          contentHash: "e".repeat(64),
+          permissionCheckSummary: "feishu_write_access_verified",
+        })),
+      },
+      managedPages,
+      agentExecutionObserver: { observe },
+      runtimeSnapshot: () => ({
+        globalEnabled: true,
+        disabledGroupIds: [],
+        capabilities: { writeKnowledgeBase: true },
+      }),
+      workerId: "publication-worker-1",
+      now: () => at,
+    });
+
+    await expect(executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "published",
+      proposalId: proposal.id,
+      code: "publication_succeeded",
+    }]);
+    expect(managedPages.registerPublication).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({
+      decisionReason: "managed_registration_identity_mismatch",
+    }));
+    expect(JSON.stringify(observe.mock.calls)).not.toMatch(/wikcn_|docx_|blk_/u);
   });
 
   it("marks a claimed execution failed when publishing is rejected before completion", async () => {

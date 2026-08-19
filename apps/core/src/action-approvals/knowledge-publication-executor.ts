@@ -207,6 +207,14 @@ async function registerManagedPublication(
   ) {
     return;
   }
+  if (!matchesDurablePublication(published, publication)) {
+    await observePublicationExecution(
+      input,
+      "action_execution_completed",
+      "managed_registration_identity_mismatch",
+    );
+    return;
+  }
   const revision = publication.remoteDocumentVersion;
   if (!isPositiveRevision(revision)) return;
   const publicationHash = createHash("sha256").update(publication.id).digest("hex");
@@ -231,6 +239,20 @@ async function registerManagedPublication(
   }
 }
 
+function matchesDurablePublication(
+  published: KnowledgePublicationPublisherResult,
+  publication: CompletePublicationExecutionResult["publication"],
+): boolean {
+  return (
+    published.remoteNodeToken === publication.remoteNodeToken &&
+    published.remoteDocumentToken === publication.remoteDocumentToken &&
+    published.remoteDocumentType === publication.remoteDocumentType &&
+    isPositiveRevision(published.remoteDocumentVersion) &&
+    published.remoteDocumentVersion === publication.remoteDocumentVersion &&
+    published.contentHash === publication.contentHash
+  );
+}
+
 async function observePublicationExecution(
   input: {
     claim: ClaimApprovedPublicationExecutionResult;
@@ -242,7 +264,12 @@ async function observePublicationExecution(
     | "action_execution_completed"
     | "action_execution_failed"
     | "action_execution_reconciliation_required",
-  decisionReason?: "publication_succeeded" | "publisher_failed" | "completion_failed" | "managed_registration_failed",
+  decisionReason?:
+    | "publication_succeeded"
+    | "publisher_failed"
+    | "completion_failed"
+    | "managed_registration_failed"
+    | "managed_registration_identity_mismatch",
 ): Promise<void> {
   if (input.agentExecutionObserver === undefined) {
     return;
