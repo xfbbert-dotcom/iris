@@ -47,7 +47,7 @@ export function createFeishuKnowledgePublicationPublisher({
         title,
         ...(parentNodeToken === undefined ? {} : { parentNodeToken }),
       });
-      const revision = await appendDocxContent({
+      const appendedBody = await appendDocxContent({
         baseUrl: safeBaseUrl,
         fetch,
         timeoutMs: safeTimeoutMs,
@@ -59,7 +59,8 @@ export function createFeishuKnowledgePublicationPublisher({
         remoteNodeToken: node.remoteNodeToken,
         remoteDocumentToken: node.remoteDocumentToken,
         remoteDocumentType: "docx",
-        ...(revision === undefined ? {} : { remoteDocumentVersion: revision }),
+        ...(appendedBody.revision === undefined ? {} : { remoteDocumentVersion: appendedBody.revision }),
+        ...(appendedBody.blockId === undefined ? {} : { managedBodyBlockId: appendedBody.blockId }),
         contentHash: createHash("sha256").update(content).digest("hex"),
         permissionCheckSummary: "feishu_write_access_verified",
       };
@@ -110,7 +111,7 @@ async function appendDocxContent(input: {
   tenantAccessToken: string;
   documentToken: string;
   content: string;
-}): Promise<number | undefined> {
+}): Promise<AppendedManagedBody> {
   const { response, responseBody } = await requestJson({
     fetch: input.fetch,
     url: `${input.baseUrl}/open-apis/docx/v1/documents/${encodeURIComponent(
@@ -144,8 +145,13 @@ async function appendDocxContent(input: {
   if (!response.ok || !isFeishuCodeOk(responseBody)) {
     throw new Error(`Feishu docx content append failed with status ${response.status}`);
   }
-  return readRevisionId(responseBody);
+  return readAppendedManagedBody(responseBody);
 }
+
+type AppendedManagedBody = {
+  revision?: number;
+  blockId?: string;
+};
 
 async function requestJson(input: {
   fetch: typeof globalThis.fetch;
@@ -198,6 +204,23 @@ function readRevisionId(responseBody: unknown): number | undefined {
     throw new Error("Feishu docx content append response returned invalid revision");
   }
   return revision;
+}
+
+function readAppendedManagedBody(responseBody: unknown): AppendedManagedBody {
+  const revision = readRevisionId(responseBody);
+  if (!isRecord(responseBody) || !isRecord(responseBody.data) || !Array.isArray(responseBody.data.children)) {
+    return { ...(revision === undefined ? {} : { revision }) };
+  }
+  const textBlocks = responseBody.data.children.filter((child) =>
+    isRecord(child) && child.block_type === 2
+  );
+  const blockId = textBlocks.length === 1 && typeof textBlocks[0].block_id === "string"
+    ? textBlocks[0].block_id.trim() || undefined
+    : undefined;
+  return {
+    ...(revision === undefined ? {} : { revision }),
+    ...(blockId === undefined ? {} : { blockId }),
+  };
 }
 
 function isFeishuCodeOk(responseBody: unknown): boolean {
