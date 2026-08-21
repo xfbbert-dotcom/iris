@@ -86,7 +86,7 @@ Across `2b0cdfc3..HEAD`: the checkpoint files listed above plus `apps/core/src/a
 ### Concerns
 
 - `IRIS_TEST_DATABASE_URL` and `DATABASE_URL` are absent locally. Configured-Postgres integration cases were therefore honestly skipped; local repository boundary behavior is covered by the injected data-source tests.
-- The earlier cleanup-policy rejection was not retried: no deletion, move, or broad cleanup was attempted. The final read-only worktree status is clean and lists no temporary directories.
+- The earlier cleanup-policy rejection was not retried: no deletion, move, or broad cleanup was attempted. The final read-only worktree status must be read together with the Fix Round 1 concern below, which records any remaining test-generated temporary directory.
 
 ## Fix Round 1/5 (Review 1)
 
