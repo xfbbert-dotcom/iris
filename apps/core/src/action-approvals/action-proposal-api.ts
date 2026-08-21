@@ -19,6 +19,8 @@ import {
   ActionProposalPersistenceConflictError,
   ActionProposalVersionConflictError,
 } from "./postgres-action-proposal-repository.js";
+import { ManagedKnowledgePageOperationConflictError } from
+  "./postgres-managed-knowledge-page-repository.js";
 
 const MAX_LIST_LIMIT = 100;
 const MAX_REFERENCE_CHARS = 512;
@@ -345,7 +347,8 @@ function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof ActionProposalVersionConflictError) {
     return reply.code(409).send({ ok: false, error: "action_proposal_version_conflict" });
   }
-  if (error instanceof ActionProposalOperationConflictError) {
+  if (error instanceof ActionProposalOperationConflictError ||
+    error instanceof ManagedKnowledgePageOperationConflictError) {
     return reply.code(409).send({ ok: false, error: "action_proposal_operation_conflict" });
   }
   if (error instanceof ActionProposalIneligibleError) {

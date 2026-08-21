@@ -257,11 +257,11 @@ export function createActionApprovalRuntime({
       workerId: "knowledge-publication-executor",
       ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
     });
-    if (
-      managedKnowledgeUpdates?.deploymentEnabled === true &&
-      typeof managedKnowledgeUpdates.syncQueue?.enqueue === "function"
-    ) {
-      const groupAllowlist = normalizeGroupAllowlist(managedKnowledgeUpdates.groupAllowlist);
+    if (managedKnowledgeUpdates !== undefined &&
+      typeof managedKnowledgeUpdates.syncQueue?.enqueue === "function") {
+      const groupAllowlist = managedKnowledgeUpdates.deploymentEnabled
+        ? normalizeGroupAllowlist(managedKnowledgeUpdates.groupAllowlist)
+        : [];
       const managedPages = createManagedPageRepository({ dataSource: pool });
       const managedBlockReader = createManagedBlockReader({
         baseUrl: feishuConfig.baseUrl,
@@ -312,12 +312,20 @@ export function createActionApprovalRuntime({
           return managedPages.getMetadataForProposal(proposalId);
         },
         async reconcile(input) {
-          const claim = await managedPages.requestReconciliation(input);
-          const result = await managedUpdateReconciler.reconcileOne(claim);
+          const requested = await managedPages.requestReconciliation(input);
+          if (requested.outcome === "already_applied") {
+            return {
+              executionId: requested.claim.execution.id,
+              state: "reconciliation_required",
+              version: requested.claim.execution.version,
+              reasonCode: requested.claim.execution.reconciliationReasonCode ?? "operator_requested",
+            };
+          }
+          const result = await managedUpdateReconciler.reconcileOne(requested.claim);
           return {
             executionId: result.executionId,
             state: result.status,
-            version: claim.execution.version,
+            version: requested.claim.execution.version,
             reasonCode: result.code,
           };
         },

@@ -53,6 +53,35 @@ describe("GET /internal/readiness", () => {
     await app.close();
   });
 
+  it("injects disabled managed-update recovery configuration when the real queue is available", async () => {
+    const syncQueue = { enqueue: vi.fn(async () => undefined) };
+    const documentSyncRuntime = fakeDocumentSyncRuntimeForReadiness() as DocumentSyncRuntime & {
+      managedKnowledgeUpdateQueue: typeof syncQueue;
+    };
+    documentSyncRuntime.managedKnowledgeUpdateQueue = syncQueue;
+    const createActionApprovalRuntime = vi.fn(() => undefined);
+    const app = await buildApp({
+      readinessEnv: readyRolloutEnv({
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "false",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "",
+      }),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime,
+    });
+
+    expect(createActionApprovalRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      managedKnowledgeUpdates: expect.objectContaining({
+        deploymentEnabled: false,
+        groupAllowlist: [],
+        syncQueue,
+      }),
+    }));
+    await app.close();
+  });
+
   it("projects enabled managed-update status and readiness without sensitive producer fields", async () => {
     const actionApprovalRuntime = {
       repository: {},

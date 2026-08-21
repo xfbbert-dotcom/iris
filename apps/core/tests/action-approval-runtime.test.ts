@@ -204,17 +204,77 @@ describe("ActionApprovalRuntime", () => {
     ]);
   });
 
-  it("does not construct update network or polling components without explicit deployment enablement", () => {
-    for (const managedKnowledgeUpdates of [
-      undefined,
-      {
+  it("keeps managed-update recovery/admin available while deployment is default-off", async () => {
+    const order: string[] = [];
+    const dependencies = runtimeDependencies({ order });
+    const syncQueue = { enqueue: vi.fn(async () => undefined) };
+    const runtime = createActionApprovalRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      knowledgeCardRuntime: knowledgeCardRuntime(),
+      dependencies,
+      managedKnowledgeUpdates: {
         deploymentEnabled: false,
-        groupAllowlist: ["oc_pilot"],
-        syncQueue: { enqueue: vi.fn(async () => undefined) },
+        groupAllowlist: [],
+        syncQueue,
         intervalMs: 2_000,
         batchLimit: 7,
         staleDispatchMs: 60_000,
       },
+    })!;
+
+    expect(dependencies.createManagedUpdateExecutor).toHaveBeenCalledOnce();
+    expect(dependencies.createManagedUpdateReconciler).toHaveBeenCalledOnce();
+    expect(runtime.managedKnowledgeAdmin).toBeDefined();
+    expect(dependencies.createManagedUpdateExecutor.mock.calls[0]?.[0].runtimeSnapshot()).toMatchObject({
+      deploymentEnabled: false,
+      groupAllowlist: [],
+    });
+    await runtime.start();
+    expect(order).toContain("managed-update-start");
+    await runtime.close();
+  });
+
+  it("does not invoke remote reconciliation again for an exact operator operation replay", async () => {
+    const dependencies = runtimeDependencies();
+    const claim = {
+      execution: {
+        id: "execution-1", state: "reconciliation_required", version: 5,
+        reconciliationReasonCode: "operator_requested",
+      },
+    };
+    Object.assign(dependencies.managedPageRepository, {
+      requestReconciliation: vi.fn()
+        .mockResolvedValueOnce({ outcome: "applied", claim })
+        .mockResolvedValueOnce({ outcome: "already_applied", claim }),
+    });
+    dependencies.managedUpdateReconciler.reconcileOne.mockResolvedValue({
+      executionId: "execution-1", status: "reconciliation_required", code: "readback_unavailable",
+    });
+    const runtime = createActionApprovalRuntime({
+      env: enabledEnv(), runtimeController: enabledController(), knowledgeCardRuntime: knowledgeCardRuntime(), dependencies,
+      managedKnowledgeUpdates: {
+        deploymentEnabled: true, groupAllowlist: ["oc_pilot"], syncQueue: { enqueue: vi.fn() },
+        intervalMs: 2_000, batchLimit: 7, staleDispatchMs: 60_000,
+      },
+    })!;
+    const input = {
+      executionId: "execution-1", expectedExecutionVersion: 4, expectedManagedPageVersion: 8,
+      operationKey: "managed-update:execution-1:reconcile:4", operator: "operator@example.com", at: new Date(),
+    };
+
+    await runtime.managedKnowledgeAdmin!.reconcile(input);
+    const replay = await runtime.managedKnowledgeAdmin!.reconcile(input);
+
+    expect(replay).toEqual({
+      executionId: "execution-1", state: "reconciliation_required", version: 5, reasonCode: "operator_requested",
+    });
+    expect(dependencies.managedUpdateReconciler.reconcileOne).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not construct managed-update recovery components without a queue", () => {
+    for (const managedKnowledgeUpdates of [
+      undefined,
       {
         deploymentEnabled: true,
         groupAllowlist: ["oc_pilot"],

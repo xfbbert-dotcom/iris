@@ -752,6 +752,7 @@ async function recordRemoteOutcome(dataSource: PostgresKnowledgeDraftDataSource,
     const execution = await requireExecutionForUpdate(client, normalized.executionId);
     if (
       proposal === undefined || execution.version !== normalized.expectedExecutionVersion ||
+      (normalized.expectedManagedPageVersion !== undefined && page.version !== normalized.expectedManagedPageVersion) ||
       !validOutcomePredecessor(execution.state, normalized.classification) ||
       !validPageDisposition(normalized.classification, normalized.pageDisposition) ||
       (normalized.classification === "remote_applied" && normalized.responseRevisionId === undefined) ||
@@ -1035,13 +1036,13 @@ async function getSourceAvailability(dataSource: PostgresKnowledgeDraftDataSourc
 
 async function getMetadataForProposal(dataSource: PostgresKnowledgeDraftDataSource, proposalId: string) {
   const proposal = ref("proposalId", proposalId);
-  const targetResult = await dataSource.query<TargetRow>(
-    `${targetSelect()} WHERE draft_id = (SELECT subject_id FROM action_proposals WHERE id = $1 AND action_type = 'update_knowledge_publication') ORDER BY created_at DESC LIMIT 1`,
-    [proposal],
-  );
-  const targetRow = targetResult.rows[0];
-  if (targetRow === undefined) return undefined;
-  const target = mapTarget(targetRow);
+  let target: ManagedKnowledgeUpdateTarget;
+  try {
+    target = await requireTargetForProposal(dataSource, proposal);
+  } catch (error) {
+    if (error instanceof ManagedKnowledgePageVersionConflictError) return undefined;
+    throw error;
+  }
   const page = await requirePage(dataSource, target.managedPageId);
   const executions = await dataSource.query<ExecutionRow>(
     `${executionSelect()} WHERE update_target_id = $1 ORDER BY created_at DESC, id ASC`,
@@ -1057,7 +1058,7 @@ async function getMetadataForProposal(dataSource: PostgresKnowledgeDraftDataSour
         reason_code: string | null; created_at: Date;
       }>(`SELECT execution_id,event_type,from_version,to_version,reason_code,created_at
           FROM knowledge_publication_update_execution_events
-          WHERE execution_id = ANY($1::uuid[])
+          WHERE execution_id = ANY($1::text[])
           ORDER BY created_at ASC,id ASC`, [executions.rows.map((row) => row.id)]);
   const eventsByExecution = new Map<string, Array<{
     type: string; fromVersion?: number; toVersion: number; reasonCode?: string; at: Date;
@@ -1108,46 +1109,29 @@ async function getMetadataForProposal(dataSource: PostgresKnowledgeDraftDataSour
 }
 
 async function requestReconciliation(dataSource: PostgresKnowledgeDraftDataSource, input: import("./managed-knowledge-page-repository.js").ManagedKnowledgeReconciliationRequest) {
-  const normalized = {
-    executionId: ref("executionId", input.executionId),
-    expectedExecutionVersion: positive("expectedExecutionVersion", input.expectedExecutionVersion),
-    expectedManagedPageVersion: positive("expectedManagedPageVersion", input.expectedManagedPageVersion),
-    operationKey: ref("operationKey", input.operationKey),
-    operator: ref("operator", input.operator),
-    at: date("at", input.at),
-  };
-  const fingerprint = operationFingerprint(normalized);
-  return withTransaction(dataSource, async (client) => {
-    await lockOperation(client, normalized.operationKey);
-    const replay = await client.query<{ execution_id: string; operation_fingerprint: string }>(
-      `SELECT execution_id, operation_fingerprint FROM knowledge_publication_update_execution_events WHERE operation_key = $1`,
-      [normalized.operationKey],
-    );
-    if (replay.rows[0] !== undefined) {
-      if (replay.rows[0].operation_fingerprint !== fingerprint) throw new ManagedKnowledgePageOperationConflictError();
-      return buildClaimResult(client, await requireExecution(client, replay.rows[0].execution_id), "already_applied");
-    }
-    const execution = await requireExecutionForUpdate(client, normalized.executionId);
-    const page = await requirePageForUpdate(client, execution.managedPageId);
-    if (execution.version !== normalized.expectedExecutionVersion || page.version !== normalized.expectedManagedPageVersion ||
-      !["outcome_unknown", "reconciliation_required", "remote_applied"].includes(execution.state)) {
-      throw new ManagedKnowledgePageVersionConflictError();
-    }
-    await insertExecutionEvent(client, execution.id, "operator_reconciliation_requested", execution.version,
-      execution.version, normalized.operationKey, fingerprint, "operator_requested", normalized.at);
-    await insertPageEvent(client, { pageId: page.id, eventType: "operator_reconciliation_requested",
-      fromVersion: page.version, toVersion: page.version, operationKey: `${normalized.operationKey}:page`,
-      fingerprint: operationFingerprint({ fingerprint, kind: "page" }), actor: normalized.operator,
-      reasonCode: "operator_requested", at: normalized.at });
-    return buildClaimResult(client, execution, "applied");
+  const result = await recordRemoteOutcome(dataSource, {
+    executionId: input.executionId,
+    expectedExecutionVersion: input.expectedExecutionVersion,
+    expectedManagedPageVersion: input.expectedManagedPageVersion,
+    classification: "reconciliation_required",
+    pageDisposition: "reconciliation_required",
+    responseClassification: "operator_requested",
+    reconciliationReasonCode: "operator_requested",
+    operationKey: input.operationKey,
+    actor: input.operator,
+    at: input.at,
   });
+  return {
+    outcome: result.outcome,
+    claim: await buildClaimResult(dataSource, result.execution, result.outcome),
+  };
 }
 
 async function pageReplay(client: KnowledgeDraftTransactionClient, operationKey: string, fingerprint: string): Promise<ManagedKnowledgePage | undefined> { const result = await client.query<{ managed_page_id: string; operation_fingerprint: string }>(`SELECT managed_page_id, operation_fingerprint FROM managed_knowledge_page_events WHERE operation_key = $1`, [operationKey]); if (result.rows[0] === undefined) return undefined; if (result.rows[0].operation_fingerprint !== fingerprint) throw new ManagedKnowledgePageOperationConflictError(); return requirePage(client, result.rows[0].managed_page_id); }
 async function requirePage(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, id: string): Promise<ManagedKnowledgePage> { const result = await queryable.query<PageRow>(`${pageSelect()} WHERE id = $1`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapPage(result.rows[0]); }
 async function requirePageForUpdate(client: KnowledgeDraftTransactionClient, id: string): Promise<ManagedKnowledgePage> { const result = await client.query<PageRow>(`${pageSelect()} WHERE id = $1 FOR UPDATE`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapPage(result.rows[0]); }
 async function requireTarget(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, id: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await queryable.query<TargetRow>(`${targetSelect()} WHERE id = $1`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
-async function requireTargetForProposal(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, proposalId: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await queryable.query<TargetRow>(`${targetSelect()} target JOIN action_proposals proposal ON proposal.subject_id = target.draft_id AND proposal.subject_revision = target.draft_revision AND proposal.target_policy_id = target.target_policy_id AND proposal.target_policy_version = target.target_policy_version WHERE proposal.id = $1`, [proposalId]); if (result.rows.length !== 1) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
+async function requireTargetForProposal(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, proposalId: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await queryable.query<TargetRow>(`${targetSelect()} target JOIN action_proposals proposal ON proposal.subject_id = target.draft_id AND proposal.subject_revision = target.draft_revision AND proposal.subject_version >= target.draft_version AND proposal.target_policy_id = target.target_policy_id AND proposal.target_policy_version = target.target_policy_version WHERE proposal.id = $1 AND proposal.action_type = 'update_knowledge_publication'`, [proposalId]); if (result.rows.length !== 1) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
 async function requireTargetForUpdate(client: KnowledgeDraftTransactionClient, id: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await client.query<TargetRow>(`${targetSelect()} WHERE id = $1 FOR UPDATE`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
 async function requireExecution(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, id: string): Promise<ManagedKnowledgeUpdateExecution> { const result = await queryable.query<ExecutionRow>(`${executionSelect()} WHERE id = $1`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapExecution(result.rows[0]); }
 async function requireExecutionForUpdate(client: KnowledgeDraftTransactionClient, id: string): Promise<ManagedKnowledgeUpdateExecution> { const result = await client.query<ExecutionRow>(`${executionSelect()} WHERE id = $1 FOR UPDATE`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapExecution(result.rows[0]); }
@@ -1165,7 +1149,7 @@ function mapObservation(row: ObservationRow): ManagedSnapshotObservation { retur
 function normalizeRegisterInput(input: RegisterManagedPublicationInput): RegisterManagedPublicationInput { return { id:ref("id",input.id),originKnowledgePublicationId:ref("originKnowledgePublicationId",input.originKnowledgePublicationId),targetPolicyId:ref("targetPolicyId",input.targetPolicyId),targetPolicyVersion:positive("targetPolicyVersion",input.targetPolicyVersion),authorizationGroupId:ref("authorizationGroupId",input.authorizationGroupId),remoteNodeToken:ref("remoteNodeToken",input.remoteNodeToken),remoteDocumentToken:ref("remoteDocumentToken",input.remoteDocumentToken),managedBodyBlockId:ref("managedBodyBlockId",input.managedBodyBlockId),currentRemoteRevisionId:ref("currentRemoteRevisionId",input.currentRemoteRevisionId),currentBodyContentHash:hash("currentBodyContentHash",input.currentBodyContentHash),operationKey:ref("operationKey",input.operationKey),actor:ref("actor",input.actor),at:date("at",input.at) }; }
 function normalizeObservationInput(input: RecordManagedSnapshotObservationInput): RecordManagedSnapshotObservationInput { return { ...input,id:ref("id",input.id),managedPageId:ref("managedPageId",input.managedPageId),managedPageVersion:positive("managedPageVersion",input.managedPageVersion),documentSnapshotId:ref("documentSnapshotId",input.documentSnapshotId),documentSourceId:ref("documentSourceId",input.documentSourceId),snapshotContentHash:hash("snapshotContentHash",input.snapshotContentHash),observedRemoteRevisionId:ref("observedRemoteRevisionId",input.observedRemoteRevisionId),observedManagedBodyBlockId:ref("observedManagedBodyBlockId",input.observedManagedBodyBlockId),managedBodyContentHash:hash("managedBodyContentHash",input.managedBodyContentHash),adapterVersion:ref("adapterVersion",input.adapterVersion),operationKey:ref("operationKey",input.operationKey),at:date("at",input.at),observedAt:date("observedAt",input.observedAt) }; }
 function normalizeTargetInput(input: BindManagedUpdateTargetInput): BindManagedUpdateTargetInput { return { ...input,id:ref("id",input.id),draftId:ref("draftId",input.draftId),draftRevision:positive("draftRevision",input.draftRevision),draftVersion:positive("draftVersion",input.draftVersion),conflictCandidateId:ref("conflictCandidateId",input.conflictCandidateId),conflictCandidateVersion:positive("conflictCandidateVersion",input.conflictCandidateVersion),managedPageId:ref("managedPageId",input.managedPageId),managedPageVersion:positive("managedPageVersion",input.managedPageVersion),linkedDocumentSourceId:ref("linkedDocumentSourceId",input.linkedDocumentSourceId),targetSnapshotId:ref("targetSnapshotId",input.targetSnapshotId),targetSnapshotHash:hash("targetSnapshotHash",input.targetSnapshotHash),...(input.targetSourceVersion === undefined ? {} : {targetSourceVersion:ref("targetSourceVersion",input.targetSourceVersion)}),remoteDocumentToken:ref("remoteDocumentToken",input.remoteDocumentToken),managedBodyBlockId:ref("managedBodyBlockId",input.managedBodyBlockId),expectedRemoteRevisionId:ref("expectedRemoteRevisionId",input.expectedRemoteRevisionId),currentBodyContentHash:hash("currentBodyContentHash",input.currentBodyContentHash),proposedBodyContentHash:hash("proposedBodyContentHash",input.proposedBodyContentHash),authorizationGroupId:ref("authorizationGroupId",input.authorizationGroupId),targetPolicyId:ref("targetPolicyId",input.targetPolicyId),targetPolicyVersion:positive("targetPolicyVersion",input.targetPolicyVersion),operationKey:ref("operationKey",input.operationKey),at:date("at",input.at) }; }
-function normalizeOutcomeInput(input: RecordManagedRemoteOutcomeInput): RecordManagedRemoteOutcomeInput { const classification = input.classification; if (!['preflight_failed','outcome_unknown','remote_applied','failed','reconciliation_required'].includes(classification)) throw new Error('classification is invalid'); if (!['active','resync_required','reconciliation_required','blocked','retired'].includes(input.pageDisposition)) throw new Error('pageDisposition is invalid'); if ((classification === 'outcome_unknown' || classification === 'reconciliation_required') && input.reconciliationReasonCode === undefined) throw new Error('reconciliationReasonCode is required'); return { ...input,executionId:ref('executionId',input.executionId),expectedExecutionVersion:positive('expectedExecutionVersion',input.expectedExecutionVersion),pageDisposition:input.pageDisposition,...(input.responseClassification === undefined ? {} : {responseClassification:ref('responseClassification',input.responseClassification)}),...(input.responseRevisionId === undefined ? {} : {responseRevisionId:ref('responseRevisionId',input.responseRevisionId)}),...(input.reconciliationReasonCode === undefined ? {} : {reconciliationReasonCode:ref('reconciliationReasonCode',input.reconciliationReasonCode)}),...(input.verifiedUnchangedRemote === undefined ? {} : { verifiedUnchangedRemote: { remoteDocumentToken: ref('verifiedUnchangedRemote.remoteDocumentToken',input.verifiedUnchangedRemote.remoteDocumentToken), managedBodyBlockId: ref('verifiedUnchangedRemote.managedBodyBlockId',input.verifiedUnchangedRemote.managedBodyBlockId), remoteRevisionId: ref('verifiedUnchangedRemote.remoteRevisionId',input.verifiedUnchangedRemote.remoteRevisionId), bodyContentHash: hash('verifiedUnchangedRemote.bodyContentHash',input.verifiedUnchangedRemote.bodyContentHash) } }),operationKey:ref('operationKey',input.operationKey),actor:ref('actor',input.actor),at:date('at',input.at) }; }
+function normalizeOutcomeInput(input: RecordManagedRemoteOutcomeInput): RecordManagedRemoteOutcomeInput { const classification = input.classification; if (!['preflight_failed','outcome_unknown','remote_applied','failed','reconciliation_required'].includes(classification)) throw new Error('classification is invalid'); if (!['active','resync_required','reconciliation_required','blocked','retired'].includes(input.pageDisposition)) throw new Error('pageDisposition is invalid'); if ((classification === 'outcome_unknown' || classification === 'reconciliation_required') && input.reconciliationReasonCode === undefined) throw new Error('reconciliationReasonCode is required'); return { ...input,executionId:ref('executionId',input.executionId),expectedExecutionVersion:positive('expectedExecutionVersion',input.expectedExecutionVersion),...(input.expectedManagedPageVersion === undefined ? {} : {expectedManagedPageVersion:positive('expectedManagedPageVersion',input.expectedManagedPageVersion)}),pageDisposition:input.pageDisposition,...(input.responseClassification === undefined ? {} : {responseClassification:ref('responseClassification',input.responseClassification)}),...(input.responseRevisionId === undefined ? {} : {responseRevisionId:ref('responseRevisionId',input.responseRevisionId)}),...(input.reconciliationReasonCode === undefined ? {} : {reconciliationReasonCode:ref('reconciliationReasonCode',input.reconciliationReasonCode)}),...(input.verifiedUnchangedRemote === undefined ? {} : { verifiedUnchangedRemote: { remoteDocumentToken: ref('verifiedUnchangedRemote.remoteDocumentToken',input.verifiedUnchangedRemote.remoteDocumentToken), managedBodyBlockId: ref('verifiedUnchangedRemote.managedBodyBlockId',input.verifiedUnchangedRemote.managedBodyBlockId), remoteRevisionId: ref('verifiedUnchangedRemote.remoteRevisionId',input.verifiedUnchangedRemote.remoteRevisionId), bodyContentHash: hash('verifiedUnchangedRemote.bodyContentHash',input.verifiedUnchangedRemote.bodyContentHash) } }),operationKey:ref('operationKey',input.operationKey),actor:ref('actor',input.actor),at:date('at',input.at) }; }
 function validOutcomePredecessor(state: ManagedKnowledgeUpdateExecution["state"], classification: RecordManagedRemoteOutcomeInput["classification"]): boolean {
   if (classification === "preflight_failed") return state === "claimed";
   if (classification === "outcome_unknown") return state === "remote_request_dispatched";

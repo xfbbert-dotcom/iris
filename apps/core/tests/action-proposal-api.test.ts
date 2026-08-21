@@ -6,6 +6,8 @@ import type {
   ActionProposalRepository,
 } from "../src/action-approvals/action-proposal-repository.js";
 import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runtime.js";
+import { ManagedKnowledgePageOperationConflictError } from
+  "../src/action-approvals/postgres-managed-knowledge-page-repository.js";
 
 describe("action proposal internal API", () => {
   it("authenticates before parsing a body and exposes no human approval route", async () => {
@@ -251,6 +253,48 @@ describe("action proposal internal API", () => {
       operator: "operator@example.com",
       at: expect.any(Date),
     });
+    await app.close();
+  });
+
+  it("keeps an exact reconciliation operation replay idempotent at the API boundary", async () => {
+    const harness = createHarness();
+    harness.managedKnowledgeAdmin.reconcile.mockResolvedValue({
+      executionId: "execution-1",
+      state: "reconciliation_required",
+      version: 5,
+      reasonCode: "operator_requested",
+    });
+    const app = await buildApp(harness.dependencies);
+    const request = {
+      method: "POST" as const,
+      url: "/internal/managed-knowledge-updates/execution-1/reconcile",
+      headers: { ...authorizedHeaders(), "x-iris-operator": "operator@example.com" },
+      payload: { expectedExecutionVersion: 4, expectedManagedPageVersion: 8, operationKey: "reconcile:replay" },
+    };
+
+    const first = await app.inject(request);
+    const replay = await app.inject(request);
+    expect(first.json()).toEqual(replay.json());
+    expect(harness.managedKnowledgeAdmin.reconcile).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it("returns an operation conflict for a reconciliation key replay with a different version fingerprint", async () => {
+    const harness = createHarness();
+    harness.managedKnowledgeAdmin.reconcile.mockRejectedValueOnce(
+      new ManagedKnowledgePageOperationConflictError(),
+    );
+    const app = await buildApp(harness.dependencies);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/managed-knowledge-updates/execution-1/reconcile",
+      headers: { ...authorizedHeaders(), "x-iris-operator": "operator@example.com" },
+      payload: { expectedExecutionVersion: 5, expectedManagedPageVersion: 8, operationKey: "reconcile:replay" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ ok: false, error: "action_proposal_operation_conflict" });
     await app.close();
   });
 });

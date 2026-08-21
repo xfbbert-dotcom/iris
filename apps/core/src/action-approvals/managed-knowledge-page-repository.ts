@@ -73,6 +73,7 @@ export type ClaimManagedUpdateInput = {
 export type RecordManagedRemoteOutcomeInput = {
   executionId: string;
   expectedExecutionVersion: number;
+  expectedManagedPageVersion?: number;
   classification: "preflight_failed" | "outcome_unknown" | "remote_applied" | "failed" | "reconciliation_required";
   responseClassification?: string;
   responseRevisionId?: string;
@@ -196,6 +197,10 @@ export type ManagedKnowledgeReconciliationRequest = {
   operator: string;
   at: Date;
 };
+export type ManagedKnowledgeReconciliationRequestResult = {
+  outcome: "applied" | "already_applied";
+  claim: ClaimedManagedKnowledgeUpdate;
+};
 export type ManagedExecutionMutationResult = {
   outcome: "applied" | "already_applied";
   page: ManagedKnowledgePage;
@@ -226,7 +231,7 @@ export interface ManagedKnowledgePageRepository {
   }): Promise<ClaimedManagedKnowledgeUpdate[]>;
   getSourceAvailability(documentSourceId: string): Promise<"available" | "barred">;
   getMetadataForProposal(proposalId: string): Promise<ManagedKnowledgeUpdateMetadata | undefined>;
-  requestReconciliation(input: ManagedKnowledgeReconciliationRequest): Promise<ClaimedManagedKnowledgeUpdate>;
+  requestReconciliation(input: ManagedKnowledgeReconciliationRequest): Promise<ManagedKnowledgeReconciliationRequestResult>;
 }
 
 export type { ManagedKnowledgePageState, ManagedKnowledgeUpdateExecutionState };

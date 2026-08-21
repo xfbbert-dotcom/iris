@@ -487,11 +487,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     )({
       runtimeController,
       knowledgeCardRuntime,
-      ...(managedKnowledgeUpdateDeployment.enabled &&
-          documentSyncRuntime?.managedKnowledgeUpdateQueue !== undefined
+      ...(documentSyncRuntime?.managedKnowledgeUpdateQueue !== undefined
         ? {
             managedKnowledgeUpdates: {
-              deploymentEnabled: true,
+              deploymentEnabled: managedKnowledgeUpdateDeployment.enabled,
               groupAllowlist: managedKnowledgeUpdateDeployment.groupAllowlist,
               syncQueue: documentSyncRuntime.managedKnowledgeUpdateQueue,
               intervalMs: 1_000,

@@ -87,3 +87,35 @@ Across `2b0cdfc3..HEAD`: the checkpoint files listed above plus `apps/core/src/a
 
 - `IRIS_TEST_DATABASE_URL` and `DATABASE_URL` are absent locally. Configured-Postgres integration cases were therefore honestly skipped; local repository boundary behavior is covered by the injected data-source tests.
 - The earlier cleanup-policy rejection was not retried: no deletion, move, or broad cleanup was attempted. The final read-only worktree status is clean and lists no temporary directories.
+
+## Fix Round 1/5 (Review 1)
+
+### Implemented
+
+- Replaced the invalid operator-only page event with the existing, migration-0052-valid `reconciliation_required` transition. The reconciliation request now atomically advances the execution and managed-page versions, emits append-only events whose `to_version` is exactly `from_version + 1`, and retains `operator_requested` as the typed auditable reason. It additionally enforces the caller's exact managed-page version under the transaction lock.
+- Kept recovery separate from new-claim enablement. Whenever the real document-sync queue is available, app composition creates the existing managed repository/updater/executor/reconciler/admin/loop even with deployment disabled; the executor runtime snapshot remains `deploymentEnabled: false` with no allowlisted groups, while the reconciler and operator metadata/actions remain available for durable uncertain work.
+- Corrected the metadata event query to pass `execution_id` values as PostgreSQL `text[]`, and bound proposal metadata through the unique target's draft revision, bound draft-version floor, policy id/version, and update action type rather than selecting a latest target by draft id.
+- Made exact reconciliation operation-key replay return the first durable outcome without re-invoking the reconciler/readback. A changed request fingerprint still maps to the established 409 operation-conflict API contract.
+- Added substantive Admin Console/API bearer-plus-operator route coverage and server-composition/readiness coverage for malformed and enabled-incomplete managed-update environments.
+
+### Fix Round TDD evidence
+
+1. RED: `npm exec --workspace apps/core -- vitest run tests/postgres-managed-knowledge-page-repository.test.ts --reporter=dot` failed with `promise resolved ... instead of rejecting` for a reconciliation request whose expected managed-page version was stale. GREEN: after adding the optional exact page-version guard inside the locked outcome transition, the same command passed: 22 tests, 1 configured-Postgres skip.
+2. RED: `npm exec --workspace apps/core -- vitest run tests/action-proposal-api.test.ts --reporter=dot` returned `503` where a same-key/different-fingerprint reconciliation request requires `409`. GREEN: mapping the managed-page operation conflict to the existing operation-conflict response passed: 9 tests.
+3. Runtime replay, disabled recovery composition, exact metadata binding, and configured-Postgres transaction tests were added before/alongside the minimal transition implementation. The merged focused run below confirms their production-boundary behavior; the configured transaction fixture is intentionally skipped locally without a database URL.
+
+### Fix Round verification
+
+- `npm exec --workspace apps/core -- vitest run tests/postgres-managed-knowledge-page-repository.test.ts tests/managed-knowledge-update-executor.test.ts tests/managed-knowledge-update-reconciler.test.ts tests/action-approval-runtime.test.ts tests/action-proposal-api.test.ts tests/admin-console-api.test.ts tests/server-startup.test.ts tests/internal-readiness-api.test.ts --reporter=dot` — passed: 120 tests, 1 configured-Postgres skip.
+- `npm exec --workspace apps/core -- tsc --noEmit` — passed (exit 0).
+- `npm run test:pilot` — passed (exit 0; the runner emits only its Node test banner in this environment).
+- `npm run pilot:config` — passed; rendered Core environment has `IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "false"` and `IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: ""`.
+- `npm test -- --reporter=dot` — passed: 199 test files, 3 skipped; 3,677 passed and 287 skipped (3,964 total). npm emitted a non-failing `Unknown cli config "--reporter"` warning before the workspace Vitest run.
+- `git diff --check` — passed (no whitespace errors; Git emitted CRLF conversion warnings only).
+
+### Fix Round self-review and concerns
+
+- No network Feishu action was invoked. The reconciliation transition contains no remote call while its database transaction/locks are held; remote reconciliation only happens after the durable request returns, and exact replay short-circuits it.
+- Metadata, readiness, and console/API projections remain content-free: no draft/document body, raw Feishu payload/error, access token, remote document token, or block token is returned or rendered.
+- `IRIS_TEST_DATABASE_URL` and `DATABASE_URL` are not configured locally, so the new configured-PostgreSQL transaction/query fixture genuinely skipped. Its test performs request, replay, conflict, text-array metadata query, privacy projection, and the database constraints when configured.
+- Read-only final status currently includes `.tmp-iris-backup-test-5vNY1W/`, generated by the pilot test. Per the cleanup-policy instruction it was not inspected destructively, moved, or deleted. All tracked product changes are ready to commit; this untracked non-product directory remains outside that commit.

@@ -120,6 +120,30 @@ describe("managed knowledge page exact remote identity lookup", () => {
 });
 
 describe("managed update admin metadata projection", () => {
+  it("binds metadata to the exact proposal target instead of a newer draft target", async () => {
+    const at = new Date("2026-08-21T00:00:00.000Z");
+    const oldTarget = managedTargetRow({ id: "target-old", expected_remote_revision_id: "11" });
+    const newerTarget = managedTargetRow({ id: "target-new", expected_remote_revision_id: "12" });
+    const page = managedPageRow({ id: "page-1", linked_document_source_id: "source-1", version: "4", updated_at: at });
+    const execution = managedExecutionRow({ update_target_id: "target-old", managed_page_id: "page-1", created_at: at, updated_at: at });
+    const query = vi.fn(async (sql: string) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ");
+      if (normalized.includes("FROM knowledge_publication_update_targets") && normalized.includes("JOIN action_proposals")) {
+        return { rows: [oldTarget] };
+      }
+      if (normalized.includes("FROM knowledge_publication_update_targets")) return { rows: [newerTarget] };
+      if (normalized.includes("FROM managed_knowledge_pages")) return { rows: [page] };
+      if (normalized.includes("FROM knowledge_publication_update_executions")) return { rows: [execution] };
+      if (normalized.includes("FROM knowledge_publication_update_execution_events")) return { rows: [] };
+      return { rows: [] };
+    });
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: { query } as never });
+
+    const metadata = await repository.getMetadataForProposal("proposal-old");
+
+    expect(metadata?.managedTarget).toMatchObject({ id: "target-old", expectedRevision: "11" });
+  });
+
   it("projects only safe target, page, execution, and immutable event metadata", async () => {
     const at = new Date("2026-08-21T00:00:00.000Z");
     const target = {
@@ -316,9 +340,10 @@ describe("managed update outcome transition contract", () => {
       at: new Date("2026-08-21T02:00:00.000Z"),
     };
 
-    await expect(repository.requestReconciliation(input)).resolves.toMatchObject({
+    const first = await repository.requestReconciliation(input);
+    expect(first).toMatchObject({
       outcome: "applied",
-      execution: { id: input.executionId, state: "outcome_unknown", version: 4 },
+      claim: { execution: { id: input.executionId } },
     });
     const executionEvent = fixture.statements.findIndex((sql) =>
       sql.includes("INSERT INTO knowledge_publication_update_execution_events"));
@@ -327,9 +352,14 @@ describe("managed update outcome transition contract", () => {
     expect(executionEvent).toBeGreaterThanOrEqual(0);
     expect(pageEvent).toBeGreaterThan(executionEvent);
     expect(fixture.statementValues[pageEvent]).toContain("operator@example.com");
+    expect(fixture.statementValues[executionEvent]).toContain(5);
+    expect(fixture.statementValues[pageEvent]).toContain(2);
 
     await expect(repository.requestReconciliation({ ...input, expectedExecutionVersion: 5,
       operationKey: "managed-update-reconcile:execution-1:5" })).rejects.toThrow(/version conflict/iu);
+
+    await expect(repository.requestReconciliation({ ...input, expectedManagedPageVersion: 3,
+      operationKey: "managed-update-reconcile:execution-1:page-3" })).rejects.toThrow(/version conflict/iu);
   });
 
   it.each([
@@ -870,10 +900,43 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         actor: "test-worker",
         at: dispatchedAt,
       });
+      const reconciliationInput = {
+        executionId: claimed.execution.id,
+        expectedExecutionVersion: dispatched.execution.version,
+        expectedManagedPageVersion: dispatched.page.version,
+        operationKey: `managed-operator-reconcile:${suffix}`,
+        operator: "operator@example.com",
+        at: new Date(at.getTime() + 1_500),
+      };
+      const reconciled = await repository.requestReconciliation(reconciliationInput);
+      expect(reconciled).toMatchObject({
+        outcome: "applied",
+        claim: {
+          execution: { state: "reconciliation_required", version: dispatched.execution.version + 1 },
+          page: { state: "reconciliation_required", version: dispatched.page.version + 1 },
+        },
+      });
+      const reconciliationReplay = await repository.requestReconciliation(reconciliationInput);
+      expect(reconciliationReplay).toMatchObject({
+        outcome: "already_applied",
+        claim: { execution: { id: claimed.execution.id, version: reconciled.claim.execution.version } },
+      });
+      await expect(repository.requestReconciliation({
+        ...reconciliationInput,
+        expectedExecutionVersion: reconciliationInput.expectedExecutionVersion + 1,
+      })).rejects.toThrow(/operation conflict/iu);
+      const metadata = await repository.getMetadataForProposal(updateProposalId);
+      expect(metadata).toMatchObject({
+        page: { id: claimed.page.id, safeWikiUrl: expect.stringMatching(/^https:\/\/www\.feishu\.cn\/wiki\//u) },
+        executions: [expect.objectContaining({ id: claimed.execution.id, events: expect.arrayContaining([
+          expect.objectContaining({ type: "reconciliation_required", toVersion: dispatched.execution.version + 1 }),
+        ]) })],
+      });
+      expect(JSON.stringify(metadata)).not.toMatch(/New approved body|docx_secret|blk_secret|tenant-token/iu);
       const appliedAt = new Date(at.getTime() + 2_000);
       const applied = await repository.recordRemoteOutcome({
         executionId: claimed.execution.id,
-        expectedExecutionVersion: dispatched.execution.version,
+        expectedExecutionVersion: reconciled.claim.execution.version,
         classification: "remote_applied",
         pageDisposition: "resync_required",
         responseClassification: "applied",
@@ -1225,6 +1288,33 @@ function managedPageRow(overrides: Record<string, unknown> = {}): Record<string,
     created_at: at,
     updated_at: at,
     ...overrides,
+  };
+}
+
+function managedTargetRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const at = new Date("2026-08-20T00:00:00.000Z");
+  return {
+    id: "target-1", draft_id: "draft-1", draft_revision: "1", draft_version: "1",
+    conflict_candidate_id: "candidate-1", conflict_candidate_version: "1", managed_page_id: "page-1",
+    managed_page_version: "1", linked_document_source_id: "source-1", target_snapshot_id: "snapshot-1",
+    target_snapshot_hash: "c".repeat(64), target_source_version: null, remote_document_token: "docx-1",
+    managed_body_block_id: "blk-1", expected_remote_revision_id: "11", current_body_content_hash: "a".repeat(64),
+    proposed_body_content_hash: "b".repeat(64), authorization_group_id: "group-1", target_policy_id: "policy-1",
+    target_policy_version: "1", operation_key: "target-op", operation_fingerprint: "d".repeat(64), created_at: at,
+    ...overrides,
+  };
+}
+
+function managedExecutionRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const at = new Date("2026-08-20T00:00:00.000Z");
+  return {
+    id: "execution-1", proposal_id: "proposal-1", approval_id: "approval-1", executor_id: "worker-1",
+    managed_page_id: "page-1", managed_page_version: "1", update_target_id: "target-1", attempt_number: "1",
+    state: "reconciliation_required", operation_key: "execution-op", operation_fingerprint: "e".repeat(64),
+    request_fingerprint: "f".repeat(64), expected_remote_revision_id: "11", before_body_content_hash: "a".repeat(64),
+    after_body_content_hash: "b".repeat(64), client_token: "client-token", response_revision_id: null,
+    response_classification: null, reconciliation_reason_code: "operator_requested", remote_request_dispatched_at: at,
+    version: "2", created_at: at, updated_at: at, ...overrides,
   };
 }
 
