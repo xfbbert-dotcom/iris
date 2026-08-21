@@ -3,6 +3,8 @@ import type pg from "pg";
 import type { RuntimeController } from "../admin/runtime-controller.js";
 import { createPostgresActionProposalRepository } from
   "../action-approvals/postgres-action-proposal-repository.js";
+import { createPostgresManagedKnowledgePageRepository } from
+  "../action-approvals/postgres-managed-knowledge-page-repository.js";
 import {
   readEmbeddingProviderConfig,
   readFeishuOpenApiConfig,
@@ -397,6 +399,9 @@ function createDefaultComposition(
   const messages = createPostgresConversationMessageRepository({ queryable: input.pool as never });
   const documentSources = createPostgresDocumentSourceRegistry(input.pool as unknown as pg.Pool);
   const publicationTargets = createPostgresActionProposalRepository({ dataSource: input.pool as never });
+  const managedPages = createPostgresManagedKnowledgePageRepository({
+    dataSource: input.pool as never,
+  });
   const drafts = createPostgresKnowledgeDraftRepository({ dataSource: input.pool as never });
   const repository = createPostgresKnowledgeConflictRepository({
     dataSource: input.pool,
@@ -498,6 +503,7 @@ function createDefaultComposition(
     membershipChecker,
     drafts,
     publicationTargets,
+    managedPages,
     cardRuntime: createLazyPresentationRuntime(input.getKnowledgeCardPresentationRuntime),
     canProcessKnowledgeConflicts: input.canUseForDelivery,
     botOpenId: input.config.botOpenId,

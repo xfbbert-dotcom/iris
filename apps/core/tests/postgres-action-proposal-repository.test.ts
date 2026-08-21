@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type {
   ActionProposalRepository,
@@ -113,6 +113,82 @@ describe("action approval migration contract", () => {
 
     expect(source).toMatch(/publicationExecutionSelect\("execution"\)\}\s+JOIN action_execution_events event/iu);
     expect(source).not.toMatch(/publicationExecutionSelect\(\) execution\s+JOIN action_execution_events event/iu);
+  });
+
+  it("classifies exact current targets and omits stale bound revisions from planning", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM knowledge_drafts draft") && sql.includes("LIMIT $2")) {
+        expect(sql).toMatch(/knowledge_publication_update_targets/iu);
+        expect(sql).toMatch(/managed_knowledge_pages/iu);
+        expect(sql).toMatch(/managed_page_version/iu);
+        expect(sql).toMatch(/state\s*=\s*'active'/iu);
+        expect(sql).toMatch(/knowledge_conflict_candidates/iu);
+        expect(sql).toMatch(/document_snapshots/iu);
+        expect(sql).toMatch(/knowledge_publication_target_policies/iu);
+        expect(sql).toMatch(
+          /WHERE draft\.status = 'pending_review'.*target\.id IS NULL.*page\.id IS NOT NULL.*target_policy\.id IS NOT NULL.*ORDER BY/isu,
+        );
+        return { rows: [
+          draftCandidateRow("draft-publish", null, null),
+          draftCandidateRow("draft-update", "target-1", "target-1"),
+          draftCandidateRow("draft-stale", "target-stale", null),
+        ] };
+      }
+      if (sql.includes("FROM knowledge_draft_revision_evidence")) return { rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createPostgresActionProposalRepository({
+      dataSource: { query } as unknown as PostgresKnowledgeDraftDataSource,
+    });
+
+    await expect(repository.listEligibleDrafts({ limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        id: "draft-publish",
+        actionType: "publish_knowledge_draft",
+      }),
+      expect.objectContaining({
+        id: "draft-update",
+        actionType: "update_knowledge_publication",
+      }),
+    ]);
+  });
+
+  it("stores the supplied update action and fingerprints its exact type", async () => {
+    const fixture = proposalCreationDataSource({ hasManagedTarget: true });
+    const repository = createPostgresActionProposalRepository({ dataSource: fixture.dataSource });
+    const input = proposalCreationInput("update_knowledge_publication", "shared-operation");
+
+    await expect(repository.createProposal(input)).resolves.toMatchObject({
+      outcome: "applied",
+      proposal: { actionType: "update_knowledge_publication" },
+    });
+    await expect(repository.createProposal({
+      ...input,
+      actionType: "publish_knowledge_draft",
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+  });
+
+  it("never falls back to publication when the current revision has a stale binding", async () => {
+    const fixture = proposalCreationDataSource({ hasManagedTarget: true, targetCurrent: false });
+    const repository = createPostgresActionProposalRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.createProposal(
+      proposalCreationInput("publish_knowledge_draft", "stale-bound-publication"),
+    )).rejects.toBeInstanceOf(ActionProposalIneligibleError);
+  });
+
+  it("preserves exact legacy publish-new proposal replays after action typing", async () => {
+    const fixture = proposalCreationDataSource({ hasManagedTarget: false });
+    const repository = createPostgresActionProposalRepository({ dataSource: fixture.dataSource });
+    const input = proposalCreationInput("publish_knowledge_draft", "legacy-publish-replay");
+
+    await repository.createProposal(input);
+    fixture.setStoredFingerprint(legacyActionProposalFingerprint(input));
+
+    await expect(repository.createProposal(input)).resolves.toMatchObject({
+      outcome: "already_applied",
+      proposal: { actionType: "publish_knowledge_draft" },
+    });
   });
 });
 
@@ -1693,6 +1769,177 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     };
   }
 });
+
+function draftCandidateRow(
+  id: string,
+  updateTargetId: string | null,
+  eligibleUpdateTargetId: string | null,
+) {
+  return {
+    id,
+    source_group_id: null,
+    status: "pending_review",
+    current_revision_number: 1,
+    version: 2,
+    title: "not returned",
+    content: "not returned",
+    risk_level: "low",
+    reviewer_type: "feishu_user",
+    reviewer_ref: "ou-owner",
+    suggested_space_id: "space-main",
+    suggested_parent_node_token: null,
+    has_current_group_confirmation: true,
+    update_target_id: updateTargetId,
+    eligible_update_target_id: eligibleUpdateTargetId,
+    updated_at: at,
+  };
+}
+
+function proposalCreationInput(
+  actionType: "publish_knowledge_draft" | "update_knowledge_publication",
+  operationKey: string,
+) {
+  return {
+    proposalId: `proposal-${operationKey}`,
+    actionType,
+    draftId: "draft-1",
+    expectedRevision: 1,
+    expectedDraftVersion: 2,
+    targetPolicyId: "policy-1",
+    expectedTargetPolicyVersion: 3,
+    operationKey,
+    at,
+  };
+}
+
+function proposalCreationDataSource(input: {
+  hasManagedTarget: boolean;
+  targetCurrent?: boolean;
+}) {
+  let proposalRow: Record<string, unknown> | undefined;
+  const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/u.test(sql) || sql.includes("pg_advisory_xact_lock")) {
+      return { rows: [] };
+    }
+    if (sql.includes("FROM action_proposals") && sql.includes("WHERE operation_key = $1")) {
+      return {
+        rows: proposalRow?.operation_key === params[0] ? [proposalRow] : [],
+      };
+    }
+    if (sql.includes("FROM knowledge_drafts draft") && sql.includes("FOR UPDATE OF draft")) {
+      return { rows: [{
+        id: "draft-1",
+        source_group_id: "group-1",
+        status: "pending_review",
+        current_revision_number: 1,
+        version: 2,
+        title: "Proposal title",
+        content: "Proposal body",
+        risk_level: "low",
+        reviewer_type: null,
+        reviewer_ref: null,
+        suggested_space_id: "space-main",
+        suggested_parent_node_token: null,
+      }] };
+    }
+    if (sql.includes("FROM knowledge_draft_revision_evidence")) return { rows: [] };
+    if (sql.includes("FROM knowledge_publication_target_policies") && sql.includes("FOR UPDATE")) {
+      return { rows: [{
+        id: "policy-1",
+        space_id: "space-main",
+        parent_node_token: null,
+        display_name: "Main wiki",
+        allowed_group_ids: ["group-1"],
+        allowed_risk_levels: ["low"],
+        enabled: true,
+        version: 3,
+        created_at: at,
+        updated_at: at,
+      }] };
+    }
+    if (sql.includes("FROM knowledge_draft_group_confirmations")) {
+      return { rows: [{ actor_open_id: "ou-member", presentation_id: "presentation-1" }] };
+    }
+    if (sql.includes("FROM knowledge_publication_update_targets") &&
+      sql.includes("WHERE draft_id = $1")) {
+      return { rows: input.hasManagedTarget ? [{
+        id: "target-1",
+        conflict_candidate_id: "candidate-1",
+        conflict_candidate_version: 3,
+        managed_page_id: "managed-1",
+        managed_page_version: 4,
+        linked_document_source_id: "source-1",
+        target_snapshot_id: "snapshot-1",
+        target_snapshot_hash: "a".repeat(64),
+        target_source_version: "v7",
+        remote_document_token: "doc-managed-1",
+        managed_body_block_id: "block-managed-1",
+        expected_remote_revision_id: "12",
+        current_body_content_hash: "b".repeat(64),
+        proposed_body_content_hash: "c".repeat(64),
+        authorization_group_id: "group-1",
+        target_policy_id: "policy-1",
+        target_policy_version: 3,
+      }] : [] };
+    }
+    if (sql.includes("FROM knowledge_publication_update_targets target") &&
+      sql.includes("WHERE target.id = $1")) {
+      return { rows: input.targetCurrent === false ? [] : [{ id: "target-1" }] };
+    }
+    if (sql.includes("INSERT INTO action_proposals")) {
+      const parameterizedAction = !sql.includes("'publish_knowledge_draft'");
+      const offset = parameterizedAction ? 1 : 0;
+      const actionType = parameterizedAction ? String(params[1]) : "publish_knowledge_draft";
+      proposalRow = {
+        id: params[0],
+        action_type: actionType,
+        subject_type: "knowledge_draft",
+        subject_id: params[1 + offset],
+        subject_revision: params[2 + offset],
+        subject_version: params[3 + offset],
+        target_policy_id: params[4 + offset],
+        target_policy_version: params[5 + offset],
+        risk_level: params[6 + offset],
+        status: params[7 + offset],
+        operation_key: params[8 + offset],
+        operation_fingerprint: params[9 + offset],
+        version: 1,
+        created_at: params[10 + offset],
+        updated_at: params[10 + offset],
+      };
+      return { rows: [] };
+    }
+    if (sql.includes("INSERT INTO action_approval_requirements") ||
+      sql.includes("INSERT INTO action_events")) return { rows: [] };
+    if (sql.includes("FROM action_proposals") && sql.includes("WHERE id = $1")) {
+      return { rows: proposalRow === undefined ? [] : [proposalRow] };
+    }
+    throw new Error(`unexpected query: ${sql}`);
+  });
+  const client = { query, release() {} };
+  return {
+    dataSource: {
+      query,
+      async connect() { return client; },
+    } as unknown as PostgresKnowledgeDraftDataSource,
+    setStoredFingerprint(value: string) {
+      if (proposalRow === undefined) throw new Error("proposal was not created");
+      proposalRow.operation_fingerprint = value;
+    },
+  };
+}
+
+function legacyActionProposalFingerprint(
+  input: ReturnType<typeof proposalCreationInput>,
+): string {
+  const { actionType: _actionType, ...legacyInput } = input;
+  return createHash("sha256")
+    .update(JSON.stringify({
+      operation: "create_proposal",
+      ...legacyInput,
+    }, (_key, value) => value instanceof Date ? value.toISOString() : value))
+    .digest("hex");
+}
 
 function policyInput(
   label: string,

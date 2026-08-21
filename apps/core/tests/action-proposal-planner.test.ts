@@ -45,11 +45,12 @@ describe("ActionProposalPlanner", () => {
     });
     expect(repository.createProposal.mock.calls.map(([input]) => ({
       draftId: input.draftId,
+      actionType: input.actionType,
       operationKey: input.operationKey,
     }))).toEqual([
-      { draftId: "draft-a", operationKey: "publish-knowledge:draft-a:1:3" },
-      { draftId: "draft-b", operationKey: "publish-knowledge:draft-b:1:3" },
-      { draftId: "draft-later", operationKey: "publish-knowledge:draft-later:1:3" },
+      { draftId: "draft-a", actionType: "publish_knowledge_draft", operationKey: "publish-knowledge:draft-a:1:3" },
+      { draftId: "draft-b", actionType: "publish_knowledge_draft", operationKey: "publish-knowledge:draft-b:1:3" },
+      { draftId: "draft-later", actionType: "publish_knowledge_draft", operationKey: "publish-knowledge:draft-later:1:3" },
     ]);
     expect(observe.mock.calls.map(([event]) => event)).toEqual([
       expect.objectContaining({
@@ -100,6 +101,34 @@ describe("ActionProposalPlanner", () => {
       plannedCount: 1,
       failedCount: 0,
     });
+  });
+
+  it.each([
+    ["update-bound", "update_knowledge_publication", "update-knowledge-publication:draft-a:1:3"],
+    ["unbound", "publish_knowledge_draft", "publish-knowledge:draft-a:1:3"],
+  ] as const)("routes only the candidate's exact %s action", async (_label, actionType, operationKey) => {
+    const repository = repositoryHarness({
+      candidates: [candidate("draft-a", { actionType })],
+      policies: [policy()],
+    });
+    repository.createProposal.mockResolvedValue({
+      outcome: "applied",
+      proposal: proposal("draft-a", actionType),
+    });
+    const planner = createActionProposalPlanner({
+      repository,
+      getAllowedGroupIds: () => ["oc_pilot"],
+    });
+
+    await expect(planner.planBatch({ limit: 1, at })).resolves.toMatchObject({
+      plannedCount: 1,
+      failedCount: 0,
+    });
+    expect(repository.createProposal).toHaveBeenCalledWith(expect.objectContaining({
+      draftId: "draft-a",
+      actionType,
+      operationKey,
+    }));
   });
 
   it("fails closed for every ambiguous or stale planning input without leaking details", async () => {
@@ -191,6 +220,7 @@ function candidate(
 ): ActionProposalDraftCandidate {
   return {
     id,
+    actionType: "publish_knowledge_draft",
     sourceGroupId: "oc_pilot",
     currentRevision: 1,
     version: 2,
@@ -219,10 +249,14 @@ function policy(): PublicationTargetPolicy {
   };
 }
 
-function proposal(subjectId: string) {
+function proposal(
+  subjectId: string,
+  actionType: "publish_knowledge_draft" | "update_knowledge_publication" =
+    "publish_knowledge_draft",
+) {
   return {
     id: `proposal-${subjectId}`,
-    actionType: "publish_knowledge_draft" as const,
+    actionType,
     subjectType: "knowledge_draft" as const,
     subjectId,
     subjectRevision: 1,
@@ -231,7 +265,9 @@ function proposal(subjectId: string) {
     targetPolicyVersion: 3,
     riskLevel: "medium" as const,
     status: "pending_approval" as const,
-    operationKey: `publish-knowledge:${subjectId}:1:3`,
+    operationKey: actionType === "publish_knowledge_draft"
+      ? `publish-knowledge:${subjectId}:1:3`
+      : `update-knowledge-publication:${subjectId}:1:3`,
     version: 1,
     createdAt: at,
     updatedAt: at,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACTION_APPROVAL_REQUIREMENT_KINDS,
   ACTION_PROPOSAL_ACTION_TYPE,
+  ACTION_PROPOSAL_ACTION_TYPES,
   ACTION_PROPOSAL_STATUSES,
   ACTION_ROLE_GRANT_TYPES,
   ActionProposalValidationError,
@@ -12,6 +13,10 @@ import {
 describe("action proposal contracts", () => {
   it("publishes the bounded Phase 5B-2A enums", () => {
     expect(ACTION_PROPOSAL_ACTION_TYPE).toBe("publish_knowledge_draft");
+    expect(ACTION_PROPOSAL_ACTION_TYPES).toEqual([
+      "publish_knowledge_draft",
+      "update_knowledge_publication",
+    ]);
     expect(ACTION_PROPOSAL_STATUSES).toEqual([
       "pending_approval",
       "approved",

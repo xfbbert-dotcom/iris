@@ -74,10 +74,13 @@ export function createActionProposalPlanner(input: {
           result.ineligibleCount += 1;
           continue;
         }
-        const operationKey = `publish-knowledge:${candidate.id}:${candidate.currentRevision}:${policy.version}`;
+        const operationKey = candidate.actionType === "publish_knowledge_draft"
+          ? `publish-knowledge:${candidate.id}:${candidate.currentRevision}:${policy.version}`
+          : `update-knowledge-publication:${candidate.id}:${candidate.currentRevision}:${policy.version}`;
         try {
           const mutation = await input.repository.createProposal({
             proposalId: proposalId(operationKey),
+            actionType: candidate.actionType,
             draftId: candidate.id,
             expectedRevision: candidate.currentRevision,
             expectedDraftVersion: currentVersion,

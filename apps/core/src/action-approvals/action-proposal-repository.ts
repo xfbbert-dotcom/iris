@@ -8,6 +8,7 @@ import type {
 
 import type {
   ActionApprovalRequirementKind,
+  ActionProposalActionType,
   ActionProposal,
   ActionProposalStatus,
   ActionRoleGrantType,
@@ -240,6 +241,7 @@ export type KnowledgePublication = {
 
 export type ActionProposalDraftCandidate = {
   id: string;
+  actionType: ActionProposalActionType;
   sourceGroupId?: string;
   currentRevision: number;
   version: number;
@@ -279,6 +281,7 @@ export type UpsertActionRoleGrantInput = {
 
 export type CreateActionProposalInput = {
   proposalId: string;
+  actionType?: ActionProposalActionType;
   draftId: string;
   expectedRevision: number;
   expectedDraftVersion: number;

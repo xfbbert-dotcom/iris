@@ -56,6 +56,37 @@ describe("KnowledgeConflictCardRenderer", () => {
     });
   });
 
+  it("uses replacement wording and metadata only for an exact managed update target", () => {
+    const result = renderKnowledgeConflictCard({
+      candidate: candidate(),
+      source: source(),
+      nonce: "nonce-1",
+      managedUpdateTarget: {
+        managedPageId: "managed-1",
+        managedPageVersion: 4,
+        expectedRemoteRevisionId: "12",
+      },
+    });
+
+    const visible = markdownContent(result.card);
+    expect(visible).toMatch(/replace existing managed page/iu);
+    expect(visible).toContain("managed\\-1");
+    expect(visible).toContain("12");
+    expect(result.json).not.toMatch(/current body|proposed body|content hash/iu);
+  });
+
+  it("uses publication wording when no exact managed update target exists", () => {
+    const result = renderKnowledgeConflictCard({
+      candidate: candidate(),
+      source: source(),
+      nonce: "nonce-1",
+    });
+
+    const visible = markdownContent(result.card);
+    expect(visible).toMatch(/publish a new managed page/iu);
+    expect(visible).not.toMatch(/replace existing managed page/iu);
+  });
+
   it("treats all visible text as untrusted, omits hidden facts, and excludes unsafe links", () => {
     const malicious = candidate({
       plan: {

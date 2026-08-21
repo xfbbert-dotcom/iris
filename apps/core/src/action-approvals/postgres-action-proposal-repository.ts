@@ -20,12 +20,14 @@ import type {
 
 import {
   ACTION_PROPOSAL_STATUSES,
+  ACTION_PROPOSAL_ACTION_TYPES,
   ACTION_ROLE_GRANT_TYPES,
   buildApprovalRequirementSnapshot,
   type ActionApprovalRequirementSnapshot,
   type ActionApprovalRequirementKind,
   type ActionApprovalRoleRefType,
   type ActionProposal,
+  type ActionProposalActionType,
   type ActionProposalStatus,
   type ActionRoleGrantType,
 } from "./action-proposal.js";
@@ -96,7 +98,7 @@ type GrantRow = {
 
 type ProposalRow = {
   id: string;
-  action_type: "publish_knowledge_draft";
+  action_type: ActionProposalActionType;
   subject_type: "knowledge_draft";
   subject_id: string;
   subject_revision: string | number;
@@ -189,7 +191,29 @@ type DraftRevisionRow = {
 
 type DraftCandidateRow = DraftRevisionRow & {
   has_current_group_confirmation: boolean;
+  update_target_id: string | null;
+  eligible_update_target_id: string | null;
   updated_at: Date;
+};
+
+type ManagedUpdateTargetRoutingRow = {
+  id: string;
+  conflict_candidate_id: string;
+  conflict_candidate_version: string | number;
+  managed_page_id: string;
+  managed_page_version: string | number;
+  linked_document_source_id: string;
+  target_snapshot_id: string;
+  target_snapshot_hash: string;
+  target_source_version: string | null;
+  remote_document_token: string;
+  managed_body_block_id: string;
+  expected_remote_revision_id: string;
+  current_body_content_hash: string;
+  proposed_body_content_hash: string;
+  authorization_group_id: string;
+  target_policy_id: string;
+  target_policy_version: string | number;
 };
 
 type EvidenceRow = {
@@ -462,19 +486,87 @@ export function createPostgresActionProposalRepository({
                   WHERE confirmation.draft_id = draft.id
                     AND confirmation.revision_number = draft.current_revision_number
                 ) AS has_current_group_confirmation,
+                target.id AS update_target_id,
+                CASE WHEN page.id IS NOT NULL
+                  AND conflict_candidate.id IS NOT NULL
+                  AND interaction.id IS NOT NULL
+                  AND snapshot.id IS NOT NULL
+                  AND source.id IS NOT NULL
+                  AND target_policy.id IS NOT NULL
+                  THEN target.id ELSE NULL
+                END AS eligible_update_target_id,
                 draft.updated_at
          FROM knowledge_drafts draft
          JOIN knowledge_draft_revisions revision
-           ON revision.draft_id = draft.id
+          ON revision.draft_id = draft.id
           AND revision.revision_number = draft.current_revision_number
+         LEFT JOIN knowledge_publication_update_targets target
+           ON target.draft_id = draft.id
+          AND target.draft_revision = draft.current_revision_number
+         LEFT JOIN managed_knowledge_pages page
+           ON page.id = target.managed_page_id
+          AND page.version = target.managed_page_version
+          AND page.state = 'active'
+          AND page.linked_document_source_id = target.linked_document_source_id
+          AND page.authorization_group_id = target.authorization_group_id
+          AND page.target_policy_id = target.target_policy_id
+          AND page.target_policy_version = target.target_policy_version
+          AND page.remote_document_token = target.remote_document_token
+          AND page.managed_body_block_id = target.managed_body_block_id
+          AND page.current_remote_revision_id = target.expected_remote_revision_id
+          AND page.current_body_content_hash = target.current_body_content_hash
+         LEFT JOIN knowledge_conflict_candidates conflict_candidate
+           ON conflict_candidate.id = target.conflict_candidate_id
+          AND conflict_candidate.version = target.conflict_candidate_version + 1
+          AND conflict_candidate.status = 'draft_created'
+          AND conflict_candidate.group_id = target.authorization_group_id
+          AND conflict_candidate.target_document_source_id = target.linked_document_source_id
+          AND conflict_candidate.target_snapshot_id = target.target_snapshot_id
+          AND conflict_candidate.target_content_hash = target.target_snapshot_hash
+          AND conflict_candidate.target_source_version IS NOT DISTINCT FROM target.target_source_version
+         LEFT JOIN knowledge_conflict_interactions interaction
+           ON interaction.candidate_id = target.conflict_candidate_id
+          AND interaction.action = 'create_draft'
+          AND interaction.result = 'applied'
+          AND interaction.draft_id = target.draft_id
+         LEFT JOIN document_snapshots snapshot
+           ON snapshot.id = target.target_snapshot_id
+          AND snapshot.document_source_id = target.linked_document_source_id
+          AND snapshot.content_hash = target.target_snapshot_hash
+          AND snapshot.source_version IS NOT DISTINCT FROM target.target_source_version
+          AND snapshot.fetch_status = 'succeeded'
+         LEFT JOIN document_sources source
+           ON source.id = target.linked_document_source_id
+          AND source.source_type = 'authorized_wiki_document'
+          AND source.permission_state IN ('readable', 'unknown')
+          AND source.sync_state = 'synced'
+          AND source.can_use_for_knowledge_drafts = TRUE
+         LEFT JOIN knowledge_publication_target_policies target_policy
+           ON target_policy.id = target.target_policy_id
+          AND target_policy.version = target.target_policy_version
+          AND target_policy.enabled = TRUE
+          AND target.authorization_group_id = draft.source_group_id
+          AND target.authorization_group_id = ANY(target_policy.allowed_group_ids)
+          AND revision.risk_level = ANY(target_policy.allowed_risk_levels)
+          AND revision.suggested_space_id = target_policy.space_id
+          AND revision.suggested_parent_node_token IS NOT DISTINCT FROM target_policy.parent_node_token
          WHERE draft.status = 'pending_review'
            AND ($1::TEXT[] IS NULL OR draft.source_group_id = ANY($1))
+           AND (target.id IS NULL OR (
+             page.id IS NOT NULL
+             AND conflict_candidate.id IS NOT NULL
+             AND interaction.id IS NOT NULL
+             AND snapshot.id IS NOT NULL
+             AND source.id IS NOT NULL
+             AND target_policy.id IS NOT NULL
+           ))
          ORDER BY draft.updated_at ASC, draft.id ASC
          LIMIT $2`,
         [groupIds ?? null, requireLimit(input.limit)],
       );
       const candidates: ActionProposalDraftCandidate[] = [];
       for (const row of result.rows) {
+        if (row.update_target_id !== null && row.eligible_update_target_id === null) continue;
         const evidence = await loadDraftEvidence(dataSource, row.id, Number(row.current_revision_number));
         const invalidReason = await findInvalidKnowledgeDraftEvidence({
           queryable: dataSource,
@@ -493,6 +585,9 @@ export function createPostgresActionProposalRepository({
             };
         candidates.push({
           id: row.id,
+          actionType: row.update_target_id === null
+            ? "publish_knowledge_draft"
+            : "update_knowledge_publication",
           ...(row.source_group_id === null ? {} : { sourceGroupId: row.source_group_id }),
           currentRevision: Number(row.current_revision_number),
           version: Number(row.version),
@@ -1580,6 +1675,7 @@ async function claimApprovedPublicationExecution(
 
     const proposal = await lockProposal(client, normalized.proposalId);
     if (
+      proposal.action_type !== "publish_knowledge_draft" ||
       proposal.status !== "approved" ||
       Number(proposal.version) !== normalized.expectedProposalVersion
     ) throw new ActionProposalVersionConflictError();
@@ -2767,7 +2863,13 @@ async function createProposal(
       [normalized.operationKey],
     );
     if (replay.rows[0] !== undefined) {
-      if (replay.rows[0].operation_fingerprint !== fingerprint) {
+      const legacyFingerprint = normalized.actionType === "publish_knowledge_draft"
+        ? legacyCreateProposalFingerprint(normalized)
+        : undefined;
+      if (replay.rows[0].operation_fingerprint !== fingerprint &&
+        (legacyFingerprint === undefined ||
+          replay.rows[0].action_type !== "publish_knowledge_draft" ||
+          replay.rows[0].operation_fingerprint !== legacyFingerprint)) {
         throw new ActionProposalOperationConflictError();
       }
       return { outcome: "already_applied", proposal: mapProposal(replay.rows[0]) };
@@ -2780,6 +2882,7 @@ async function createProposal(
       Number(draft.version) !== normalized.expectedDraftVersion
     ) throw new ActionProposalIneligibleError();
     await validateDraftEvidence(client, draft);
+    await validateProposalActionRouting(client, draft, normalized);
 
     const policy = await lockPolicy(client, normalized.targetPolicyId);
     if (
@@ -2814,10 +2917,11 @@ async function createProposal(
         id, action_type, subject_type, subject_id, subject_revision, subject_version,
         target_policy_id, target_policy_version, risk_level, status,
         operation_key, operation_fingerprint, version, created_at, updated_at
-      ) VALUES ($1, 'publish_knowledge_draft', 'knowledge_draft', $2, $3, $4,
-        $5, $6, $7, $8, $9, $10, 1, $11, $11)`,
+      ) VALUES ($1, $2, 'knowledge_draft', $3, $4, $5,
+        $6, $7, $8, $9, $10, $11, 1, $12, $12)`,
       [
         normalized.proposalId,
+        normalized.actionType,
         normalized.draftId,
         normalized.expectedRevision,
         normalized.expectedDraftVersion,
@@ -2929,6 +3033,91 @@ async function createProposal(
       proposal: await requireProposal(client, normalized.proposalId),
     };
   });
+}
+
+function legacyCreateProposalFingerprint(
+  input: ReturnType<typeof normalizeCreateProposalInput>,
+): string {
+  const { actionType: _actionType, ...legacyInput } = input;
+  return operationFingerprint({ operation: "create_proposal", ...legacyInput });
+}
+
+async function validateProposalActionRouting(
+  client: KnowledgeDraftTransactionClient,
+  draft: DraftRevisionRow,
+  input: ReturnType<typeof normalizeCreateProposalInput>,
+): Promise<void> {
+  const targetResult = await client.query<ManagedUpdateTargetRoutingRow>(
+    `SELECT id, conflict_candidate_id, conflict_candidate_version, managed_page_id,
+       managed_page_version, linked_document_source_id, target_snapshot_id,
+       target_snapshot_hash, target_source_version, remote_document_token,
+       managed_body_block_id, expected_remote_revision_id, current_body_content_hash,
+       proposed_body_content_hash, authorization_group_id, target_policy_id,
+       target_policy_version
+     FROM knowledge_publication_update_targets
+     WHERE draft_id = $1 AND draft_revision = $2
+     FOR UPDATE`,
+    [input.draftId, input.expectedRevision],
+  );
+  const target = targetResult.rows[0];
+  if (target === undefined) {
+    if (input.actionType !== "publish_knowledge_draft") {
+      throw new ActionProposalIneligibleError();
+    }
+    return;
+  }
+  if (input.actionType !== "update_knowledge_publication" ||
+    target.authorization_group_id !== draft.source_group_id ||
+    target.target_policy_id !== input.targetPolicyId ||
+    Number(target.target_policy_version) !== input.expectedTargetPolicyVersion) {
+    throw new ActionProposalIneligibleError();
+  }
+  const eligible = await client.query<{ id: string }>(
+    `SELECT target.id
+     FROM knowledge_publication_update_targets target
+     JOIN managed_knowledge_pages page
+       ON page.id = target.managed_page_id
+      AND page.version = target.managed_page_version
+      AND page.state = 'active'
+      AND page.linked_document_source_id = target.linked_document_source_id
+      AND page.authorization_group_id = target.authorization_group_id
+      AND page.target_policy_id = target.target_policy_id
+      AND page.target_policy_version = target.target_policy_version
+      AND page.remote_document_token = target.remote_document_token
+      AND page.managed_body_block_id = target.managed_body_block_id
+      AND page.current_remote_revision_id = target.expected_remote_revision_id
+      AND page.current_body_content_hash = target.current_body_content_hash
+     JOIN knowledge_conflict_candidates conflict_candidate
+       ON conflict_candidate.id = target.conflict_candidate_id
+      AND conflict_candidate.version = target.conflict_candidate_version + 1
+      AND conflict_candidate.status = 'draft_created'
+      AND conflict_candidate.group_id = target.authorization_group_id
+      AND conflict_candidate.target_document_source_id = target.linked_document_source_id
+      AND conflict_candidate.target_snapshot_id = target.target_snapshot_id
+      AND conflict_candidate.target_content_hash = target.target_snapshot_hash
+      AND conflict_candidate.target_source_version IS NOT DISTINCT FROM target.target_source_version
+     JOIN knowledge_conflict_interactions interaction
+       ON interaction.candidate_id = target.conflict_candidate_id
+      AND interaction.action = 'create_draft'
+      AND interaction.result = 'applied'
+      AND interaction.draft_id = target.draft_id
+     JOIN document_snapshots snapshot
+       ON snapshot.id = target.target_snapshot_id
+      AND snapshot.document_source_id = target.linked_document_source_id
+      AND snapshot.content_hash = target.target_snapshot_hash
+      AND snapshot.source_version IS NOT DISTINCT FROM target.target_source_version
+      AND snapshot.fetch_status = 'succeeded'
+     JOIN document_sources source
+       ON source.id = target.linked_document_source_id
+      AND source.source_type = 'authorized_wiki_document'
+      AND source.permission_state IN ('readable', 'unknown')
+      AND source.sync_state = 'synced'
+      AND source.can_use_for_knowledge_drafts = TRUE
+     WHERE target.id = $1
+     FOR UPDATE OF page, conflict_candidate`,
+    [target.id],
+  );
+  if (eligible.rows[0]?.id !== target.id) throw new ActionProposalIneligibleError();
 }
 
 async function listApprovalPresentationRecipients(
@@ -3403,6 +3592,7 @@ function normalizeRoleGrantInput(input: UpsertActionRoleGrantInput) {
 function normalizeCreateProposalInput(input: CreateActionProposalInput) {
   return {
     proposalId: requireReference("proposalId", input.proposalId),
+    actionType: requireActionType(input.actionType ?? "publish_knowledge_draft"),
     draftId: requireReference("draftId", input.draftId),
     expectedRevision: requirePositiveInteger("expectedRevision", input.expectedRevision),
     expectedDraftVersion: requirePositiveInteger("expectedDraftVersion", input.expectedDraftVersion),
@@ -3414,6 +3604,13 @@ function normalizeCreateProposalInput(input: CreateActionProposalInput) {
     operationKey: requireReference("operationKey", input.operationKey),
     at: requireDate(input.at),
   };
+}
+
+function requireActionType(value: unknown): ActionProposalActionType {
+  if (!ACTION_PROPOSAL_ACTION_TYPES.includes(value as ActionProposalActionType)) {
+    throw new Error("actionType is invalid");
+  }
+  return value as ActionProposalActionType;
 }
 
 function normalizeApplyActionInput(input: ApplyActionProposalActionInput) {

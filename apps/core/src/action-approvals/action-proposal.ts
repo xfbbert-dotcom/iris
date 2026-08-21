@@ -4,7 +4,11 @@ import type {
 } from "../knowledge-governance/knowledge-draft.js";
 import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
 
-export const ACTION_PROPOSAL_ACTION_TYPE = "publish_knowledge_draft" as const;
+export const ACTION_PROPOSAL_ACTION_TYPES = [
+  "publish_knowledge_draft",
+  "update_knowledge_publication",
+] as const;
+export const ACTION_PROPOSAL_ACTION_TYPE = ACTION_PROPOSAL_ACTION_TYPES[0];
 export const ACTION_PROPOSAL_STATUSES = [
   "pending_approval",
   "approved",
@@ -26,6 +30,7 @@ export const ACTION_ROLE_GRANT_TYPES = [
 ] as const;
 
 export type ActionProposalStatus = (typeof ACTION_PROPOSAL_STATUSES)[number];
+export type ActionProposalActionType = (typeof ACTION_PROPOSAL_ACTION_TYPES)[number];
 export type ActionApprovalRequirementKind =
   (typeof ACTION_APPROVAL_REQUIREMENT_KINDS)[number];
 export type ActionRoleGrantType = (typeof ACTION_ROLE_GRANT_TYPES)[number];
@@ -33,7 +38,7 @@ export type ActionApprovalRoleRefType = "source_group" | "feishu_user" | "unassi
 
 export type ActionProposal = {
   id: string;
-  actionType: typeof ACTION_PROPOSAL_ACTION_TYPE;
+  actionType: ActionProposalActionType;
   subjectType: "knowledge_draft";
   subjectId: string;
   subjectRevision: number;
