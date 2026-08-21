@@ -28,6 +28,11 @@ export type EligibleManagedPageForConflictInput = {
   authorizationGroupId: string;
 };
 
+export type FindManagedPageByRemoteIdentityInput = {
+  remoteWikiNodeToken?: string;
+  remoteDocumentToken?: string;
+};
+
 export type LinkManagedPageSourceInput = {
   managedPageId: string;
   expectedVersion: number;
@@ -112,6 +117,7 @@ export type ManagedExecutionMutationResult = {
 
 export interface ManagedKnowledgePageRepository {
   registerPublication(input: RegisterManagedPublicationInput): Promise<ManagedPageMutationResult>;
+  findByRemoteIdentity(input: FindManagedPageByRemoteIdentityInput): Promise<ManagedKnowledgePage | undefined>;
   findEligiblePageForConflict(input: EligibleManagedPageForConflictInput): Promise<ManagedKnowledgePage | undefined>;
   linkSource(input: LinkManagedPageSourceInput): Promise<ManagedPageMutationResult>;
   recordSnapshotObservation(input: RecordManagedSnapshotObservationInput): Promise<ManagedSnapshotObservationResult>;

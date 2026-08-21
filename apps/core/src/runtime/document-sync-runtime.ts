@@ -2,6 +2,17 @@ import { createClient } from "redis";
 import type pg from "pg";
 
 import {
+  createFeishuManagedKnowledgeBlockReader,
+  type ManagedBlockReader,
+} from "../action-approvals/feishu-managed-knowledge-block-reader.js";
+import {
+  createManagedKnowledgeSyncObserver,
+  type ManagedKnowledgeSyncObserver,
+} from "../action-approvals/managed-knowledge-sync-observer.js";
+import type { ManagedKnowledgePageRepository } from "../action-approvals/managed-knowledge-page-repository.js";
+import { createPostgresManagedKnowledgePageRepository } from "../action-approvals/postgres-managed-knowledge-page-repository.js";
+
+import {
   readEmbeddingProviderConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readFeishuOpenApiConfig,
@@ -66,6 +77,7 @@ import {
   createPostgresDocumentSourceGroupGrantRepository,
   type PostgresDocumentSourceGroupGrantDataSource,
 } from "../documents/postgres-document-source-group-grant-repository.js";
+import type { PostgresKnowledgeDraftDataSource } from "../knowledge-governance/postgres-knowledge-draft-repository.js";
 import {
   createRedisDocumentSyncQueue,
   type RedisDocumentSyncQueueClient,
@@ -310,6 +322,24 @@ export type DocumentSyncRuntimeDependencies = {
     tokenProvider: FeishuTenantAccessTokenProvider;
     timeoutMs: number;
   }) => DocumentBodyFetcher;
+  createPostgresManagedKnowledgePageRepository?: (dependencies: {
+    dataSource: PostgresKnowledgeDraftDataSource;
+  }) => Pick<
+    ManagedKnowledgePageRepository,
+    "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation"
+  >;
+  createFeishuManagedKnowledgeBlockReader?: (dependencies: {
+    baseUrl: string;
+    tokenProvider: FeishuTenantAccessTokenProvider;
+    timeoutMs: number;
+  }) => ManagedBlockReader;
+  createManagedKnowledgeSyncObserver?: (dependencies: {
+    repository: Pick<
+      ManagedKnowledgePageRepository,
+      "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation"
+    >;
+    blockReader: ManagedBlockReader;
+  }) => ManagedKnowledgeSyncObserver;
   createDocumentSyncQueue?: (client: RedisDocumentSyncQueueClient) => DocumentSyncRuntimeQueue;
   createDocumentReindexQueue?: (
     client: RedisDocumentReindexQueueClient,
@@ -397,6 +427,14 @@ function createEnabledDocumentSyncRuntime({
     dependencies.createFeishuTenantAccessTokenProvider ?? createFeishuTenantAccessTokenProvider;
   const createBodyFetcher =
     dependencies.createFeishuDocumentBodyFetcher ?? createFeishuDocumentBodyFetcher;
+  const createManagedPages =
+    dependencies.createPostgresManagedKnowledgePageRepository ??
+    createPostgresManagedKnowledgePageRepository;
+  const createManagedBlockReader =
+    dependencies.createFeishuManagedKnowledgeBlockReader ??
+    createFeishuManagedKnowledgeBlockReader;
+  const createManagedObserver =
+    dependencies.createManagedKnowledgeSyncObserver ?? createManagedKnowledgeSyncObserver;
   const createQueue =
     dependencies.createDocumentSyncQueue ??
     ((client: RedisDocumentSyncQueueClient) => createRedisDocumentSyncQueue({ client }));
@@ -447,6 +485,9 @@ function createEnabledDocumentSyncRuntime({
     dataSource: pool as unknown as PostgresDocumentSourceGroupGrantDataSource,
   }));
   const snapshots = constructRuntimeComponent(() => createSnapshots({ queryable: pool }));
+  const managedPages = constructRuntimeComponent(() => createManagedPages({
+    dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+  }));
   const tokenProvider = constructRuntimeComponent(() =>
     createTokenProvider({
       baseUrl: feishuConfig.baseUrl,
@@ -461,6 +502,19 @@ function createEnabledDocumentSyncRuntime({
       tokenProvider,
       timeoutMs: feishuConfig.documentFetchTimeoutMs,
       maxContentChars: feishuConfig.documentMaxContentChars,
+    }),
+  );
+  const managedBlockReader = constructRuntimeComponent(() =>
+    createManagedBlockReader({
+      baseUrl: feishuConfig.baseUrl,
+      tokenProvider,
+      timeoutMs: feishuConfig.documentFetchTimeoutMs,
+    }),
+  );
+  const managedKnowledgeObserver = constructRuntimeComponent(() =>
+    createManagedObserver({
+      repository: managedPages,
+      blockReader: managedBlockReader,
     }),
   );
   const queue = constructRuntimeComponent(() =>
@@ -505,6 +559,7 @@ function createEnabledDocumentSyncRuntime({
       registry: documentSources,
       snapshots,
       fetcher,
+      managedKnowledgeObserver,
       ...(syncedSnapshotReindexer === undefined ? {} : { syncedSnapshotReindexer }),
     }),
   );

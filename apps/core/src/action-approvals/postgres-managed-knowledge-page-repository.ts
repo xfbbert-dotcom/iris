@@ -18,6 +18,7 @@ import type {
   ClaimedManagedKnowledgeUpdate,
   CompleteManagedResyncInput,
   EligibleManagedPageForConflictInput,
+  FindManagedPageByRemoteIdentityInput,
   LinkManagedPageSourceInput,
   MarkManagedRemoteRequestDispatchedInput,
   ManagedExecutionMutationResult,
@@ -44,6 +45,13 @@ export class ManagedKnowledgePageVersionConflictError extends Error {
   }
 }
 
+export class ManagedKnowledgePageIdentityConflictError extends Error {
+  constructor() {
+    super("managed knowledge page remote identity is ambiguous");
+    this.name = "ManagedKnowledgePageIdentityConflictError";
+  }
+}
+
 type PageRow = Record<string, unknown>;
 type TargetRow = Record<string, unknown>;
 type ExecutionRow = Record<string, unknown>;
@@ -56,6 +64,7 @@ export function createPostgresManagedKnowledgePageRepository({
 }): ManagedKnowledgePageRepository {
   return {
     registerPublication: (input) => registerPublication(dataSource, input),
+    findByRemoteIdentity: (input) => findByRemoteIdentity(dataSource, input),
     findEligiblePageForConflict: (input) => findEligiblePageForConflict(dataSource, input),
     linkSource: (input) => linkSource(dataSource, input),
     recordSnapshotObservation: (input) => recordSnapshotObservation(dataSource, input),
@@ -68,6 +77,47 @@ export function createPostgresManagedKnowledgePageRepository({
     listReconciliationRequired: (input) => listReconciliationRequired(dataSource, input),
     getSourceAvailability: (documentSourceId) => getSourceAvailability(dataSource, documentSourceId),
   };
+}
+
+async function findByRemoteIdentity(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: FindManagedPageByRemoteIdentityInput,
+): Promise<ManagedKnowledgePage | undefined> {
+  const remoteWikiNodeToken = input.remoteWikiNodeToken === undefined
+    ? undefined
+    : ref("remoteWikiNodeToken", input.remoteWikiNodeToken);
+  const remoteDocumentToken = input.remoteDocumentToken === undefined
+    ? undefined
+    : ref("remoteDocumentToken", input.remoteDocumentToken);
+  if (remoteWikiNodeToken === undefined && remoteDocumentToken === undefined) {
+    throw new Error("managed knowledge page remote identity is required");
+  }
+
+  const clauses: string[] = [];
+  const values: string[] = [];
+  if (remoteWikiNodeToken !== undefined) {
+    values.push(remoteWikiNodeToken);
+    clauses.push(`remote_node_token = $${values.length}`);
+  }
+  if (remoteDocumentToken !== undefined) {
+    values.push(remoteDocumentToken);
+    clauses.push(`remote_document_token = $${values.length}`);
+  }
+  const result = await dataSource.query<PageRow>(
+    `${pageSelect()} WHERE ${clauses.join(" OR ")} LIMIT 2`,
+    values,
+  );
+  if (result.rows.length === 0) return undefined;
+  if (result.rows.length !== 1) throw new ManagedKnowledgePageIdentityConflictError();
+
+  const page = mapPage(result.rows[0]);
+  if (
+    (remoteWikiNodeToken !== undefined && page.remoteNodeToken !== remoteWikiNodeToken) ||
+    (remoteDocumentToken !== undefined && page.remoteDocumentToken !== remoteDocumentToken)
+  ) {
+    throw new ManagedKnowledgePageIdentityConflictError();
+  }
+  return page;
 }
 
 async function registerPublication(

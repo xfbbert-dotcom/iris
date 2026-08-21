@@ -194,7 +194,7 @@ describe("createDocumentSyncRunner", () => {
     });
   });
 
-  it("enqueues reindex after a successful sync snapshot is marked synced", async () => {
+  it("observes a successful snapshot before reindexing and marking the source synced", async () => {
     const candidate = source({ id: "source-to-reindex" });
     const calls: string[] = [];
     const succeededSnapshot = snapshot({
@@ -215,6 +215,11 @@ describe("createDocumentSyncRunner", () => {
         calls.push("reindex");
       }),
     };
+    const managedKnowledgeObserver = {
+      observe: vi.fn(async () => {
+        calls.push("managed-observation");
+      }),
+    };
     const runner = createDocumentSyncRunner({
       registry,
       snapshots: {
@@ -230,6 +235,7 @@ describe("createDocumentSyncRunner", () => {
           fetchedAt,
         })),
       },
+      managedKnowledgeObserver,
       syncedSnapshotReindexer,
     });
 
@@ -237,10 +243,74 @@ describe("createDocumentSyncRunner", () => {
       status: "synced",
       snapshot: succeededSnapshot,
     });
-    expect(calls).toEqual(["mark:syncing", "snapshot:succeeded", "mark:synced", "reindex"]);
+    expect(calls).toEqual([
+      "mark:syncing",
+      "snapshot:succeeded",
+      "managed-observation",
+      "reindex",
+      "mark:synced",
+    ]);
+    expect(managedKnowledgeObserver.observe).toHaveBeenCalledWith({
+      source: source({ id: candidate.id, syncState: "syncing" }),
+      snapshot: succeededSnapshot,
+    });
     expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({
       documentSnapshotId: "snapshot-to-reindex",
     });
+  });
+
+  it("preserves an ordinary successful snapshot when managed observation fails", async () => {
+    const candidate = source({ id: "source-with-observation-failure" });
+    const calls: string[] = [];
+    const succeededSnapshot = snapshot({
+      id: "snapshot-with-observation-failure",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchedAt,
+    });
+    const runner = createDocumentSyncRunner({
+      registry: {
+        findSourceById: vi.fn(async () => candidate),
+        markSyncState: vi.fn(async (id: string, syncState: string) => {
+          calls.push(`mark:${syncState}`);
+          return source({ id, syncState: syncState as DocumentSource["syncState"] });
+        }),
+      },
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(async () => {
+          calls.push("snapshot:succeeded");
+          return succeededSnapshot;
+        }),
+        insertFailedSnapshot: vi.fn(),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => ({ bodyText: "Document body", fetchedAt })),
+      },
+      managedKnowledgeObserver: {
+        observe: vi.fn(async () => {
+          calls.push("managed-observation");
+          throw new Error("managed block unavailable");
+        }),
+      },
+      syncedSnapshotReindexer: {
+        enqueueSyncedSnapshotReindex: vi.fn(async () => {
+          calls.push("reindex");
+        }),
+      },
+    });
+
+    await expect(runner.syncSourceById(candidate.id)).resolves.toEqual({
+      status: "synced",
+      source: candidate,
+      snapshot: succeededSnapshot,
+    });
+    expect(calls).toEqual([
+      "mark:syncing",
+      "snapshot:succeeded",
+      "managed-observation",
+      "reindex",
+      "mark:synced",
+    ]);
   });
 
   it("uses the claimed source for external fetches and succeeded snapshots", async () => {
@@ -345,7 +415,6 @@ describe("createDocumentSyncRunner", () => {
     expect(calls).toEqual([
       "mark:syncing",
       "snapshot:succeeded",
-      "mark:synced",
       "reindex",
       "mark:pending",
     ]);
@@ -933,8 +1002,8 @@ describe("createDocumentSyncRunner", () => {
         "mark:syncing",
         "fetch",
         "snapshot:succeeded",
-        "mark:synced",
         "reindex",
+        "mark:synced",
       ]);
       expect(fetcher.fetch).toHaveBeenCalledWith(claimedSource);
       expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({

@@ -1,6 +1,7 @@
 import type { DocumentSnapshot } from "./document-snapshot-repository.js";
 import { normalizeDocumentSnapshotErrorMessage } from "./document-snapshot-error-message.js";
 import type { DocumentSource, DocumentSyncState } from "./document-source-registry.js";
+import type { ManagedKnowledgeSyncObserver } from "../action-approvals/managed-knowledge-sync-observer.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -92,12 +93,14 @@ export function createDocumentSyncRunner({
   registry,
   snapshots,
   fetcher,
+  managedKnowledgeObserver,
   syncedSnapshotReindexer,
   now = () => new Date(),
 }: {
   registry: DocumentSyncRunnerRegistry;
   snapshots: DocumentSyncSnapshotWriter;
   fetcher: DocumentBodyFetcher;
+  managedKnowledgeObserver?: ManagedKnowledgeSyncObserver;
   syncedSnapshotReindexer?: SyncedSnapshotReindexer;
   now?: () => Date;
 }): DocumentSyncRunner {
@@ -168,12 +171,19 @@ export function createDocumentSyncRunner({
           sourceVersion: fetchResult.sourceVersion,
           fetchedAt: fetchResult.fetchedAt,
         });
-        await registry.markSyncState(claimedSource.id, "synced");
+        if (managedKnowledgeObserver !== undefined) {
+          try {
+            await managedKnowledgeObserver.observe({ source: claimedSource, snapshot });
+          } catch {
+            // An exact managed-page observation is additive; the ordinary snapshot remains valid.
+          }
+        }
         if (syncedSnapshotReindexer !== undefined) {
           await syncedSnapshotReindexer.enqueueSyncedSnapshotReindex({
             documentSnapshotId: snapshot.id,
           });
         }
+        await registry.markSyncState(claimedSource.id, "synced");
 
         return { status: "synced", source, snapshot };
       } catch (error) {

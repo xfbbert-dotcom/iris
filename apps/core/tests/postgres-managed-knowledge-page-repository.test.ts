@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 import pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createPostgresManagedKnowledgePageRepository } from "../src/action-approvals/postgres-managed-knowledge-page-repository.js";
 import type { PostgresKnowledgeDraftDataSource } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
@@ -41,6 +41,62 @@ describe("managed knowledge page migration contract", () => {
     );
     expect(source).toMatch(/state IN \('outcome_unknown','reconciliation_required'\).*remote_request_dispatched/isu);
     expect(source).toMatch(/remote_request_dispatched_at <= \$2/iu);
+  });
+});
+
+describe("managed knowledge page exact remote identity lookup", () => {
+  const pageRow = {
+    id: "managed-1",
+    origin_knowledge_publication_id: "publication-1",
+    target_policy_id: "policy-1",
+    target_policy_version: "1",
+    authorization_group_id: "group-1",
+    remote_node_token: "wiki-node-1",
+    remote_document_token: "docx-1",
+    managed_body_block_id: "blk_body",
+    linked_document_source_id: null,
+    current_remote_revision_id: "12",
+    current_body_content_hash: "a".repeat(64),
+    expected_resync_content_hash: null,
+    state: "active",
+    version: "1",
+    created_at: new Date("2026-08-20T00:00:00.000Z"),
+    updated_at: new Date("2026-08-20T00:00:00.000Z"),
+  };
+
+  it("finds one page only when every supplied token identifies that exact row", async () => {
+    const query = vi.fn(async () => ({ rows: [pageRow], rowCount: 1 }));
+    const repository = createPostgresManagedKnowledgePageRepository({
+      dataSource: { query } as never,
+    });
+
+    await expect(repository.findByRemoteIdentity({
+      remoteWikiNodeToken: "wiki-node-1",
+      remoteDocumentToken: "docx-1",
+    })).resolves.toMatchObject({ id: "managed-1" });
+    expect(query).toHaveBeenCalledWith(expect.stringMatching(/remote_node_token = \$1[\s\S]+remote_document_token = \$2/iu), [
+      "wiki-node-1",
+      "docx-1",
+    ]);
+  });
+
+  it("fails closed for absent, disagreeing, or ambiguous exact identities", async () => {
+    const repository = createPostgresManagedKnowledgePageRepository({
+      dataSource: {
+        query: vi.fn()
+          .mockResolvedValueOnce({ rows: [pageRow], rowCount: 1 })
+          .mockResolvedValueOnce({ rows: [pageRow, { ...pageRow, id: "managed-2" }], rowCount: 2 }),
+      } as never,
+    });
+
+    await expect(repository.findByRemoteIdentity({})).rejects.toThrow("remote identity is required");
+    await expect(repository.findByRemoteIdentity({
+      remoteWikiNodeToken: "wiki-node-1",
+      remoteDocumentToken: "different-docx",
+    })).rejects.toThrow("remote identity is ambiguous");
+    await expect(repository.findByRemoteIdentity({
+      remoteWikiNodeToken: "wiki-node-1",
+    })).rejects.toThrow("remote identity is ambiguous");
   });
 });
 
