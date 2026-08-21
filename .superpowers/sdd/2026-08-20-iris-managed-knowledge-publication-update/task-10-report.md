@@ -94,3 +94,44 @@ captured exit-0 repository gate.
 This fix changes Markdown/report evidence only. It performs no live Feishu call, deployment,
 runtime enablement, database mutation, push, or merge. The live pilot remains `not yet run` /
 controlled Feishu acceptance pending.
+
+## Fix Round 2/5 — executable-safety contract
+
+### Changes
+
+- Added fail-closed private-value validation for sentinel/placeholder values, control characters,
+  whitespace, ID/operator/ticket/token syntax and length; no failure reports the supplied value.
+- Bound all bearer use to one separately supplied ticket-approved internal origin, requiring HTTPS
+  except loopback HTTP explicitly approved with `IRIS_PILOT_ALLOW_LOOPBACK_HTTP=true`, rejecting
+  userinfo/path/query/fragment and blocking an origin mismatch.
+- Added a fresh PostgreSQL/current-desired/group/capability state assertion before each capability,
+  group, and global runtime mutation, plus the existing human ticket-entry gate immediately before
+  dispatch.
+- Initialized and validated managed-page, draft, proposal, and recovery-execution IDs from private
+  environment/verified readback; internal routes URL-encode them and the SQL remains psql-variable
+  parameterized. Removed literal draft/proposal route placeholders.
+- Corrected approval evidence to current migrations: Task 5's managed-update
+  `action_target_fingerprint` plus attestation `reviewed_at`, and the approval to requirement join
+  with subject/revision, authorization summary, requirement kind/role/state, and satisfied-source
+  metadata; no callback, operation-key, body, or token columns are selected.
+- Completed rollback readback with PostgreSQL persistence, both capabilities, current/desired global,
+  pilot group, and the reusable content-free drain helper. Disable continues recovery/admin until all
+  queues, DLQs, and unresolved states are zero.
+
+### Documentation checks
+
+- Parsed all three fenced PowerShell blocks with `System.Management.Automation.Language.Parser`:
+  zero parse errors; Markdown fence count was 12.
+- Static contract assertions: 17 required fragments passed (approved-origin binding, placeholder
+  rejection, pre-write gates, ID encoding, corrected SQL join, final rollback/drain); four forbidden
+  fragments were absent (literal draft/proposal placeholders and obsolete approval columns).
+- Write-safety assertion: exactly six guarded runtime writes, each with one fresh pre-write state
+  assertion; no direct write exists outside `Invoke-InternalWrite`.
+- `git diff --check` passed (line-ending warnings only); focused `rg` found all expected safety and
+  schema fragments.
+
+### Scope and remaining gate
+
+This fix changes Markdown/report evidence only. It does not execute a documented network, database,
+or runtime command; it performs no live Feishu call, deployment, enablement, push, or merge. The live
+pilot remains `not yet run` / controlled Feishu acceptance pending.

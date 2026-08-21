@@ -37,7 +37,7 @@ Any pending/missing field blocks `passed`.
 | Target/control | internal managed-page ID, safe Wiki URL, state/version, policy version, revision, body hash, node/document/block SHA-256 fingerprints; control neighbor count/type/hash fingerprints |
 | Source/snapshot | source/snapshot/observation IDs, source/snapshot hash/version, observed revision/body hash |
 | Proposal | before/after count/types, proposal ID/version, target ID/fingerprint/version, reason code |
-| Review/approval | attestation ID/version/content hash/target fingerprint; approval ID/version/reviewer role |
+| Review/approval | attestation ID/proposal-version/content hash/target fingerprint; approval ID/subject revision/version, requirement kind/role-reference/state and satisfied-source metadata |
 | Mutation/resync | execution ID/version/state/request fingerprint/request count, before/after revisions/hashes, neighbor fingerprint, resync tuple, retrieval result IDs/hash/version |
 | Drain/rollback | every supported queue/DLQ/unresolved count, durable disable acknowledgements, final runtime/readiness, UTC time |
 
@@ -47,26 +47,50 @@ Set variables only in the private operator environment. They are validated but n
 
 ```powershell
 $IrisBaseUri = $env:IRIS_PILOT_INTERNAL_BASE_URI
+$ApprovedInternalOrigin = $env:IRIS_PILOT_APPROVED_INTERNAL_ORIGIN
+$AllowLoopbackHttp = $env:IRIS_PILOT_ALLOW_LOOPBACK_HTTP
 $PilotGroupId = $env:IRIS_PILOT_GROUP_ID
 $Operator = $env:IRIS_PILOT_OPERATOR
 $ChangeTicket = $env:IRIS_PILOT_CHANGE_TICKET
 $ApprovedImageDigest = $env:IRIS_PILOT_IMAGE_DIGEST
 $InternalToken = $env:IRIS_INTERNAL_API_TOKEN
-foreach ($pair in @(@{n='base URI';v=$IrisBaseUri},@{n='group';v=$PilotGroupId},@{n='operator';v=$Operator},@{n='ticket';v=$ChangeTicket},@{n='image digest';v=$ApprovedImageDigest},@{n='token';v=$InternalToken})) { if ([string]::IsNullOrWhiteSpace([string]$pair.v)) { throw "Missing $($pair.n)" } }
-$IrisBaseUri = $IrisBaseUri.Trim().TrimEnd('/'); $base = [uri]$IrisBaseUri
-if (-not $base.IsAbsoluteUri -or $base.Scheme -notin @('https','http') -or $base.UserInfo -ne '' -or $base.Query -ne '' -or $base.Fragment -ne '' -or $base.AbsolutePath -notin @('','/')) { throw 'Use an authority-only HTTP(S) internal base URI' }
-if ($ApprovedImageDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw 'Use immutable sha256:<64 lowercase hex> image digest' }
+function Require-PrivateText([object]$value,[string]$label,[int]$min,[int]$max) {
+  $text=[string]$value
+  if ([string]::IsNullOrWhiteSpace($text) -or $text.Length -lt $min -or $text.Length -gt $max -or $text -match '[\x00-\x1f\x7f]' -or $text -match '\s' -or $text -match '(?i)^(pending|change[_-]?me|placeholder|example|dummy|todo|tbd|null|undefined|none|n/?a|<[^>]+>)$' -or $text -match '(?i)(change[_-]?me|placeholder|example|dummy|<[^>]*>)') { throw "Invalid $label" }
+  return $text
+}
+function Require-Id([object]$value,[string]$label) { $text=Require-PrivateText $value $label 1 512; if ($text -notmatch '^[A-Za-z0-9][A-Za-z0-9._:@/-]*$') { throw "Invalid $label" }; return $text }
+function Require-Token([object]$value) { $text=Require-PrivateText $value 'internal bearer token' 8 4096; if ($text -notmatch '^[A-Za-z0-9._~+/-=]+$') { throw 'Invalid internal bearer token' }; return $text }
+$AllowLoopbackHttp=if ([string]::IsNullOrWhiteSpace([string]$AllowLoopbackHttp)) { 'false' } else { Require-PrivateText $AllowLoopbackHttp 'loopback HTTP approval' 4 5 }
+if ($AllowLoopbackHttp -notin @('true','false')) { throw 'Invalid loopback HTTP approval' }
+function ConvertTo-InternalOrigin([object]$value,[string]$label) {
+  $text=Require-PrivateText $value $label 12 512
+  try { $uri=[uri]$text } catch { throw "Invalid $label" }
+  if (-not $uri.IsAbsoluteUri -or $uri.UserInfo -ne '' -or $uri.Query -ne '' -or $uri.Fragment -ne '' -or $uri.AbsolutePath -notin @('','/')) { throw "Invalid $label" }
+  $loopback=$uri.Host -in @('localhost','127.0.0.1','::1','[::1]')
+  if ($uri.Scheme -ne 'https' -and -not ($uri.Scheme -eq 'http' -and $loopback -and $AllowLoopbackHttp -eq 'true')) { throw 'Bearer destination must be HTTPS or explicitly approved loopback HTTP' }
+  return $uri
+}
+$IrisBaseUri=ConvertTo-InternalOrigin $IrisBaseUri 'internal base URI'; $approved=ConvertTo-InternalOrigin $ApprovedInternalOrigin 'ticket-approved internal origin'
+if ($IrisBaseUri.Scheme -ne $approved.Scheme -or $IrisBaseUri.Host -ne $approved.Host -or $IrisBaseUri.Port -ne $approved.Port) { throw 'Internal bearer destination does not match the ticket-approved origin' }
+$IrisBaseUri=$IrisBaseUri.GetLeftPart([System.UriPartial]::Authority)
+$PilotGroupId=Require-Id $PilotGroupId 'pilot group ID'; $Operator=Require-Id $Operator 'operator'; $ChangeTicket=Require-Id $ChangeTicket 'change ticket'; $InternalToken=Require-Token $InternalToken
+if ($ApprovedImageDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw 'Invalid immutable image digest' }
 $irisHeaders = @{ authorization = "Bearer $InternalToken"; 'x-iris-operator' = $Operator.Trim() }
 function Prop([object]$o,[string]$n,[string]$l) { if ($null -eq $o -or $null -eq $o.PSObject.Properties[$n]) { throw "Missing $l.$n" }; $o.$n }
 function Zero([object]$v,[string]$l) { if ($v -isnot [int] -and $v -isnot [long]) { throw "$l is not an integer" }; if ([long]$v -ne 0) { throw "$l is not zero" } }
-function Get-Internal([string]$path) { Invoke-RestMethod -Headers $irisHeaders -Uri ($IrisBaseUri + $path) -Method Get }
+function Get-InternalUri([string]$path) { if ($path -notmatch '^/[A-Za-z0-9._~!$&''()*+,;=:@/%?&=-]+$' -or $path -match '\.\.') { throw 'Invalid internal route' }; $uri=[uri]($IrisBaseUri+$path); if ($uri.Scheme -ne $approved.Scheme -or $uri.Host -ne $approved.Host -or $uri.Port -ne $approved.Port) { throw 'Blocked unapproved bearer destination' }; return $uri.AbsoluteUri }
+function Get-Internal([string]$path) { Invoke-RestMethod -Headers $irisHeaders -Uri (Get-InternalUri $path) -Method Get }
 function Confirm-LiveWrite([string]$action) { if ((Read-Host "Type $ChangeTicket to authorize $action against $ApprovedImageDigest") -cne $ChangeTicket) { throw "Human authority gate rejected $action" } }
+function Invoke-InternalWrite([ValidateSet('Post','Patch')][string]$method,[string]$path,[object]$body,[string]$label) { Confirm-LiveWrite $label; Invoke-RestMethod -Headers $irisHeaders -Method $method -ContentType application/json -Uri (Get-InternalUri $path) -Body ($body | ConvertTo-Json -Compress) }
 function Durable([object]$r,[bool]$global,[string]$label) { if ($r.ok -ne $true -or $r.durable -ne $true) { throw "$label is not durable" }; $p=Prop $r persistence $label; if ((Prop $p ok "$label.persistence") -ne $true -or (Prop $p storage "$label.persistence") -ne 'postgres') { throw "$label is not PostgreSQL durable" }; if ((Prop $r globalEnabled $label) -ne $global -or (Prop $r desiredGlobalEnabled $label) -ne $global) { throw "$label desired/current state mismatches" } }
+function Assert-RuntimeState([object]$s,[bool]$global,[bool]$pilotDisabled,[bool]$writeKnowledgeBase,[bool]$updateManagedKnowledge,[string]$label) { if ((Prop $s ok $label) -ne $true) { throw "$label is not readable" }; $p=Prop $s persistence $label; if ((Prop $p ok "$label.persistence") -ne $true -or (Prop $p storage "$label.persistence") -ne 'postgres') { throw "$label is not PostgreSQL durable" }; if ((Prop $s globalEnabled $label) -ne $global -or (Prop $s desiredGlobalEnabled $label) -ne $global) { throw "$label global desired/current mismatch" }; $groups=@(Prop $s disabledGroupIds $label); if ((($groups -contains $PilotGroupId) -ne $pilotDisabled)) { throw "$label pilot-group state mismatch" }; $caps=Prop $s capabilities $label; if ((Prop $caps writeKnowledgeBase "$label.capabilities") -ne $writeKnowledgeBase -or (Prop $caps updateManagedKnowledge "$label.capabilities") -ne $updateManagedKnowledge) { throw "$label capability state mismatch" } }
 ```
 
-Expected: no exception and no secret output. Stop for an invalid URI, missing authority/group/token, or
-non-immutable image. Before every write, the operator must compare ticket/authority/image digest and
-pass `Confirm-LiveWrite`.
+Expected: no exception and no secret output. Stop for placeholders, whitespace/control characters,
+invalid IDs/tokens, a non-immutable image, or a base URI that is not the exact ticket-approved HTTPS
+origin (loopback HTTP additionally requires `IRIS_PILOT_ALLOW_LOOPBACK_HTTP=true`). Bearer credentials can only reach `Get-InternalUri`; every
+write uses `Invoke-InternalWrite`, which calls `Confirm-LiveWrite` immediately before dispatch.
 
 ## Preparation: keep managed-update deployment disabled
 
@@ -86,8 +110,7 @@ pass `Confirm-LiveWrite`.
    a credential, raw token, or body and never uses `SELECT *`:
 
    ```powershell
-   $ManagedPageId=$env:IRIS_PILOT_MANAGED_PAGE_ID
-   if ([string]::IsNullOrWhiteSpace($ManagedPageId)) { throw 'IRIS_PILOT_MANAGED_PAGE_ID is required' }
+   $ManagedPageId=Require-Id $env:IRIS_PILOT_MANAGED_PAGE_ID 'managed page ID'
    ```
 
    ```sql
@@ -115,6 +138,7 @@ rollback. Real shape is `status.components.managedKnowledgeUpdates`; approval-in
 top-level `status.knowledgeCards.queue`, not a managed-update property.
 
 ```powershell
+function Assert-ContentFreeDrain {
 $readiness = Get-Internal '/internal/readiness'; $status = Get-Internal '/internal/status'
 if ($readiness.ok -ne $true -or $status.ok -ne $true -or $status.status -ne 'healthy') { throw 'Readiness/internal status is not healthy' }
 $gate=@($readiness.checks | Where-Object { $_.id -eq 'managedKnowledgeUpdates' }); if ($gate.Count -ne 1 -or $gate[0].status -ne 'pass') { throw 'Managed-update readiness is not pass' }
@@ -128,6 +152,8 @@ if ($managed.enabled -eq $true) {
   $recon=Prop $managed reconciliation 'status.components.managedKnowledgeUpdates'
   foreach ($n in @('outcomeUnknown','reconciliationRequired')) { Zero (Prop $recon $n 'managedUpdates.reconciliation') "managedUpdates.$n" }
 } elseif ($managed.ok -ne $true -or $managed.enabled -ne $false -or $managed.running -ne $false) { throw 'Managed-update feature is neither safely disabled nor healthy' }
+}
+Assert-ContentFreeDrain
 ```
 
 Expected: every supported count is present and zero. Before deployment enablement, managed updates
@@ -158,19 +184,19 @@ COMMIT;
    review, or approval. Each has its human gate, durable response/readback, and rollback below.
 
    ```powershell
-   $before=Get-Internal '/internal/runtime-control/status'; if ($before.persistence.ok -ne $true -or $before.persistence.storage -ne 'postgres') { throw 'Runtime persistence is not PostgreSQL' }
-   Confirm-LiveWrite 'enable managed-update capabilities'
-   $r=Invoke-RestMethod -Headers $irisHeaders -Method Patch -ContentType application/json -Uri ($IrisBaseUri+'/internal/runtime-control/capabilities') -Body (@{writeKnowledgeBase=$true;updateManagedKnowledge=$true}|ConvertTo-Json -Compress); Durable $r $false 'Capability enable'
-   Confirm-LiveWrite 'enable one pilot group'
-   $r=Invoke-RestMethod -Headers $irisHeaders -Method Post -ContentType application/json -Uri ($IrisBaseUri+'/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) -Body (@{enabled=$true}|ConvertTo-Json -Compress); Durable $r $false 'Group enable'
-   Confirm-LiveWrite 'enable global runtime'
-   $r=Invoke-RestMethod -Headers $irisHeaders -Method Post -ContentType application/json -Uri ($IrisBaseUri+'/internal/runtime-control/global') -Body (@{enabled=$true}|ConvertTo-Json -Compress); Durable $r $true 'Global enable'
+   $before=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $before $false $true $false $false 'Pre-capability enable'
+   $r=Invoke-InternalWrite Patch '/internal/runtime-control/capabilities' @{writeKnowledgeBase=$true;updateManagedKnowledge=$true} 'enable managed-update capabilities'; Durable $r $false 'Capability enable'
+   $beforeGroup=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeGroup $false $true $true $true 'Pre-group enable'
+   $r=Invoke-InternalWrite Post ('/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) @{enabled=$true} 'enable one pilot group'; Durable $r $false 'Group enable'
+   $beforeGlobal=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeGlobal $false $false $true $true 'Pre-global enable'
+   $r=Invoke-InternalWrite Post '/internal/runtime-control/global' @{enabled=$true} 'enable global runtime'; Durable $r $true 'Global enable'
    $after=Get-Internal '/internal/runtime-control/status'
-   if ($after.globalEnabled -ne $true -or $after.desiredGlobalEnabled -ne $true -or $after.disabledGroupIds -contains $PilotGroupId -or $after.capabilities.writeKnowledgeBase -ne $true -or $after.capabilities.updateManagedKnowledge -ne $true) { throw 'Runtime readback mismatches one-group window' }
+   Assert-RuntimeState $after $true $false $true $true 'Post-enable readback'
    ```
 
-   Expected: content-free durable acknowledgements, exact current/desired state. Stop and roll back
-   for non-durable/storage mismatch, any enabled wrong group, or unexpected capability.
+   Expected: every capability/group/global write has a fresh fail-closed precondition, human ticket
+   entry, content-free durable acknowledgement, and exact current/desired readback. Stop and roll
+   back for a non-durable/storage mismatch, unexpected pilot-group state, or capability mismatch.
 
 ## Acceptance actions for the already prepared target
 
@@ -186,11 +212,16 @@ use only the approved deployment/Feishu surfaces; their readbacks are adjacent m
    prepared target. Stop if resolution is unavailable, a control is targeted, or it falls back to
    publish-new; roll back without confirmation or mutation.
 
-2. Human gate: before a group member manually confirms the exact displayed card, record only the
-   content-free UI acknowledgement timestamp/operator and prove zero proposals with either
-   `GET /internal/action-proposals?subjectId=<draft-id>&limit=100` (read only) or this read-only
-   projection. Expected: zero rows; stop otherwise and roll back without confirmation. There is no
-   internal confirmation route.
+2. After the manual conflict action returns its internal draft ID, the operator records it in the
+   private environment, reinitializes and validates it, then proves zero proposals with this exact
+   read-only request/projection. Before a group member manually confirms the exact displayed card,
+   record only the content-free UI acknowledgement timestamp/operator. Expected: zero rows; stop
+   otherwise and roll back without confirmation. There is no internal confirmation route.
+
+   ```powershell
+   $DraftId=Require-Id $env:IRIS_PILOT_DRAFT_ID 'draft ID'
+   $beforeProposals=Get-Internal ('/internal/action-proposals?subjectId='+[uri]::EscapeDataString($DraftId)+'&limit=100')
+   ```
 
    ```sql
 BEGIN READ ONLY;
@@ -201,23 +232,34 @@ COMMIT;
 
 3. Human gate: the group member rechecks the exact card, target fingerprint, and ticket before using
    Feishu’s normal confirmation control. This is the real confirmation action—never a forged internal
-   API call. Immediately repeat the preceding read-only query. Expected durable readback: exactly one
+   API call. After confirmation returns the internal proposal ID, the operator records it privately,
+   reinitializes and validates it, then immediately repeats the preceding query. Expected durable readback: exactly one
    `update_knowledge_publication`, no `publish_knowledge_draft`. Record proposal ID/version; use
-   `GET /internal/action-proposals/<proposal-id>` only for its projected managed target/page/execution
-   metadata (safe URL, IDs, states, hashes, revision/version, request fingerprint). Stop on a changed
+   this read-only request only for its projected managed target/page/execution metadata (safe URL,
+   IDs, states, hashes, revision/version, request fingerprint). Stop on a changed
    target fingerprint/version, missing target, extra proposal, or wrong action type; enter rollback.
+
+   ```powershell
+   $ProposalId=Require-Id $env:IRIS_PILOT_PROPOSAL_ID 'proposal ID'
+   $proposalMetadata=Get-Internal ('/internal/action-proposals/'+[uri]::EscapeDataString($ProposalId))
+   ```
 
 4. Human gate: the eligible owner/admin confirms the ticket, proposal version, target fingerprint,
    and full-text review scope, then manually opens the existing OAuth review and approves that exact
    Feishu card. Never use proposal GET/reconcile to forge it. Expected durable proof is current
-   attestation/approval; inspect IDs/versions/role/hash only:
+   attestation/approval; inspect IDs/versions/role/hash only. `action_target_fingerprint` is the
+   managed-update schema field added by the Task 5 migration:
 
    ```sql
 BEGIN READ ONLY;
-SELECT id, proposal_id, proposal_version, subject_revision, subject_version, content_hash, action_target_fingerprint, created_at
-FROM action_review_attestations WHERE proposal_id = :'proposal_id' ORDER BY created_at, id;
-SELECT id, proposal_id, requirement_id, proposal_version, subject_revision, subject_version, approver_role, created_at
-FROM action_approvals WHERE proposal_id = :'proposal_id' ORDER BY created_at, id;
+SELECT id, proposal_id, proposal_version, subject_revision, subject_version, content_hash, action_target_fingerprint, reviewed_at
+FROM action_review_attestations WHERE proposal_id = :'proposal_id' ORDER BY reviewed_at, id;
+SELECT a.id, a.proposal_id, a.requirement_id, a.subject_revision, a.subject_version,
+       a.authorization_summary, a.created_at, r.requirement_kind, r.role_ref_type, r.state,
+       r.satisfied_source_type, r.satisfied_source_id
+FROM action_approvals AS a
+JOIN action_approval_requirements AS r ON r.id = a.requirement_id AND r.proposal_id = a.proposal_id
+WHERE a.proposal_id = :'proposal_id' ORDER BY a.created_at, a.id;
 COMMIT;
 ```
 
@@ -244,9 +286,11 @@ COMMIT;
 ```
 
    Stop on a second request, lower/equal revision, wrong page/block, neighbor change, or human edit;
-   enter rollback. `POST /internal/managed-knowledge-updates/<execution-id>/reconcile` is only for an
-   existing unresolved execution with exact execution/page versions and an operator operation key; it
-   is not an approval or blind retry.
+   enter rollback. `POST /internal/managed-knowledge-updates/$([uri]::EscapeDataString($ExecutionId))/reconcile`
+   is only for an existing unresolved execution with exact execution/page versions and an operator
+   operation key; it is not an approval or blind retry. If it is ever authorized, first set
+   `$ExecutionId=Require-Id $env:IRIS_PILOT_EXECUTION_ID 'execution ID'`; normal pilot acceptance
+   never invokes this recovery route.
 
 6. Keep the barrier until normal sync observes the exact source/snapshot/revision/hash tuple and the
    page becomes `active`; only then perform permitted retrieval and record IDs/hash/version, not text.
@@ -263,14 +307,19 @@ Then, after `Confirm-LiveWrite` before each mutation, disable global, pilot grou
 capabilities with the same actual routes/payloads:
 
 ```powershell
-Confirm-LiveWrite 'disable global runtime'; $r=Invoke-RestMethod -Headers $irisHeaders -Method Post -ContentType application/json -Uri ($IrisBaseUri+'/internal/runtime-control/global') -Body (@{enabled=$false}|ConvertTo-Json -Compress); Durable $r $false 'Global disable'
-Confirm-LiveWrite 'disable pilot group'; $r=Invoke-RestMethod -Headers $irisHeaders -Method Post -ContentType application/json -Uri ($IrisBaseUri+'/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) -Body (@{enabled=$false}|ConvertTo-Json -Compress); Durable $r $false 'Group disable'
-Confirm-LiveWrite 'disable managed-update capabilities'; $r=Invoke-RestMethod -Headers $irisHeaders -Method Patch -ContentType application/json -Uri ($IrisBaseUri+'/internal/runtime-control/capabilities') -Body (@{writeKnowledgeBase=$false;updateManagedKnowledge=$false}|ConvertTo-Json -Compress); Durable $r $false 'Capability disable'
-$final=Get-Internal '/internal/runtime-control/status'; if ($final.globalEnabled -ne $false -or $final.desiredGlobalEnabled -ne $false -or $final.disabledGroupIds -notcontains $PilotGroupId -or $final.capabilities.updateManagedKnowledge -ne $false) { throw 'Disable readback incomplete' }
+$beforeRollback=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeRollback $true $false $true $true 'Pre-global disable'
+$r=Invoke-InternalWrite Post '/internal/runtime-control/global' @{enabled=$false} 'disable global runtime'; Durable $r $false 'Global disable'
+$beforeGroupDisable=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeGroupDisable $false $false $true $true 'Pre-group disable'
+$r=Invoke-InternalWrite Post ('/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) @{enabled=$false} 'disable pilot group'; Durable $r $false 'Group disable'
+$beforeCapabilityDisable=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeCapabilityDisable $false $true $true $true 'Pre-capability disable'
+$r=Invoke-InternalWrite Patch '/internal/runtime-control/capabilities' @{writeKnowledgeBase=$false;updateManagedKnowledge=$false} 'disable managed-update capabilities'; Durable $r $false 'Capability disable'
+$final=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $final $false $true $false $false 'Final disable readback'
+Assert-ContentFreeDrain
 ```
 
 Expected: durable disabled readback, while recovery/admin converges existing resync/reconciliation to
-zero. Stop closeout if recovery is unavailable, any queue/DLQ/unresolved count remains nonzero, or a
-page remains barred. Never delete history/queues/facts or blind-retry remote work. Mark **passed**
+zero. The final drain helper must stay available after disabling new claims and must reach zero before
+closeout. Stop closeout if recovery/admin is unavailable, any queue/DLQ/unresolved count remains
+nonzero, or a page remains barred. Never delete history/queues/facts or blind-retry remote work. Mark **passed**
 only when every evidence field is non-pending; otherwise it remains **not yet run / controlled Feishu
 acceptance pending**.
