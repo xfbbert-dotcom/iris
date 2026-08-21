@@ -243,13 +243,17 @@ describe("ActionApprovalRuntime", () => {
         reconciliationReasonCode: "operator_requested",
       },
     };
+    const acknowledgement = {
+      executionId: "execution-1", state: "reconciliation_required" as const, version: 5,
+      reasonCode: "operator_requested" as const,
+    };
     Object.assign(dependencies.managedPageRepository, {
       requestReconciliation: vi.fn()
-        .mockResolvedValueOnce({ outcome: "applied", claim })
-        .mockResolvedValueOnce({ outcome: "already_applied", claim }),
+        .mockResolvedValueOnce({ outcome: "applied", claim, acknowledgement })
+        .mockResolvedValueOnce({ outcome: "already_applied", claim, acknowledgement }),
     });
     dependencies.managedUpdateReconciler.reconcileOne.mockResolvedValue({
-      executionId: "execution-1", status: "reconciliation_required", code: "readback_unavailable",
+      executionId: "execution-1", status: "resync_required", code: "readback_confirmed",
     });
     const runtime = createActionApprovalRuntime({
       env: enabledEnv(), runtimeController: enabledController(), knowledgeCardRuntime: knowledgeCardRuntime(), dependencies,
@@ -263,12 +267,13 @@ describe("ActionApprovalRuntime", () => {
       operationKey: "managed-update:execution-1:reconcile:4", operator: "operator@example.com", at: new Date(),
     };
 
-    await runtime.managedKnowledgeAdmin!.reconcile(input);
-    const replay = await runtime.managedKnowledgeAdmin!.reconcile(input);
-
-    expect(replay).toEqual({
-      executionId: "execution-1", state: "reconciliation_required", version: 5, reasonCode: "operator_requested",
+    const first = await runtime.managedKnowledgeAdmin!.reconcile(input);
+    const replay = await runtime.managedKnowledgeAdmin!.reconcile({
+      ...input, at: new Date(input.at.getTime() + 1_000),
     });
+
+    expect(first).toEqual(acknowledgement);
+    expect(replay).toEqual(first);
     expect(dependencies.managedUpdateReconciler.reconcileOne).toHaveBeenCalledTimes(1);
   });
 

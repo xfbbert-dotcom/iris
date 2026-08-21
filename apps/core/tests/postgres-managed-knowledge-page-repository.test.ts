@@ -344,6 +344,12 @@ describe("managed update outcome transition contract", () => {
     expect(first).toMatchObject({
       outcome: "applied",
       claim: { execution: { id: input.executionId } },
+      acknowledgement: {
+        executionId: input.executionId,
+        state: "reconciliation_required",
+        version: 5,
+        reasonCode: "operator_requested",
+      },
     });
     const executionEvent = fixture.statements.findIndex((sql) =>
       sql.includes("INSERT INTO knowledge_publication_update_execution_events"));
@@ -354,6 +360,19 @@ describe("managed update outcome transition contract", () => {
     expect(fixture.statementValues[pageEvent]).toContain("operator@example.com");
     expect(fixture.statementValues[executionEvent]).toContain(5);
     expect(fixture.statementValues[pageEvent]).toContain(2);
+
+    const replay = await repository.requestReconciliation({
+      ...input,
+      at: new Date("2026-08-21T02:00:01.000Z"),
+    });
+    expect(replay).toMatchObject({ outcome: "already_applied" });
+    expect(replay.acknowledgement).toEqual(first.acknowledgement);
+
+    await expect(repository.requestReconciliation({
+      ...input,
+      operator: "different-operator@example.com",
+      at: new Date("2026-08-21T02:00:02.000Z"),
+    })).rejects.toThrow(/operation conflict/iu);
 
     await expect(repository.requestReconciliation({ ...input, expectedExecutionVersion: 5,
       operationKey: "managed-update-reconcile:execution-1:5" })).rejects.toThrow(/version conflict/iu);
@@ -916,11 +935,15 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
           page: { state: "reconciliation_required", version: dispatched.page.version + 1 },
         },
       });
-      const reconciliationReplay = await repository.requestReconciliation(reconciliationInput);
+      const reconciliationReplay = await repository.requestReconciliation({
+        ...reconciliationInput,
+        at: new Date(reconciliationInput.at.getTime() + 1_000),
+      });
       expect(reconciliationReplay).toMatchObject({
         outcome: "already_applied",
         claim: { execution: { id: claimed.execution.id, version: reconciled.claim.execution.version } },
       });
+      expect(reconciliationReplay.acknowledgement).toEqual(reconciled.acknowledgement);
       await expect(repository.requestReconciliation({
         ...reconciliationInput,
         expectedExecutionVersion: reconciliationInput.expectedExecutionVersion + 1,
@@ -1352,6 +1375,7 @@ function managedUpdateClaimDataSource({
   const statementValues: unknown[][] = [];
   const attestationFingerprints: string[] = [];
   const terminalizedProposalIds: string[] = [];
+  const executionEvents = new Map<string, Record<string, unknown>>();
   let claimed = false;
   let proposalExecuting = false;
   const page = () => managedPageRow({
@@ -1438,6 +1462,10 @@ function managedUpdateClaimDataSource({
       return { rows: [] };
     }
     if (normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+    if (normalized.includes("FROM knowledge_publication_update_execution_events") && normalized.includes("operation_key = $1")) {
+      const event = executionEvents.get(String(values[0]));
+      return { rows: event === undefined ? [] : [event] };
+    }
     if (normalized.includes("FROM knowledge_publication_update_executions") && normalized.includes("operation_key = $1")) {
       return { rows: [] };
     }
@@ -1534,6 +1562,13 @@ function managedUpdateClaimDataSource({
     }
     if (normalized.startsWith("UPDATE managed_knowledge_pages")) {
       claimed = true;
+      return { rows: [] };
+    }
+    if (normalized.startsWith("INSERT INTO knowledge_publication_update_execution_events")) {
+      executionEvents.set(String(values[5]), {
+        execution_id: values[1], event_type: values[2], from_version: values[3], to_version: values[4],
+        operation_fingerprint: values[6], reason_code: values[7], created_at: values[8],
+      });
       return { rows: [] };
     }
     if (normalized.startsWith("UPDATE action_proposals")) {

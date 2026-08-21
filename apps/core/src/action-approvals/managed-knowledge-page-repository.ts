@@ -200,6 +200,12 @@ export type ManagedKnowledgeReconciliationRequest = {
 export type ManagedKnowledgeReconciliationRequestResult = {
   outcome: "applied" | "already_applied";
   claim: ClaimedManagedKnowledgeUpdate;
+  acknowledgement: {
+    executionId: string;
+    state: "reconciliation_required";
+    version: number;
+    reasonCode: "operator_requested";
+  };
 };
 export type ManagedExecutionMutationResult = {
   outcome: "applied" | "already_applied";

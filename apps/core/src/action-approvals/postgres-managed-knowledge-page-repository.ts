@@ -733,7 +733,7 @@ async function claimRemoteRetry(
 }
 
 async function recordRemoteOutcome(dataSource: PostgresKnowledgeDraftDataSource, input: RecordManagedRemoteOutcomeInput): Promise<ManagedExecutionMutationResult> {
-  const normalized = normalizeOutcomeInput(input); const fingerprint = operationFingerprint(normalized);
+  const normalized = normalizeOutcomeInput(input); const fingerprint = reconciliationRequestFingerprint(normalized) ?? operationFingerprint(normalized);
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
     const event = await client.query<{ execution_id: string; operation_fingerprint: string }>(`SELECT execution_id, operation_fingerprint FROM knowledge_publication_update_execution_events WHERE operation_key = $1`, [normalized.operationKey]);
@@ -1124,6 +1124,34 @@ async function requestReconciliation(dataSource: PostgresKnowledgeDraftDataSourc
   return {
     outcome: result.outcome,
     claim: await buildClaimResult(dataSource, result.execution, result.outcome),
+    acknowledgement: await readReconciliationRequestAcknowledgement(dataSource, input.operationKey),
+  };
+}
+
+async function readReconciliationRequestAcknowledgement(
+  dataSource: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  operationKey: string,
+): Promise<{
+  executionId: string;
+  state: "reconciliation_required";
+  version: number;
+  reasonCode: "operator_requested";
+}> {
+  const result = await dataSource.query<{
+    execution_id: string; event_type: string; to_version: string | number; reason_code: string | null;
+  }>(`SELECT execution_id,event_type,to_version,reason_code
+       FROM knowledge_publication_update_execution_events
+      WHERE operation_key = $1`, [ref("operationKey", operationKey)]);
+  const event = result.rows[0];
+  if (result.rows.length !== 1 || event === undefined || event.event_type !== "reconciliation_required" ||
+    event.reason_code !== "operator_requested") {
+    throw new ManagedKnowledgePageVersionConflictError();
+  }
+  return {
+    executionId: text(event.execution_id),
+    state: "reconciliation_required",
+    version: number(event.to_version),
+    reasonCode: "operator_requested",
   };
 }
 
@@ -1150,6 +1178,20 @@ function normalizeRegisterInput(input: RegisterManagedPublicationInput): Registe
 function normalizeObservationInput(input: RecordManagedSnapshotObservationInput): RecordManagedSnapshotObservationInput { return { ...input,id:ref("id",input.id),managedPageId:ref("managedPageId",input.managedPageId),managedPageVersion:positive("managedPageVersion",input.managedPageVersion),documentSnapshotId:ref("documentSnapshotId",input.documentSnapshotId),documentSourceId:ref("documentSourceId",input.documentSourceId),snapshotContentHash:hash("snapshotContentHash",input.snapshotContentHash),observedRemoteRevisionId:ref("observedRemoteRevisionId",input.observedRemoteRevisionId),observedManagedBodyBlockId:ref("observedManagedBodyBlockId",input.observedManagedBodyBlockId),managedBodyContentHash:hash("managedBodyContentHash",input.managedBodyContentHash),adapterVersion:ref("adapterVersion",input.adapterVersion),operationKey:ref("operationKey",input.operationKey),at:date("at",input.at),observedAt:date("observedAt",input.observedAt) }; }
 function normalizeTargetInput(input: BindManagedUpdateTargetInput): BindManagedUpdateTargetInput { return { ...input,id:ref("id",input.id),draftId:ref("draftId",input.draftId),draftRevision:positive("draftRevision",input.draftRevision),draftVersion:positive("draftVersion",input.draftVersion),conflictCandidateId:ref("conflictCandidateId",input.conflictCandidateId),conflictCandidateVersion:positive("conflictCandidateVersion",input.conflictCandidateVersion),managedPageId:ref("managedPageId",input.managedPageId),managedPageVersion:positive("managedPageVersion",input.managedPageVersion),linkedDocumentSourceId:ref("linkedDocumentSourceId",input.linkedDocumentSourceId),targetSnapshotId:ref("targetSnapshotId",input.targetSnapshotId),targetSnapshotHash:hash("targetSnapshotHash",input.targetSnapshotHash),...(input.targetSourceVersion === undefined ? {} : {targetSourceVersion:ref("targetSourceVersion",input.targetSourceVersion)}),remoteDocumentToken:ref("remoteDocumentToken",input.remoteDocumentToken),managedBodyBlockId:ref("managedBodyBlockId",input.managedBodyBlockId),expectedRemoteRevisionId:ref("expectedRemoteRevisionId",input.expectedRemoteRevisionId),currentBodyContentHash:hash("currentBodyContentHash",input.currentBodyContentHash),proposedBodyContentHash:hash("proposedBodyContentHash",input.proposedBodyContentHash),authorizationGroupId:ref("authorizationGroupId",input.authorizationGroupId),targetPolicyId:ref("targetPolicyId",input.targetPolicyId),targetPolicyVersion:positive("targetPolicyVersion",input.targetPolicyVersion),operationKey:ref("operationKey",input.operationKey),at:date("at",input.at) }; }
 function normalizeOutcomeInput(input: RecordManagedRemoteOutcomeInput): RecordManagedRemoteOutcomeInput { const classification = input.classification; if (!['preflight_failed','outcome_unknown','remote_applied','failed','reconciliation_required'].includes(classification)) throw new Error('classification is invalid'); if (!['active','resync_required','reconciliation_required','blocked','retired'].includes(input.pageDisposition)) throw new Error('pageDisposition is invalid'); if ((classification === 'outcome_unknown' || classification === 'reconciliation_required') && input.reconciliationReasonCode === undefined) throw new Error('reconciliationReasonCode is required'); return { ...input,executionId:ref('executionId',input.executionId),expectedExecutionVersion:positive('expectedExecutionVersion',input.expectedExecutionVersion),...(input.expectedManagedPageVersion === undefined ? {} : {expectedManagedPageVersion:positive('expectedManagedPageVersion',input.expectedManagedPageVersion)}),pageDisposition:input.pageDisposition,...(input.responseClassification === undefined ? {} : {responseClassification:ref('responseClassification',input.responseClassification)}),...(input.responseRevisionId === undefined ? {} : {responseRevisionId:ref('responseRevisionId',input.responseRevisionId)}),...(input.reconciliationReasonCode === undefined ? {} : {reconciliationReasonCode:ref('reconciliationReasonCode',input.reconciliationReasonCode)}),...(input.verifiedUnchangedRemote === undefined ? {} : { verifiedUnchangedRemote: { remoteDocumentToken: ref('verifiedUnchangedRemote.remoteDocumentToken',input.verifiedUnchangedRemote.remoteDocumentToken), managedBodyBlockId: ref('verifiedUnchangedRemote.managedBodyBlockId',input.verifiedUnchangedRemote.managedBodyBlockId), remoteRevisionId: ref('verifiedUnchangedRemote.remoteRevisionId',input.verifiedUnchangedRemote.remoteRevisionId), bodyContentHash: hash('verifiedUnchangedRemote.bodyContentHash',input.verifiedUnchangedRemote.bodyContentHash) } }),operationKey:ref('operationKey',input.operationKey),actor:ref('actor',input.actor),at:date('at',input.at) }; }
+function reconciliationRequestFingerprint(input: RecordManagedRemoteOutcomeInput): string | undefined {
+  if (input.classification !== "reconciliation_required" || input.pageDisposition !== "reconciliation_required" ||
+    input.responseClassification !== "operator_requested" || input.reconciliationReasonCode !== "operator_requested") {
+    return undefined;
+  }
+  return operationFingerprint({
+    operation: "operator_reconciliation_request",
+    executionId: input.executionId,
+    expectedExecutionVersion: input.expectedExecutionVersion,
+    ...(input.expectedManagedPageVersion === undefined ? {} : { expectedManagedPageVersion: input.expectedManagedPageVersion }),
+    operationKey: input.operationKey,
+    operator: input.actor,
+  });
+}
 function validOutcomePredecessor(state: ManagedKnowledgeUpdateExecution["state"], classification: RecordManagedRemoteOutcomeInput["classification"]): boolean {
   if (classification === "preflight_failed") return state === "claimed";
   if (classification === "outcome_unknown") return state === "remote_request_dispatched";

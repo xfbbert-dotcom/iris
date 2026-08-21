@@ -314,20 +314,10 @@ export function createActionApprovalRuntime({
         async reconcile(input) {
           const requested = await managedPages.requestReconciliation(input);
           if (requested.outcome === "already_applied") {
-            return {
-              executionId: requested.claim.execution.id,
-              state: "reconciliation_required",
-              version: requested.claim.execution.version,
-              reasonCode: requested.claim.execution.reconciliationReasonCode ?? "operator_requested",
-            };
+            return requested.acknowledgement;
           }
-          const result = await managedUpdateReconciler.reconcileOne(requested.claim);
-          return {
-            executionId: result.executionId,
-            state: result.status,
-            version: requested.claim.execution.version,
-            reasonCode: result.code,
-          };
+          await managedUpdateReconciler.reconcileOne(requested.claim);
+          return requested.acknowledgement;
         },
       };
     }
