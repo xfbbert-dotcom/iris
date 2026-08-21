@@ -125,13 +125,15 @@ describe("action approval migration contract", () => {
         expect(sql).toMatch(/knowledge_conflict_candidates/iu);
         expect(sql).toMatch(/document_snapshots/iu);
         expect(sql).toMatch(/knowledge_publication_target_policies/iu);
+        expect(sql).toMatch(/has_any_update_target/iu);
         expect(sql).toMatch(
-          /WHERE draft\.status = 'pending_review'.*target\.id IS NULL.*page\.id IS NOT NULL.*target_policy\.id IS NOT NULL.*ORDER BY/isu,
+          /WHERE draft\.status = 'pending_review'.*target\.id IS NULL AND NOT EXISTS\s*\(\s*SELECT 1 FROM knowledge_publication_update_targets prior_target.*page\.id IS NOT NULL.*target_policy\.id IS NOT NULL.*ORDER BY/isu,
         );
         return { rows: [
           draftCandidateRow("draft-publish", null, null),
           draftCandidateRow("draft-update", "target-1", "target-1"),
           draftCandidateRow("draft-stale", "target-stale", null),
+          draftCandidateRow("draft-revised-bound", null, null, true),
         ] };
       }
       if (sql.includes("FROM knowledge_draft_revision_evidence")) return { rows: [] };
@@ -151,6 +153,28 @@ describe("action approval migration contract", () => {
         actionType: "update_knowledge_publication",
       }),
     ]);
+  });
+
+  it("filters action type before proposal batch limits", async () => {
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      expect(sql).toMatch(/action_type = ANY\(\$2::TEXT\[\]\).*LIMIT \$4/isu);
+      expect(params).toEqual([
+        ["approved"],
+        ["publish_knowledge_draft"],
+        null,
+        1,
+      ]);
+      return { rows: [] };
+    });
+    const repository = createPostgresActionProposalRepository({
+      dataSource: { query } as unknown as PostgresKnowledgeDraftDataSource,
+    });
+
+    await expect(repository.listProposals({
+      statuses: ["approved"],
+      actionTypes: ["publish_knowledge_draft"],
+      limit: 1,
+    })).resolves.toEqual([]);
   });
 
   it("stores the supplied update action and fingerprints its exact type", async () => {
@@ -175,6 +199,66 @@ describe("action approval migration contract", () => {
     await expect(repository.createProposal(
       proposalCreationInput("publish_knowledge_draft", "stale-bound-publication"),
     )).rejects.toBeInstanceOf(ActionProposalIneligibleError);
+  });
+
+  it("never publishes or updates a reconfirmed revision whose binding belongs to an older revision", async () => {
+    const fixture = proposalCreationDataSource({
+      hasManagedTarget: true,
+      targetRevision: 1,
+      draftRevision: 2,
+      draftVersion: 4,
+    });
+    const repository = createPostgresActionProposalRepository({ dataSource: fixture.dataSource });
+    const revisedInput = {
+      ...proposalCreationInput("publish_knowledge_draft", "reconfirmed-revised-binding"),
+      expectedRevision: 2,
+      expectedDraftVersion: 4,
+    };
+
+    await expect(repository.createProposal(revisedInput))
+      .rejects.toBeInstanceOf(ActionProposalIneligibleError);
+    await expect(repository.createProposal({
+      ...revisedInput,
+      proposalId: "proposal-reconfirmed-revised-update",
+      actionType: "update_knowledge_publication",
+      operationKey: "reconfirmed-revised-update",
+    })).rejects.toBeInstanceOf(ActionProposalIneligibleError);
+  });
+
+  it("rejects a publication replay key presented for a different update proposal", async () => {
+    const fixture = publicationClaimReplayDataSource();
+    const repository = createPostgresActionProposalRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.claimApprovedPublicationExecution({
+      proposalId: "proposal-update",
+      expectedProposalVersion: 2,
+      runtimeGate: {
+        globalEnabled: true,
+        writeKnowledgeBase: true,
+        disabledGroupIds: [],
+      },
+      workerId: "publication-worker",
+      operationKey: "publication-claim-existing",
+      at,
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+  });
+
+  it("rejects a publication replay whose stored request fingerprint is not exact", async () => {
+    const fixture = publicationClaimReplayDataSource({ requestFingerprint: "f".repeat(64) });
+    const repository = createPostgresActionProposalRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.claimApprovedPublicationExecution({
+      proposalId: "proposal-publish",
+      expectedProposalVersion: 2,
+      runtimeGate: {
+        globalEnabled: true,
+        writeKnowledgeBase: true,
+        disabledGroupIds: [],
+      },
+      workerId: "publication-worker",
+      operationKey: "publication-claim-existing",
+      at,
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
   });
 
   it("preserves exact legacy publish-new proposal replays after action typing", async () => {
@@ -1774,6 +1858,7 @@ function draftCandidateRow(
   id: string,
   updateTargetId: string | null,
   eligibleUpdateTargetId: string | null,
+  hasAnyUpdateTarget = updateTargetId !== null,
 ) {
   return {
     id,
@@ -1789,6 +1874,7 @@ function draftCandidateRow(
     suggested_space_id: "space-main",
     suggested_parent_node_token: null,
     has_current_group_confirmation: true,
+    has_any_update_target: hasAnyUpdateTarget,
     update_target_id: updateTargetId,
     eligible_update_target_id: eligibleUpdateTargetId,
     updated_at: at,
@@ -1815,6 +1901,9 @@ function proposalCreationInput(
 function proposalCreationDataSource(input: {
   hasManagedTarget: boolean;
   targetCurrent?: boolean;
+  targetRevision?: number;
+  draftRevision?: number;
+  draftVersion?: number;
 }) {
   let proposalRow: Record<string, unknown> | undefined;
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
@@ -1831,8 +1920,8 @@ function proposalCreationDataSource(input: {
         id: "draft-1",
         source_group_id: "group-1",
         status: "pending_review",
-        current_revision_number: 1,
-        version: 2,
+        current_revision_number: input.draftRevision ?? 1,
+        version: input.draftVersion ?? 2,
         title: "Proposal title",
         content: "Proposal body",
         risk_level: "low",
@@ -1864,6 +1953,7 @@ function proposalCreationDataSource(input: {
       sql.includes("WHERE draft_id = $1")) {
       return { rows: input.hasManagedTarget ? [{
         id: "target-1",
+        draft_revision: input.targetRevision ?? 1,
         conflict_candidate_id: "candidate-1",
         conflict_candidate_version: 3,
         managed_page_id: "managed-1",
@@ -1926,6 +2016,109 @@ function proposalCreationDataSource(input: {
       if (proposalRow === undefined) throw new Error("proposal was not created");
       proposalRow.operation_fingerprint = value;
     },
+  };
+}
+
+function publicationClaimReplayDataSource(input: { requestFingerprint?: string } = {}) {
+  const publishProposal = {
+    id: "proposal-publish",
+    action_type: "publish_knowledge_draft",
+    subject_type: "knowledge_draft",
+    subject_id: "draft-publish",
+    subject_revision: 1,
+    subject_version: 3,
+    target_policy_id: "policy-1",
+    target_policy_version: 2,
+    risk_level: "low",
+    status: "executing",
+    operation_key: "proposal-publish-operation",
+    operation_fingerprint: "a".repeat(64),
+    version: 3,
+    created_at: at,
+    updated_at: at,
+  };
+  const updateProposal = {
+    ...publishProposal,
+    id: "proposal-update",
+    action_type: "update_knowledge_publication",
+    subject_id: "draft-update",
+    status: "approved",
+    operation_key: "proposal-update-operation",
+    version: 2,
+  };
+  const expectedFingerprint = createHash("sha256")
+    .update(JSON.stringify({
+      operation: "feishu_wiki_publish_request",
+      proposalId: publishProposal.id,
+      draftId: publishProposal.subject_id,
+      revisionNumber: publishProposal.subject_revision,
+      draftVersion: publishProposal.subject_version,
+      targetPolicyId: publishProposal.target_policy_id,
+      targetPolicyVersion: publishProposal.target_policy_version,
+    }))
+    .digest("hex");
+  const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/u.test(sql) || sql.includes("pg_advisory_xact_lock")) {
+      return { rows: [] };
+    }
+    if (sql.includes("JOIN action_execution_events event") && sql.includes("event.operation_key = $1")) {
+      return { rows: [{
+        id: "execution-existing",
+        proposal_id: "proposal-publish",
+        attempt_number: 1,
+        state: "executing",
+        request_fingerprint: input.requestFingerprint ?? expectedFingerprint,
+        provider: "feishu_wiki",
+        response_classification: null,
+        remote_node_token: null,
+        remote_document_token: null,
+        version: 1,
+        retry_at: null,
+        created_at: at,
+        updated_at: at,
+      }] };
+    }
+    if (sql.includes("FROM action_proposals") && sql.includes("WHERE id = $1")) {
+      return { rows: [params[0] === "proposal-update" ? updateProposal : publishProposal] };
+    }
+    if (sql.includes("FROM knowledge_drafts draft") && sql.includes("FOR UPDATE OF draft")) {
+      return { rows: [{
+        id: "draft-publish",
+        source_group_id: "group-1",
+        status: "pending_review",
+        current_revision_number: 1,
+        version: 3,
+        title: "Published draft title",
+        content: "Published draft body",
+        risk_level: "low",
+        reviewer_type: null,
+        reviewer_ref: null,
+        suggested_space_id: "space-1",
+        suggested_parent_node_token: null,
+      }] };
+    }
+    if (sql.includes("FROM knowledge_publication_target_policies") && sql.includes("WHERE id = $1")) {
+      return { rows: [{
+        id: "policy-1",
+        space_id: "space-1",
+        parent_node_token: null,
+        display_name: "Main wiki",
+        allowed_group_ids: ["group-1"],
+        allowed_risk_levels: ["low"],
+        enabled: true,
+        version: 2,
+        created_at: at,
+        updated_at: at,
+      }] };
+    }
+    throw new Error(`unexpected query: ${sql}`);
+  });
+  const client = { query, release() {} };
+  return {
+    dataSource: {
+      query,
+      async connect() { return client; },
+    } as unknown as PostgresKnowledgeDraftDataSource,
   };
 }
 

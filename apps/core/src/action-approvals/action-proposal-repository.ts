@@ -534,6 +534,7 @@ export interface ActionProposalRepository {
   listEvents(id: string): Promise<ActionProposalEvent[]>;
   listProposals(input: {
     statuses?: ActionProposalStatus[];
+    actionTypes?: ActionProposalActionType[];
     subjectId?: string;
     limit: number;
   }): Promise<ActionProposal[]>;

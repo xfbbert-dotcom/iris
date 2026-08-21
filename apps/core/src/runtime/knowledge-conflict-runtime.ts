@@ -467,6 +467,7 @@ function createDefaultComposition(
     repository,
     currentValidator,
     documentSources,
+    managedPages,
     cardClient,
     readDeliveryGates(groupId) {
       const open = input.canUseForDelivery(groupId);

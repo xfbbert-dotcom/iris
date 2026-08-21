@@ -83,6 +83,11 @@ describe("KnowledgePublicationExecutor", () => {
       proposalId: proposal.id,
       code: "publication_succeeded",
     }]);
+    expect(repository.listProposals).toHaveBeenCalledWith({
+      statuses: ["approved"],
+      actionTypes: ["publish_knowledge_draft"],
+      limit: 1,
+    });
     expect(repository.claimApprovedPublicationExecution).toHaveBeenCalledWith({
       proposalId: proposal.id,
       expectedProposalVersion: proposal.version,
@@ -427,6 +432,59 @@ describe("KnowledgePublicationExecutor", () => {
       code: "publication_succeeded",
     }]);
     expect(managedPages.registerPublication).not.toHaveBeenCalled();
+  });
+
+  it("does not let an approved update proposal consume the publication batch limit", async () => {
+    const publicationProposal = actionProposal();
+    const updateProposal = {
+      ...actionProposal(),
+      id: "proposal-update",
+      actionType: "update_knowledge_publication" as const,
+    };
+    const approved = [updateProposal, publicationProposal];
+    const claim = publicationClaim({ proposal: publicationProposal });
+    const repository = {
+      listProposals: vi.fn(async (input: {
+        statuses?: string[];
+        actionTypes?: string[];
+        limit: number;
+      }) => approved
+        .filter((proposal) => input.actionTypes?.includes(proposal.actionType) ?? true)
+        .slice(0, input.limit)),
+      claimApprovedPublicationExecution: vi.fn(async (input: { proposalId: string }) => {
+        if (input.proposalId !== publicationProposal.id) throw new Error("wrong action type");
+        return claim;
+      }),
+      completePublicationExecution: vi.fn(),
+      failPublicationExecution: vi.fn(async () => ({
+        outcome: "applied" as const,
+        proposal: claim.proposal,
+        execution: { ...claim.execution, state: "failed" as const, version: 2 },
+      })),
+    };
+    const executor = createKnowledgePublicationExecutor({
+      repository,
+      publisher: { publish: vi.fn(async () => { throw new Error("stop after claim"); }) },
+      runtimeSnapshot: () => ({
+        globalEnabled: true,
+        disabledGroupIds: [],
+        capabilities: { writeKnowledgeBase: true },
+      }),
+      workerId: "publication-worker-1",
+      now: () => at,
+    });
+
+    await expect(executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "failed",
+      proposalId: publicationProposal.id,
+      code: "publisher_failed",
+    }]);
+    expect(repository.claimApprovedPublicationExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ proposalId: publicationProposal.id }),
+    );
+    expect(repository.claimApprovedPublicationExecution).not.toHaveBeenCalledWith(
+      expect.objectContaining({ proposalId: updateProposal.id }),
+    );
   });
 
   it("does not claim or publish while knowledge-base writing is disabled", async () => {

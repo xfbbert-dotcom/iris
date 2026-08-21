@@ -131,6 +131,24 @@ describe("ActionProposalPlanner", () => {
     }));
   });
 
+  it("does not synthesize publication for a reconfirmed revision suppressed by prior binding", async () => {
+    const repository = repositoryHarness({ candidates: [], policies: [policy()] });
+    const planner = createActionProposalPlanner({
+      repository,
+      getAllowedGroupIds: () => ["oc_pilot"],
+    });
+
+    await expect(planner.planBatch({ limit: 1, at })).resolves.toEqual({
+      candidateCount: 0,
+      plannedCount: 0,
+      alreadyPlannedCount: 0,
+      ineligibleCount: 0,
+      failedCount: 0,
+      cancelledStaleCount: 0,
+    });
+    expect(repository.createProposal).not.toHaveBeenCalled();
+  });
+
   it("fails closed for every ambiguous or stale planning input without leaking details", async () => {
     const candidates = [
       candidate("invalid-evidence", { evidenceState: { status: "invalidated", reason: "source_missing" } }),

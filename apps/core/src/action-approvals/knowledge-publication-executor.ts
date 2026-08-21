@@ -78,7 +78,11 @@ export function createKnowledgePublicationExecutor({
       const safeLimit = sanitizeLimit(limit);
       const initialGate = normalizeRuntimeSnapshot(runtimeSnapshot());
       if (!initialGate.globalEnabled || !initialGate.capabilities.writeKnowledgeBase) return [];
-      const proposals = await repository.listProposals({ statuses: ["approved"], limit: safeLimit });
+      const proposals = await repository.listProposals({
+        statuses: ["approved"],
+        actionTypes: ["publish_knowledge_draft"],
+        limit: safeLimit,
+      });
       const results: KnowledgePublicationExecutorResult[] = [];
       for (const proposal of proposals) {
         const gate = normalizeRuntimeSnapshot(runtimeSnapshot());

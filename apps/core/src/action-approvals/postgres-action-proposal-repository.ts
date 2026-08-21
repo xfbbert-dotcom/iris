@@ -191,6 +191,7 @@ type DraftRevisionRow = {
 
 type DraftCandidateRow = DraftRevisionRow & {
   has_current_group_confirmation: boolean;
+  has_any_update_target: boolean;
   update_target_id: string | null;
   eligible_update_target_id: string | null;
   updated_at: Date;
@@ -198,6 +199,7 @@ type DraftCandidateRow = DraftRevisionRow & {
 
 type ManagedUpdateTargetRoutingRow = {
   id: string;
+  draft_revision: string | number;
   conflict_candidate_id: string;
   conflict_candidate_version: string | number;
   managed_page_id: string;
@@ -486,6 +488,10 @@ export function createPostgresActionProposalRepository({
                   WHERE confirmation.draft_id = draft.id
                     AND confirmation.revision_number = draft.current_revision_number
                 ) AS has_current_group_confirmation,
+                EXISTS (
+                  SELECT 1 FROM knowledge_publication_update_targets prior_target
+                  WHERE prior_target.draft_id = draft.id
+                ) AS has_any_update_target,
                 target.id AS update_target_id,
                 CASE WHEN page.id IS NOT NULL
                   AND conflict_candidate.id IS NOT NULL
@@ -552,20 +558,26 @@ export function createPostgresActionProposalRepository({
           AND revision.suggested_parent_node_token IS NOT DISTINCT FROM target_policy.parent_node_token
          WHERE draft.status = 'pending_review'
            AND ($1::TEXT[] IS NULL OR draft.source_group_id = ANY($1))
-           AND (target.id IS NULL OR (
-             page.id IS NOT NULL
-             AND conflict_candidate.id IS NOT NULL
-             AND interaction.id IS NOT NULL
-             AND snapshot.id IS NOT NULL
-             AND source.id IS NOT NULL
-             AND target_policy.id IS NOT NULL
-           ))
+           AND (
+             (target.id IS NULL AND NOT EXISTS (
+               SELECT 1 FROM knowledge_publication_update_targets prior_target
+               WHERE prior_target.draft_id = draft.id
+             ))
+             OR (target.id IS NOT NULL
+               AND page.id IS NOT NULL
+               AND conflict_candidate.id IS NOT NULL
+               AND interaction.id IS NOT NULL
+               AND snapshot.id IS NOT NULL
+               AND source.id IS NOT NULL
+               AND target_policy.id IS NOT NULL)
+           )
          ORDER BY draft.updated_at ASC, draft.id ASC
          LIMIT $2`,
         [groupIds ?? null, requireLimit(input.limit)],
       );
       const candidates: ActionProposalDraftCandidate[] = [];
       for (const row of result.rows) {
+        if (row.update_target_id === null && row.has_any_update_target) continue;
         if (row.update_target_id !== null && row.eligible_update_target_id === null) continue;
         const evidence = await loadDraftEvidence(dataSource, row.id, Number(row.current_revision_number));
         const invalidReason = await findInvalidKnowledgeDraftEvidence({
@@ -612,15 +624,17 @@ export function createPostgresActionProposalRepository({
     },
     async listProposals(input) {
       const statuses = normalizeStatusFilter(input.statuses);
+      const actionTypes = normalizeActionTypeFilter(input.actionTypes);
       const subjectId = input.subjectId === undefined
         ? undefined
         : requireReference("subjectId", input.subjectId);
       const result = await dataSource.query<ProposalRow>(
         `${proposalSelect()}
          WHERE ($1::TEXT[] IS NULL OR status = ANY($1::TEXT[]))
-           AND ($2::TEXT IS NULL OR subject_id = $2)
-         ORDER BY updated_at DESC, id ASC LIMIT $3`,
-        [statuses ?? null, subjectId ?? null, requireLimit(input.limit)],
+           AND ($2::TEXT[] IS NULL OR action_type = ANY($2::TEXT[]))
+           AND ($3::TEXT IS NULL OR subject_id = $3)
+         ORDER BY updated_at DESC, id ASC LIMIT $4`,
+        [statuses ?? null, actionTypes ?? null, subjectId ?? null, requireLimit(input.limit)],
       );
       return result.rows.map(mapProposal);
     },
@@ -1670,6 +1684,7 @@ async function claimApprovedPublicationExecution(
       [normalized.operationKey],
     );
     if (replay.rows[0] !== undefined) {
+      await validatePublicationExecutionReplay(client, replay.rows[0], normalized.proposalId);
       return buildPublicationExecutionClaimResult(client, replay.rows[0]);
     }
 
@@ -1712,15 +1727,7 @@ async function claimApprovedPublicationExecution(
     if (existingLiveExecution.rows[0] !== undefined) throw new ActionProposalIneligibleError();
 
     const executionId = randomUUID();
-    const requestFingerprint = operationFingerprint({
-      operation: "feishu_wiki_publish_request",
-      proposalId: proposal.id,
-      draftId: proposal.subject_id,
-      revisionNumber: Number(proposal.subject_revision),
-      draftVersion: Number(proposal.subject_version),
-      targetPolicyId: policy.id,
-      targetPolicyVersion: Number(policy.version),
-    });
+    const requestFingerprint = publicationRequestFingerprint(proposal);
     await client.query(
       `INSERT INTO action_executions (
         id, proposal_id, attempt_number, state, request_fingerprint, provider,
@@ -3035,6 +3042,33 @@ async function createProposal(
   });
 }
 
+async function validatePublicationExecutionReplay(
+  client: KnowledgeDraftTransactionClient,
+  execution: PublicationExecutionRow,
+  requestedProposalId: string,
+): Promise<void> {
+  if (execution.proposal_id !== requestedProposalId) {
+    throw new ActionProposalOperationConflictError();
+  }
+  const proposal = await lockProposal(client, requestedProposalId);
+  if (proposal.action_type !== "publish_knowledge_draft" ||
+    execution.request_fingerprint !== publicationRequestFingerprint(proposal)) {
+    throw new ActionProposalOperationConflictError();
+  }
+}
+
+function publicationRequestFingerprint(proposal: ProposalRow): string {
+  return operationFingerprint({
+    operation: "feishu_wiki_publish_request",
+    proposalId: proposal.id,
+    draftId: proposal.subject_id,
+    revisionNumber: Number(proposal.subject_revision),
+    draftVersion: Number(proposal.subject_version),
+    targetPolicyId: proposal.target_policy_id,
+    targetPolicyVersion: Number(proposal.target_policy_version),
+  });
+}
+
 function legacyCreateProposalFingerprint(
   input: ReturnType<typeof normalizeCreateProposalInput>,
 ): string {
@@ -3048,20 +3082,23 @@ async function validateProposalActionRouting(
   input: ReturnType<typeof normalizeCreateProposalInput>,
 ): Promise<void> {
   const targetResult = await client.query<ManagedUpdateTargetRoutingRow>(
-    `SELECT id, conflict_candidate_id, conflict_candidate_version, managed_page_id,
+    `SELECT id, draft_revision, conflict_candidate_id, conflict_candidate_version, managed_page_id,
        managed_page_version, linked_document_source_id, target_snapshot_id,
        target_snapshot_hash, target_source_version, remote_document_token,
        managed_body_block_id, expected_remote_revision_id, current_body_content_hash,
        proposed_body_content_hash, authorization_group_id, target_policy_id,
        target_policy_version
      FROM knowledge_publication_update_targets
-     WHERE draft_id = $1 AND draft_revision = $2
+     WHERE draft_id = $1
+     ORDER BY draft_revision DESC
      FOR UPDATE`,
-    [input.draftId, input.expectedRevision],
+    [input.draftId],
   );
-  const target = targetResult.rows[0];
+  const target = targetResult.rows.find(
+    (candidate) => Number(candidate.draft_revision) === input.expectedRevision,
+  );
   if (target === undefined) {
-    if (input.actionType !== "publish_knowledge_draft") {
+    if (targetResult.rows.length > 0 || input.actionType !== "publish_knowledge_draft") {
       throw new ActionProposalIneligibleError();
     }
     return;
@@ -3874,6 +3911,18 @@ function normalizeStatusFilter(value: ActionProposalStatus[] | undefined) {
   const normalized = [...new Set(value)];
   if (normalized.some((item) => !ACTION_PROPOSAL_STATUSES.includes(item))) {
     throw new Error("statuses is invalid");
+  }
+  return normalized.sort();
+}
+
+function normalizeActionTypeFilter(value: ActionProposalActionType[] | undefined) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length < 1 || value.length > ACTION_PROPOSAL_ACTION_TYPES.length) {
+    throw new Error("actionTypes is invalid");
+  }
+  const normalized = [...new Set(value)];
+  if (normalized.some((item) => !ACTION_PROPOSAL_ACTION_TYPES.includes(item))) {
+    throw new Error("actionTypes is invalid");
   }
   return normalized.sort();
 }
