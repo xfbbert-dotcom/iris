@@ -640,13 +640,25 @@ export function createPostgresActionProposalRepository({
       const subjectId = input.subjectId === undefined
         ? undefined
         : requireReference("subjectId", input.subjectId);
+      const authorizationGroupIds = input.authorizationGroupIds === undefined
+        ? undefined
+        : normalizeReferenceList("authorizationGroupIds", input.authorizationGroupIds, false);
       const result = await dataSource.query<ProposalRow>(
         `${proposalSelect()}
          WHERE ($1::TEXT[] IS NULL OR status = ANY($1::TEXT[]))
            AND ($2::TEXT[] IS NULL OR action_type = ANY($2::TEXT[]))
            AND ($3::TEXT IS NULL OR subject_id = $3)
-         ORDER BY updated_at DESC, id ASC LIMIT $4`,
-        [statuses ?? null, actionTypes ?? null, subjectId ?? null, requireLimit(input.limit)],
+           AND ($4::TEXT[] IS NULL OR EXISTS (
+             SELECT 1
+             FROM knowledge_publication_update_targets target
+             WHERE target.draft_id = action_proposals.subject_id
+               AND target.draft_revision = action_proposals.subject_revision
+               AND target.draft_version = action_proposals.subject_version
+               AND target.authorization_group_id = ANY($4::TEXT[])
+           ))
+         ORDER BY updated_at DESC, id ASC LIMIT $5`,
+        [statuses ?? null, actionTypes ?? null, subjectId ?? null,
+          authorizationGroupIds ?? null, requireLimit(input.limit)],
       );
       return result.rows.map(mapProposal);
     },

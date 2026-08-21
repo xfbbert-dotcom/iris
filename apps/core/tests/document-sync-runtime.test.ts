@@ -497,6 +497,8 @@ describe("createDocumentSyncRuntime", () => {
       findByRemoteIdentity: vi.fn(),
       linkSource: vi.fn(),
       recordSnapshotObservation: vi.fn(),
+      findResyncReadyExecution: vi.fn(),
+      completeResync: vi.fn(),
     };
     const blockReader = {
       readManagedBlock: vi.fn(),

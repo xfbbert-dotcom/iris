@@ -18,7 +18,8 @@ export interface ManagedKnowledgeSyncObserver {
 export type ManagedKnowledgeSyncObserverDependencies = {
   repository: Pick<
     ManagedKnowledgePageRepository,
-    "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation"
+    "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation" |
+    "findResyncReadyExecution" | "completeResync"
   >;
   blockReader: ManagedBlockReader;
   createId?: () => string;
@@ -68,7 +69,7 @@ export function createManagedKnowledgeSyncObserver({
         throw new Error("managed knowledge observation requires a text block");
       }
 
-      await repository.recordSnapshotObservation({
+      const recorded = await repository.recordSnapshotObservation({
         id: createId(),
         managedPageId: linkedPage.id,
         managedPageVersion: linkedPage.version,
@@ -84,6 +85,23 @@ export function createManagedKnowledgeSyncObserver({
         operationKey: operationKey("managed-snapshot-observation", [linkedPage.id, snapshot.id]),
         at: observedAt,
       });
+      const ready = await repository.findResyncReadyExecution({
+        observationId: recorded.observation.id,
+      });
+      if (ready !== undefined) {
+        await repository.completeResync({
+          executionId: ready.executionId,
+          expectedExecutionVersion: ready.executionVersion,
+          expectedManagedPageVersion: ready.managedPageVersion,
+          observationId: ready.observationId,
+          operationKey: operationKey("managed-resync-complete", [
+            ready.executionId,
+            ready.observationId,
+          ]),
+          actor: ACTOR,
+          at: observedAt,
+        });
+      }
     },
   };
 }

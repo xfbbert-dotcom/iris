@@ -9,6 +9,10 @@ import { createActionApprovalWorker } from "../action-approvals/action-approval-
 import {
   createFeishuKnowledgePublicationPublisher,
 } from "../action-approvals/feishu-knowledge-publication-publisher.js";
+import { createFeishuManagedKnowledgeBlockReader } from
+  "../action-approvals/feishu-managed-knowledge-block-reader.js";
+import { createFeishuManagedKnowledgeUpdater } from
+  "../action-approvals/feishu-managed-knowledge-updater.js";
 import {
   createKnowledgePublicationExecutor,
 } from "../action-approvals/knowledge-publication-executor.js";
@@ -16,6 +20,14 @@ import {
   createKnowledgePublicationExecutorLoop,
   type KnowledgePublicationExecutorLoopSnapshot,
 } from "../action-approvals/knowledge-publication-executor-loop.js";
+import { createManagedKnowledgeUpdateExecutor } from
+  "../action-approvals/managed-knowledge-update-executor.js";
+import {
+  createManagedKnowledgeUpdateExecutorLoop,
+  type ManagedKnowledgeUpdateExecutorLoopSnapshot,
+} from "../action-approvals/managed-knowledge-update-executor-loop.js";
+import { createManagedKnowledgeUpdateReconciler } from
+  "../action-approvals/managed-knowledge-update-reconciler.js";
 import { createActionProposalPlanner } from "../action-approvals/action-proposal-planner.js";
 import {
   createActionProposalPlannerLoop,
@@ -27,6 +39,8 @@ import type {
   ActionProposalStatusCounts,
 } from "../action-approvals/action-proposal-repository.js";
 import { createPostgresActionProposalRepository } from "../action-approvals/postgres-action-proposal-repository.js";
+import { createPostgresManagedKnowledgePageRepository } from
+  "../action-approvals/postgres-managed-knowledge-page-repository.js";
 import {
   readActionApprovalRuntimeConfig,
   readFeishuOpenApiConfig,
@@ -36,6 +50,7 @@ import type { DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 import { createFeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
 import type { PostgresKnowledgeDraftDataSource } from "../knowledge-governance/postgres-knowledge-draft-repository.js";
+import type { DocumentSyncQueue } from "../documents/document-sync-queue.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import type { KnowledgeCardRuntime } from "./knowledge-card-runtime.js";
 import { observeStartupPromise } from "./startup-promise.js";
@@ -57,8 +72,18 @@ export type ActionApprovalRuntimeStatus = {
   planner: ReturnType<ActionProposalPlannerLoop["getSnapshot"]>;
   dispatcher: ActionApprovalDispatcherLoopSnapshot;
   publicationExecutor: KnowledgePublicationExecutorLoopSnapshot;
+  managedKnowledgeUpdates?: ManagedKnowledgeUpdateExecutorLoopSnapshot;
   proposals: ActionProposalStatusCounts;
   outbox: ActionApprovalOutboxStatusCounts;
+};
+
+export type ManagedKnowledgeUpdateRuntimeConfiguration = {
+  deploymentEnabled: boolean;
+  groupAllowlist: readonly string[];
+  syncQueue: Pick<DocumentSyncQueue, "enqueue">;
+  intervalMs: number;
+  batchLimit: number;
+  staleDispatchMs: number;
 };
 
 export type ActionApprovalRuntime = {
@@ -81,6 +106,12 @@ export type ActionApprovalRuntimeDependencies = {
   createPlannerLoop?: typeof createActionProposalPlannerLoop;
   createDispatcherLoop?: typeof createActionApprovalDispatcherLoop;
   createPublicationExecutorLoop?: typeof createKnowledgePublicationExecutorLoop;
+  createManagedPageRepository?: typeof createPostgresManagedKnowledgePageRepository;
+  createManagedBlockReader?: typeof createFeishuManagedKnowledgeBlockReader;
+  createManagedUpdater?: typeof createFeishuManagedKnowledgeUpdater;
+  createManagedUpdateExecutor?: typeof createManagedKnowledgeUpdateExecutor;
+  createManagedUpdateReconciler?: typeof createManagedKnowledgeUpdateReconciler;
+  createManagedUpdateLoop?: typeof createManagedKnowledgeUpdateExecutorLoop;
   onStartupCleanup?: (cleanup: Promise<void>) => void;
 };
 
@@ -90,12 +121,14 @@ export function createActionApprovalRuntime({
   knowledgeCardRuntime,
   dependencies = {},
   agentExecutionObserver,
+  managedKnowledgeUpdates,
 }: {
   env?: EnvLike;
   runtimeController?: ActionApprovalRuntimeGate;
   knowledgeCardRuntime?: KnowledgeCardRuntime;
   dependencies?: ActionApprovalRuntimeDependencies;
   agentExecutionObserver?: AgentExecutionObserver;
+  managedKnowledgeUpdates?: ManagedKnowledgeUpdateRuntimeConfiguration;
 } = {}): ActionApprovalRuntime | undefined {
   const config = readActionApprovalRuntimeConfig(env);
   if (!config.enabled) return undefined;
@@ -119,12 +152,24 @@ export function createActionApprovalRuntime({
   const createDispatcherPollingLoop = dependencies.createDispatcherLoop ?? createActionApprovalDispatcherLoop;
   const createPublicationPollingLoop = dependencies.createPublicationExecutorLoop ??
     createKnowledgePublicationExecutorLoop;
+  const createManagedPageRepository = dependencies.createManagedPageRepository ??
+    createPostgresManagedKnowledgePageRepository;
+  const createManagedBlockReader = dependencies.createManagedBlockReader ??
+    createFeishuManagedKnowledgeBlockReader;
+  const createManagedUpdater = dependencies.createManagedUpdater ?? createFeishuManagedKnowledgeUpdater;
+  const createManagedUpdateExecution = dependencies.createManagedUpdateExecutor ??
+    createManagedKnowledgeUpdateExecutor;
+  const createManagedUpdateReconciliation = dependencies.createManagedUpdateReconciler ??
+    createManagedKnowledgeUpdateReconciler;
+  const createManagedUpdatePollingLoop = dependencies.createManagedUpdateLoop ??
+    createManagedKnowledgeUpdateExecutorLoop;
   const enabledGroups = new Set(config.enabledGroupIds);
   const requireReviewAttestation = env.IRIS_ACTION_REVIEW_ENABLED === "true";
   let pool: ActionApprovalPool | undefined;
   let plannerLoop: ActionProposalPlannerLoop | undefined;
   let dispatcherLoop: ReturnType<typeof createActionApprovalDispatcherLoop> | undefined;
   let publicationExecutorLoop: ReturnType<typeof createKnowledgePublicationExecutorLoop> | undefined;
+  let managedUpdateLoop: ReturnType<typeof createManagedKnowledgeUpdateExecutorLoop> | undefined;
   let lifecycle: "idle" | "started" | "closed" = "idle";
 
   const canUseGroup = (groupId?: string): boolean => {
@@ -192,6 +237,57 @@ export function createActionApprovalRuntime({
       workerId: "knowledge-publication-executor",
       ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
     });
+    if (
+      managedKnowledgeUpdates?.deploymentEnabled === true &&
+      typeof managedKnowledgeUpdates.syncQueue?.enqueue === "function"
+    ) {
+      const groupAllowlist = normalizeGroupAllowlist(managedKnowledgeUpdates.groupAllowlist);
+      const managedPages = createManagedPageRepository({ dataSource: pool });
+      const managedBlockReader = createManagedBlockReader({
+        baseUrl: feishuConfig.baseUrl,
+        tokenProvider,
+      });
+      const managedUpdater = createManagedUpdater({
+        baseUrl: feishuConfig.baseUrl,
+        tokenProvider,
+        blockReader: managedBlockReader,
+      });
+      const managedUpdateExecutor = createManagedUpdateExecution({
+        proposals: repository,
+        managedPages,
+        updater: managedUpdater,
+        syncQueue: managedKnowledgeUpdates.syncQueue,
+        runtimeSnapshot: () => {
+          const snapshot = runtimeController.getSnapshot();
+          return {
+            deploymentEnabled: managedKnowledgeUpdates.deploymentEnabled,
+            globalEnabled: snapshot.globalEnabled,
+            disabledGroupIds: snapshot.disabledGroupIds,
+            groupAllowlist,
+            capabilities: {
+              writeKnowledgeBase: snapshot.capabilities.writeKnowledgeBase,
+              updateManagedKnowledge: snapshot.capabilities.updateManagedKnowledge,
+            },
+          };
+        },
+        workerId: "managed-knowledge-update-executor",
+        ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
+      });
+      const managedUpdateReconciler = createManagedUpdateReconciliation({
+        managedPages,
+        updater: managedUpdater,
+        syncQueue: managedKnowledgeUpdates.syncQueue,
+        workerId: "managed-knowledge-update-reconciler",
+        staleDispatchMs: managedKnowledgeUpdates.staleDispatchMs,
+      });
+      managedUpdateLoop = createManagedUpdatePollingLoop({
+        executor: managedUpdateExecutor,
+        reconciler: managedUpdateReconciler,
+        intervalMs: managedKnowledgeUpdates.intervalMs,
+        batchLimit: managedKnowledgeUpdates.batchLimit,
+        onError: () => undefined,
+      });
+    }
     plannerLoop = createPlannerPollingLoop({
       planner,
       canRun: anyGroupEnabled,
@@ -217,6 +313,7 @@ export function createActionApprovalRuntime({
     const close = (): Promise<void> => {
       lifecycle = "closed";
       closePromise ??= observeStartupPromise(closeRuntimeResources([
+        ...(managedUpdateLoop === undefined ? [] : [() => managedUpdateLoop!.stop()]),
         () => publicationExecutorLoop!.stop(),
         () => dispatcherLoop!.stop(),
         () => plannerLoop!.stop(),
@@ -236,6 +333,7 @@ export function createActionApprovalRuntime({
           plannerLoop!.start();
           dispatcherLoop!.start();
           publicationExecutorLoop!.start();
+          managedUpdateLoop?.start();
         } catch (error) {
           await close();
           throw error;
@@ -245,17 +343,22 @@ export function createActionApprovalRuntime({
         const planner = plannerLoop!.getSnapshot();
         const dispatcher = dispatcherLoop!.getSnapshot();
         const publicationExecutor = publicationExecutorLoop!.getSnapshot();
+        const managedKnowledgeUpdateSnapshot = managedUpdateLoop?.getSnapshot();
         const [proposals, outbox] = await Promise.all([
           repository.getStatusCounts(),
           repository.getApprovalOutboxStatusCounts(),
         ]);
         return {
           enabled: true,
-          running: planner.running && dispatcher.running,
+          running: planner.running && dispatcher.running && publicationExecutor.running &&
+            (managedKnowledgeUpdateSnapshot?.running ?? true),
           enabledGroupCount: enabledGroups.size,
           planner,
           dispatcher,
           publicationExecutor,
+          ...(managedKnowledgeUpdateSnapshot === undefined
+            ? {}
+            : { managedKnowledgeUpdates: managedKnowledgeUpdateSnapshot }),
           proposals,
           outbox,
         };
@@ -264,12 +367,28 @@ export function createActionApprovalRuntime({
     };
   } catch (error) {
     const cleanup = observeStartupPromise(closeRuntimeResources([
-      ...(dispatcherLoop === undefined ? [] : [() => dispatcherLoop!.stop()]),
       ...(publicationExecutorLoop === undefined ? [] : [() => publicationExecutorLoop!.stop()]),
+      ...(dispatcherLoop === undefined ? [] : [() => dispatcherLoop!.stop()]),
       ...(plannerLoop === undefined ? [] : [() => plannerLoop!.stop()]),
+      ...(managedUpdateLoop === undefined ? [] : [() => managedUpdateLoop!.stop()]),
       ...(pool === undefined ? [] : [() => pool!.end()]),
     ]));
     dependencies.onStartupCleanup?.(cleanup);
     throw error;
   }
+}
+
+function normalizeGroupAllowlist(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error("managed update group allowlist is invalid");
+  }
+  const groups = value.map((item) => {
+    if (typeof item !== "string") throw new Error("managed update group allowlist is invalid");
+    const normalized = item.trim();
+    if (normalized.length < 1 || normalized.length > 512) {
+      throw new Error("managed update group allowlist is invalid");
+    }
+    return normalized;
+  });
+  return [...new Set(groups)].sort();
 }

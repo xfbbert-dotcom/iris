@@ -6,6 +6,8 @@ import type {
   ManagedKnowledgeUpdateTarget,
   ManagedSnapshotObservation,
 } from "./managed-knowledge-page.js";
+import type { ActionProposal } from "./action-proposal.js";
+import type { KnowledgeDraftRiskLevel } from "../knowledge-governance/knowledge-draft.js";
 
 export type RegisterManagedPublicationInput = {
   id: string;
@@ -53,12 +55,17 @@ export type BindManagedUpdateTargetInput = Omit<ManagedKnowledgeUpdateTarget, "c
 };
 
 export type ClaimManagedUpdateInput = {
-  id: string;
   proposalId: string;
-  updateTargetId: string;
-  expectedManagedPageVersion: number;
+  expectedProposalVersion: number;
+  runtimeGate: {
+    deploymentEnabled: boolean;
+    globalEnabled: boolean;
+    writeKnowledgeBase: boolean;
+    updateManagedKnowledge: boolean;
+    disabledGroupIds: string[];
+    allowedGroupIds: string[];
+  };
   operationKey: string;
-  clientToken: string;
   workerId: string;
   at: Date;
 };
@@ -70,6 +77,13 @@ export type RecordManagedRemoteOutcomeInput = {
   responseClassification?: string;
   responseRevisionId?: string;
   reconciliationReasonCode?: string;
+  pageDisposition: "active" | "resync_required" | "reconciliation_required" | "blocked" | "retired";
+  verifiedUnchangedRemote?: {
+    remoteDocumentToken: string;
+    managedBodyBlockId: string;
+    remoteRevisionId: string;
+    bodyContentHash: string;
+  };
   operationKey: string;
   actor: string;
   at: Date;
@@ -82,13 +96,25 @@ export type MarkManagedRemoteRequestDispatchedInput = {
   at: Date;
 };
 
+export type ClaimManagedRemoteRetryInput = MarkManagedRemoteRequestDispatchedInput & {
+  staleDispatchedBefore: Date;
+};
+
 export type CompleteManagedResyncInput = {
   executionId: string;
   expectedExecutionVersion: number;
+  expectedManagedPageVersion: number;
   observationId: string;
   operationKey: string;
   actor: string;
   at: Date;
+};
+
+export type ManagedResyncReadyExecution = {
+  executionId: string;
+  executionVersion: number;
+  managedPageVersion: number;
+  observationId: string;
 };
 
 export type ManagedPageMutationResult = {
@@ -105,6 +131,15 @@ export type ManagedTargetMutationResult = {
 };
 export type ClaimedManagedKnowledgeUpdate = {
   outcome: "applied" | "already_applied";
+  proposal: ActionProposal;
+  draft: {
+    id: string;
+    sourceGroupId: string;
+    revisionNumber: number;
+    version: number;
+    content: string;
+    riskLevel: KnowledgeDraftRiskLevel;
+  };
   page: ManagedKnowledgePage;
   target: ManagedKnowledgeUpdateTarget;
   execution: ManagedKnowledgeUpdateExecution;
@@ -125,8 +160,13 @@ export interface ManagedKnowledgePageRepository {
   getTargetForDraft(input: { draftId: string; revision: number }): Promise<ManagedKnowledgeUpdateTarget | undefined>;
   claimApprovedUpdate(input: ClaimManagedUpdateInput): Promise<ClaimedManagedKnowledgeUpdate>;
   markRemoteRequestDispatched(input: MarkManagedRemoteRequestDispatchedInput): Promise<ManagedExecutionMutationResult>;
+  claimRemoteRetry(input: ClaimManagedRemoteRetryInput): Promise<ManagedExecutionMutationResult>;
   recordRemoteOutcome(input: RecordManagedRemoteOutcomeInput): Promise<ManagedExecutionMutationResult>;
   completeResync(input: CompleteManagedResyncInput): Promise<ManagedExecutionMutationResult>;
+  findResyncReadyExecution(input: {
+    executionId?: string;
+    observationId?: string;
+  }): Promise<ManagedResyncReadyExecution | undefined>;
   listReconciliationRequired(input: { limit: number; dispatchedBefore?: Date }): Promise<ClaimedManagedKnowledgeUpdate[]>;
   getSourceAvailability(documentSourceId: string): Promise<"available" | "barred">;
 }

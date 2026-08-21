@@ -326,7 +326,8 @@ export type DocumentSyncRuntimeDependencies = {
     dataSource: PostgresKnowledgeDraftDataSource;
   }) => Pick<
     ManagedKnowledgePageRepository,
-    "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation"
+    "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation" |
+    "findResyncReadyExecution" | "completeResync"
   >;
   createFeishuManagedKnowledgeBlockReader?: (dependencies: {
     baseUrl: string;
@@ -336,7 +337,8 @@ export type DocumentSyncRuntimeDependencies = {
   createManagedKnowledgeSyncObserver?: (dependencies: {
     repository: Pick<
       ManagedKnowledgePageRepository,
-      "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation"
+      "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation" |
+      "findResyncReadyExecution" | "completeResync"
     >;
     blockReader: ManagedBlockReader;
   }) => ManagedKnowledgeSyncObserver;

@@ -562,6 +562,7 @@ export interface ActionProposalRepository {
     statuses?: ActionProposalStatus[];
     actionTypes?: ActionProposalActionType[];
     subjectId?: string;
+    authorizationGroupIds?: string[];
     limit: number;
   }): Promise<ActionProposal[]>;
   getStatusCounts(): Promise<ActionProposalStatusCounts>;

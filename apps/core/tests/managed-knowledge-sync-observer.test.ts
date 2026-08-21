@@ -30,6 +30,8 @@ describe("ManagedKnowledgeSyncObserver", () => {
         outcome: "applied" as const,
         observation: { ...input, createdAt: input.at },
       })),
+      findResyncReadyExecution: vi.fn(async () => undefined),
+      completeResync: vi.fn(),
     };
     const blockReader = {
       readManagedBlock: vi.fn(async () => ({
@@ -84,6 +86,8 @@ describe("ManagedKnowledgeSyncObserver", () => {
       findByRemoteIdentity: vi.fn(async () => undefined),
       linkSource: vi.fn(),
       recordSnapshotObservation: vi.fn(),
+      findResyncReadyExecution: vi.fn(),
+      completeResync: vi.fn(),
     };
     const blockReader = { readManagedBlock: vi.fn() };
     const observer = createManagedKnowledgeSyncObserver({ repository, blockReader });
@@ -114,6 +118,8 @@ describe("ManagedKnowledgeSyncObserver", () => {
         outcome: "applied" as const,
         observation: { ...input, createdAt: input.at },
       })),
+      findResyncReadyExecution: vi.fn(async () => undefined),
+      completeResync: vi.fn(),
     };
     const observer = createManagedKnowledgeSyncObserver({
       repository,
@@ -138,6 +144,100 @@ describe("ManagedKnowledgeSyncObserver", () => {
     }));
   });
 
+  it("completes resync only through an exact durable observation candidate", async () => {
+    const page = managedPage({
+      linkedDocumentSourceId: "source-1",
+      state: "resync_required",
+      expectedResyncContentHash: canonicalManagedBodyHash("New approved body"),
+      version: 3,
+    });
+    const repository = {
+      findByRemoteIdentity: vi.fn(async () => page),
+      linkSource: vi.fn(),
+      recordSnapshotObservation: vi.fn(async (input) => ({
+        outcome: "applied" as const,
+        observation: { ...input, createdAt: input.at },
+      })),
+      findResyncReadyExecution: vi.fn(async () => ({
+        executionId: "execution-1",
+        executionVersion: 3,
+        managedPageVersion: 3,
+        observationId: "observation-resync",
+      })),
+      completeResync: vi.fn(async () => ({
+        outcome: "applied" as const,
+        page: { ...page, state: "active" as const, version: 4 },
+        execution: {
+          id: "execution-1", proposalId: "proposal-1", managedPageId: page.id,
+          managedPageVersion: 2, updateTargetId: "target-1", attemptNumber: 1,
+          state: "succeeded" as const, operationKey: "execution-op",
+          requestFingerprint: "a".repeat(64), expectedRemoteRevisionId: "12",
+          beforeBodyContentHash: "b".repeat(64), afterBodyContentHash: canonicalManagedBodyHash("New approved body"),
+          clientToken: "token-1", responseRevisionId: "13", version: 4,
+          createdAt: observedAt, updatedAt: observedAt,
+        },
+      })),
+    };
+    const observedAt = new Date("2026-08-21T03:00:00.000Z");
+    const observer = createManagedKnowledgeSyncObserver({
+      repository,
+      blockReader: {
+        readManagedBlock: vi.fn(async () => ({
+          revision: 13,
+          blockType: "text" as const,
+          body: "New approved body",
+        })),
+      },
+      createId: () => "observation-resync",
+      now: () => observedAt,
+    });
+
+    await observer.observe({ source: documentSource(), snapshot: documentSnapshot({ id: "snapshot-new" }) });
+
+    expect(repository.findResyncReadyExecution).toHaveBeenCalledWith({
+      observationId: "observation-resync",
+    });
+    expect(repository.completeResync).toHaveBeenCalledWith({
+      executionId: "execution-1",
+      expectedExecutionVersion: 3,
+      expectedManagedPageVersion: 3,
+      observationId: "observation-resync",
+      operationKey: expect.stringMatching(/^managed-resync-complete:[0-9a-f]{64}$/u),
+      actor: "document-sync",
+      at: observedAt,
+    });
+  });
+
+  it("records but does not activate a sync callback that arrives before remote_applied is durable", async () => {
+    const page = managedPage({ linkedDocumentSourceId: "source-1", state: "updating", version: 2 });
+    const repository = {
+      findByRemoteIdentity: vi.fn(async () => page),
+      linkSource: vi.fn(),
+      recordSnapshotObservation: vi.fn(async (input) => ({
+        outcome: "applied" as const,
+        observation: { ...input, createdAt: input.at },
+      })),
+      findResyncReadyExecution: vi.fn(async () => undefined),
+      completeResync: vi.fn(),
+    };
+    const observer = createManagedKnowledgeSyncObserver({
+      repository,
+      blockReader: {
+        readManagedBlock: vi.fn(async () => ({
+          revision: 13,
+          blockType: "text" as const,
+          body: "New approved body",
+        })),
+      },
+      createId: () => "observation-early",
+    });
+
+    await observer.observe({ source: documentSource(), snapshot: documentSnapshot({ id: "snapshot-new" }) });
+
+    expect(repository.recordSnapshotObservation).toHaveBeenCalledOnce();
+    expect(repository.completeResync).not.toHaveBeenCalled();
+  });
+
   it("never reassigns a page already linked to a different source", async () => {
     const repository = {
       findByRemoteIdentity: vi.fn(async () => managedPage({
@@ -145,6 +245,8 @@ describe("ManagedKnowledgeSyncObserver", () => {
       })),
       linkSource: vi.fn(),
       recordSnapshotObservation: vi.fn(),
+      findResyncReadyExecution: vi.fn(),
+      completeResync: vi.fn(),
     };
     const blockReader = { readManagedBlock: vi.fn() };
     const observer = createManagedKnowledgeSyncObserver({ repository, blockReader });
@@ -177,6 +279,8 @@ describe("ManagedKnowledgeSyncObserver", () => {
         findByRemoteIdentity: vi.fn(async () => managedPage()),
         linkSource: vi.fn(),
         recordSnapshotObservation: vi.fn(),
+        findResyncReadyExecution: vi.fn(),
+        completeResync: vi.fn(),
       };
       const blockReader = { readManagedBlock: vi.fn() };
       const observer = createManagedKnowledgeSyncObserver({ repository, blockReader });

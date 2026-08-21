@@ -157,10 +157,11 @@ describe("action approval migration contract", () => {
 
   it("filters action type before proposal batch limits", async () => {
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
-      expect(sql).toMatch(/action_type = ANY\(\$2::TEXT\[\]\).*LIMIT \$4/isu);
+      expect(sql).toMatch(/action_type = ANY\(\$2::TEXT\[\]\).*LIMIT \$5/isu);
       expect(params).toEqual([
         ["approved"],
         ["publish_knowledge_draft"],
+        null,
         null,
         1,
       ]);
@@ -173,6 +174,32 @@ describe("action approval migration contract", () => {
     await expect(repository.listProposals({
       statuses: ["approved"],
       actionTypes: ["publish_knowledge_draft"],
+      limit: 1,
+    })).resolves.toEqual([]);
+  });
+
+  it("filters update authorization groups before proposal batch limits", async () => {
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      expect(sql).toMatch(
+        /EXISTS\s*\(\s*SELECT 1\s+FROM knowledge_publication_update_targets target[\s\S]+target\.authorization_group_id = ANY\(\$4::TEXT\[\]\)[\s\S]+LIMIT \$5/iu,
+      );
+      expect(params).toEqual([
+        ["approved"],
+        ["update_knowledge_publication"],
+        null,
+        ["group-1"],
+        1,
+      ]);
+      return { rows: [] };
+    });
+    const repository = createPostgresActionProposalRepository({
+      dataSource: { query } as unknown as PostgresKnowledgeDraftDataSource,
+    });
+
+    await expect(repository.listProposals({
+      statuses: ["approved"],
+      actionTypes: ["update_knowledge_publication"],
+      authorizationGroupIds: ["group-1"],
       limit: 1,
     })).resolves.toEqual([]);
   });

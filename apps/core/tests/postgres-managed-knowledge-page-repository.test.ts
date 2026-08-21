@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
 import { describe, expect, it, vi } from "vitest";
@@ -32,15 +32,18 @@ describe("managed knowledge page migration contract", () => {
     expect(repository.registerPublication).toBeTypeOf("function");
     expect(repository.claimApprovedUpdate).toBeTypeOf("function");
     expect(repository.markRemoteRequestDispatched).toBeTypeOf("function");
+    expect(repository.claimRemoteRetry).toBeTypeOf("function");
+    expect(repository.findResyncReadyExecution).toBeTypeOf("function");
+    expect(repository.completeResync).toBeTypeOf("function");
     expect(repository.getSourceAvailability).toBeTypeOf("function");
   });
 
-  it("keeps only stale dispatched executions eligible for recovery", async () => {
+  it("discovers durable uncertain/applied work plus only stale dispatched requests", async () => {
     const source = await readFile(
       new URL("../src/action-approvals/postgres-managed-knowledge-page-repository.ts", import.meta.url),
       "utf8",
     );
-    expect(source).toMatch(/state IN \('outcome_unknown','reconciliation_required'\).*remote_request_dispatched/isu);
+    expect(source).toMatch(/state IN \('outcome_unknown','reconciliation_required','remote_applied'\).*remote_request_dispatched/isu);
     expect(source).toMatch(/remote_request_dispatched_at <= \$2/iu);
   });
 });
@@ -150,6 +153,236 @@ describe("managed knowledge page source-link serialization", () => {
   });
 });
 
+describe("managed update claim contract", () => {
+  it("returns exact immutable draft content and derives a stable UUID client token after exact attestation validation", async () => {
+    const fixture = managedUpdateClaimDataSource();
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    const result = await repository.claimApprovedUpdate(managedUpdateClaimInput());
+
+    expect(result).toMatchObject({
+      outcome: "applied",
+      proposal: {
+        id: "update-proposal-1",
+        actionType: "update_knowledge_publication",
+        status: "executing",
+        version: 3,
+      },
+      draft: {
+        id: "update-draft-1",
+        sourceGroupId: "group-1",
+        revisionNumber: 1,
+        version: 4,
+        content: "New approved body",
+      },
+      page: { id: "managed-1", state: "updating", version: 2 },
+      execution: {
+        id: "e4f1ec52-3d3d-5f72-a7e4-ecde994e3ed5",
+        clientToken: "8b2dcd5d-37ab-5b63-94d2-7e3eb6d3b271",
+        state: "claimed",
+      },
+    });
+    expect(result.execution.clientToken).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
+    expect(fixture.attestationFingerprints).toEqual([managedUpdateTargetFingerprint()]);
+    const sourceLock = fixture.statements.findIndex((_sql, index) =>
+      fixture.statementValues[index]?.[0] === "managed-knowledge-source:source-1");
+    const pageLock = fixture.statements.findIndex((sql) =>
+      sql.includes("FROM managed_knowledge_pages") && sql.includes("FOR UPDATE"));
+    const targetLock = fixture.statements.findIndex((sql) =>
+      sql.includes("FROM knowledge_publication_update_targets") && sql.includes("FOR UPDATE"));
+    const proposalLock = fixture.statements.findIndex((sql) =>
+      sql.includes("FROM action_proposals") && sql.includes("FOR UPDATE"));
+    expect(sourceLock).toBeGreaterThanOrEqual(0);
+    expect(sourceLock).toBeLessThan(pageLock);
+    expect(pageLock).toBeLessThan(targetLock);
+    expect(targetLock).toBeLessThan(proposalLock);
+  });
+
+  it("rejects a claim whose current review attestation is not bound to the exact target fingerprint", async () => {
+    const fixture = managedUpdateClaimDataSource({ hasExactAttestation: false });
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.claimApprovedUpdate(managedUpdateClaimInput())).rejects.toThrow(
+      /version conflict/iu,
+    );
+    expect(fixture.statements.some((sql) =>
+      sql.includes("INSERT INTO knowledge_publication_update_executions"))).toBe(false);
+  });
+});
+
+describe("managed update outcome transition contract", () => {
+  it.each([
+    ["reconciliation_required", "reconciliation_required"],
+    ["blocked", "blocked"],
+    ["retired", "retired"],
+  ] as const)("keeps a dispatched rejection safely %s", async (pageDisposition, expectedState) => {
+    const fixture = managedUpdateOutcomeDataSource();
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    const result = await repository.recordRemoteOutcome({
+      executionId: "execution-1",
+      expectedExecutionVersion: 2,
+      classification: "failed",
+      pageDisposition,
+      responseClassification: pageDisposition === "blocked" ? "forbidden" : pageDisposition,
+      reconciliationReasonCode: pageDisposition,
+      operationKey: `managed-update-outcome:${pageDisposition}`,
+      actor: "managed-update-worker",
+      at: new Date("2026-08-21T02:00:00.000Z"),
+    });
+
+    expect(result.page.state).toBe(expectedState);
+    expect(result.execution.state).toBe("failed");
+  });
+
+  it("refuses to reopen active content after a dispatched failure", async () => {
+    const fixture = managedUpdateOutcomeDataSource();
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.recordRemoteOutcome({
+      executionId: "execution-1",
+      expectedExecutionVersion: 2,
+      classification: "failed",
+      pageDisposition: "active",
+      responseClassification: "stale_revision",
+      operationKey: "managed-update-unsafe-active",
+      actor: "managed-update-worker",
+      at: new Date("2026-08-21T02:00:00.000Z"),
+    })).rejects.toThrow(/version conflict/iu);
+  });
+
+  it("requires exact verified remote identity/revision/hash proof before a pre-dispatch active restore", async () => {
+    const withoutProof = createPostgresManagedKnowledgePageRepository({
+      dataSource: managedUpdateOutcomeDataSource({ executionState: "claimed", executionVersion: 1 }).dataSource,
+    });
+    const input = {
+      executionId: "execution-1",
+      expectedExecutionVersion: 1,
+      classification: "preflight_failed" as const,
+      pageDisposition: "active" as const,
+      responseClassification: "request_not_sent",
+      operationKey: "managed-update-safe-active:test",
+      actor: "managed-update-worker",
+      at: new Date("2026-08-21T02:00:00.000Z"),
+    };
+    await expect(withoutProof.recordRemoteOutcome(input)).rejects.toThrow(/version conflict/iu);
+
+    const withProof = createPostgresManagedKnowledgePageRepository({
+      dataSource: managedUpdateOutcomeDataSource({ executionState: "claimed", executionVersion: 1 }).dataSource,
+    });
+    await expect(withProof.recordRemoteOutcome({
+      ...input,
+      verifiedUnchangedRemote: {
+        remoteDocumentToken: "docx-1",
+        managedBodyBlockId: "blk_body",
+        remoteRevisionId: "12",
+        bodyContentHash: canonicalHash("Old approved body"),
+      },
+    })).resolves.toMatchObject({ page: { state: "active" } });
+  });
+
+  it("claims a same-token retry only after a dispatched request crosses the durable cutoff", async () => {
+    const repository = createPostgresManagedKnowledgePageRepository({
+      dataSource: managedUpdateOutcomeDataSource().dataSource,
+    });
+    const input = {
+      executionId: "execution-1",
+      expectedExecutionVersion: 2,
+      operationKey: "managed-update-safe-retry:test",
+      actor: "managed-update-reconciler",
+      at: new Date("2026-08-21T01:02:00.000Z"),
+    };
+
+    await expect(repository.claimRemoteRetry({
+      ...input,
+      staleDispatchedBefore: new Date("2026-08-21T00:59:59.000Z"),
+    })).rejects.toThrow(/version conflict/iu);
+    await expect(repository.claimRemoteRetry({
+      ...input,
+      staleDispatchedBefore: new Date("2026-08-21T01:00:00.000Z"),
+    })).resolves.toMatchObject({
+      execution: {
+        state: "remote_request_dispatched",
+        clientToken: "8b2dcd5d-37ab-5b63-94d2-7e3eb6d3b271",
+        version: 3,
+      },
+    });
+  });
+});
+
+describe("managed update exact resync contract", () => {
+  it("reactivates from a new successful exact observation and writes immutable success/proposal facts", async () => {
+    const fixture = managedResyncDataSource();
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.findResyncReadyExecution({
+      observationId: "observation-new",
+    })).resolves.toEqual({
+      executionId: "execution-1",
+      executionVersion: 3,
+      managedPageVersion: 3,
+      observationId: "observation-new",
+    });
+    const result = await repository.completeResync({
+      executionId: "execution-1",
+      expectedExecutionVersion: 3,
+      expectedManagedPageVersion: 3,
+      observationId: "observation-new",
+      operationKey: "managed-resync-complete:test",
+      actor: "document-sync",
+      at: new Date("2026-08-21T04:00:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      page: {
+        state: "active",
+        currentRemoteRevisionId: "13",
+        currentBodyContentHash: canonicalHash("New approved body"),
+        version: 4,
+      },
+      execution: { state: "succeeded", version: 4 },
+    });
+    expect(fixture.statements.some((sql) =>
+      sql.includes("INSERT INTO knowledge_publication_updates"))).toBe(true);
+    expect(fixture.statements.some((sql) =>
+      sql.includes("INSERT INTO knowledge_publication_update_execution_events"))).toBe(true);
+    expect(fixture.statements.some((sql) =>
+      sql.includes("INSERT INTO managed_knowledge_page_events"))).toBe(true);
+    expect(fixture.statements.some((sql) =>
+      sql.includes("INSERT INTO action_events") && sql.includes("execution_succeeded"))).toBe(true);
+    expect(fixture.proposalState()).toBe("succeeded");
+  });
+
+  it("does not expose an exact candidate when source permission is unusable", async () => {
+    const fixture = managedResyncDataSource({ permissionUsable: false });
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.findResyncReadyExecution({
+      observationId: "observation-new",
+    })).resolves.toBeUndefined();
+  });
+
+  it("completes a proven apply after an earlier local queue failure barred the proposal", async () => {
+    const fixture = managedResyncDataSource({ initialProposalState: "reconciliation_required" });
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.completeResync({
+      executionId: "execution-1",
+      expectedExecutionVersion: 3,
+      expectedManagedPageVersion: 3,
+      observationId: "observation-new",
+      operationKey: "managed-resync-complete:queue-recovery",
+      actor: "managed-update-reconciler",
+      at: new Date("2026-08-21T04:00:00.000Z"),
+    })).resolves.toMatchObject({
+      page: { state: "active" },
+      execution: { state: "succeeded" },
+    });
+  });
+});
+
 runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
   const schema = `managed_page_${randomUUID().replaceAll("-", "")}`;
   const at = new Date("2026-08-20T00:00:00.000Z");
@@ -246,7 +479,21 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
       const sourceId = `source-${suffix}`;
       const snapshotId = `snapshot-${suffix}`;
       const targetId = `target-${suffix}`;
+      const updateDraftId = `update-draft-${suffix}`;
       const updateProposalId = `update-proposal-${suffix}`;
+      const proposedBody = "New approved body";
+      const proposedBodyHash = canonicalHash(proposedBody);
+      await pool.query(`
+        INSERT INTO knowledge_drafts (
+          id, source_group_id, origin_kind, status, current_revision_number, version,
+          created_by, created_at, updated_at
+        ) VALUES ($1, 'group', 'knowledge_conflict', 'pending_review', 1, 1, 'test', $2, $2)
+      `, [updateDraftId, at]);
+      await pool.query(`
+        INSERT INTO knowledge_draft_revisions (
+          draft_id, revision_number, title, content, risk_level, author, created_at
+        ) VALUES ($1, 1, 'Managed update', $2, 'low', 'test', $3)
+      `, [updateDraftId, proposedBody, at]);
       await pool.query(`
         INSERT INTO document_sources (
           id, source_type, source_uri, permission_state, sync_state,
@@ -274,7 +521,7 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
       });
       await repository.bindConflictDraft({
         id: targetId,
-        draftId,
+        draftId: updateDraftId,
         draftRevision: 1,
         draftVersion: 1,
         conflictCandidateId: candidateId,
@@ -288,28 +535,74 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         managedBodyBlockId: linked.page.managedBodyBlockId,
         expectedRemoteRevisionId: linked.page.currentRemoteRevisionId!,
         currentBodyContentHash: "f".repeat(64),
-        proposedBodyContentHash: "c".repeat(64),
+        proposedBodyContentHash: proposedBodyHash,
         authorizationGroupId: "group",
         targetPolicyId: policyId,
         targetPolicyVersion: 1,
         operationKey: `managed-target:${suffix}`,
         at,
       });
+      await pool.query(
+        `UPDATE knowledge_conflict_candidates
+            SET status = 'draft_created',version = 2,updated_at = $2
+          WHERE id = $1`,
+        [candidateId, at],
+      );
       await pool.query(`
         INSERT INTO action_proposals (
           id, action_type, subject_type, subject_id, subject_revision, subject_version, target_policy_id,
           target_policy_version, risk_level, status, operation_key, operation_fingerprint, version, created_at, updated_at
         ) VALUES ($1, 'update_knowledge_publication', 'knowledge_draft', $2, 1, 1, $3, 1,
           'low', 'approved', $4, repeat('b', 64), 1, $5, $5)
-      `, [updateProposalId, draftId, policyId, `update-proposal:${suffix}`, at]);
-      await pool.query(`INSERT INTO action_review_attestations (id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version, content_hash, action_target_fingerprint, session_id_hash, operation_key, operation_fingerprint, reviewed_at) VALUES ($1,$2,'reviewer',1,1,1,repeat('c',64),repeat('f',64),repeat('d',64),$3,repeat('e',64),$4)`, [`attestation-${suffix}`, updateProposalId, `attestation:${suffix}`, at]);
-      const claimInput = {
-        id: `update-execution-${suffix}`,
+      `, [updateProposalId, updateDraftId, policyId, `update-proposal:${suffix}`, at]);
+      const targetFingerprint = configuredManagedUpdateTargetFingerprint({
         proposalId: updateProposalId,
-        updateTargetId: targetId,
-        expectedManagedPageVersion: linked.page.version,
+        draftId: updateDraftId,
+        candidateId,
+        candidateVersion: 1,
+        managedPageId: linked.page.id,
+        managedPageVersion: linked.page.version,
+        sourceId,
+        snapshotId,
+        snapshotHash: "a".repeat(64),
+        remoteDocumentToken: linked.page.remoteDocumentToken,
+        managedBodyBlockId: linked.page.managedBodyBlockId,
+        expectedRemoteRevision: linked.page.currentRemoteRevisionId!,
+        currentBodyHash: "f".repeat(64),
+        proposedBodyHash,
+        policyId,
+        policyVersion: 1,
+        authorizationGroupId: "group",
+      });
+      const requirementId = `requirement-${suffix}`;
+      await pool.query(`
+        INSERT INTO action_approval_requirements (
+          id,proposal_id,requirement_kind,role_ref_type,role_ref,target_policy_id,
+          target_policy_version,state,satisfied_actor_open_id,satisfied_source_type,
+          satisfied_source_id,version,created_at,updated_at
+        ) VALUES ($1,$2,'group_confirmation','source_group','group',$3,1,'satisfied',
+          'reviewer','group_confirmation',$4,1,$5,$5)
+      `, [requirementId, updateProposalId, policyId, `approval-source-${suffix}`, at]);
+      await pool.query(`
+        INSERT INTO action_review_attestations (
+          id,proposal_id,actor_open_id,subject_revision,subject_version,proposal_version,
+          content_hash,action_target_fingerprint,session_id_hash,operation_key,
+          operation_fingerprint,reviewed_at
+        ) VALUES ($1,$2,'reviewer',1,1,1,$3,$4,repeat('d',64),$5,repeat('e',64),$6)
+      `, [`attestation-${suffix}`, updateProposalId, proposedBodyHash, targetFingerprint,
+        `attestation:${suffix}`, at]);
+      const claimInput = {
+        proposalId: updateProposalId,
+        expectedProposalVersion: 1,
+        runtimeGate: {
+          deploymentEnabled: true,
+          globalEnabled: true,
+          writeKnowledgeBase: true,
+          updateManagedKnowledge: true,
+          disabledGroupIds: [],
+          allowedGroupIds: ["group"],
+        },
         operationKey: `managed-claim:${suffix}`,
-        clientToken: `client-${suffix}`,
         workerId: "test-worker",
         at,
       };
@@ -318,6 +611,233 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         repository.claimApprovedUpdate(claimInput),
       ]);
       expect(claims.map((claim) => claim.outcome).sort()).toEqual(["already_applied", "applied"]);
+      const claimed = claims.find(({ outcome }) => outcome === "applied")!;
+      const dispatchedAt = new Date(at.getTime() + 1_000);
+      const dispatched = await repository.markRemoteRequestDispatched({
+        executionId: claimed.execution.id,
+        expectedExecutionVersion: claimed.execution.version,
+        operationKey: `managed-dispatch:${suffix}`,
+        actor: "test-worker",
+        at: dispatchedAt,
+      });
+      const appliedAt = new Date(at.getTime() + 2_000);
+      const applied = await repository.recordRemoteOutcome({
+        executionId: claimed.execution.id,
+        expectedExecutionVersion: dispatched.execution.version,
+        classification: "remote_applied",
+        pageDisposition: "resync_required",
+        responseClassification: "applied",
+        responseRevisionId: "13",
+        operationKey: `managed-applied:${suffix}`,
+        actor: "test-worker",
+        at: appliedAt,
+      });
+      const presentationId = `presentation-${suffix}`;
+      await pool.query(`
+        INSERT INTO action_approval_presentations (
+          id,proposal_id,requirement_id,proposal_version,recipient_open_id,state,
+          operation_key,operation_fingerprint,version,created_at,closed_at
+        ) VALUES ($1,$2,$3,1,'reviewer','closed',$4,repeat('a',64),1,$5,$5)
+      `, [presentationId, updateProposalId, requirementId, `presentation:${suffix}`, appliedAt]);
+      await pool.query(`
+        INSERT INTO action_approvals (
+          id,proposal_id,requirement_id,actor_open_id,source_presentation_id,callback_event_id,
+          subject_revision,subject_version,authorization_summary,operation_key,
+          operation_fingerprint,created_at
+        ) VALUES ($1,$2,$3,'reviewer',$4,$5,1,1,'group confirmation',$6,repeat('b',64),$7)
+      `, [`approval-${suffix}`, updateProposalId, requirementId, presentationId,
+        `callback-${suffix}`, `approval:${suffix}`, appliedAt]);
+      const newSnapshotId = `snapshot-new-${suffix}`;
+      const newSnapshotHash = "9".repeat(64);
+      const syncedAt = new Date(at.getTime() + 3_000);
+      await pool.query(`
+        INSERT INTO document_snapshots (
+          id,document_source_id,source_uri,fetch_status,body_text,content_hash,fetched_at,created_at
+        ) VALUES ($1,$2,$3,'succeeded','New snapshot body',$4,$5,$5)
+      `, [newSnapshotId, sourceId, `https://example.test/${sourceId}`, newSnapshotHash, syncedAt]);
+      const observation = await repository.recordSnapshotObservation({
+        id: `observation-${suffix}`,
+        managedPageId: applied.page.id,
+        managedPageVersion: applied.page.version,
+        documentSnapshotId: newSnapshotId,
+        documentSourceId: sourceId,
+        snapshotContentHash: newSnapshotHash,
+        observedRemoteRevisionId: "13",
+        observedManagedBodyBlockId: applied.page.managedBodyBlockId,
+        observedBlockType: "text",
+        managedBodyContentHash: proposedBodyHash,
+        adapterVersion: "configured-pg-test-v1",
+        observedAt: syncedAt,
+        operationKey: `observation:${suffix}`,
+        at: syncedAt,
+      });
+      const ready = await repository.findResyncReadyExecution({
+        observationId: observation.observation.id,
+      });
+      expect(ready).toEqual({
+        executionId: claimed.execution.id,
+        executionVersion: applied.execution.version,
+        managedPageVersion: applied.page.version,
+        observationId: observation.observation.id,
+      });
+      const completed = await repository.completeResync({
+        executionId: ready!.executionId,
+        expectedExecutionVersion: ready!.executionVersion,
+        expectedManagedPageVersion: ready!.managedPageVersion,
+        observationId: ready!.observationId,
+        operationKey: `complete-resync:${suffix}`,
+        actor: "test-worker",
+        at: new Date(at.getTime() + 4_000),
+      });
+      expect(completed).toMatchObject({
+        page: { state: "active", version: applied.page.version + 1 },
+        execution: { state: "succeeded", version: applied.execution.version + 1 },
+      });
+      const immutableUpdate = await pool.query<{ count: string }>(
+        `SELECT count(*)::TEXT AS count FROM knowledge_publication_updates WHERE execution_id = $1`,
+        [claimed.execution.id],
+      );
+      expect(immutableUpdate.rows[0]?.count).toBe("1");
+
+      await pool.query(`
+        UPDATE knowledge_conflict_candidates
+           SET target_snapshot_id = $2,target_content_hash = $3,target_source_version = NULL,
+               status = 'draft_created',version = 2,updated_at = $4
+         WHERE id = $1
+      `, [candidateId, newSnapshotId, newSnapshotHash, syncedAt]);
+      const competingClaims: Array<{
+        proposalId: string;
+        expectedProposalVersion: number;
+        runtimeGate: {
+          deploymentEnabled: true;
+          globalEnabled: true;
+          writeKnowledgeBase: true;
+          updateManagedKnowledge: true;
+          disabledGroupIds: never[];
+          allowedGroupIds: string[];
+        };
+        operationKey: string;
+        workerId: string;
+        at: Date;
+      }> = [];
+      for (const label of ["a", "b"] as const) {
+        const raceDraftId = `race-draft-${label}-${suffix}`;
+        const raceTargetId = `race-target-${label}-${suffix}`;
+        const raceProposalId = `race-proposal-${label}-${suffix}`;
+        const raceBody = `Competing approved body ${label}`;
+        const raceBodyHash = canonicalHash(raceBody);
+        await pool.query(`
+          INSERT INTO knowledge_drafts (
+            id,source_group_id,origin_kind,status,current_revision_number,version,
+            created_by,created_at,updated_at
+          ) VALUES ($1,'group','knowledge_conflict','pending_review',1,1,'test',$2,$2)
+        `, [raceDraftId, syncedAt]);
+        await pool.query(`
+          INSERT INTO knowledge_draft_revisions (
+            draft_id,revision_number,title,content,risk_level,author,created_at
+          ) VALUES ($1,1,$2,$3,'low','test',$4)
+        `, [raceDraftId, `Race ${label}`, raceBody, syncedAt]);
+        await repository.bindConflictDraft({
+          id: raceTargetId,
+          draftId: raceDraftId,
+          draftRevision: 1,
+          draftVersion: 1,
+          conflictCandidateId: candidateId,
+          conflictCandidateVersion: 2,
+          managedPageId: completed.page.id,
+          managedPageVersion: completed.page.version,
+          linkedDocumentSourceId: sourceId,
+          targetSnapshotId: newSnapshotId,
+          targetSnapshotHash: newSnapshotHash,
+          remoteDocumentToken: completed.page.remoteDocumentToken,
+          managedBodyBlockId: completed.page.managedBodyBlockId,
+          expectedRemoteRevisionId: completed.page.currentRemoteRevisionId!,
+          currentBodyContentHash: completed.page.currentBodyContentHash!,
+          proposedBodyContentHash: raceBodyHash,
+          authorizationGroupId: "group",
+          targetPolicyId: policyId,
+          targetPolicyVersion: 1,
+          operationKey: `race-target:${label}:${suffix}`,
+          at: syncedAt,
+        });
+        await pool.query(`
+          INSERT INTO action_proposals (
+            id,action_type,subject_type,subject_id,subject_revision,subject_version,
+            target_policy_id,target_policy_version,risk_level,status,operation_key,
+            operation_fingerprint,version,created_at,updated_at
+          ) VALUES ($1,'update_knowledge_publication','knowledge_draft',$2,1,1,$3,1,
+            'low','approved',$4,repeat('c',64),1,$5,$5)
+        `, [raceProposalId, raceDraftId, policyId, `race-proposal:${label}:${suffix}`, syncedAt]);
+        const raceRequirementId = `race-requirement-${label}-${suffix}`;
+        await pool.query(`
+          INSERT INTO action_approval_requirements (
+            id,proposal_id,requirement_kind,role_ref_type,role_ref,target_policy_id,
+            target_policy_version,state,satisfied_actor_open_id,satisfied_source_type,
+            satisfied_source_id,version,created_at,updated_at
+          ) VALUES ($1,$2,'group_confirmation','source_group','group',$3,1,'satisfied',
+            'reviewer','group_confirmation',$4,1,$5,$5)
+        `, [raceRequirementId, raceProposalId, policyId,
+          `race-approval-source-${label}-${suffix}`, syncedAt]);
+        const raceFingerprint = configuredManagedUpdateTargetFingerprint({
+          proposalId: raceProposalId,
+          draftId: raceDraftId,
+          candidateId,
+          candidateVersion: 2,
+          managedPageId: completed.page.id,
+          managedPageVersion: completed.page.version,
+          sourceId,
+          snapshotId: newSnapshotId,
+          snapshotHash: newSnapshotHash,
+          remoteDocumentToken: completed.page.remoteDocumentToken,
+          managedBodyBlockId: completed.page.managedBodyBlockId,
+          expectedRemoteRevision: completed.page.currentRemoteRevisionId!,
+          currentBodyHash: completed.page.currentBodyContentHash!,
+          proposedBodyHash: raceBodyHash,
+          policyId,
+          policyVersion: 1,
+          authorizationGroupId: "group",
+        });
+        await pool.query(`
+          INSERT INTO action_review_attestations (
+            id,proposal_id,actor_open_id,subject_revision,subject_version,proposal_version,
+            content_hash,action_target_fingerprint,session_id_hash,operation_key,
+            operation_fingerprint,reviewed_at
+          ) VALUES ($1,$2,'reviewer',1,1,1,$3,$4,repeat('d',64),$5,repeat('e',64),$6)
+        `, [`race-attestation-${label}-${suffix}`, raceProposalId, raceBodyHash,
+          raceFingerprint, `race-attestation:${label}:${suffix}`, syncedAt]);
+        competingClaims.push({
+          proposalId: raceProposalId,
+          expectedProposalVersion: 1,
+          runtimeGate: {
+            deploymentEnabled: true,
+            globalEnabled: true,
+            writeKnowledgeBase: true,
+            updateManagedKnowledge: true,
+            disabledGroupIds: [],
+            allowedGroupIds: ["group"],
+          },
+          operationKey: `race-claim:${label}:${suffix}`,
+          workerId: `race-worker-${label}`,
+          at: new Date(at.getTime() + 5_000),
+        });
+      }
+      await pool.query(
+        `UPDATE knowledge_conflict_candidates SET version = 3,updated_at = $2 WHERE id = $1`,
+        [candidateId, new Date(at.getTime() + 5_000)],
+      );
+      const race = await Promise.allSettled(competingClaims.map((input) =>
+        repository.claimApprovedUpdate(input)));
+      expect(race.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+      expect(race.filter(({ status }) => status === "rejected")).toHaveLength(1);
+      const unresolvedCount = await pool.query<{ count: string }>(
+        `SELECT count(*)::TEXT AS count
+           FROM knowledge_publication_update_executions
+          WHERE managed_page_id = $1
+            AND state IN ('claimed','remote_request_dispatched','outcome_unknown','remote_applied',
+              'resync_required','reconciliation_required')`,
+        [completed.page.id],
+      );
+      expect(unresolvedCount.rows[0]?.count).toBe("1");
     } finally {
       await pool?.end();
       await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
@@ -346,5 +866,470 @@ function managedPageRow(overrides: Record<string, unknown> = {}): Record<string,
     created_at: at,
     updated_at: at,
     ...overrides,
+  };
+}
+
+function managedUpdateClaimInput() {
+  return {
+    proposalId: "update-proposal-1",
+    expectedProposalVersion: 2,
+    runtimeGate: {
+      deploymentEnabled: true,
+      globalEnabled: true,
+      writeKnowledgeBase: true,
+      updateManagedKnowledge: true,
+      disabledGroupIds: [],
+      allowedGroupIds: ["group-1"],
+    },
+    operationKey: "managed-update-claim:test",
+    workerId: "managed-update-worker",
+    at: new Date("2026-08-21T01:00:00.000Z"),
+  };
+}
+
+function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
+  const at = new Date("2026-08-21T01:00:00.000Z");
+  const statements: string[] = [];
+  const statementValues: unknown[][] = [];
+  const attestationFingerprints: string[] = [];
+  let claimed = false;
+  let proposalExecuting = false;
+  const page = () => managedPageRow({
+    target_policy_version: "3",
+    linked_document_source_id: "source-1",
+    current_remote_revision_id: "12",
+    current_body_content_hash: canonicalHash("Old approved body"),
+    state: claimed ? "updating" : "active",
+    version: claimed ? "2" : "1",
+    updated_at: at,
+  });
+  const target = {
+    id: "target-1",
+    draft_id: "update-draft-1",
+    draft_revision: "1",
+    draft_version: "4",
+    conflict_candidate_id: "candidate-1",
+    conflict_candidate_version: "5",
+    managed_page_id: "managed-1",
+    managed_page_version: "1",
+    linked_document_source_id: "source-1",
+    target_snapshot_id: "snapshot-old",
+    target_snapshot_hash: "a".repeat(64),
+    target_source_version: "source-version-1",
+    remote_document_token: "docx-1",
+    managed_body_block_id: "blk_body",
+    expected_remote_revision_id: "12",
+    current_body_content_hash: canonicalHash("Old approved body"),
+    proposed_body_content_hash: canonicalHash("New approved body"),
+    authorization_group_id: "group-1",
+    target_policy_id: "policy-1",
+    target_policy_version: "3",
+    operation_key: "target-op",
+    operation_fingerprint: "b".repeat(64),
+    created_at: at,
+  };
+  const proposal = () => ({
+    id: "update-proposal-1",
+    action_type: "update_knowledge_publication",
+    subject_type: "knowledge_draft",
+    subject_id: "update-draft-1",
+    subject_revision: "1",
+    subject_version: "4",
+    target_policy_id: "policy-1",
+    target_policy_version: "3",
+    risk_level: "low",
+    status: proposalExecuting ? "executing" : "approved",
+    operation_key: "proposal-op",
+    operation_fingerprint: "c".repeat(64),
+    version: proposalExecuting ? "3" : "2",
+    created_at: at,
+    updated_at: at,
+  });
+  const execution = {
+    id: "e4f1ec52-3d3d-5f72-a7e4-ecde994e3ed5",
+    proposal_id: "update-proposal-1",
+    managed_page_id: "managed-1",
+    managed_page_version: "2",
+    update_target_id: "target-1",
+    attempt_number: "1",
+    state: "claimed",
+    operation_key: "managed-update-claim:test",
+    operation_fingerprint: "d".repeat(64),
+    request_fingerprint: "e".repeat(64),
+    expected_remote_revision_id: "12",
+    before_body_content_hash: canonicalHash("Old approved body"),
+    after_body_content_hash: canonicalHash("New approved body"),
+    client_token: "8b2dcd5d-37ab-5b63-94d2-7e3eb6d3b271",
+    response_revision_id: null,
+    response_classification: null,
+    reconciliation_reason_code: null,
+    remote_request_dispatched_at: null,
+    version: "1",
+    created_at: at,
+    updated_at: at,
+  };
+  const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+    const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+    statements.push(normalized);
+    statementValues.push(values);
+    if (normalized === "BEGIN" || normalized === "COMMIT" || normalized === "ROLLBACK") {
+      return { rows: [] };
+    }
+    if (normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+    if (normalized.includes("FROM knowledge_publication_update_executions") && normalized.includes("operation_key = $1")) {
+      return { rows: [] };
+    }
+    if (normalized.includes("FROM knowledge_publication_update_targets") && !normalized.includes("FOR UPDATE")) {
+      return { rows: [target] };
+    }
+    if (normalized.includes("FROM managed_knowledge_pages")) return { rows: [page()] };
+    if (normalized.includes("FROM knowledge_publication_update_targets")) return { rows: [target] };
+    if (normalized.includes("FROM knowledge_conflict_candidates")) {
+      return { rows: [{
+        version: "6",
+        status: "draft_created",
+        group_id: "group-1",
+        target_document_source_id: "source-1",
+        target_snapshot_id: "snapshot-old",
+        target_content_hash: "a".repeat(64),
+        target_source_version: "source-version-1",
+      }] };
+    }
+    if (normalized.includes("FROM action_proposals")) return { rows: [proposal()] };
+    if (normalized.includes("FROM knowledge_drafts")) {
+      return { rows: [{
+        id: "update-draft-1",
+        source_group_id: "group-1",
+        status: "pending_review",
+        current_revision_number: "1",
+        version: "4",
+        title: "Managed update",
+        content: "New approved body",
+        risk_level: "low",
+      }] };
+    }
+    if (normalized.includes("FROM knowledge_publication_target_policies")) {
+      return { rows: [{
+        id: "policy-1",
+        space_id: "space-1",
+        parent_node_token: null,
+        display_name: "Policy",
+        allowed_group_ids: ["group-1"],
+        allowed_risk_levels: ["low"],
+        enabled: true,
+        version: "3",
+        created_at: at,
+        updated_at: at,
+      }] };
+    }
+    if (normalized.includes("FROM document_sources")) {
+      return { rows: [{
+        id: "source-1",
+        source_type: "authorized_wiki_document",
+        permission_state: "readable",
+        sync_state: "synced",
+        can_use_for_answering: true,
+        can_use_for_knowledge_drafts: true,
+      }] };
+    }
+    if (normalized.includes("FROM document_snapshots")) {
+      return { rows: [{
+        id: "snapshot-old",
+        document_source_id: "source-1",
+        content_hash: "a".repeat(64),
+        source_version: "source-version-1",
+        fetch_status: "succeeded",
+      }] };
+    }
+    if (normalized.includes("action_target_fingerprint")) {
+      const fingerprint = values.find((value) =>
+        typeof value === "string" && /^[0-9a-f]{64}$/u.test(value));
+      if (typeof fingerprint === "string") attestationFingerprints.push(fingerprint);
+      return { rows: [{ present: hasExactAttestation }] };
+    }
+    if (normalized.includes("FROM knowledge_publication_update_executions") &&
+      normalized.includes("managed_page_id = $1") && normalized.includes("state IN")) {
+      return { rows: [] };
+    }
+    if (normalized.startsWith("UPDATE managed_knowledge_pages")) {
+      claimed = true;
+      return { rows: [] };
+    }
+    if (normalized.startsWith("UPDATE action_proposals")) {
+      proposalExecuting = true;
+      return { rows: [] };
+    }
+    if (normalized.includes("FROM knowledge_publication_update_executions")) {
+      return { rows: [execution] };
+    }
+    return { rows: [] };
+  });
+  return {
+    statements,
+    statementValues,
+    attestationFingerprints,
+    dataSource: {
+      query,
+      async connect() { return { query, release() {} }; },
+    } as PostgresKnowledgeDraftDataSource,
+  };
+}
+
+function managedUpdateTargetFingerprint(): string {
+  return createHash("sha256").update(JSON.stringify([
+    ["action_type", "update_knowledge_publication"],
+    ["proposal_id", "update-proposal-1"],
+    ["proposal_version", 2],
+    ["draft_id", "update-draft-1"],
+    ["draft_revision", 1],
+    ["proposed_content_hash", canonicalHash("New approved body")],
+    ["conflict_candidate_id", "candidate-1"],
+    ["candidate_version", 5],
+    ["managed_page_id", "managed-1"],
+    ["managed_page_version", 1],
+    ["document_source_id", "source-1"],
+    ["target_snapshot_id", "snapshot-old"],
+    ["target_snapshot_hash", "a".repeat(64)],
+    ["remote_document_token", "docx-1"],
+    ["managed_body_block_id", "blk_body"],
+    ["expected_remote_revision", "12"],
+    ["current_body_content_hash", canonicalHash("Old approved body")],
+    ["target_policy_id", "policy-1"],
+    ["target_policy_version", 3],
+    ["authorization_group_id", "group-1"],
+  ])).digest("hex");
+}
+
+function configuredManagedUpdateTargetFingerprint(input: {
+  proposalId: string;
+  draftId: string;
+  candidateId: string;
+  candidateVersion: number;
+  managedPageId: string;
+  managedPageVersion: number;
+  sourceId: string;
+  snapshotId: string;
+  snapshotHash: string;
+  remoteDocumentToken: string;
+  managedBodyBlockId: string;
+  expectedRemoteRevision: string;
+  currentBodyHash: string;
+  proposedBodyHash: string;
+  policyId: string;
+  policyVersion: number;
+  authorizationGroupId: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    ["action_type", "update_knowledge_publication"],
+    ["proposal_id", input.proposalId],
+    ["proposal_version", 1],
+    ["draft_id", input.draftId],
+    ["draft_revision", 1],
+    ["proposed_content_hash", input.proposedBodyHash],
+    ["conflict_candidate_id", input.candidateId],
+    ["candidate_version", input.candidateVersion],
+    ["managed_page_id", input.managedPageId],
+    ["managed_page_version", input.managedPageVersion],
+    ["document_source_id", input.sourceId],
+    ["target_snapshot_id", input.snapshotId],
+    ["target_snapshot_hash", input.snapshotHash],
+    ["remote_document_token", input.remoteDocumentToken],
+    ["managed_body_block_id", input.managedBodyBlockId],
+    ["expected_remote_revision", input.expectedRemoteRevision],
+    ["current_body_content_hash", input.currentBodyHash],
+    ["target_policy_id", input.policyId],
+    ["target_policy_version", input.policyVersion],
+    ["authorization_group_id", input.authorizationGroupId],
+  ])).digest("hex");
+}
+
+function canonicalHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function managedUpdateOutcomeDataSource({
+  executionState: initialExecutionState = "remote_request_dispatched",
+  executionVersion: initialExecutionVersion = 2,
+}: { executionState?: string; executionVersion?: number } = {}) {
+  const at = new Date("2026-08-21T01:00:00.000Z");
+  let pageState = "updating";
+  let pageVersion = 2;
+  let executionState = initialExecutionState;
+  let executionVersion = initialExecutionVersion;
+  let proposalState = "executing";
+  let proposalVersion = 3;
+  const target = {
+    id: "target-1", draft_id: "update-draft-1", draft_revision: "1", draft_version: "4",
+    conflict_candidate_id: "candidate-1", conflict_candidate_version: "5",
+    managed_page_id: "managed-1", managed_page_version: "1",
+    linked_document_source_id: "source-1", target_snapshot_id: "snapshot-old",
+    target_snapshot_hash: "a".repeat(64), target_source_version: null,
+    remote_document_token: "docx-1", managed_body_block_id: "blk_body",
+    expected_remote_revision_id: "12", current_body_content_hash: canonicalHash("Old approved body"),
+    proposed_body_content_hash: canonicalHash("New approved body"), authorization_group_id: "group-1",
+    target_policy_id: "policy-1", target_policy_version: "3", operation_key: "target-op",
+    operation_fingerprint: "b".repeat(64), created_at: at,
+  };
+  const page = () => managedPageRow({
+    target_policy_version: "3", linked_document_source_id: "source-1",
+    current_remote_revision_id: "12", current_body_content_hash: canonicalHash("Old approved body"),
+    state: pageState, version: String(pageVersion), updated_at: at,
+  });
+  const execution = () => ({
+    id: "execution-1", proposal_id: "update-proposal-1", managed_page_id: "managed-1",
+    managed_page_version: "2", update_target_id: "target-1", attempt_number: "1",
+    state: executionState, operation_key: "execution-op", operation_fingerprint: "d".repeat(64),
+    request_fingerprint: "e".repeat(64), expected_remote_revision_id: "12",
+    before_body_content_hash: canonicalHash("Old approved body"),
+    after_body_content_hash: canonicalHash("New approved body"),
+    client_token: "8b2dcd5d-37ab-5b63-94d2-7e3eb6d3b271", response_revision_id: null,
+    response_classification: null, reconciliation_reason_code: null,
+    remote_request_dispatched_at: at, version: String(executionVersion), created_at: at, updated_at: at,
+  });
+  const proposal = () => ({
+    id: "update-proposal-1", action_type: "update_knowledge_publication",
+    subject_type: "knowledge_draft", subject_id: "update-draft-1", subject_revision: "1",
+    subject_version: "4", target_policy_id: "policy-1", target_policy_version: "3",
+    risk_level: "low", status: proposalState, operation_key: "proposal-op",
+    operation_fingerprint: "c".repeat(64), version: String(proposalVersion), created_at: at, updated_at: at,
+  });
+  const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+    const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized) || normalized.includes("pg_advisory_xact_lock")) {
+      return { rows: [] };
+    }
+    if (normalized.includes("knowledge_publication_update_execution_events") && normalized.includes("operation_key = $1")) return { rows: [] };
+    if (normalized.includes("FROM managed_knowledge_pages")) return { rows: [page()] };
+    if (normalized.includes("FROM knowledge_publication_update_targets")) return { rows: [target] };
+    if (normalized.includes("FROM action_proposals")) return { rows: [proposal()] };
+    if (normalized.includes("FROM knowledge_publication_update_executions")) return { rows: [execution()] };
+    if (normalized.startsWith("UPDATE knowledge_publication_update_executions")) {
+      executionState = normalized.includes("SET state = 'remote_request_dispatched'")
+        ? "remote_request_dispatched"
+        : String(values[1]);
+      executionVersion += 1;
+      return { rows: [] };
+    }
+    if (normalized.startsWith("UPDATE managed_knowledge_pages")) {
+      pageState = String(values[1]);
+      pageVersion += 1;
+      return { rows: [] };
+    }
+    if (normalized.startsWith("UPDATE action_proposals")) {
+      proposalState = String(values[1]);
+      proposalVersion += 1;
+      return { rows: [] };
+    }
+    return { rows: [] };
+  });
+  return {
+    dataSource: {
+      query,
+      async connect() { return { query, release() {} }; },
+    } as PostgresKnowledgeDraftDataSource,
+  };
+}
+
+function managedResyncDataSource({
+  permissionUsable = true,
+  initialProposalState = "executing",
+}: { permissionUsable?: boolean; initialProposalState?: string } = {}) {
+  const at = new Date("2026-08-21T03:00:00.000Z");
+  const statements: string[] = [];
+  let pageState = "resync_required";
+  let pageVersion = 3;
+  let pageRevision = "12";
+  let pageHash = canonicalHash("Old approved body");
+  let executionState = "remote_applied";
+  let executionVersion = 3;
+  let proposalState = initialProposalState;
+  let proposalVersion = 3;
+  const target = {
+    id: "target-1", draft_id: "update-draft-1", draft_revision: "1", draft_version: "4",
+    conflict_candidate_id: "candidate-1", conflict_candidate_version: "5",
+    managed_page_id: "managed-1", managed_page_version: "1",
+    linked_document_source_id: "source-1", target_snapshot_id: "snapshot-old",
+    target_snapshot_hash: "a".repeat(64), target_source_version: "source-version-1",
+    remote_document_token: "docx-1", managed_body_block_id: "blk_body",
+    expected_remote_revision_id: "12", current_body_content_hash: canonicalHash("Old approved body"),
+    proposed_body_content_hash: canonicalHash("New approved body"), authorization_group_id: "group-1",
+    target_policy_id: "policy-1", target_policy_version: "3", operation_key: "target-op",
+    operation_fingerprint: "b".repeat(64), created_at: at,
+  };
+  const page = () => managedPageRow({
+    target_policy_version: "3", linked_document_source_id: "source-1",
+    current_remote_revision_id: pageRevision, current_body_content_hash: pageHash,
+    expected_resync_content_hash: pageState === "resync_required" ? canonicalHash("New approved body") : null,
+    state: pageState, version: String(pageVersion), updated_at: at,
+  });
+  const execution = () => ({
+    id: "execution-1", proposal_id: "update-proposal-1", managed_page_id: "managed-1",
+    managed_page_version: "2", update_target_id: "target-1", attempt_number: "1",
+    state: executionState, operation_key: "execution-op", operation_fingerprint: "d".repeat(64),
+    request_fingerprint: "e".repeat(64), expected_remote_revision_id: "12",
+    before_body_content_hash: canonicalHash("Old approved body"),
+    after_body_content_hash: canonicalHash("New approved body"),
+    client_token: "8b2dcd5d-37ab-5b63-94d2-7e3eb6d3b271", response_revision_id: "13",
+    response_classification: "applied", reconciliation_reason_code: null,
+    remote_request_dispatched_at: new Date("2026-08-21T02:59:00.000Z"),
+    version: String(executionVersion), created_at: at, updated_at: at,
+  });
+  const proposal = () => ({
+    id: "update-proposal-1", status: proposalState, version: String(proposalVersion),
+  });
+  const observation = {
+    id: "observation-new", managed_page_id: "managed-1", managed_page_version: "2",
+    document_snapshot_id: "snapshot-new", document_source_id: "source-1",
+    snapshot_content_hash: "9".repeat(64), observed_remote_revision_id: "13",
+    observed_managed_body_block_id: "blk_body", observed_block_type: "text",
+    managed_body_content_hash: canonicalHash("New approved body"),
+    adapter_version: "feishu-docx-managed-block-v1", operation_key: "observation-op",
+    operation_fingerprint: "f".repeat(64), observed_at: at,
+  };
+  const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+    const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+    statements.push(normalized);
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized) || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+    if (normalized.includes("AS execution_id") && normalized.includes("managed_knowledge_snapshot_observations")) {
+      return { rows: permissionUsable ? [{
+        execution_id: "execution-1", execution_version: "3",
+        managed_page_version: "3", observation_id: "observation-new",
+      }] : [] };
+    }
+    if (normalized.includes("knowledge_publication_update_execution_events") && normalized.includes("operation_key = $1")) return { rows: [] };
+    if (normalized.includes("FROM managed_knowledge_pages")) return { rows: [page()] };
+    if (normalized.includes("FROM knowledge_publication_update_targets")) return { rows: [target] };
+    if (normalized.includes("FROM action_proposals")) return { rows: [proposal()] };
+    if (normalized.includes("AS ready") && normalized.includes("document_snapshots")) {
+      return { rows: [{ ready: permissionUsable, approval_id: "approval-1" }] };
+    }
+    if (normalized.includes("FROM knowledge_publication_update_executions")) return { rows: [execution()] };
+    if (normalized.includes("FROM managed_knowledge_snapshot_observations")) return { rows: [observation] };
+    if (normalized.startsWith("UPDATE knowledge_publication_update_executions")) {
+      executionState = "succeeded";
+      executionVersion += 1;
+      return { rows: [] };
+    }
+    if (normalized.startsWith("UPDATE managed_knowledge_pages")) {
+      pageState = "active";
+      pageRevision = String(values[1]);
+      pageHash = String(values[2]);
+      pageVersion += 1;
+      return { rows: [] };
+    }
+    if (normalized.startsWith("UPDATE action_proposals")) {
+      proposalState = "succeeded";
+      proposalVersion += 1;
+      return { rows: [] };
+    }
+    return { rows: [] };
+  });
+  return {
+    statements,
+    proposalState: () => proposalState,
+    dataSource: {
+      query,
+      async connect() { return { query, release() {} }; },
+    } as PostgresKnowledgeDraftDataSource,
   };
 }

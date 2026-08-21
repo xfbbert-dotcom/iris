@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
 import type { ActionProposalRepository } from "../src/action-approvals/action-proposal-repository.js";
+import type { ManagedKnowledgePageRepository } from
+  "../src/action-approvals/managed-knowledge-page-repository.js";
+import type { ManagedKnowledgeUpdater } from
+  "../src/action-approvals/feishu-managed-knowledge-updater.js";
 import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import {
@@ -124,6 +128,112 @@ describe("ActionApprovalRuntime", () => {
       requireReviewAttestation: true,
     }));
   });
+
+  it("creates and owns update execution only from an explicit injectable feature snapshot and sync queue", async () => {
+    const order: string[] = [];
+    const dependencies = runtimeDependencies({ order });
+    const runtimeController = enabledController();
+    runtimeController.setCapability("writeKnowledgeBase", true);
+    runtimeController.setCapability("updateManagedKnowledge", true);
+    const syncQueue = { enqueue: vi.fn(async () => undefined) };
+    const runtime = createActionApprovalRuntime({
+      env: enabledEnv(),
+      runtimeController,
+      knowledgeCardRuntime: knowledgeCardRuntime(),
+      dependencies,
+      managedKnowledgeUpdates: {
+        deploymentEnabled: true,
+        groupAllowlist: ["oc_pilot"],
+        syncQueue,
+        intervalMs: 2_000,
+        batchLimit: 7,
+        staleDispatchMs: 60_000,
+      },
+    })!;
+
+    expect(dependencies.createManagedPageRepository).toHaveBeenCalledWith({
+      dataSource: dependencies.pool,
+    });
+    expect(dependencies.createManagedBlockReader).toHaveBeenCalledWith(expect.objectContaining({
+      tokenProvider: dependencies.tokenProvider,
+    }));
+    expect(dependencies.createManagedUpdater).toHaveBeenCalledWith({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: dependencies.tokenProvider,
+      blockReader: dependencies.managedBlockReader,
+    });
+    expect(dependencies.createManagedUpdateExecutor).toHaveBeenCalledWith(expect.objectContaining({
+      proposals: dependencies.repository,
+      managedPages: dependencies.managedPageRepository,
+      updater: dependencies.managedUpdater,
+      syncQueue,
+    }));
+    const runtimeSnapshot = dependencies.createManagedUpdateExecutor.mock.calls[0]?.[0].runtimeSnapshot;
+    expect(runtimeSnapshot?.()).toEqual({
+      deploymentEnabled: true,
+      globalEnabled: true,
+      disabledGroupIds: [],
+      groupAllowlist: ["oc_pilot"],
+      capabilities: { writeKnowledgeBase: true, updateManagedKnowledge: true },
+    });
+    expect(dependencies.createManagedUpdateReconciler).toHaveBeenCalledWith(expect.objectContaining({
+      staleDispatchMs: 60_000,
+      syncQueue,
+    }));
+
+    await runtime.start();
+    expect(order).toEqual([
+      "planner-start", "dispatcher-start", "publication-start", "managed-update-start",
+    ]);
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      managedKnowledgeUpdates: { running: true, intervalMs: 2_000, batchLimit: 7 },
+    });
+    expect(JSON.stringify((await runtime.getStatus()).managedKnowledgeUpdates)).not.toMatch(
+      /body|token|proposalId|executionId/iu,
+    );
+
+    await runtime.close();
+    expect(order.slice(-5)).toEqual([
+      "managed-update-stop", "publication-stop", "dispatcher-stop", "planner-stop", "pool-end",
+    ]);
+  });
+
+  it("does not construct update network or polling components without explicit deployment enablement", () => {
+    for (const managedKnowledgeUpdates of [
+      undefined,
+      {
+        deploymentEnabled: false,
+        groupAllowlist: ["oc_pilot"],
+        syncQueue: { enqueue: vi.fn(async () => undefined) },
+        intervalMs: 2_000,
+        batchLimit: 7,
+        staleDispatchMs: 60_000,
+      },
+      {
+        deploymentEnabled: true,
+        groupAllowlist: ["oc_pilot"],
+        syncQueue: undefined,
+        intervalMs: 2_000,
+        batchLimit: 7,
+        staleDispatchMs: 60_000,
+      },
+    ] as const) {
+      const dependencies = runtimeDependencies();
+      createActionApprovalRuntime({
+        env: enabledEnv(),
+        runtimeController: enabledController(),
+        knowledgeCardRuntime: knowledgeCardRuntime(),
+        dependencies,
+        ...(managedKnowledgeUpdates === undefined
+          ? {}
+          : { managedKnowledgeUpdates: managedKnowledgeUpdates as never }),
+      });
+
+      expect(dependencies.createManagedBlockReader).not.toHaveBeenCalled();
+      expect(dependencies.createManagedUpdater).not.toHaveBeenCalled();
+      expect(dependencies.createManagedUpdateLoop).not.toHaveBeenCalled();
+    }
+  });
 });
 
 function enabledEnv() {
@@ -212,6 +322,19 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
   const tokenProvider = { getTenantAccessToken: vi.fn() };
   const publicationPublisher = { publish: vi.fn() };
   const publicationExecutor = { processBatch: vi.fn() };
+  const managedPageRepository = {} as ManagedKnowledgePageRepository;
+  const managedBlockReader = { readManagedBlock: vi.fn() };
+  const managedUpdater = {
+    preflight: vi.fn(), update: vi.fn(), readBack: vi.fn(),
+  } as unknown as ManagedKnowledgeUpdater;
+  const managedUpdateExecutor = { processBatch: vi.fn() };
+  const managedUpdateReconciler = { processBatch: vi.fn(), reconcileOne: vi.fn() };
+  const managedUpdateLoop = {
+    start: vi.fn(() => { order.push("managed-update-start"); }),
+    stop: vi.fn(async () => { order.push("managed-update-stop"); }),
+    isRunning: vi.fn(() => true),
+    getSnapshot: vi.fn(() => ({ running: true, intervalMs: 2_000, batchLimit: 7 })),
+  };
   const dependencies = {
     createPostgresPool: vi.fn(() => pool),
     createRepository: vi.fn(() => repository),
@@ -226,6 +349,12 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     createPlannerLoop: vi.fn(() => plannerLoop),
     createDispatcherLoop: vi.fn(() => dispatcherLoop),
     createPublicationExecutorLoop: vi.fn(() => publicationLoop),
+    createManagedPageRepository: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedPageRepository"]>>(() => managedPageRepository),
+    createManagedBlockReader: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedBlockReader"]>>(() => managedBlockReader),
+    createManagedUpdater: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedUpdater"]>>(() => managedUpdater),
+    createManagedUpdateExecutor: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedUpdateExecutor"]>>(() => managedUpdateExecutor),
+    createManagedUpdateReconciler: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedUpdateReconciler"]>>(() => managedUpdateReconciler),
+    createManagedUpdateLoop: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedUpdateLoop"]>>(() => managedUpdateLoop),
   } satisfies ActionApprovalRuntimeDependencies;
   return Object.assign(dependencies, {
     pool,
@@ -237,5 +366,11 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     tokenProvider,
     publicationPublisher,
     publicationExecutor,
+    managedPageRepository,
+    managedBlockReader,
+    managedUpdater,
+    managedUpdateExecutor,
+    managedUpdateReconciler,
+    managedUpdateLoop,
   });
 }
