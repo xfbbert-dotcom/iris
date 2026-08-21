@@ -3,15 +3,17 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
-import { readDatabaseConfig } from "../src/database/database-config.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import {
   createDocumentSnapshotRepository,
   type DocumentSnapshot,
   type Queryable,
 } from "../src/documents/document-snapshot-repository.js";
+import { insertManagedKnowledgePageFixture } from
+  "./managed-knowledge-page-postgres-fixture.js";
 
-const databaseUrl = process.env.DATABASE_URL?.trim();
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim()
+  || process.env.DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 function normalizeSql(sql: string): string {
@@ -602,7 +604,7 @@ runIfDatabase("DocumentSnapshotRepository with Postgres", () => {
   const sourceUri = `https://example.com/postgres-snapshots/${sourceId}`;
 
   beforeAll(async () => {
-    pool = new pg.Pool({ connectionString: readDatabaseConfig().databaseUrl });
+    pool = new pg.Pool({ connectionString: databaseUrl });
     const client = await pool.connect();
 
     try {
@@ -757,4 +759,115 @@ values ($1, 'group_visible_document', $2, 'Whitespace snapshot source', 'group-1
       await pool.query("delete from document_sources where id = any($1::text[])", [sourceIds]);
     }
   });
+
+  it.each([
+    "updating",
+    "resync_required",
+    "reconciliation_required",
+    "blocked",
+    "retired",
+  ] as const)("excludes a managed source in %s before the indexing limit", async (state) => {
+    if (!pool) throw new Error("Expected Postgres pool to be initialized");
+    const client = await pool.connect();
+    const suffix = randomUUID().replaceAll("-", "");
+    const managedSourceId = `snapshot-managed-${state}-${suffix}`;
+    const unmanagedSourceId = `snapshot-unmanaged-${state}-${suffix}`;
+    try {
+      await client.query("BEGIN");
+      await insertMissingProfileSnapshotFixture({
+        client,
+        documentSourceId: managedSourceId,
+        fetchedAt: new Date("2026-08-20T00:00:00.000Z"),
+      });
+      await insertMissingProfileSnapshotFixture({
+        client,
+        documentSourceId: unmanagedSourceId,
+        fetchedAt: new Date("2026-08-20T00:01:00.000Z"),
+      });
+      await insertManagedKnowledgePageFixture({
+        queryable: client,
+        state,
+        documentSourceId: managedSourceId,
+        suffix: `snapshot-${state}-${suffix}`,
+      });
+      const repository = createDocumentSnapshotRepository({ queryable: client });
+
+      const planned = await repository.listSuccessfulSnapshotsMissingProfile({
+        embeddingProfileId: `missing-profile-${suffix}`,
+        limit: 1,
+      });
+
+      expect(planned.map(({ documentSourceId }) => documentSourceId)).toEqual([
+        unmanagedSourceId,
+      ]);
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
+  it("keeps active managed and unmanaged snapshots eligible for indexing", async () => {
+    if (!pool) throw new Error("Expected Postgres pool to be initialized");
+    const client = await pool.connect();
+    const suffix = randomUUID().replaceAll("-", "");
+    const activeSourceId = `snapshot-active-${suffix}`;
+    const unmanagedSourceId = `snapshot-unmanaged-${suffix}`;
+    try {
+      await client.query("BEGIN");
+      await insertMissingProfileSnapshotFixture({
+        client,
+        documentSourceId: activeSourceId,
+        fetchedAt: new Date("2026-08-20T00:00:00.000Z"),
+      });
+      await insertMissingProfileSnapshotFixture({
+        client,
+        documentSourceId: unmanagedSourceId,
+        fetchedAt: new Date("2026-08-20T00:01:00.000Z"),
+      });
+      await insertManagedKnowledgePageFixture({
+        queryable: client,
+        state: "active",
+        documentSourceId: activeSourceId,
+        suffix: `snapshot-active-${suffix}`,
+      });
+      const repository = createDocumentSnapshotRepository({ queryable: client });
+
+      const planned = await repository.listSuccessfulSnapshotsMissingProfile({
+        embeddingProfileId: `missing-profile-controls-${suffix}`,
+        limit: 2,
+      });
+
+      expect(new Set(planned.map(({ documentSourceId }) => documentSourceId))).toEqual(
+        new Set([activeSourceId, unmanagedSourceId]),
+      );
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
 });
+
+async function insertMissingProfileSnapshotFixture(input: {
+  client: pg.PoolClient;
+  documentSourceId: string;
+  fetchedAt: Date;
+}): Promise<void> {
+  const sourceUri = `https://example.com/managed-snapshot/${input.documentSourceId}`;
+  const snapshotId = `managed-snapshot-${input.documentSourceId}`;
+  await input.client.query(
+    `INSERT INTO document_sources (
+       id, source_type, source_uri, permission_state, sync_state,
+       can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+     ) VALUES ($1, 'authorized_wiki_document', $2, 'readable', 'synced',
+       TRUE, TRUE, $3, $3)`,
+    [input.documentSourceId, sourceUri, input.fetchedAt],
+  );
+  await input.client.query(
+    `INSERT INTO document_snapshots (
+       id, document_source_id, source_uri, fetch_status, body_text,
+       content_hash, source_version, fetched_at, created_at
+     ) VALUES ($1, $2, $3, 'succeeded', 'Managed snapshot body',
+       repeat('a', 64), 'v1', $4, $4)`,
+    [snapshotId, input.documentSourceId, sourceUri, input.fetchedAt],
+  );
+}

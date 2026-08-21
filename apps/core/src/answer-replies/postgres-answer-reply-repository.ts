@@ -5,6 +5,8 @@ import {
   KnowledgeConflictVersionConflictError,
   lockCurrentKnowledgeConflictCandidateForAnswerSend,
 } from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
+import { acquireManagedKnowledgeSourceLocks } from
+  "../documents/managed-knowledge-source-lock.js";
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import {
   createAnswerReplyEventId,
@@ -365,6 +367,10 @@ export function createPostgresAnswerReplyRepository(input: {
       return withTransaction(dataSource, async (client) => {
         await acquireAdvisoryLock(client, normalized.deliveryId);
         const prelockedSources = await loadSources(client, normalized.deliveryId);
+        await acquireManagedKnowledgeSourceLocks(
+          client,
+          prelockedSources.map(({ documentSourceId }) => documentSourceId),
+        );
         await lockManagedSourceFreshness(client, prelockedSources);
         await lockCurrentSourceGrantBindings(client, prelockedSources);
         const binding = await loadKnowledgeConflictBinding(client, normalized.deliveryId);

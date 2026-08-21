@@ -8,7 +8,8 @@ import { createPostgresManagedKnowledgePageRepository } from "../src/action-appr
 import type { PostgresKnowledgeDraftDataSource } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 import { defaultMigrationsDir, runMigrations, type MigrationClient } from "../src/database/migrate.js";
 
-const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim()
+  || process.env.DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe.sequential : describe.skip;
 
 describe("managed knowledge page migration contract", () => {
@@ -97,6 +98,55 @@ describe("managed knowledge page exact remote identity lookup", () => {
     await expect(repository.findByRemoteIdentity({
       remoteWikiNodeToken: "wiki-node-1",
     })).rejects.toThrow("remote identity is ambiguous");
+  });
+});
+
+describe("managed knowledge page source-link serialization", () => {
+  it("locks the normalized source identity before reading or updating the managed page", async () => {
+    const statements: Array<{ sql: string; values?: unknown[] }> = [];
+    const at = new Date("2026-08-20T00:00:00.000Z");
+    const initialPage = managedPageRow({ updated_at: at });
+    const linkedPage = managedPageRow({
+      linked_document_source_id: "source-1",
+      version: "2",
+      updated_at: at,
+    });
+    const query = async (sql: string, values?: unknown[]) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      statements.push({ sql: normalized, values });
+      if (normalized.includes("FROM managed_knowledge_page_events")) return { rows: [] };
+      if (normalized.includes("FROM managed_knowledge_pages") && normalized.includes("FOR UPDATE")) {
+        return { rows: [initialPage] };
+      }
+      if (normalized.includes("FROM managed_knowledge_pages")) return { rows: [linkedPage] };
+      return { rows: [] };
+    };
+    const repository = createPostgresManagedKnowledgePageRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresKnowledgeDraftDataSource,
+    });
+
+    await expect(repository.linkSource({
+      managedPageId: "managed-1",
+      expectedVersion: 1,
+      documentSourceId: " source-1 ",
+      operationKey: "managed-link:source-1",
+      actor: "test",
+      at,
+    })).resolves.toMatchObject({
+      outcome: "applied",
+      page: { id: "managed-1", linkedDocumentSourceId: "source-1", version: 2 },
+    });
+
+    const sourceLockIndex = statements.findIndex(({ sql, values }) =>
+      sql.includes("pg_advisory_xact_lock")
+      && values?.[0] === "managed-knowledge-source:source-1");
+    const pageLockIndex = statements.findIndex(({ sql }) =>
+      sql.includes("FROM managed_knowledge_pages") && sql.includes("FOR UPDATE"));
+    expect(sourceLockIndex).toBeGreaterThanOrEqual(0);
+    expect(sourceLockIndex).toBeLessThan(pageLockIndex);
   });
 });
 
@@ -275,3 +325,26 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
     }
   });
 });
+
+function managedPageRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const at = new Date("2026-08-20T00:00:00.000Z");
+  return {
+    id: "managed-1",
+    origin_knowledge_publication_id: "publication-1",
+    target_policy_id: "policy-1",
+    target_policy_version: "1",
+    authorization_group_id: "group-1",
+    remote_node_token: "wiki-node-1",
+    remote_document_token: "docx-1",
+    managed_body_block_id: "blk_body",
+    linked_document_source_id: null,
+    current_remote_revision_id: "12",
+    current_body_content_hash: "a".repeat(64),
+    expected_resync_content_hash: null,
+    state: "active",
+    version: "1",
+    created_at: at,
+    updated_at: at,
+    ...overrides,
+  };
+}

@@ -4,6 +4,8 @@ import type {
   KnowledgeDraftTransactionClient,
   PostgresKnowledgeDraftDataSource,
 } from "../knowledge-governance/postgres-knowledge-draft-repository.js";
+import { acquireManagedKnowledgeSourceLocks } from
+  "../documents/managed-knowledge-source-lock.js";
 
 import type {
   ManagedKnowledgePage,
@@ -182,6 +184,7 @@ async function linkSource(
   const fingerprint = operationFingerprint(normalized);
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
+    await acquireManagedKnowledgeSourceLocks(client, [normalized.documentSourceId]);
     const replay = await pageReplay(client, normalized.operationKey, fingerprint);
     if (replay !== undefined) return { outcome: "already_applied", page: replay };
     const page = await requirePageForUpdate(client, normalized.managedPageId);

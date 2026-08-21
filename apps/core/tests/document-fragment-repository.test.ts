@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { readDatabaseConfig } from "../src/database/database-config.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import {
   createDocumentFragmentRepository,
@@ -12,6 +11,9 @@ import {
   type Queryable,
 } from "../src/documents/document-fragment-repository.js";
 import { DOCUMENT_SOURCE_METADATA_MAX_CHARS } from "../src/documents/document-source-registry.js";
+import {
+  insertManagedKnowledgePageFixture,
+} from "./managed-knowledge-page-postgres-fixture.js";
 
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
@@ -1345,7 +1347,8 @@ describe("DocumentFragmentRepository", () => {
   });
 });
 
-const databaseUrl = process.env.DATABASE_URL?.trim();
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim()
+  || process.env.DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 runIfDatabase("DocumentFragmentRepository with Postgres", () => {
@@ -1359,7 +1362,7 @@ runIfDatabase("DocumentFragmentRepository with Postgres", () => {
   const evidenceGroupId = `fragment-evidence-group-${randomUUID()}`;
 
   beforeAll(async () => {
-    pool = new pg.Pool({ connectionString: readDatabaseConfig().databaseUrl });
+    pool = new pg.Pool({ connectionString: databaseUrl });
     const client = await pool.connect();
     try {
       await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
@@ -1542,6 +1545,158 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
     ).resolves.toEqual([]);
   });
 
+  it.each([
+    "updating",
+    "resync_required",
+    "reconciliation_required",
+    "blocked",
+    "retired",
+  ] as const)(
+    "excludes a managed source in %s before every retrieval limit and ranking",
+    async (state) => {
+      if (!pool) throw new Error("Expected Postgres pool to be initialized");
+      const client = await pool.connect();
+      const suffix = randomUUID().replaceAll("-", "");
+      const authorizedSpaceId = `managed-fragment-space-${suffix}`;
+      const managedSourceId = `managed-fragment-a-${suffix}`;
+      const unmanagedSourceId = `managed-fragment-z-${suffix}`;
+      try {
+        await client.query("BEGIN");
+        await insertFragmentSearchFixture({
+          client,
+          repository: createDocumentFragmentRepository({
+            queryable: client,
+            embeddingProfiles: {
+              getProfileById: vi.fn(async () => ({ id: embeddingProfileId, dimensions: 6 })),
+            },
+          }),
+          embeddingProfileId,
+          documentSourceId: managedSourceId,
+          authorizedSpaceId,
+          embedding: [1, 0, 0, 0, 0, 0],
+        });
+        await insertFragmentSearchFixture({
+          client,
+          repository: createDocumentFragmentRepository({
+            queryable: client,
+            embeddingProfiles: {
+              getProfileById: vi.fn(async () => ({ id: embeddingProfileId, dimensions: 6 })),
+            },
+          }),
+          embeddingProfileId,
+          documentSourceId: unmanagedSourceId,
+          authorizedSpaceId,
+          embedding: [0.9, 0.1, 0, 0, 0, 0],
+        });
+        await insertManagedKnowledgePageFixture({
+          queryable: client,
+          state,
+          documentSourceId: managedSourceId,
+          suffix: `fragment-${state}-${suffix}`,
+        });
+        const repository = createDocumentFragmentRepository({
+          queryable: client,
+          embeddingProfiles: {
+            getProfileById: vi.fn(async () => ({ id: embeddingProfileId, dimensions: 6 })),
+          },
+        });
+
+        for (const usage of ["answering", "knowledge_drafts"] as const) {
+          const results = await repository.searchSimilarFragments({
+            embeddingProfileId,
+            embedding: [1, 0, 0, 0, 0, 0],
+            limit: 1,
+            usage,
+            ...(usage === "knowledge_drafts" ? { authorizedSpaceId } : {}),
+          });
+          expect(results.map(({ documentSourceId }) => documentSourceId)).toEqual([
+            unmanagedSourceId,
+          ]);
+        }
+        const candidates = await repository.searchSimilarFragmentCandidates({
+          embeddingProfileId,
+          embedding: [1, 0, 0, 0, 0, 0],
+          limit: 1,
+          usage: "knowledge_drafts",
+          authorizedSpaceId,
+        });
+        expect(candidates.map(({ documentSourceId }) => documentSourceId)).toEqual([
+          unmanagedSourceId,
+        ]);
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+        client.release();
+      }
+    },
+  );
+
+  it("keeps active managed and unmanaged sources eligible in every retrieval path", async () => {
+    if (!pool) throw new Error("Expected Postgres pool to be initialized");
+    const client = await pool.connect();
+    const suffix = randomUUID().replaceAll("-", "");
+    const authorizedSpaceId = `managed-fragment-control-space-${suffix}`;
+    const activeSourceId = `managed-fragment-active-${suffix}`;
+    const unmanagedSourceId = `managed-fragment-unmanaged-${suffix}`;
+    try {
+      await client.query("BEGIN");
+      const repository = createDocumentFragmentRepository({
+        queryable: client,
+        embeddingProfiles: {
+          getProfileById: vi.fn(async () => ({ id: embeddingProfileId, dimensions: 6 })),
+        },
+      });
+      await insertFragmentSearchFixture({
+        client,
+        repository,
+        embeddingProfileId,
+        documentSourceId: activeSourceId,
+        authorizedSpaceId,
+        embedding: [1, 0, 0, 0, 0, 0],
+      });
+      await insertFragmentSearchFixture({
+        client,
+        repository,
+        embeddingProfileId,
+        documentSourceId: unmanagedSourceId,
+        authorizedSpaceId,
+        embedding: [0.9, 0.1, 0, 0, 0, 0],
+      });
+      await insertManagedKnowledgePageFixture({
+        queryable: client,
+        state: "active",
+        documentSourceId: activeSourceId,
+        suffix: `fragment-active-${suffix}`,
+      });
+      const expectedIds = new Set([activeSourceId, unmanagedSourceId]);
+
+      for (const usage of ["answering", "knowledge_drafts"] as const) {
+        const results = await repository.searchSimilarFragments({
+          embeddingProfileId,
+          embedding: [1, 0, 0, 0, 0, 0],
+          limit: 2,
+          usage,
+          ...(usage === "knowledge_drafts" ? { authorizedSpaceId } : {}),
+        });
+        expect(new Set(results.map(({ documentSourceId }) => documentSourceId))).toEqual(
+          expectedIds,
+        );
+      }
+      const candidates = await repository.searchSimilarFragmentCandidates({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 2,
+        usage: "knowledge_drafts",
+        authorizedSpaceId,
+      });
+      expect(new Set(candidates.map(({ documentSourceId }) => documentSourceId))).toEqual(
+        expectedIds,
+      );
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
   it("balances knowledge candidates across sources before exact text materialization", async () => {
     if (!pool) throw new Error("Expected Postgres pool to be initialized");
     const suffix = randomUUID();
@@ -1704,3 +1859,41 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
     }
   });
 });
+
+async function insertFragmentSearchFixture(input: {
+  client: pg.PoolClient;
+  repository: ReturnType<typeof createDocumentFragmentRepository>;
+  embeddingProfileId: string;
+  documentSourceId: string;
+  authorizedSpaceId: string;
+  embedding: number[];
+}): Promise<void> {
+  const sourceUri = `https://example.com/managed-fragment/${input.documentSourceId}`;
+  const snapshotId = `managed-fragment-snapshot-${input.documentSourceId}`;
+  const at = new Date("2026-08-20T00:00:00.000Z");
+  await input.client.query(
+    `INSERT INTO document_sources (
+       id, source_type, source_uri, permission_state, sync_state,
+       can_use_for_answering, can_use_for_knowledge_drafts, authorized_space_id,
+       created_at, updated_at
+     ) VALUES ($1, 'authorized_wiki_document', $2, 'readable', 'synced',
+       TRUE, TRUE, $3, $4, $4)`,
+    [input.documentSourceId, sourceUri, input.authorizedSpaceId, at],
+  );
+  await input.client.query(
+    `INSERT INTO document_snapshots (
+       id, document_source_id, source_uri, fetch_status, body_text,
+       content_hash, source_version, fetched_at, created_at
+     ) VALUES ($1, $2, $3, 'succeeded', 'Managed fragment body',
+       repeat('a', 64), 'v1', $4, $4)`,
+    [snapshotId, input.documentSourceId, sourceUri, at],
+  );
+  await input.repository.replaceFragmentsForSnapshot({
+    documentSourceId: input.documentSourceId,
+    documentSnapshotId: snapshotId,
+    sourceUri,
+    embeddingProfileId: input.embeddingProfileId,
+    chunks: [{ chunkIndex: 0, text: `Managed fragment ${input.documentSourceId}` }],
+    embeddings: [input.embedding],
+  });
+}
