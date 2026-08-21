@@ -58,3 +58,39 @@ captured exit-0 repository gate.
   claims but leaves recovery/admin convergence available.
 - **Live-pilot blocker:** no specifically authorized group/page/credentials were supplied; result is
   `not yet run` / controlled Feishu acceptance pending.
+
+## Fix Round 1/5 — executable controlled-pilot documentation
+
+### Changes
+
+- Corrected the internal-status path to `status.components.managedKnowledgeUpdates`; approval
+  interaction queue counts are checked at `status.knowledgeCards.queue`.
+- Made the status helper conditional: while the deployment is safely disabled it verifies only the
+  actual disabled shape and uses the durable execution-state projection; after enablement it requires
+  the reconciliation object and both supported reconciliation counters at zero.
+- Added fail-closed PowerShell helpers for placeholder validation, property existence, count checks,
+  durable runtime acknowledgements, and a human authority/ticket/image-digest gate.
+- Replaced prose-only activation/rollback with the actual runtime-control GET/POST/PATCH routes,
+  headers, payloads, expected durable PostgreSQL readbacks, and stop conditions.
+- Made fresh target/control publication, group confirmation, OAuth review, and approval explicitly
+  manual Feishu actions, with adjacent read-only API/SQL evidence instead of invented write routes.
+- Added explicit human-gate/action/readback/stop/rollback wording for conflict, confirmation,
+  OAuth approval, and the system mutation, including a parameterized metadata-only execution/update
+  projection for the post-mutation revision/hash/request evidence.
+- Added per-step content-free evidence fields, exact read-only SQL projections with explicit columns,
+  and a clear prohibition on raw Feishu tokens/block IDs/bodies/errors.
+
+### Documentation checks
+
+- `git diff --check` — passed (only line-ending warnings).
+- Required managed-update acceptance/status/privacy `rg` check — passed; it found the corrected
+  component path, real runtime routes, read-only evidence projections, pending live status, and the
+  raw-token prohibition.
+- PowerShell parser check over every fenced PowerShell block — passed with zero parse errors; blocks
+  were parsed only, never executed.
+
+### Scope and remaining gate
+
+This fix changes Markdown/report evidence only. It performs no live Feishu call, deployment,
+runtime enablement, database mutation, push, or merge. The live pilot remains `not yet run` /
+controlled Feishu acceptance pending.
