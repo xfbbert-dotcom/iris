@@ -140,6 +140,11 @@ export type ActionApprovalRuntimeConfig =
       reviewPublicOrigin?: string;
     };
 
+export type ManagedKnowledgeUpdateDeploymentConfig = {
+  enabled: boolean;
+  groupAllowlist: string[];
+};
+
 export type ProactiveSignalDeliveryRuntimeConfig =
   | { enabled: false }
   | {
@@ -726,6 +731,26 @@ export function readActionApprovalRuntimeConfig(
   };
 }
 
+export function readManagedKnowledgeUpdateDeploymentConfig(
+  env: EnvLike = process.env,
+): ManagedKnowledgeUpdateDeploymentConfig {
+  const enabled = readStrictBooleanEnv(
+    "IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED",
+    env.IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED,
+    false,
+  );
+  const groupAllowlist = readOptionalUniqueGroupIdListEnv(
+    "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST",
+    env.IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST,
+  );
+  if (enabled && groupAllowlist.length === 0) {
+    throw new Error(
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain at least one group",
+    );
+  }
+  return { enabled, groupAllowlist };
+}
+
 export function readProactiveSignalDeliveryRuntimeConfig(
   env: EnvLike = process.env,
 ): ProactiveSignalDeliveryRuntimeConfig {
@@ -1129,6 +1154,37 @@ function readRequiredUniqueGroupIdListEnv(name: string, value: string | undefine
   }
 
   return groupIds;
+}
+
+function readOptionalUniqueGroupIdListEnv(name: string, value: string | undefined): string[] {
+  if (value === undefined || value.trim().length === 0) {
+    return [];
+  }
+  const groupIds = value.split(",").map((part) => part.trim());
+  if (groupIds.some((groupId) => groupId.length === 0)) {
+    throw new Error(`${name} must not contain blank group IDs`);
+  }
+  if (groupIds.length > 100) {
+    throw new Error(`${name} must contain at most 100 groups`);
+  }
+  if (groupIds.some((groupId) => groupId.length > 512)) {
+    throw new Error(`${name} group IDs must be at most 512 characters`);
+  }
+  if (new Set(groupIds).size !== groupIds.length) {
+    throw new Error(`${name} must contain unique group IDs`);
+  }
+  return groupIds;
+}
+
+function readStrictBooleanEnv(
+  name: string,
+  value: string | undefined,
+  fallback: boolean,
+): boolean {
+  if (value === undefined) return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be true or false`);
 }
 
 function readOptionalPositiveIntegerEnv(

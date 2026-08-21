@@ -384,6 +384,17 @@ test("keeps knowledge conflicts disabled with an empty pilot allowlist", () => {
   }
 });
 
+test("renders managed knowledge updates default-off with an empty allowlist", () => {
+  const expectedValues = {
+    IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "false",
+    IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "",
+  };
+  for (const [name, expected] of Object.entries(expectedValues)) {
+    assert.equal(readEnvAssignment(pilotCiEnv, name), expected, `${name} must match in CI env`);
+    assert.equal(compose.services.core.environment[name], expected, `${name} must survive Compose interpolation`);
+  }
+});
+
 test("keeps wiki space sync default-off with deterministic Compose wiring", () => {
   const expectedValues = {
     IRIS_WIKI_SPACE_SYNC_ENABLED: "false",

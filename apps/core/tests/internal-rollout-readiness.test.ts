@@ -126,6 +126,53 @@ describe("buildInternalRolloutReadinessReport", () => {
     });
   });
 
+  it("keeps managed knowledge updates healthy while the deployment contract is disabled", () => {
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv())).managedKnowledgeUpdates)
+      .toMatchObject({
+        status: "pass",
+        detail: "Managed knowledge updates are safely disabled.",
+      });
+  });
+
+  it("fails enabled managed knowledge updates without the 0055 identity migration or a healthy worker", () => {
+    const env = readyRolloutEnv({
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot",
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+      IRIS_ACTION_REVIEW_ENABLED: "true",
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+      IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+      FEISHU_ENCRYPT_KEY: "managed-update-encrypt-key",
+    });
+    const baseStatus = {
+      ok: true,
+      enabled: true,
+      running: true,
+      migration0055Applied: true,
+      worker: { running: true },
+      reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
+    };
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: { ...baseStatus, migration0055Applied: false },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge update migration 0055 is not applied.",
+    });
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: {
+        ...baseStatus,
+        reconciliation: { outcomeUnknown: 1, reconciliationRequired: 0 },
+      },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge updates have unresolved outcome-unknown executions.",
+    });
+  });
+
   it("treats knowledge conflicts as safely disabled by default", () => {
     expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv())).knowledgeConflicts)
       .toMatchObject({

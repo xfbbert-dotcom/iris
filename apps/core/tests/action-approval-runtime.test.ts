@@ -186,7 +186,13 @@ describe("ActionApprovalRuntime", () => {
       "planner-start", "dispatcher-start", "publication-start", "managed-update-start",
     ]);
     await expect(runtime.getStatus()).resolves.toMatchObject({
-      managedKnowledgeUpdates: { running: true, intervalMs: 2_000, batchLimit: 7 },
+      managedKnowledgeUpdates: {
+        running: true,
+        intervalMs: 2_000,
+        batchLimit: 7,
+        migration0055Applied: true,
+        reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
+      },
     });
     expect(JSON.stringify((await runtime.getStatus()).managedKnowledgeUpdates)).not.toMatch(
       /body|token|proposalId|executionId/iu,
@@ -275,7 +281,9 @@ function knowledgeCardRuntime(): KnowledgeCardRuntime {
 
 function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
   const pool = {
-    query: vi.fn(),
+    query: async <T>() => ({
+      rows: [{ present: true, outcome_unknown: 0, reconciliation_required: 0 } as unknown as T],
+    }),
     connect: vi.fn(),
     end: vi.fn(async () => { order.push("pool-end"); }),
   };

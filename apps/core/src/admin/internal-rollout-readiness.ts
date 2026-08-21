@@ -9,6 +9,7 @@ import {
   readFeishuOpenApiConfig,
   readKnowledgeCardRuntimeConfig,
   readKnowledgeConflictRuntimeConfig,
+  readManagedKnowledgeUpdateDeploymentConfig,
   readModelProviderConfig,
   readOptionalFeishuBotOpenId,
   readReindexWorkerRuntimeConfig,
@@ -114,6 +115,17 @@ type KnowledgeConflictReadinessStatus = {
   reconciliation?: { terminalFailed: number; outcomeUnknown: number };
   degradedReason?: string;
 };
+type ManagedKnowledgeUpdateReadinessStatus = {
+  ok: boolean;
+  enabled: boolean;
+  running: boolean;
+  migration0055Applied?: boolean;
+  worker?: { running: boolean };
+  reconciliation?: {
+    outcomeUnknown: number;
+    reconciliationRequired: number;
+  };
+};
 export type InternalRolloutReadinessContext = {
   documentSyncStatus?: {
     ok: boolean;
@@ -145,6 +157,7 @@ export type InternalRolloutReadinessContext = {
     degradedReason?: string;
   };
   knowledgeConflictStatus?: KnowledgeConflictReadinessStatus;
+  managedKnowledgeUpdateStatus?: ManagedKnowledgeUpdateReadinessStatus;
   actionReviewStatus?: {
     configured: boolean;
     running: boolean;
@@ -679,6 +692,59 @@ const checkDefinitions: CheckDefinition[] = [
       return pass("Action-review runtime is configured and running with migration 0053 applied.");
     },
   },
+  {
+    id: "managedKnowledgeUpdates",
+    title: "Managed knowledge update pilot",
+    envVars: [
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED",
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST",
+      "IRIS_DOCUMENT_SYNC_WORKER_ENABLED",
+      "IRIS_ACTION_REVIEW_ENABLED",
+      "IRIS_APPROVAL_ACTIONS_ENABLED",
+      "IRIS_KNOWLEDGE_CARD_ENABLED",
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "DATABASE_URL",
+    ],
+    evaluate(env, context) {
+      const config = readManagedKnowledgeUpdateDeploymentConfig(env);
+      if (!config.enabled) return pass("Managed knowledge updates are safely disabled.");
+
+      if (!readDocumentSyncWorkerRuntimeConfig(env).enabled) {
+        return fail("IRIS_DOCUMENT_SYNC_WORKER_ENABLED=true is required for managed knowledge updates.");
+      }
+      if (!readActionApprovalRuntimeConfig(env).enabled) {
+        return fail("IRIS_APPROVAL_ACTIONS_ENABLED=true is required for managed knowledge updates.");
+      }
+      if (!readKnowledgeCardRuntimeConfig(env).enabled) {
+        return fail("IRIS_KNOWLEDGE_CARD_ENABLED=true is required for managed knowledge updates.");
+      }
+      if (!readActionReviewRuntimeConfig(env).enabled) {
+        return fail("IRIS_ACTION_REVIEW_ENABLED=true is required for managed knowledge updates.");
+      }
+      readFeishuOpenApiConfig(env);
+
+      const status = context.managedKnowledgeUpdateStatus;
+      if (status === undefined) return fail("Managed knowledge update runtime status is unavailable.");
+      if (status.migration0055Applied !== true) {
+        return fail("Managed knowledge update migration 0055 is not applied.");
+      }
+      if (!status.ok) return fail("Managed knowledge update runtime status is unreadable.");
+      if (!status.enabled || !status.running || status.worker?.running !== true) {
+        return fail("Managed knowledge update worker is not running.");
+      }
+      if (!isValidManagedKnowledgeUpdateReconciliationStatus(status.reconciliation)) {
+        return fail("Managed knowledge update reconciliation counts are unavailable.");
+      }
+      if (status.reconciliation.outcomeUnknown > 0) {
+        return fail("Managed knowledge updates have unresolved outcome-unknown executions.");
+      }
+      if (status.reconciliation.reconciliationRequired > 0) {
+        return fail("Managed knowledge updates have reconciliation-required executions.");
+      }
+      return pass("Managed knowledge update worker is running with migration 0055 applied.");
+    },
+  },
 ];
 
 function isValidActionApprovalOutboxStatus(
@@ -785,6 +851,13 @@ function isValidKnowledgeConflictReconciliationStatus(
 ): value is NonNullable<KnowledgeConflictReadinessStatus["reconciliation"]> {
   return value !== undefined &&
     [value.terminalFailed, value.outcomeUnknown].every(isSafeCount);
+}
+
+function isValidManagedKnowledgeUpdateReconciliationStatus(
+  value: ManagedKnowledgeUpdateReadinessStatus["reconciliation"],
+): value is NonNullable<ManagedKnowledgeUpdateReadinessStatus["reconciliation"]> {
+  return value !== undefined &&
+    [value.outcomeUnknown, value.reconciliationRequired].every(isSafeCount);
 }
 
 function isSafeCount(value: number): boolean {

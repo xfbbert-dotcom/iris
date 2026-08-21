@@ -17,7 +17,12 @@ import {
   createFeishuGateway,
   type FeishuCallbackRequest
 } from "./feishu/feishu-gateway.js";
-import { readFeishuAuthConfig, readServerPort, type EnvLike } from "./config/env.js";
+import {
+  readFeishuAuthConfig,
+  readManagedKnowledgeUpdateDeploymentConfig,
+  readServerPort,
+  type EnvLike,
+} from "./config/env.js";
 import {
   RuntimeController,
   type RuntimeCapabilityName
@@ -471,11 +476,30 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         composedKnowledgeConflictRuntime.interactionWorker,
       );
     }
+    documentSyncRuntime =
+      (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
+    documentSyncRuntime?.start();
+    const managedKnowledgeUpdateDeployment = readManagedKnowledgeUpdateDeploymentConfig(
+      dependencies.readinessEnv ?? process.env,
+    );
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
     )({
       runtimeController,
       knowledgeCardRuntime,
+      ...(managedKnowledgeUpdateDeployment.enabled &&
+          documentSyncRuntime?.managedKnowledgeUpdateQueue !== undefined
+        ? {
+            managedKnowledgeUpdates: {
+              deploymentEnabled: true,
+              groupAllowlist: managedKnowledgeUpdateDeployment.groupAllowlist,
+              syncQueue: documentSyncRuntime.managedKnowledgeUpdateQueue,
+              intervalMs: 1_000,
+              batchLimit: 10,
+              staleDispatchMs: 300_000,
+            },
+          }
+        : {}),
       ...(agentExecutionLedgerRuntime === undefined
         ? {}
         : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
@@ -578,9 +602,6 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         }),
       );
     }
-    documentSyncRuntime =
-      (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
-    documentSyncRuntime?.start();
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -783,6 +804,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     );
     const knowledgeConflicts = await getKnowledgeConflictStatus(composedKnowledgeConflictRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
+    const managedKnowledgeUpdates = getManagedKnowledgeUpdateStatus({
+      deployment: managedKnowledgeUpdateDeployment,
+      actionApprovalStatus: actionApprovals,
+    });
     const proactiveSignals = await getProactiveSignalsStatus({
       planner: proactiveSignalPlannerRuntime,
       delivery: proactiveSignalDeliveryRuntime,
@@ -828,6 +853,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       reindex: await getReindexStatus(reindexWorkerRuntime),
       knowledgeConflicts,
       actionApprovals: actionApprovals ?? { ok: true, enabled: false, running: false },
+      managedKnowledgeUpdates,
       proactiveSignals,
     };
 
@@ -846,6 +872,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       composedKnowledgeConflictRuntime,
     );
     const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
+    const managedKnowledgeUpdateStatus = getManagedKnowledgeUpdateStatus({
+      deployment: managedKnowledgeUpdateDeployment,
+      actionApprovalStatus,
+    });
     const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
@@ -854,6 +884,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         knowledgeCardStatus,
         knowledgeConflictStatus,
         actionApprovalStatus,
+        managedKnowledgeUpdateStatus,
         actionReviewStatus,
       },
     );
@@ -2164,6 +2195,30 @@ async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefine
       degradedReason: "action_approval_status_unavailable" as const,
     };
   }
+}
+
+function getManagedKnowledgeUpdateStatus({
+  deployment,
+  actionApprovalStatus,
+}: {
+  deployment: ReturnType<typeof readManagedKnowledgeUpdateDeploymentConfig>;
+  actionApprovalStatus: Awaited<ReturnType<typeof getActionApprovalStatus>>;
+}) {
+  if (!deployment.enabled) return { ok: true, enabled: false, running: false };
+  const status = actionApprovalStatus !== undefined && "managedKnowledgeUpdates" in actionApprovalStatus
+    ? actionApprovalStatus.managedKnowledgeUpdates
+    : undefined;
+  if (status === undefined) {
+    return { ok: false, enabled: true, running: false, migration0055Applied: false };
+  }
+  return {
+    ok: actionApprovalStatus?.ok === true && status.running,
+    enabled: true,
+    running: status.running,
+    migration0055Applied: status.migration0055Applied,
+    worker: { running: status.running },
+    reconciliation: status.reconciliation,
+  };
 }
 
 async function getProactiveSignalsStatus({

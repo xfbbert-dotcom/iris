@@ -21,6 +21,38 @@ afterEach(() => {
 });
 
 describe("GET /internal/readiness", () => {
+  it("injects the parsed default-off deployment contract with the real document-sync queue", async () => {
+    const syncQueue = { enqueue: vi.fn(async () => undefined) };
+    const documentSyncRuntime = fakeDocumentSyncRuntimeForReadiness() as DocumentSyncRuntime & {
+      managedKnowledgeUpdateQueue: typeof syncQueue;
+    };
+    documentSyncRuntime.managedKnowledgeUpdateQueue = syncQueue;
+    const createActionApprovalRuntime = vi.fn(() => undefined);
+    const app = await buildApp({
+      readinessEnv: readyRolloutEnv({
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot",
+      }),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime,
+    });
+
+    expect(createActionApprovalRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      managedKnowledgeUpdates: {
+        deploymentEnabled: true,
+        groupAllowlist: ["oc_pilot"],
+        syncQueue,
+        intervalMs: 1_000,
+        batchLimit: 10,
+        staleDispatchMs: 300_000,
+      },
+    }));
+    await app.close();
+  });
+
   it("uses live content-free cross-group grant counts and fails closed when they are unreadable", async () => {
     const runtime = fakeDocumentSyncRuntimeForReadiness({
       migration0051Applied: true,
@@ -186,13 +218,14 @@ describe("memory extraction internal API", () => {
       "reindex",
       "knowledgeConflicts",
       "actionApprovals",
+      "managedKnowledgeUpdates",
       "proactiveSignals",
     ]);
     expect(consolidated.json().summary).toMatchObject({
-      componentCount: 12,
+      componentCount: 13,
       healthyComponentCount: 3,
       enabledComponentCount: 3,
-      disabledComponentCount: 9,
+      disabledComponentCount: 10,
       disabledComponents: [
         "answerDraft",
         "agentExecutionLedger",
@@ -202,16 +235,23 @@ describe("memory extraction internal API", () => {
         "reindex",
         "knowledgeConflicts",
         "actionApprovals",
+        "managedKnowledgeUpdates",
         "proactiveSignals",
       ],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 9,
+        disabled: 10,
         degraded: 0,
         stopped: 0,
       },
     });
     expect(consolidated.json().components.memoryExtraction).toEqual({
+      status: "disabled",
+      ok: true,
+      enabled: false,
+      running: false,
+    });
+    expect(consolidated.json().components.managedKnowledgeUpdates).toEqual({
       status: "disabled",
       ok: true,
       enabled: false,
@@ -790,7 +830,7 @@ function memoryExtractionStatus(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function readyRolloutEnv(): EnvLike {
+function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {
   return {
     DATABASE_URL: "postgres://iris:iris@localhost:5432/iris",
     REDIS_URL: "redis://localhost:6379",
@@ -814,6 +854,7 @@ function readyRolloutEnv(): EnvLike {
     IRIS_EMBEDDING_API_KEY: "embedding-key",
     IRIS_EMBEDDING_MODEL: "embedding-model",
     IRIS_EMBEDDING_DIMENSIONS: "1536",
+    ...overrides,
   };
 }
 

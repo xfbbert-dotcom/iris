@@ -128,6 +128,7 @@ const MAX_DOCUMENT_SYNC_RUNTIME_LIST_LIMIT = 100;
 
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
+  managedKnowledgeUpdateQueue?: Pick<DocumentSyncQueue, "enqueue">;
   sources: {
     list(input: DocumentSourceInventoryListInput): Promise<DocumentSource[]>;
     get(id: string): Promise<DocumentSource | undefined>;
@@ -581,6 +582,7 @@ function createEnabledDocumentSyncRuntime({
   );
 
   return {
+    managedKnowledgeUpdateQueue: queue,
     start() {
       loop.start();
       wikiSpaceLoop?.start();

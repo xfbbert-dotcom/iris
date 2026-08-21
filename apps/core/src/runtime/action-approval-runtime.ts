@@ -72,7 +72,13 @@ export type ActionApprovalRuntimeStatus = {
   planner: ReturnType<ActionProposalPlannerLoop["getSnapshot"]>;
   dispatcher: ActionApprovalDispatcherLoopSnapshot;
   publicationExecutor: KnowledgePublicationExecutorLoopSnapshot;
-  managedKnowledgeUpdates?: ManagedKnowledgeUpdateExecutorLoopSnapshot;
+  managedKnowledgeUpdates?: ManagedKnowledgeUpdateExecutorLoopSnapshot & {
+    migration0055Applied: boolean;
+    reconciliation: {
+      outcomeUnknown: number;
+      reconciliationRequired: number;
+    };
+  };
   proposals: ActionProposalStatusCounts;
   outbox: ActionApprovalOutboxStatusCounts;
 };
@@ -344,9 +350,12 @@ export function createActionApprovalRuntime({
         const dispatcher = dispatcherLoop!.getSnapshot();
         const publicationExecutor = publicationExecutorLoop!.getSnapshot();
         const managedKnowledgeUpdateSnapshot = managedUpdateLoop?.getSnapshot();
-        const [proposals, outbox] = await Promise.all([
+        const [proposals, outbox, managedKnowledgeUpdateReadiness] = await Promise.all([
           repository.getStatusCounts(),
           repository.getApprovalOutboxStatusCounts(),
+          managedKnowledgeUpdateSnapshot === undefined
+            ? Promise.resolve(undefined)
+            : getManagedKnowledgeUpdateReadiness(pool!),
         ]);
         return {
           enabled: true,
@@ -358,7 +367,12 @@ export function createActionApprovalRuntime({
           publicationExecutor,
           ...(managedKnowledgeUpdateSnapshot === undefined
             ? {}
-            : { managedKnowledgeUpdates: managedKnowledgeUpdateSnapshot }),
+            : {
+                managedKnowledgeUpdates: {
+                  ...managedKnowledgeUpdateSnapshot,
+                  ...managedKnowledgeUpdateReadiness!,
+                },
+              }),
           proposals,
           outbox,
         };
@@ -376,6 +390,43 @@ export function createActionApprovalRuntime({
     dependencies.onStartupCleanup?.(cleanup);
     throw error;
   }
+}
+
+async function getManagedKnowledgeUpdateReadiness(
+  pool: Pick<PostgresKnowledgeDraftDataSource, "query">,
+): Promise<{
+  migration0055Applied: boolean;
+  reconciliation: { outcomeUnknown: number; reconciliationRequired: number };
+}> {
+  const result = await pool.query<{
+    present: boolean;
+    outcome_unknown: string | number;
+    reconciliation_required: string | number;
+  }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM schema_migrations WHERE name = '0055_managed_update_execution_identity.sql'
+     ) AS present,
+     COUNT(*) FILTER (WHERE state = 'outcome_unknown') AS outcome_unknown,
+     COUNT(*) FILTER (WHERE state = 'reconciliation_required') AS reconciliation_required
+     FROM knowledge_publication_update_executions`,
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new Error("managed knowledge update readiness is unavailable");
+  return {
+    migration0055Applied: row.present === true,
+    reconciliation: {
+      outcomeUnknown: requireSafeCount(row.outcome_unknown),
+      reconciliationRequired: requireSafeCount(row.reconciliation_required),
+    },
+  };
+}
+
+function requireSafeCount(value: string | number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error("managed knowledge update readiness is unavailable");
+  }
+  return parsed;
 }
 
 function normalizeGroupAllowlist(value: unknown): string[] {

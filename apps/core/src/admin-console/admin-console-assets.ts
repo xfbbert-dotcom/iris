@@ -1161,6 +1161,7 @@ const capabilityLabels = {
   proactiveSpeech: "Proactive speech",
   generateKnowledgeDrafts: "Generate knowledge drafts",
   writeKnowledgeBase: "Write knowledge base",
+  updateManagedKnowledge: "Update managed knowledge",
   callExternalTools: "Call external tools",
 };
 

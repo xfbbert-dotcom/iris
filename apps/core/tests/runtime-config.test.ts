@@ -4,6 +4,7 @@ import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import * as envConfig from "../src/config/env.js";
 import {
   readKnowledgeConflictRuntimeConfig,
+  readManagedKnowledgeUpdateDeploymentConfig,
   readMemoryExtractionRuntimeConfig,
   readProactiveSignalPlannerRuntimeConfig,
 } from "../src/config/env.js";
@@ -39,6 +40,49 @@ describe("createDefaultRuntimeConfig", () => {
     expect(() => createDefaultRuntimeConfig({ IRIS_RUNTIME_GLOBAL_ENABLED: "   " })).toThrow(
       "IRIS_RUNTIME_GLOBAL_ENABLED must be true or false",
     );
+  });
+});
+
+describe("managed knowledge update deployment configuration", () => {
+  it("defaults off and accepts only an explicit unique pilot allowlist", () => {
+    expect(readManagedKnowledgeUpdateDeploymentConfig({})).toEqual({
+      enabled: false,
+      groupAllowlist: [],
+    });
+    expect(readManagedKnowledgeUpdateDeploymentConfig({
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: " group-a,group-b ",
+    })).toEqual({
+      enabled: true,
+      groupAllowlist: ["group-a", "group-b"],
+    });
+  });
+
+  it.each([
+    [
+      { IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "yes" },
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED must be true or false",
+    ],
+    [
+      { IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true" },
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain at least one group",
+    ],
+    [
+      {
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "group-a, ,group-b",
+      },
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must not contain blank group IDs",
+    ],
+    [
+      {
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "group-a,group-a",
+      },
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain unique group IDs",
+    ],
+  ])("fails closed for malformed deployment input %#", (env, message) => {
+    expect(() => readManagedKnowledgeUpdateDeploymentConfig(env)).toThrow(message);
   });
 });
 
