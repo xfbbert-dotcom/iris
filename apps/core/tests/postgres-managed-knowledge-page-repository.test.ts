@@ -119,6 +119,59 @@ describe("managed knowledge page exact remote identity lookup", () => {
   });
 });
 
+describe("managed update admin metadata projection", () => {
+  it("projects only safe target, page, execution, and immutable event metadata", async () => {
+    const at = new Date("2026-08-21T00:00:00.000Z");
+    const target = {
+      id: "target-1", draft_id: "draft-1", draft_revision: "2", draft_version: "7",
+      conflict_candidate_id: "candidate-1", conflict_candidate_version: "5", managed_page_id: "page-1",
+      managed_page_version: "8", linked_document_source_id: "source-1", target_snapshot_id: "snapshot-1",
+      target_snapshot_hash: "c".repeat(64), target_source_version: "source-v1", remote_document_token: "docx_secret",
+      managed_body_block_id: "blk_secret", expected_remote_revision_id: "13",
+      current_body_content_hash: "a".repeat(64), proposed_body_content_hash: "b".repeat(64),
+      authorization_group_id: "group-1", target_policy_id: "policy-1", target_policy_version: "3",
+      operation_key: "target-op", operation_fingerprint: "d".repeat(64), created_at: at,
+    };
+    const page = managedPageRow({
+      id: "page-1", linked_document_source_id: "source-1", remote_node_token: "wiki-node-1",
+      remote_document_token: "docx_secret", managed_body_block_id: "blk_secret", current_remote_revision_id: "12",
+      state: "reconciliation_required", version: "8", updated_at: at,
+    });
+    const execution = {
+      id: "execution-1", proposal_id: "proposal-1", approval_id: "approval-1", executor_id: "worker-1",
+      managed_page_id: "page-1", managed_page_version: "8", update_target_id: "target-1", attempt_number: "1",
+      state: "outcome_unknown", operation_key: "execution-op", operation_fingerprint: "e".repeat(64),
+      request_fingerprint: "f".repeat(64), expected_remote_revision_id: "13", before_body_content_hash: "a".repeat(64),
+      after_body_content_hash: "b".repeat(64), client_token: "tenant-token", response_revision_id: null,
+      response_classification: "timeout", reconciliation_reason_code: "readback_unavailable",
+      remote_request_dispatched_at: at, version: "4", created_at: at, updated_at: at,
+    };
+    const query = vi.fn(async (sql: string) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ");
+      if (normalized.includes("FROM knowledge_publication_update_execution_events")) {
+        return { rows: [{ execution_id: "execution-1", event_type: "remote_outcome_unknown", from_version: "3",
+          to_version: "4", reason_code: "readback_unavailable", created_at: at }] };
+      }
+      if (normalized.includes("FROM knowledge_publication_update_executions")) return { rows: [execution] };
+      if (normalized.includes("FROM managed_knowledge_pages")) return { rows: [page] };
+      if (normalized.includes("FROM knowledge_publication_update_targets")) return { rows: [target] };
+      return { rows: [] };
+    });
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: { query } as never });
+
+    const metadata = await repository.getMetadataForProposal("proposal-1");
+
+    expect(metadata).toMatchObject({
+      managedTarget: { id: "target-1", expectedRevision: "13", currentBodyHash: "a".repeat(64) },
+      page: { id: "page-1", sourceId: "source-1", currentRevision: "12", version: 8,
+        safeWikiUrl: "https://www.feishu.cn/wiki/wiki-node-1" },
+      executions: [{ id: "execution-1", requestFingerprint: "f".repeat(64), reasonCode: "readback_unavailable",
+        events: [{ type: "remote_outcome_unknown", fromVersion: 3, toVersion: 4, reasonCode: "readback_unavailable" }] }],
+    });
+    expect(JSON.stringify(metadata)).not.toMatch(/docx_secret|blk_secret|tenant-token|New approved body/iu);
+  });
+});
+
 describe("managed knowledge page source-link serialization", () => {
   it("locks the normalized source identity before reading or updating the managed page", async () => {
     const statements: Array<{ sql: string; values?: unknown[] }> = [];
@@ -251,6 +304,34 @@ describe("managed update claim contract", () => {
 });
 
 describe("managed update outcome transition contract", () => {
+  it("records an operator reconciliation request with exact versions and a replay-safe operation key", async () => {
+    const fixture = managedUpdateClaimDataSource({ executionState: "outcome_unknown", executionVersion: 4 });
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+    const input = {
+      executionId: "e4f1ec52-3d3d-5f72-a7e4-ecde994e3ed5",
+      expectedExecutionVersion: 4,
+      expectedManagedPageVersion: 1,
+      operationKey: "managed-update-reconcile:execution-1:4",
+      operator: "operator@example.com",
+      at: new Date("2026-08-21T02:00:00.000Z"),
+    };
+
+    await expect(repository.requestReconciliation(input)).resolves.toMatchObject({
+      outcome: "applied",
+      execution: { id: input.executionId, state: "outcome_unknown", version: 4 },
+    });
+    const executionEvent = fixture.statements.findIndex((sql) =>
+      sql.includes("INSERT INTO knowledge_publication_update_execution_events"));
+    const pageEvent = fixture.statements.findIndex((sql) =>
+      sql.includes("INSERT INTO managed_knowledge_page_events"));
+    expect(executionEvent).toBeGreaterThanOrEqual(0);
+    expect(pageEvent).toBeGreaterThan(executionEvent);
+    expect(fixture.statementValues[pageEvent]).toContain("operator@example.com");
+
+    await expect(repository.requestReconciliation({ ...input, expectedExecutionVersion: 5,
+      operationKey: "managed-update-reconcile:execution-1:5" })).rejects.toThrow(/version conflict/iu);
+  });
+
   it.each([
     ["reconciliation_required", "reconciliation_required"],
     ["blocked", "blocked"],
@@ -1168,9 +1249,13 @@ function managedUpdateClaimInput() {
 function managedUpdateClaimDataSource({
   hasExactAttestation = true,
   hasCompetingProposal = false,
+  executionState: initialExecutionState = "claimed",
+  executionVersion: initialExecutionVersion = 1,
 }: {
   hasExactAttestation?: boolean;
   hasCompetingProposal?: boolean;
+  executionState?: string;
+  executionVersion?: number;
 } = {}) {
   const at = new Date("2026-08-21T01:00:00.000Z");
   const statements: string[] = [];
@@ -1239,7 +1324,7 @@ function managedUpdateClaimDataSource({
     managed_page_version: "2",
     update_target_id: "target-1",
     attempt_number: "1",
-    state: "claimed",
+    state: initialExecutionState,
     operation_key: "managed-update-claim:test",
     operation_fingerprint: "d".repeat(64),
     request_fingerprint: "e".repeat(64),
@@ -1251,7 +1336,7 @@ function managedUpdateClaimDataSource({
     response_classification: null,
     reconciliation_reason_code: null,
     remote_request_dispatched_at: null,
-    version: "1",
+    version: String(initialExecutionVersion),
     created_at: at,
     updated_at: at,
   };

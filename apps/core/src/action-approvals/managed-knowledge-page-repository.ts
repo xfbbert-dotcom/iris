@@ -155,6 +155,47 @@ export type TerminalManagedKnowledgeUpdateClaim = {
 export type ManagedKnowledgeUpdateClaimResult =
   | ClaimedManagedKnowledgeUpdate
   | TerminalManagedKnowledgeUpdateClaim;
+export type ManagedKnowledgeUpdateMetadata = {
+  managedTarget: {
+    id: string;
+    expectedRevision: string;
+    currentBodyHash: string;
+    proposedBodyHash: string;
+    state: ManagedKnowledgePageState;
+  };
+  page: {
+    id: string;
+    sourceId?: string;
+    state: ManagedKnowledgePageState;
+    version: number;
+    currentRevision?: string;
+    safeWikiUrl: string;
+  };
+  executions: Array<{
+    id: string;
+    state: ManagedKnowledgeUpdateExecutionState;
+    version: number;
+    requestFingerprint: string;
+    reasonCode?: string;
+    createdAt: Date;
+    updatedAt: Date;
+    events: Array<{
+      type: string;
+      fromVersion?: number;
+      toVersion: number;
+      reasonCode?: string;
+      at: Date;
+    }>;
+  }>;
+};
+export type ManagedKnowledgeReconciliationRequest = {
+  executionId: string;
+  expectedExecutionVersion: number;
+  expectedManagedPageVersion: number;
+  operationKey: string;
+  operator: string;
+  at: Date;
+};
 export type ManagedExecutionMutationResult = {
   outcome: "applied" | "already_applied";
   page: ManagedKnowledgePage;
@@ -184,6 +225,8 @@ export interface ManagedKnowledgePageRepository {
     claimedBefore?: Date;
   }): Promise<ClaimedManagedKnowledgeUpdate[]>;
   getSourceAvailability(documentSourceId: string): Promise<"available" | "barred">;
+  getMetadataForProposal(proposalId: string): Promise<ManagedKnowledgeUpdateMetadata | undefined>;
+  requestReconciliation(input: ManagedKnowledgeReconciliationRequest): Promise<ClaimedManagedKnowledgeUpdate>;
 }
 
 export type { ManagedKnowledgePageState, ManagedKnowledgeUpdateExecutionState };

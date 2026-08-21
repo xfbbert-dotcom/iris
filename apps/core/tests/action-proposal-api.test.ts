@@ -156,6 +156,103 @@ describe("action proposal internal API", () => {
 
     await app.close();
   });
+
+  it("returns managed-update metadata without draft, document, token, or remote-error content", async () => {
+    const harness = createHarness();
+    harness.managedKnowledgeAdmin.getProposalMetadata.mockResolvedValueOnce({
+      managedTarget: {
+        id: "target-1",
+        expectedRevision: "13",
+        currentBodyHash: "a".repeat(64),
+        proposedBodyHash: "b".repeat(64),
+        state: "reconciliation_required",
+        draftBody: "Approved body",
+      },
+      page: {
+        id: "page-1",
+        sourceId: "source-1",
+        state: "reconciliation_required",
+        version: 8,
+        safeWikiUrl: "https://www.feishu.cn/wiki/wiki-node-1",
+        documentToken: "docx_secret",
+      },
+      executions: [{
+        id: "execution-1",
+        state: "outcome_unknown",
+        version: 4,
+        requestFingerprint: "f".repeat(64),
+        reasonCode: "timeout",
+        createdAt: new Date("2026-08-20T00:00:00.000Z"),
+        updatedAt: new Date("2026-08-20T00:01:00.000Z"),
+        events: [{ type: "outcome_unknown", toVersion: 4, reasonCode: "timeout",
+          at: new Date("2026-08-20T00:01:00.000Z") }],
+        rawRemoteError: "raw timeout body",
+        accessToken: "tenant-token",
+      }],
+    });
+    const app = await buildApp(harness.dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/action-proposals/proposal-1",
+      headers: authorizedHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      managedTarget: { state: "reconciliation_required", expectedRevision: "13" },
+      managedPage: { id: "page-1", safeWikiUrl: "https://www.feishu.cn/wiki/wiki-node-1" },
+      managedExecutions: [{ id: "execution-1", reasonCode: "timeout" }],
+    });
+    expect(response.body).not.toMatch(/Approved body|Proposed body|docx_secret|blk_secret|tenant-token|raw timeout body/iu);
+    await app.close();
+  });
+
+  it("requires the operator identity and exact versions for a reconciliation request", async () => {
+    const harness = createHarness();
+    harness.managedKnowledgeAdmin.reconcile.mockResolvedValueOnce({
+      executionId: "execution-1",
+      state: "reconciliation_required",
+      version: 5,
+      reasonCode: "readback_unavailable",
+    });
+    const app = await buildApp(harness.dependencies);
+
+    const missingOperator = await app.inject({
+      method: "POST",
+      url: "/internal/managed-knowledge-updates/execution-1/reconcile",
+      headers: authorizedHeaders(),
+      payload: { expectedExecutionVersion: 4, expectedManagedPageVersion: 8, operationKey: "reconcile:1" },
+    });
+    expect(missingOperator.statusCode).toBe(400);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/managed-knowledge-updates/execution-1/reconcile",
+      headers: { ...authorizedHeaders(), "x-iris-operator": "operator@example.com" },
+      payload: { expectedExecutionVersion: 4, expectedManagedPageVersion: 8, operationKey: "reconcile:1" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      execution: {
+        executionId: "execution-1",
+        state: "reconciliation_required",
+        version: 5,
+        reasonCode: "readback_unavailable",
+      },
+    });
+    expect(harness.managedKnowledgeAdmin.reconcile).toHaveBeenCalledWith({
+      executionId: "execution-1",
+      expectedExecutionVersion: 4,
+      expectedManagedPageVersion: 8,
+      operationKey: "reconcile:1",
+      operator: "operator@example.com",
+      at: expect.any(Date),
+    });
+    await app.close();
+  });
 });
 
 function authorizedHeaders() {
@@ -163,6 +260,10 @@ function authorizedHeaders() {
 }
 
 function createHarness() {
+  const managedKnowledgeAdmin = {
+    getProposalMetadata: vi.fn(async () => undefined),
+    reconcile: vi.fn(async () => undefined),
+  } as any;
   const repository = {
     listProposals: vi.fn(async () => []),
     getProposal: vi.fn(async (): Promise<ActionProposalContext | undefined> => ({
@@ -186,6 +287,7 @@ function createHarness() {
   };
   const runtime = {
     repository: repository as unknown as ActionProposalRepository,
+    managedKnowledgeAdmin,
     canUseActionApprovalsForSourceGroup: vi.fn(() => true),
     start: vi.fn(async () => undefined),
     getStatus: vi.fn(async () => ({
@@ -219,6 +321,7 @@ function createHarness() {
   } satisfies ActionApprovalRuntime;
   return {
     repository,
+    managedKnowledgeAdmin,
     runtime,
     dependencies: {
       internalApiToken: "operator-secret",

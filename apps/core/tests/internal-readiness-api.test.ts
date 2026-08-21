@@ -53,6 +53,51 @@ describe("GET /internal/readiness", () => {
     await app.close();
   });
 
+  it("projects enabled managed-update status and readiness without sensitive producer fields", async () => {
+    const actionApprovalRuntime = {
+      repository: {},
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({
+        enabled: true,
+        running: true,
+        planner: { running: true, intervalMs: 1_000, batchLimit: 10 },
+        dispatcher: { running: true, intervalMs: 1_000, batchLimit: 10 },
+        publicationExecutor: { running: true, intervalMs: 1_000, batchLimit: 10 },
+        proposals: { pending_approval: 0, approved: 0, executing: 0, succeeded: 0, failed: 0,
+          cancelled: 0, expired: 0, reconciliation_required: 0 },
+        outbox: { pending: 0, processing: 0, external_attempting: 0, sent: 0, failed: 0,
+          outcome_unknown: 0, terminalFailed: 0 },
+        managedKnowledgeUpdates: {
+          running: true, intervalMs: 1_000, batchLimit: 10, migration0055Applied: true,
+          reconciliation: { outcomeUnknown: 1, reconciliationRequired: 1 },
+          draftBody: "Approved body", documentToken: "docx_secret", remoteError: "raw timeout body",
+        },
+      })),
+    } as unknown as ActionApprovalRuntime;
+    const app = await buildApp({
+      readinessEnv: readyRolloutEnv({
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot",
+      }),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntimeForReadiness() as DocumentSyncRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime: () => actionApprovalRuntime,
+    });
+
+    const status = await app.inject({ method: "GET", url: "/internal/status" });
+    const readiness = await app.inject({ method: "GET", url: "/internal/readiness" });
+    expect(status.json().components.managedKnowledgeUpdates).toMatchObject({
+      enabled: true,
+      migration0055Applied: true,
+      reconciliation: { outcomeUnknown: 1, reconciliationRequired: 1 },
+    });
+    expect(status.body + readiness.body).not.toMatch(/Approved body|docx_secret|raw timeout body/iu);
+    await app.close();
+  });
+
   it("uses live content-free cross-group grant counts and fails closed when they are unreadable", async () => {
     const runtime = fakeDocumentSyncRuntimeForReadiness({
       migration0051Applied: true,

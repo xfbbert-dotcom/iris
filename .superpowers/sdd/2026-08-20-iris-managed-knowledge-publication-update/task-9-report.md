@@ -39,4 +39,50 @@
 
 - No live Feishu call or mutation was made. Deployment remains default-off.
 - Runtime/readiness exposes only migration boolean, loop state, and aggregate typed counters; it includes no content, Feishu payload, token, document/block token, or raw error.
-- Follow-up backlog: the approved Task 9 brief also calls for managed page/execution metadata listing and an operator reconciliation action. Those routes require a minimal metadata query/reconciliation producer on the managed-page repository and are not included in this partial implementation.
+- Checkpoint limitation: the approved metadata and reconciliation surfaces were completed in the continuation below.
+
+## Completion appendix (68bcc590..HEAD)
+
+### Implemented
+
+- Added a repository-level metadata projection for an existing-page update: managed target/page IDs and state, source ID, safe Feishu Wiki URL, expected/current revisions, current/proposed hashes, execution state/fingerprint/timestamps/reasons, and append-only typed execution-event summaries. The query deliberately omits draft/body text, remote document and block tokens, client/access tokens, operation keys, and raw provider errors.
+- Added `POST /internal/managed-knowledge-updates/:id/reconcile`. It remains behind the existing internal bearer middleware, requires `x-iris-operator`, rejects unknown fields, requires exact execution/page versions plus an idempotent operation key, locks both durable rows, accepts only unresolved eligible execution states, and appends auditable operator reconciliation events. It reuses the existing Task 8 reconciler; no parallel worker was introduced.
+- Added an explicit API whitelist projection, so even an accidental extra repository field cannot escape the response. The consolidated status endpoint now separately whitelists the nested managed-update runtime snapshot before exposing it to readiness/status consumers.
+- Added the Admin Console managed-update inspector. It displays metadata only (action/proposal lifecycle, policy, page/source, revisions/hashes/fingerprint, freshness barrier, execution/event timestamps and states); untrusted strings are rendered via DOM text nodes, and only the canonical safe Wiki URL can become a link. Its operator action uses the bearer session plus `x-iris-operator`, expected versions, and a generated operation key; failures show a generic content-free message.
+- Updated the legacy consolidated-status test contract to include the new default-off `managedKnowledgeUpdates` component.
+
+### Continuation TDD evidence
+
+1. RED: the initial metadata route test (`npm exec --workspace apps/core -- vitest run tests/action-proposal-api.test.ts`) observed missing managed metadata and `404` for reconciliation before the route/producer implementation. GREEN: metadata and reconciliation API tests passed (7 tests).
+2. RED: `npm exec --workspace apps/core -- vitest run tests/admin-console-assets.test.ts --reporter=dot` initially reported `Invalid or unexpected token` in the generated console script; after correcting template-string escaping, the new reconciliation privacy test failed with `Error: raw timeout body`. GREEN: the handler now contains that failure and the file passed 51 tests.
+3. RED: `npm exec --workspace apps/core -- vitest run tests/postgres-managed-knowledge-page-repository.test.ts --reporter=dot` failed because the metadata view lacked current revision, request fingerprint, and immutable event summaries. GREEN: it passed 21 tests with one configured-Postgres test skipped.
+4. RED: `npm exec --workspace apps/core -- vitest run tests/action-proposal-api.test.ts --reporter=dot` showed injected `Approved body`, `docx_secret`, `tenant-token`, and `raw timeout body` in the API response. GREEN: the boundary whitelist passed.
+5. RED: `npm exec --workspace apps/core -- vitest run tests/internal-readiness-api.test.ts --reporter=dot` showed injected managed-update body/token/raw-error fields nested under `actionApprovals` in `/internal/status`. GREEN: the app-level runtime snapshot whitelist passed all 18 tests.
+6. RED: the Admin Console event-display assertion failed because immutable event history was not rendered. GREEN: it now renders typed event/reason/timestamp summaries and the browser behavior test passed.
+
+### Final verification
+
+- `npm exec --workspace apps/core -- vitest run tests/action-proposal-api.test.ts tests/internal-rollout-readiness.test.ts tests/admin-console-assets.test.ts tests/admin-console-api.test.ts tests/internal-readiness-api.test.ts tests/server-startup.test.ts tests/postgres-managed-knowledge-page-repository.test.ts tests/action-approval-runtime.test.ts tests/runtime-config.test.ts --reporter=dot` — passed: 193 tests, 1 configured-Postgres skip.
+- `npm run pilot:config` — passed; rendered `IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "false"` and `IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: ""` in the Core service.
+- `npm run test:pilot` — final process exit `0`; 174 passed, 1 Docker-daemon probe skipped, duration `361357ms`.
+- `npm exec --workspace apps/core -- tsc --noEmit` — passed.
+- `git diff --check` — passed with no whitespace errors (Git printed only CRLF conversion warnings).
+- The required single `npm test` full-suite run completed once: 3,666 passed, 287 configured-environment skips, and 2 failures in `answer-draft-api.test.ts` because its pre-Task-9 exact snapshot still expected 12 components. I updated those two expectations for the intentional default-off 13th component; the follow-up targeted command `npm exec --workspace apps/core -- vitest run tests/admin-console-assets.test.ts tests/action-proposal-api.test.ts tests/internal-readiness-api.test.ts tests/answer-draft-api.test.ts tests/postgres-managed-knowledge-page-repository.test.ts --reporter=dot` passed 263 tests with 1 configured-Postgres skip. Per the instruction to run the full suite only once, it was not rerun.
+
+### Files changed
+
+Across `2b0cdfc3..HEAD`: the checkpoint files listed above plus `apps/core/src/action-approvals/managed-knowledge-page-repository.ts`, `apps/core/src/action-approvals/postgres-managed-knowledge-page-repository.ts`, `apps/core/tests/postgres-managed-knowledge-page-repository.test.ts`, and the updated `apps/core/tests/answer-draft-api.test.ts` status-contract assertions. The continuation also modifies the API/runtime/app/Admin Console and their behavior tests listed in the Task 9 brief.
+
+### Self-review
+
+- Default-off parsing and pilot wiring remain unchanged; no live Feishu request/mutation was made.
+- Enabled readiness still requires 0055 and typed content-free unresolved counts; disabled readiness remains healthy.
+- New claims remain subject to existing capability/deployment/allowlist gates. The reconciliation route intentionally operates only on durable unresolved work, so disabled claim gates cannot abandon an uncertain outcome.
+- API, status/readiness, and UI metadata are whitelist-projected; no body, raw Feishu payload/error, access token, document token, or block token is returned or rendered.
+- Reconciliation is bearer-protected, operator-audited, version-bound, operation-key idempotent, and fail-closed on ineligible state/version conflict.
+
+### Concerns
+
+- `IRIS_TEST_DATABASE_URL` and `DATABASE_URL` are absent locally. Configured-Postgres integration cases were therefore honestly skipped; local repository boundary behavior is covered by the injected data-source tests.
+- The two explicitly named temporary directories `.tmp-iris-backup-test-HRA4QZ` and `.tmp-iris-backup-test-Mg0Ev4` were left untouched after the cleanup policy rejected the prescribed cleanup command; no retry, move, or broad cleanup was attempted. They are non-product artifacts.
+- The only full-suite attempt was before synchronizing two old exact status snapshots; their targeted corrected test passed, but the full suite was not repeated to honor the one-full-run constraint.

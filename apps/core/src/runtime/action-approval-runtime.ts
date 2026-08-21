@@ -51,6 +51,10 @@ import { createPostgresPool } from "../database/postgres.js";
 import { createFeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
 import type { PostgresKnowledgeDraftDataSource } from "../knowledge-governance/postgres-knowledge-draft-repository.js";
 import type { DocumentSyncQueue } from "../documents/document-sync-queue.js";
+import type {
+  ManagedKnowledgeReconciliationRequest,
+  ManagedKnowledgeUpdateMetadata,
+} from "../action-approvals/managed-knowledge-page-repository.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import type { KnowledgeCardRuntime } from "./knowledge-card-runtime.js";
 import { observeStartupPromise } from "./startup-promise.js";
@@ -94,6 +98,15 @@ export type ManagedKnowledgeUpdateRuntimeConfiguration = {
 
 export type ActionApprovalRuntime = {
   repository: ActionProposalRepository;
+  managedKnowledgeAdmin?: {
+    getProposalMetadata(proposalId: string): Promise<ManagedKnowledgeUpdateMetadata | undefined>;
+    reconcile(input: ManagedKnowledgeReconciliationRequest): Promise<{
+      executionId: string;
+      state: "applied" | "retry_same_token" | "reconciliation_required";
+      version: number;
+      reasonCode: string;
+    }>;
+  };
   canUseActionApprovalsForSourceGroup(groupId?: string): boolean;
   start(): Promise<void>;
   getStatus(): Promise<ActionApprovalRuntimeStatus>;
@@ -176,6 +189,7 @@ export function createActionApprovalRuntime({
   let dispatcherLoop: ReturnType<typeof createActionApprovalDispatcherLoop> | undefined;
   let publicationExecutorLoop: ReturnType<typeof createKnowledgePublicationExecutorLoop> | undefined;
   let managedUpdateLoop: ReturnType<typeof createManagedKnowledgeUpdateExecutorLoop> | undefined;
+  let managedKnowledgeAdmin: ActionApprovalRuntime["managedKnowledgeAdmin"];
   let lifecycle: "idle" | "started" | "closed" = "idle";
 
   const canUseGroup = (groupId?: string): boolean => {
@@ -293,6 +307,21 @@ export function createActionApprovalRuntime({
         batchLimit: managedKnowledgeUpdates.batchLimit,
         onError: () => undefined,
       });
+      managedKnowledgeAdmin = {
+        getProposalMetadata(proposalId) {
+          return managedPages.getMetadataForProposal(proposalId);
+        },
+        async reconcile(input) {
+          const claim = await managedPages.requestReconciliation(input);
+          const result = await managedUpdateReconciler.reconcileOne(claim);
+          return {
+            executionId: result.executionId,
+            state: result.status,
+            version: claim.execution.version,
+            reasonCode: result.code,
+          };
+        },
+      };
     }
     plannerLoop = createPlannerPollingLoop({
       planner,
@@ -330,6 +359,7 @@ export function createActionApprovalRuntime({
 
     return {
       repository,
+      ...(managedKnowledgeAdmin === undefined ? {} : { managedKnowledgeAdmin }),
       canUseActionApprovalsForSourceGroup: canUseGroup,
       async start() {
         if (lifecycle === "closed") throw new Error("action approval runtime is closed");

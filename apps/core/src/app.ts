@@ -2186,7 +2186,14 @@ async function getKnowledgeConflictStatus(runtime: KnowledgeConflictRuntime | un
 async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefined) {
   if (runtime === undefined) return undefined;
   try {
-    return { ok: true, ...(await runtime.getStatus()) };
+    const status = await runtime.getStatus();
+    return {
+      ok: true,
+      ...status,
+      ...("managedKnowledgeUpdates" in status && status.managedKnowledgeUpdates !== undefined
+        ? { managedKnowledgeUpdates: projectManagedKnowledgeUpdateStatus(status.managedKnowledgeUpdates) }
+        : {}),
+    };
   } catch {
     return {
       ok: false,
@@ -2195,6 +2202,25 @@ async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefine
       degradedReason: "action_approval_status_unavailable" as const,
     };
   }
+}
+
+function projectManagedKnowledgeUpdateStatus(status: {
+  running: boolean;
+  intervalMs: number;
+  batchLimit: number;
+  migration0055Applied: boolean;
+  reconciliation: { outcomeUnknown: number; reconciliationRequired: number };
+}) {
+  return {
+    running: status.running,
+    intervalMs: status.intervalMs,
+    batchLimit: status.batchLimit,
+    migration0055Applied: status.migration0055Applied,
+    reconciliation: {
+      outcomeUnknown: status.reconciliation.outcomeUnknown,
+      reconciliationRequired: status.reconciliation.reconciliationRequired,
+    },
+  };
 }
 
 function getManagedKnowledgeUpdateStatus({

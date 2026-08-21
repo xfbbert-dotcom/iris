@@ -84,6 +84,8 @@ export function createPostgresManagedKnowledgePageRepository({
     findResyncReadyExecution: (input) => findResyncReadyExecution(dataSource, input),
     listReconciliationRequired: (input) => listReconciliationRequired(dataSource, input),
     getSourceAvailability: (documentSourceId) => getSourceAvailability(dataSource, documentSourceId),
+    getMetadataForProposal: (proposalId) => getMetadataForProposal(dataSource, proposalId),
+    requestReconciliation: (input) => requestReconciliation(dataSource, input),
   };
 }
 
@@ -1029,6 +1031,116 @@ async function listReconciliationRequired(dataSource: PostgresKnowledgeDraftData
 
 async function getSourceAvailability(dataSource: PostgresKnowledgeDraftDataSource, documentSourceId: string): Promise<"available" | "barred"> {
   const result = await dataSource.query<{ barred: boolean }>(`SELECT EXISTS (SELECT 1 FROM managed_knowledge_pages WHERE linked_document_source_id = $1 AND state <> 'active') AS barred`, [ref("documentSourceId", documentSourceId)]); return result.rows[0]?.barred === true ? "barred" : "available";
+}
+
+async function getMetadataForProposal(dataSource: PostgresKnowledgeDraftDataSource, proposalId: string) {
+  const proposal = ref("proposalId", proposalId);
+  const targetResult = await dataSource.query<TargetRow>(
+    `${targetSelect()} WHERE draft_id = (SELECT subject_id FROM action_proposals WHERE id = $1 AND action_type = 'update_knowledge_publication') ORDER BY created_at DESC LIMIT 1`,
+    [proposal],
+  );
+  const targetRow = targetResult.rows[0];
+  if (targetRow === undefined) return undefined;
+  const target = mapTarget(targetRow);
+  const page = await requirePage(dataSource, target.managedPageId);
+  const executions = await dataSource.query<ExecutionRow>(
+    `${executionSelect()} WHERE update_target_id = $1 ORDER BY created_at DESC, id ASC`,
+    [target.id],
+  );
+  const eventResult = executions.rows.length === 0
+    ? { rows: [] as Array<{
+        execution_id: string; event_type: string; from_version: string | null; to_version: string;
+        reason_code: string | null; created_at: Date;
+      }> }
+    : await dataSource.query<{
+        execution_id: string; event_type: string; from_version: string | null; to_version: string;
+        reason_code: string | null; created_at: Date;
+      }>(`SELECT execution_id,event_type,from_version,to_version,reason_code,created_at
+          FROM knowledge_publication_update_execution_events
+          WHERE execution_id = ANY($1::uuid[])
+          ORDER BY created_at ASC,id ASC`, [executions.rows.map((row) => row.id)]);
+  const eventsByExecution = new Map<string, Array<{
+    type: string; fromVersion?: number; toVersion: number; reasonCode?: string; at: Date;
+  }>>();
+  for (const event of eventResult.rows) {
+    const values = eventsByExecution.get(event.execution_id) ?? [];
+    values.push({
+      type: event.event_type,
+      ...(event.from_version === null ? {} : { fromVersion: Number(event.from_version) }),
+      toVersion: Number(event.to_version),
+      ...(event.reason_code === null ? {} : { reasonCode: event.reason_code }),
+      at: event.created_at,
+    });
+    eventsByExecution.set(event.execution_id, values);
+  }
+  return {
+    managedTarget: {
+      id: target.id,
+      expectedRevision: target.expectedRemoteRevisionId,
+      currentBodyHash: target.currentBodyContentHash,
+      proposedBodyHash: target.proposedBodyContentHash,
+      state: page.state,
+    },
+    page: {
+      id: page.id,
+      ...(page.linkedDocumentSourceId === undefined ? {} : { sourceId: page.linkedDocumentSourceId }),
+      state: page.state,
+      version: page.version,
+      ...(page.currentRemoteRevisionId === undefined ? {} : { currentRevision: page.currentRemoteRevisionId }),
+      safeWikiUrl: `https://www.feishu.cn/wiki/${encodeURIComponent(page.remoteNodeToken)}`,
+    },
+    executions: executions.rows.map((row) => {
+      const execution = mapExecution(row);
+      return {
+        id: execution.id,
+        state: execution.state,
+        version: execution.version,
+        requestFingerprint: execution.requestFingerprint,
+        ...(execution.reconciliationReasonCode === undefined
+          ? execution.responseClassification === undefined ? {} : { reasonCode: execution.responseClassification }
+          : { reasonCode: execution.reconciliationReasonCode }),
+        createdAt: execution.createdAt,
+        updatedAt: execution.updatedAt,
+        events: eventsByExecution.get(execution.id) ?? [],
+      };
+    }),
+  };
+}
+
+async function requestReconciliation(dataSource: PostgresKnowledgeDraftDataSource, input: import("./managed-knowledge-page-repository.js").ManagedKnowledgeReconciliationRequest) {
+  const normalized = {
+    executionId: ref("executionId", input.executionId),
+    expectedExecutionVersion: positive("expectedExecutionVersion", input.expectedExecutionVersion),
+    expectedManagedPageVersion: positive("expectedManagedPageVersion", input.expectedManagedPageVersion),
+    operationKey: ref("operationKey", input.operationKey),
+    operator: ref("operator", input.operator),
+    at: date("at", input.at),
+  };
+  const fingerprint = operationFingerprint(normalized);
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const replay = await client.query<{ execution_id: string; operation_fingerprint: string }>(
+      `SELECT execution_id, operation_fingerprint FROM knowledge_publication_update_execution_events WHERE operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      if (replay.rows[0].operation_fingerprint !== fingerprint) throw new ManagedKnowledgePageOperationConflictError();
+      return buildClaimResult(client, await requireExecution(client, replay.rows[0].execution_id), "already_applied");
+    }
+    const execution = await requireExecutionForUpdate(client, normalized.executionId);
+    const page = await requirePageForUpdate(client, execution.managedPageId);
+    if (execution.version !== normalized.expectedExecutionVersion || page.version !== normalized.expectedManagedPageVersion ||
+      !["outcome_unknown", "reconciliation_required", "remote_applied"].includes(execution.state)) {
+      throw new ManagedKnowledgePageVersionConflictError();
+    }
+    await insertExecutionEvent(client, execution.id, "operator_reconciliation_requested", execution.version,
+      execution.version, normalized.operationKey, fingerprint, "operator_requested", normalized.at);
+    await insertPageEvent(client, { pageId: page.id, eventType: "operator_reconciliation_requested",
+      fromVersion: page.version, toVersion: page.version, operationKey: `${normalized.operationKey}:page`,
+      fingerprint: operationFingerprint({ fingerprint, kind: "page" }), actor: normalized.operator,
+      reasonCode: "operator_requested", at: normalized.at });
+    return buildClaimResult(client, execution, "applied");
+  });
 }
 
 async function pageReplay(client: KnowledgeDraftTransactionClient, operationKey: string, fingerprint: string): Promise<ManagedKnowledgePage | undefined> { const result = await client.query<{ managed_page_id: string; operation_fingerprint: string }>(`SELECT managed_page_id, operation_fingerprint FROM managed_knowledge_page_events WHERE operation_key = $1`, [operationKey]); if (result.rows[0] === undefined) return undefined; if (result.rows[0].operation_fingerprint !== fingerprint) throw new ManagedKnowledgePageOperationConflictError(); return requirePage(client, result.rows[0].managed_page_id); }
