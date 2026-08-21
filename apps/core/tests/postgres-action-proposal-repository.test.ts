@@ -183,6 +183,13 @@ describe("action approval migration contract", () => {
       expect(sql).toMatch(
         /EXISTS\s*\(\s*SELECT 1\s+FROM knowledge_publication_update_targets target[\s\S]+target\.authorization_group_id = ANY\(\$4::TEXT\[\]\)[\s\S]+LIMIT \$5/iu,
       );
+      expect(sql).toMatch(/managed_knowledge_pages page[\s\S]+page\.state = 'active'/iu);
+      expect(sql).toMatch(/document_sources source[\s\S]+source\.permission_state IN \('readable','unknown'\)/iu);
+      expect(sql).toMatch(/document_snapshots snapshot[\s\S]+snapshot\.fetch_status = 'succeeded'/iu);
+      expect(sql).toMatch(/knowledge_publication_target_policies policy[\s\S]+policy\.enabled = TRUE/iu);
+      expect(sql).toMatch(/knowledge_drafts draft[\s\S]+draft\.current_revision_number = target\.draft_revision/iu);
+      expect(sql).toMatch(/knowledge_conflict_interactions interaction[\s\S]+interaction\.draft_id = target\.draft_id/iu);
+      expect(sql).not.toMatch(/target\.draft_version = action_proposals\.subject_version/iu);
       expect(params).toEqual([
         ["approved"],
         ["update_knowledge_publication"],
@@ -1952,8 +1959,8 @@ function proposalCreationDataSource(input: {
         title: "Proposal title",
         content: "Proposal body",
         risk_level: "low",
-        reviewer_type: null,
-        reviewer_ref: null,
+        reviewer_type: input.hasManagedTarget ? "feishu_user" : null,
+        reviewer_ref: input.hasManagedTarget ? "ou-reviewer" : null,
         suggested_space_id: "space-main",
         suggested_parent_node_token: null,
       }] };
@@ -2026,7 +2033,10 @@ function proposalCreationDataSource(input: {
       };
       return { rows: [] };
     }
-    if (sql.includes("INSERT INTO action_approval_requirements") ||
+    if (sql.includes("INSERT INTO action_approval_presentation_outbox") ||
+      sql.includes("INSERT INTO action_approval_presentation_events") ||
+      sql.includes("INSERT INTO action_approval_presentations") ||
+      sql.includes("INSERT INTO action_approval_requirements") ||
       sql.includes("INSERT INTO action_events")) return { rows: [] };
     if (sql.includes("FROM action_proposals") && sql.includes("WHERE id = $1")) {
       return { rows: proposalRow === undefined ? [] : [proposalRow] };

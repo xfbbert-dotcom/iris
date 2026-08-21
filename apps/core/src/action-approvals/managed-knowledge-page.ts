@@ -73,6 +73,10 @@ export type ManagedSnapshotObservation = {
 
 export type ManagedKnowledgeUpdateExecution = {
   id: string;
+  /** Nullable only for executions created before migration 0055. */
+  approvalId?: string;
+  /** Nullable only for executions created before migration 0055. */
+  executorId?: string;
   proposalId: string;
   managedPageId: string;
   managedPageVersion: number;

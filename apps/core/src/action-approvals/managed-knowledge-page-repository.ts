@@ -144,6 +144,17 @@ export type ClaimedManagedKnowledgeUpdate = {
   target: ManagedKnowledgeUpdateTarget;
   execution: ManagedKnowledgeUpdateExecution;
 };
+
+export type TerminalManagedKnowledgeUpdateClaim = {
+  outcome: "terminal";
+  proposalId: string;
+  proposalVersion: number;
+  code: "stale_target" | "competing_execution" | "approval_chain_invalid";
+};
+
+export type ManagedKnowledgeUpdateClaimResult =
+  | ClaimedManagedKnowledgeUpdate
+  | TerminalManagedKnowledgeUpdateClaim;
 export type ManagedExecutionMutationResult = {
   outcome: "applied" | "already_applied";
   page: ManagedKnowledgePage;
@@ -158,7 +169,7 @@ export interface ManagedKnowledgePageRepository {
   recordSnapshotObservation(input: RecordManagedSnapshotObservationInput): Promise<ManagedSnapshotObservationResult>;
   bindConflictDraft(input: BindManagedUpdateTargetInput): Promise<ManagedTargetMutationResult>;
   getTargetForDraft(input: { draftId: string; revision: number }): Promise<ManagedKnowledgeUpdateTarget | undefined>;
-  claimApprovedUpdate(input: ClaimManagedUpdateInput): Promise<ClaimedManagedKnowledgeUpdate>;
+  claimApprovedUpdate(input: ClaimManagedUpdateInput): Promise<ManagedKnowledgeUpdateClaimResult>;
   markRemoteRequestDispatched(input: MarkManagedRemoteRequestDispatchedInput): Promise<ManagedExecutionMutationResult>;
   claimRemoteRetry(input: ClaimManagedRemoteRetryInput): Promise<ManagedExecutionMutationResult>;
   recordRemoteOutcome(input: RecordManagedRemoteOutcomeInput): Promise<ManagedExecutionMutationResult>;
@@ -167,7 +178,11 @@ export interface ManagedKnowledgePageRepository {
     executionId?: string;
     observationId?: string;
   }): Promise<ManagedResyncReadyExecution | undefined>;
-  listReconciliationRequired(input: { limit: number; dispatchedBefore?: Date }): Promise<ClaimedManagedKnowledgeUpdate[]>;
+  listReconciliationRequired(input: {
+    limit: number;
+    dispatchedBefore?: Date;
+    claimedBefore?: Date;
+  }): Promise<ClaimedManagedKnowledgeUpdate[]>;
   getSourceAvailability(documentSourceId: string): Promise<"available" | "barred">;
 }
 

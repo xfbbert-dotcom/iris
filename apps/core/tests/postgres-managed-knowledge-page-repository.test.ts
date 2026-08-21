@@ -5,6 +5,9 @@ import pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPostgresManagedKnowledgePageRepository } from "../src/action-approvals/postgres-managed-knowledge-page-repository.js";
+import { createPostgresActionProposalRepository } from "../src/action-approvals/postgres-action-proposal-repository.js";
+import { createPostgresKnowledgeCardRepository } from "../src/knowledge-cards/postgres-knowledge-card-repository.js";
+import { createPostgresKnowledgeDraftRepository } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 import type { PostgresKnowledgeDraftDataSource } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 import { defaultMigrationsDir, runMigrations, type MigrationClient } from "../src/database/migrate.js";
 
@@ -25,6 +28,17 @@ describe("managed knowledge page migration contract", () => {
     expect(sql).toMatch(/knowledge_publication_updates_append_only/iu);
   });
 
+  it("adds exact approval and mutation executor identity without rewriting existing executions", async () => {
+    const sql = await readFile(
+      new URL("../migrations/0055_managed_update_execution_identity.sql", import.meta.url),
+      "utf8",
+    );
+    expect(sql).toMatch(/ALTER TABLE knowledge_publication_update_executions[\s\S]+ADD COLUMN approval_id/iu);
+    expect(sql).toMatch(/ADD COLUMN executor_id/iu);
+    expect(sql).toMatch(/REFERENCES action_approvals\s*\(id\)/iu);
+    expect(sql).not.toMatch(/UPDATE knowledge_publication_update_executions/iu);
+  });
+
   it("exposes a focused managed-page repository", () => {
     const repository = createPostgresManagedKnowledgePageRepository({
       dataSource: { query: async () => ({ rows: [], rowCount: 0 }) } as never,
@@ -38,13 +52,14 @@ describe("managed knowledge page migration contract", () => {
     expect(repository.getSourceAvailability).toBeTypeOf("function");
   });
 
-  it("discovers durable uncertain/applied work plus only stale dispatched requests", async () => {
+  it("discovers durable uncertain/applied work plus only stale claimed/dispatched requests", async () => {
     const source = await readFile(
       new URL("../src/action-approvals/postgres-managed-knowledge-page-repository.ts", import.meta.url),
       "utf8",
     );
     expect(source).toMatch(/state IN \('outcome_unknown','reconciliation_required','remote_applied'\).*remote_request_dispatched/isu);
     expect(source).toMatch(/remote_request_dispatched_at <= \$2/iu);
+    expect(source).toMatch(/state = 'claimed'[\s\S]+updated_at <= \$3/iu);
   });
 });
 
@@ -159,6 +174,7 @@ describe("managed update claim contract", () => {
     const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
 
     const result = await repository.claimApprovedUpdate(managedUpdateClaimInput());
+    if (result.outcome === "terminal") throw new Error("expected managed update claim");
 
     expect(result).toMatchObject({
       outcome: "applied",
@@ -166,7 +182,7 @@ describe("managed update claim contract", () => {
         id: "update-proposal-1",
         actionType: "update_knowledge_publication",
         status: "executing",
-        version: 3,
+        version: 4,
       },
       draft: {
         id: "update-draft-1",
@@ -178,6 +194,8 @@ describe("managed update claim contract", () => {
       page: { id: "managed-1", state: "updating", version: 2 },
       execution: {
         id: "e4f1ec52-3d3d-5f72-a7e4-ecde994e3ed5",
+        approvalId: "approval-1",
+        executorId: "managed-update-worker",
         clientToken: "8b2dcd5d-37ab-5b63-94d2-7e3eb6d3b271",
         state: "claimed",
       },
@@ -200,15 +218,35 @@ describe("managed update claim contract", () => {
     expect(targetLock).toBeLessThan(proposalLock);
   });
 
-  it("rejects a claim whose current review attestation is not bound to the exact target fingerprint", async () => {
+  it("durably terminalizes a claim whose approval-time attestation is not bound to the exact target", async () => {
     const fixture = managedUpdateClaimDataSource({ hasExactAttestation: false });
     const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
 
-    await expect(repository.claimApprovedUpdate(managedUpdateClaimInput())).rejects.toThrow(
-      /version conflict/iu,
-    );
+    await expect(repository.claimApprovedUpdate(managedUpdateClaimInput())).resolves.toEqual({
+      outcome: "terminal",
+      proposalId: "update-proposal-1",
+      proposalVersion: 4,
+      code: "approval_chain_invalid",
+    });
     expect(fixture.statements.some((sql) =>
       sql.includes("INSERT INTO knowledge_publication_update_executions"))).toBe(false);
+  });
+
+  it("atomically terminalizes an approved loser before starting the winning page execution", async () => {
+    const fixture = managedUpdateClaimDataSource({ hasCompetingProposal: true });
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.claimApprovedUpdate(managedUpdateClaimInput())).resolves.toMatchObject({
+      outcome: "applied",
+      proposal: { id: "update-proposal-1", status: "executing" },
+    });
+    expect(fixture.terminalizedProposalIds).toEqual(["competing-proposal-1"]);
+    const loserEvent = fixture.statements.findIndex((sql) =>
+      sql.includes("'execution_failed'") && sql.includes("'competing_execution'"));
+    const pageClaim = fixture.statements.findIndex((sql) =>
+      sql.startsWith("UPDATE managed_knowledge_pages SET state = 'updating'"));
+    expect(loserEvent).toBeGreaterThanOrEqual(0);
+    expect(loserEvent).toBeLessThan(pageClaim);
   });
 });
 
@@ -353,6 +391,9 @@ describe("managed update exact resync contract", () => {
     expect(fixture.statements.some((sql) =>
       sql.includes("INSERT INTO action_events") && sql.includes("execution_succeeded"))).toBe(true);
     expect(fixture.proposalState()).toBe("succeeded");
+    expect(fixture.immutableExecutorIds()).toEqual(["managed-update-worker"]);
+    expect(fixture.immutableApprovalIds()).toEqual(["approval-1"]);
+    expect(fixture.successEventActors()).toEqual(["document-sync"]);
   });
 
   it("does not expose an exact candidate when source permission is unusable", async () => {
@@ -484,22 +525,32 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
       const proposedBody = "New approved body";
       const proposedBodyHash = canonicalHash(proposedBody);
       await pool.query(`
-        INSERT INTO knowledge_drafts (
-          id, source_group_id, origin_kind, status, current_revision_number, version,
-          created_by, created_at, updated_at
-        ) VALUES ($1, 'group', 'knowledge_conflict', 'pending_review', 1, 1, 'test', $2, $2)
-      `, [updateDraftId, at]);
-      await pool.query(`
-        INSERT INTO knowledge_draft_revisions (
-          draft_id, revision_number, title, content, risk_level, author, created_at
-        ) VALUES ($1, 1, 'Managed update', $2, 'low', 'test', $3)
-      `, [updateDraftId, proposedBody, at]);
-      await pool.query(`
         INSERT INTO document_sources (
           id, source_type, source_uri, permission_state, sync_state,
           can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
         ) VALUES ($1, 'authorized_wiki_document', $2, 'readable', 'synced', TRUE, TRUE, $3, $3)
       `, [sourceId, `https://example.test/${sourceId}`, at]);
+      const reviewerOpenId = `ou-managed-reviewer-${suffix}`;
+      const draftRepository = createPostgresKnowledgeDraftRepository({
+        dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+      });
+      const updateDraft = (await draftRepository.createDraft({
+        id: updateDraftId,
+        operationKey: `managed-update-draft:${suffix}`,
+        originKind: "knowledge_conflict",
+        createdBy: "test",
+        revision: {
+          sourceGroupId: "group",
+          title: "Managed update",
+          content: proposedBody,
+          riskLevel: "low",
+          reviewer: { type: "feishu_user", ref: reviewerOpenId },
+          suggestedPublication: { spaceId: "space" },
+          evidence: [{ type: "document_source", id: sourceId, expectedUpdatedAt: at }],
+        },
+        at,
+      })).draft;
+      expect(updateDraft).toMatchObject({ id: updateDraftId, version: 1 });
       await pool.query(`
         INSERT INTO document_snapshots (
           id, document_source_id, source_uri, fetch_status, body_text, content_hash, fetched_at, created_at
@@ -549,51 +600,164 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         [candidateId, at],
       );
       await pool.query(`
-        INSERT INTO action_proposals (
-          id, action_type, subject_type, subject_id, subject_revision, subject_version, target_policy_id,
-          target_policy_version, risk_level, status, operation_key, operation_fingerprint, version, created_at, updated_at
-        ) VALUES ($1, 'update_knowledge_publication', 'knowledge_draft', $2, 1, 1, $3, 1,
-          'low', 'approved', $4, repeat('b', 64), 1, $5, $5)
-      `, [updateProposalId, updateDraftId, policyId, `update-proposal:${suffix}`, at]);
-      const targetFingerprint = configuredManagedUpdateTargetFingerprint({
-        proposalId: updateProposalId,
-        draftId: updateDraftId,
-        candidateId,
-        candidateVersion: 1,
-        managedPageId: linked.page.id,
-        managedPageVersion: linked.page.version,
-        sourceId,
-        snapshotId,
-        snapshotHash: "a".repeat(64),
-        remoteDocumentToken: linked.page.remoteDocumentToken,
-        managedBodyBlockId: linked.page.managedBodyBlockId,
-        expectedRemoteRevision: linked.page.currentRemoteRevisionId!,
-        currentBodyHash: "f".repeat(64),
-        proposedBodyHash,
-        policyId,
-        policyVersion: 1,
-        authorizationGroupId: "group",
+        INSERT INTO knowledge_conflict_interactions (
+          id,candidate_id,callback_operation_key,actor_ref,action,result,draft_id,created_at
+        ) VALUES ($1,$2,$3,'test','create_draft','applied',$4,$5)
+      `, [`interaction-${suffix}`, candidateId, `interaction:${suffix}`, updateDraftId, at]);
+
+      const cardRepository = createPostgresKnowledgeCardRepository({
+        dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
       });
-      const requirementId = `requirement-${suffix}`;
-      await pool.query(`
-        INSERT INTO action_approval_requirements (
-          id,proposal_id,requirement_kind,role_ref_type,role_ref,target_policy_id,
-          target_policy_version,state,satisfied_actor_open_id,satisfied_source_type,
-          satisfied_source_id,version,created_at,updated_at
-        ) VALUES ($1,$2,'group_confirmation','source_group','group',$3,1,'satisfied',
-          'reviewer','group_confirmation',$4,1,$5,$5)
-      `, [requirementId, updateProposalId, policyId, `approval-source-${suffix}`, at]);
-      await pool.query(`
-        INSERT INTO action_review_attestations (
-          id,proposal_id,actor_open_id,subject_revision,subject_version,proposal_version,
-          content_hash,action_target_fingerprint,session_id_hash,operation_key,
-          operation_fingerprint,reviewed_at
-        ) VALUES ($1,$2,'reviewer',1,1,1,$3,$4,repeat('d',64),$5,repeat('e',64),$6)
-      `, [`attestation-${suffix}`, updateProposalId, proposedBodyHash, targetFingerprint,
-        `attestation:${suffix}`, at]);
+      const groupPresentationId = `group-presentation-${suffix}`;
+      await cardRepository.createPresentation({
+        id: groupPresentationId,
+        draftId: updateDraftId,
+        expectedDraftVersion: 1,
+        expectedRevisionNumber: 1,
+        chatId: "group",
+        contentHash: "8".repeat(64),
+        operationKey: `group-presentation:${suffix}`,
+        at,
+      });
+      const cardWorker = `group-card-worker-${suffix}`;
+      await cardRepository.claimPresentationSend({ workerId: cardWorker, leaseUntil: new Date(at.getTime() + 30_000), at });
+      await cardRepository.beginExternalAttempt({ presentationId: groupPresentationId, workerId: cardWorker, at });
+      await cardRepository.completePresentationSend({
+        presentationId: groupPresentationId,
+        workerId: cardWorker,
+        messageId: `om-group-${suffix}`,
+        at,
+      });
+      const confirmed = await cardRepository.applyInteraction({
+        presentationId: groupPresentationId,
+        draftId: updateDraftId,
+        revisionNumber: 1,
+        draftVersion: 1,
+        chatId: "group",
+        eventId: `group-confirm-callback-${suffix}`,
+        actorOpenId: `ou-group-member-${suffix}`,
+        membershipCheckedAt: at,
+        at,
+        action: "confirm",
+      });
+      expect(confirmed.draft).toMatchObject({ version: 2, status: "pending_review" });
+      const groupUpdateSend = await cardRepository.claimPresentationSend({
+        workerId: cardWorker,
+        leaseUntil: new Date(at.getTime() + 30_000),
+        at,
+      });
+      expect(groupUpdateSend?.presentation.id).toBe(groupPresentationId);
+      await cardRepository.beginExternalAttempt({
+        presentationId: groupPresentationId,
+        workerId: cardWorker,
+        at,
+      });
+      await cardRepository.completePresentationSend({
+        presentationId: groupPresentationId,
+        workerId: cardWorker,
+        messageId: `om-group-${suffix}`,
+        at,
+      });
+
+      const actionRepository = createPostgresActionProposalRepository({
+        dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+      });
+      const planned = await actionRepository.createProposal({
+        proposalId: updateProposalId,
+        actionType: "update_knowledge_publication",
+        draftId: updateDraftId,
+        expectedRevision: 1,
+        expectedDraftVersion: confirmed.draft.version,
+        targetPolicyId: policyId,
+        expectedTargetPolicyVersion: 1,
+        operationKey: `update-proposal:${suffix}`,
+        at,
+      });
+      expect(planned.proposal).toMatchObject({ status: "pending_approval", subjectVersion: 2, version: 1 });
+      const plannedContext = await actionRepository.getProposal(updateProposalId);
+      expect(plannedContext?.requirements).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: "group_confirmation", state: "satisfied" }),
+        expect.objectContaining({ kind: "designated_owner", state: "pending", roleRef: reviewerOpenId }),
+      ]));
+      const ownerRequirement = plannedContext?.requirements.find((item) => item.kind === "designated_owner");
+      expect(ownerRequirement).toBeDefined();
+      const approvalSend = await actionRepository.claimApprovalPresentationSend({
+        workerId: `approval-worker-${suffix}`,
+        leaseUntil: new Date(at.getTime() + 30_000),
+        at,
+      });
+      expect(approvalSend?.presentation).toMatchObject({
+        proposalId: updateProposalId,
+        requirementId: ownerRequirement!.id,
+        proposalVersion: planned.proposal.version,
+        recipientOpenId: reviewerOpenId,
+      });
+      await actionRepository.beginApprovalExternalAttempt({
+        presentationId: approvalSend!.presentation.id,
+        workerId: `approval-worker-${suffix}`,
+        at,
+      });
+      await actionRepository.completeApprovalPresentationSend({
+        presentationId: approvalSend!.presentation.id,
+        workerId: `approval-worker-${suffix}`,
+        messageId: `om-approval-${suffix}`,
+        at,
+      });
+      const reviewContext = await actionRepository.getAuthorizedReviewContext({
+        proposalId: updateProposalId,
+        actorOpenId: reviewerOpenId,
+      });
+      expect(reviewContext).toMatchObject({
+        actionType: "update_knowledge_publication",
+        proposalVersion: planned.proposal.version,
+        subjectVersion: confirmed.draft.version,
+        contentHash: proposedBodyHash,
+        actionTargetFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      });
+      await actionRepository.recordReviewAttestation({
+        proposalId: updateProposalId,
+        actorOpenId: reviewerOpenId,
+        expectedProposalVersion: reviewContext!.proposalVersion,
+        expectedSubjectRevision: reviewContext!.subjectRevision,
+        expectedSubjectVersion: reviewContext!.subjectVersion,
+        expectedContentHash: reviewContext!.contentHash,
+        expectedActionTargetFingerprint: reviewContext!.actionTargetFingerprint,
+        sessionIdHash: "d".repeat(64),
+        operationKey: `managed-review:${suffix}`,
+        at,
+      });
+      const approved = await actionRepository.applyApprovalAction({
+        proposalId: updateProposalId,
+        requirementId: ownerRequirement!.id,
+        expectedProposalVersion: planned.proposal.version,
+        expectedSubjectRevision: planned.proposal.subjectRevision,
+        expectedSubjectVersion: planned.proposal.subjectVersion,
+        expectedTargetPolicyVersion: planned.proposal.targetPolicyVersion,
+        sourcePresentationId: approvalSend!.presentation.id,
+        callbackEventId: `managed-approval-callback-${suffix}`,
+        actorOpenId: reviewerOpenId,
+        action: "approve",
+        requireReviewAttestation: true,
+        operationKey: `managed-approval:${suffix}`,
+        at,
+      });
+      expect(approved).toMatchObject({
+        proposal: { status: "approved", version: 3, subjectVersion: 3 },
+        draftVersion: 3,
+      });
+      const approvedContext = await actionRepository.getProposal(updateProposalId);
+      const exactApproval = approvedContext?.approvals.find((item) =>
+        item.requirementId === ownerRequirement!.id);
+      expect(exactApproval).toBeDefined();
+      await expect(actionRepository.listProposals({
+        statuses: ["approved"],
+        actionTypes: ["update_knowledge_publication"],
+        authorizationGroupIds: ["group"],
+        limit: 1,
+      })).resolves.toEqual([expect.objectContaining({ id: updateProposalId, version: 3 })]);
       const claimInput = {
         proposalId: updateProposalId,
-        expectedProposalVersion: 1,
+        expectedProposalVersion: approved.proposal.version,
         runtimeGate: {
           deploymentEnabled: true,
           globalEnabled: true,
@@ -612,6 +776,11 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
       ]);
       expect(claims.map((claim) => claim.outcome).sort()).toEqual(["already_applied", "applied"]);
       const claimed = claims.find(({ outcome }) => outcome === "applied")!;
+      if (claimed.outcome === "terminal") throw new Error("expected winning managed update claim");
+      expect(claimed.execution).toMatchObject({
+        approvalId: exactApproval!.id,
+        executorId: "test-worker",
+      });
       const dispatchedAt = new Date(at.getTime() + 1_000);
       const dispatched = await repository.markRemoteRequestDispatched({
         executionId: claimed.execution.id,
@@ -632,21 +801,6 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         actor: "test-worker",
         at: appliedAt,
       });
-      const presentationId = `presentation-${suffix}`;
-      await pool.query(`
-        INSERT INTO action_approval_presentations (
-          id,proposal_id,requirement_id,proposal_version,recipient_open_id,state,
-          operation_key,operation_fingerprint,version,created_at,closed_at
-        ) VALUES ($1,$2,$3,1,'reviewer','closed',$4,repeat('a',64),1,$5,$5)
-      `, [presentationId, updateProposalId, requirementId, `presentation:${suffix}`, appliedAt]);
-      await pool.query(`
-        INSERT INTO action_approvals (
-          id,proposal_id,requirement_id,actor_open_id,source_presentation_id,callback_event_id,
-          subject_revision,subject_version,authorization_summary,operation_key,
-          operation_fingerprint,created_at
-        ) VALUES ($1,$2,$3,'reviewer',$4,$5,1,1,'group confirmation',$6,repeat('b',64),$7)
-      `, [`approval-${suffix}`, updateProposalId, requirementId, presentationId,
-        `callback-${suffix}`, `approval:${suffix}`, appliedAt]);
       const newSnapshotId = `snapshot-new-${suffix}`;
       const newSnapshotHash = "9".repeat(64);
       const syncedAt = new Date(at.getTime() + 3_000);
@@ -693,57 +847,63 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         page: { state: "active", version: applied.page.version + 1 },
         execution: { state: "succeeded", version: applied.execution.version + 1 },
       });
-      const immutableUpdate = await pool.query<{ count: string }>(
-        `SELECT count(*)::TEXT AS count FROM knowledge_publication_updates WHERE execution_id = $1`,
+      const immutableUpdate = await pool.query<{
+        count: string;
+        approval_id: string;
+        executor_id: string;
+      }>(
+        `SELECT count(*) OVER ()::TEXT AS count,approval_id,executor_id
+           FROM knowledge_publication_updates WHERE execution_id = $1`,
         [claimed.execution.id],
       );
-      expect(immutableUpdate.rows[0]?.count).toBe("1");
+      expect(immutableUpdate.rows).toEqual([{
+        count: "1",
+        approval_id: exactApproval!.id,
+        executor_id: "test-worker",
+      }]);
 
-      await pool.query(`
-        UPDATE knowledge_conflict_candidates
-           SET target_snapshot_id = $2,target_content_hash = $3,target_source_version = NULL,
-               status = 'draft_created',version = 2,updated_at = $4
-         WHERE id = $1
-      `, [candidateId, newSnapshotId, newSnapshotHash, syncedAt]);
-      const competingClaims: Array<{
-        proposalId: string;
-        expectedProposalVersion: number;
-        runtimeGate: {
-          deploymentEnabled: true;
-          globalEnabled: true;
-          writeKnowledgeBase: true;
-          updateManagedKnowledge: true;
-          disabledGroupIds: never[];
-          allowedGroupIds: string[];
-        };
-        operationKey: string;
-        workerId: string;
-        at: Date;
-      }> = [];
-      for (const label of ["a", "b"] as const) {
+      const createApprovedRaceProposal = async (label: "a" | "b") => {
+        const raceAt = new Date(at.getTime() + (label === "a" ? 5_000 : 6_000));
         const raceDraftId = `race-draft-${label}-${suffix}`;
+        const raceCandidateId = `race-candidate-${label}-${suffix}`;
         const raceTargetId = `race-target-${label}-${suffix}`;
         const raceProposalId = `race-proposal-${label}-${suffix}`;
+        const raceReviewer = `ou-race-reviewer-${label}-${suffix}`;
         const raceBody = `Competing approved body ${label}`;
         const raceBodyHash = canonicalHash(raceBody);
         await pool.query(`
-          INSERT INTO knowledge_drafts (
-            id,source_group_id,origin_kind,status,current_revision_number,version,
-            created_by,created_at,updated_at
-          ) VALUES ($1,'group','knowledge_conflict','pending_review',1,1,'test',$2,$2)
-        `, [raceDraftId, syncedAt]);
-        await pool.query(`
-          INSERT INTO knowledge_draft_revisions (
-            draft_id,revision_number,title,content,risk_level,author,created_at
-          ) VALUES ($1,1,$2,$3,'low','test',$4)
-        `, [raceDraftId, `Race ${label}`, raceBody, syncedAt]);
+          INSERT INTO knowledge_conflict_candidates (
+            id,idempotency_key,group_id,group_memory_id,memory_updated_at,source_message_id,
+            target_document_source_id,target_source_updated_at,target_snapshot_id,target_content_hash,
+            detector_contract_version,status,subject,knowledge_base_statement,group_conclusion_statement,
+            difference,suggested_update,target_document_ref,confidence,version,created_at,updated_at
+          ) VALUES ($1,$2,'group',$3,$4,$5,$6,$4,$7,$8,'v1','pending_review',$9,
+            'Prior','Current','Difference','Update','D1','high',1,$10,$10)
+        `, [raceCandidateId, `race-candidate-key-${label}-${suffix}`, memoryId, at,
+          messageId, sourceId, newSnapshotId, newSnapshotHash, `Race ${label}`, raceAt]);
+        const raceDraft = (await draftRepository.createDraft({
+          id: raceDraftId,
+          operationKey: `race-draft:${label}:${suffix}`,
+          originKind: "knowledge_conflict",
+          createdBy: "test",
+          revision: {
+            sourceGroupId: "group",
+            title: `Race ${label}`,
+            content: raceBody,
+            riskLevel: "low",
+            reviewer: { type: "feishu_user", ref: raceReviewer },
+            suggestedPublication: { spaceId: "space" },
+            evidence: [{ type: "document_source", id: sourceId, expectedUpdatedAt: at }],
+          },
+          at: raceAt,
+        })).draft;
         await repository.bindConflictDraft({
           id: raceTargetId,
           draftId: raceDraftId,
           draftRevision: 1,
-          draftVersion: 1,
-          conflictCandidateId: candidateId,
-          conflictCandidateVersion: 2,
+          draftVersion: raceDraft.version,
+          conflictCandidateId: raceCandidateId,
+          conflictCandidateVersion: 1,
           managedPageId: completed.page.id,
           managedPageVersion: completed.page.version,
           linkedDocumentSourceId: sourceId,
@@ -758,56 +918,150 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
           targetPolicyId: policyId,
           targetPolicyVersion: 1,
           operationKey: `race-target:${label}:${suffix}`,
-          at: syncedAt,
+          at: raceAt,
         });
+        await pool.query(
+          `UPDATE knowledge_conflict_candidates
+              SET status = 'draft_created',version = 2,updated_at = $2 WHERE id = $1`,
+          [raceCandidateId, raceAt],
+        );
         await pool.query(`
-          INSERT INTO action_proposals (
-            id,action_type,subject_type,subject_id,subject_revision,subject_version,
-            target_policy_id,target_policy_version,risk_level,status,operation_key,
-            operation_fingerprint,version,created_at,updated_at
-          ) VALUES ($1,'update_knowledge_publication','knowledge_draft',$2,1,1,$3,1,
-            'low','approved',$4,repeat('c',64),1,$5,$5)
-        `, [raceProposalId, raceDraftId, policyId, `race-proposal:${label}:${suffix}`, syncedAt]);
-        const raceRequirementId = `race-requirement-${label}-${suffix}`;
-        await pool.query(`
-          INSERT INTO action_approval_requirements (
-            id,proposal_id,requirement_kind,role_ref_type,role_ref,target_policy_id,
-            target_policy_version,state,satisfied_actor_open_id,satisfied_source_type,
-            satisfied_source_id,version,created_at,updated_at
-          ) VALUES ($1,$2,'group_confirmation','source_group','group',$3,1,'satisfied',
-            'reviewer','group_confirmation',$4,1,$5,$5)
-        `, [raceRequirementId, raceProposalId, policyId,
-          `race-approval-source-${label}-${suffix}`, syncedAt]);
-        const raceFingerprint = configuredManagedUpdateTargetFingerprint({
-          proposalId: raceProposalId,
+          INSERT INTO knowledge_conflict_interactions (
+            id,candidate_id,callback_operation_key,actor_ref,action,result,draft_id,created_at
+          ) VALUES ($1,$2,$3,'test','create_draft','applied',$4,$5)
+        `, [`race-interaction-${label}-${suffix}`, raceCandidateId,
+          `race-interaction:${label}:${suffix}`, raceDraftId, raceAt]);
+
+        const raceCardId = `race-card-${label}-${suffix}`;
+        const raceCardWorker = `race-card-worker-${label}-${suffix}`;
+        await cardRepository.createPresentation({
+          id: raceCardId,
           draftId: raceDraftId,
-          candidateId,
-          candidateVersion: 2,
-          managedPageId: completed.page.id,
-          managedPageVersion: completed.page.version,
-          sourceId,
-          snapshotId: newSnapshotId,
-          snapshotHash: newSnapshotHash,
-          remoteDocumentToken: completed.page.remoteDocumentToken,
-          managedBodyBlockId: completed.page.managedBodyBlockId,
-          expectedRemoteRevision: completed.page.currentRemoteRevisionId!,
-          currentBodyHash: completed.page.currentBodyContentHash!,
-          proposedBodyHash: raceBodyHash,
-          policyId,
-          policyVersion: 1,
-          authorizationGroupId: "group",
+          expectedDraftVersion: 1,
+          expectedRevisionNumber: 1,
+          chatId: "group",
+          contentHash: (label === "a" ? "6" : "7").repeat(64),
+          operationKey: `race-card:${label}:${suffix}`,
+          at: raceAt,
         });
-        await pool.query(`
-          INSERT INTO action_review_attestations (
-            id,proposal_id,actor_open_id,subject_revision,subject_version,proposal_version,
-            content_hash,action_target_fingerprint,session_id_hash,operation_key,
-            operation_fingerprint,reviewed_at
-          ) VALUES ($1,$2,'reviewer',1,1,1,$3,$4,repeat('d',64),$5,repeat('e',64),$6)
-        `, [`race-attestation-${label}-${suffix}`, raceProposalId, raceBodyHash,
-          raceFingerprint, `race-attestation:${label}:${suffix}`, syncedAt]);
-        competingClaims.push({
+        const initialCardSend = await cardRepository.claimPresentationSend({
+          workerId: raceCardWorker,
+          leaseUntil: new Date(raceAt.getTime() + 30_000),
+          at: raceAt,
+        });
+        expect(initialCardSend?.presentation.id).toBe(raceCardId);
+        await cardRepository.beginExternalAttempt({
+          presentationId: raceCardId,
+          workerId: raceCardWorker,
+          at: raceAt,
+        });
+        await cardRepository.completePresentationSend({
+          presentationId: raceCardId,
+          workerId: raceCardWorker,
+          messageId: `om-race-card-${label}-${suffix}`,
+          at: raceAt,
+        });
+        const raceConfirmation = await cardRepository.applyInteraction({
+          presentationId: raceCardId,
+          draftId: raceDraftId,
+          revisionNumber: 1,
+          draftVersion: 1,
+          chatId: "group",
+          eventId: `race-confirm-${label}-${suffix}`,
+          actorOpenId: `ou-race-member-${label}-${suffix}`,
+          membershipCheckedAt: raceAt,
+          at: raceAt,
+          action: "confirm",
+        });
+        const updateCardSend = await cardRepository.claimPresentationSend({
+          workerId: raceCardWorker,
+          leaseUntil: new Date(raceAt.getTime() + 30_000),
+          at: raceAt,
+        });
+        expect(updateCardSend?.presentation.id).toBe(raceCardId);
+        await cardRepository.beginExternalAttempt({
+          presentationId: raceCardId,
+          workerId: raceCardWorker,
+          at: raceAt,
+        });
+        await cardRepository.completePresentationSend({
+          presentationId: raceCardId,
+          workerId: raceCardWorker,
+          messageId: `om-race-card-${label}-${suffix}`,
+          at: raceAt,
+        });
+
+        const racePlan = await actionRepository.createProposal({
           proposalId: raceProposalId,
-          expectedProposalVersion: 1,
+          actionType: "update_knowledge_publication",
+          draftId: raceDraftId,
+          expectedRevision: 1,
+          expectedDraftVersion: raceConfirmation.draft.version,
+          targetPolicyId: policyId,
+          expectedTargetPolicyVersion: 1,
+          operationKey: `race-proposal:${label}:${suffix}`,
+          at: raceAt,
+        });
+        const raceContext = await actionRepository.getProposal(raceProposalId);
+        const raceRequirement = raceContext?.requirements.find((item) =>
+          item.kind === "designated_owner");
+        expect(raceRequirement).toBeDefined();
+        const raceApprovalWorker = `race-approval-worker-${label}-${suffix}`;
+        const raceApprovalSend = await actionRepository.claimApprovalPresentationSend({
+          workerId: raceApprovalWorker,
+          leaseUntil: new Date(raceAt.getTime() + 30_000),
+          at: raceAt,
+        });
+        expect(raceApprovalSend?.presentation).toMatchObject({
+          proposalId: raceProposalId,
+          requirementId: raceRequirement!.id,
+        });
+        await actionRepository.beginApprovalExternalAttempt({
+          presentationId: raceApprovalSend!.presentation.id,
+          workerId: raceApprovalWorker,
+          at: raceAt,
+        });
+        await actionRepository.completeApprovalPresentationSend({
+          presentationId: raceApprovalSend!.presentation.id,
+          workerId: raceApprovalWorker,
+          messageId: `om-race-approval-${label}-${suffix}`,
+          at: raceAt,
+        });
+        const raceReview = await actionRepository.getAuthorizedReviewContext({
+          proposalId: raceProposalId,
+          actorOpenId: raceReviewer,
+        });
+        expect(raceReview).toBeDefined();
+        await actionRepository.recordReviewAttestation({
+          proposalId: raceProposalId,
+          actorOpenId: raceReviewer,
+          expectedProposalVersion: raceReview!.proposalVersion,
+          expectedSubjectRevision: raceReview!.subjectRevision,
+          expectedSubjectVersion: raceReview!.subjectVersion,
+          expectedContentHash: raceReview!.contentHash,
+          expectedActionTargetFingerprint: raceReview!.actionTargetFingerprint,
+          sessionIdHash: canonicalHash(`race-session-${label}`),
+          operationKey: `race-review:${label}:${suffix}`,
+          at: raceAt,
+        });
+        const raceApproval = await actionRepository.applyApprovalAction({
+          proposalId: raceProposalId,
+          requirementId: raceRequirement!.id,
+          expectedProposalVersion: racePlan.proposal.version,
+          expectedSubjectRevision: racePlan.proposal.subjectRevision,
+          expectedSubjectVersion: racePlan.proposal.subjectVersion,
+          expectedTargetPolicyVersion: racePlan.proposal.targetPolicyVersion,
+          sourcePresentationId: raceApprovalSend!.presentation.id,
+          callbackEventId: `race-approval-${label}-${suffix}`,
+          actorOpenId: raceReviewer,
+          action: "approve",
+          requireReviewAttestation: true,
+          operationKey: `race-approve:${label}:${suffix}`,
+          at: raceAt,
+        });
+        return {
+          proposalId: raceProposalId,
+          expectedProposalVersion: raceApproval.proposal.version,
           runtimeGate: {
             deploymentEnabled: true,
             globalEnabled: true,
@@ -818,26 +1072,50 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
           },
           operationKey: `race-claim:${label}:${suffix}`,
           workerId: `race-worker-${label}`,
-          at: new Date(at.getTime() + 5_000),
-        });
-      }
-      await pool.query(
-        `UPDATE knowledge_conflict_candidates SET version = 3,updated_at = $2 WHERE id = $1`,
-        [candidateId, new Date(at.getTime() + 5_000)],
-      );
-      const race = await Promise.allSettled(competingClaims.map((input) =>
+          at: new Date(at.getTime() + 7_000),
+        };
+      };
+
+      const competingClaims = [
+        await createApprovedRaceProposal("a"),
+        await createApprovedRaceProposal("b"),
+      ];
+      await expect(actionRepository.listProposals({
+        statuses: ["approved"],
+        actionTypes: ["update_knowledge_publication"],
+        authorizationGroupIds: ["group"],
+        limit: 2,
+      })).resolves.toHaveLength(2);
+      const race = await Promise.all(competingClaims.map((input) =>
         repository.claimApprovedUpdate(input)));
-      expect(race.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
-      expect(race.filter(({ status }) => status === "rejected")).toHaveLength(1);
+      expect(race.map((result) => result.outcome).sort()).toEqual(["applied", "terminal"]);
+      const loser = race.find((result) => result.outcome === "terminal");
+      expect(loser).toMatchObject({ outcome: "terminal", code: "competing_execution" });
+      await expect(pool.query(
+        `SELECT status FROM action_proposals WHERE id = $1`,
+        [loser!.proposalId],
+      )).resolves.toMatchObject({ rows: [{ status: "failed" }] });
+      await expect(pool.query(
+        `SELECT count(*)::INT AS count FROM action_events
+          WHERE proposal_id = $1 AND event_type = 'execution_failed'
+            AND reason_code = 'competing_execution'`,
+        [loser!.proposalId],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+      await expect(actionRepository.listProposals({
+        statuses: ["approved"],
+        actionTypes: ["update_knowledge_publication"],
+        authorizationGroupIds: ["group"],
+        limit: 1,
+      })).resolves.toEqual([]);
       const unresolvedCount = await pool.query<{ count: string }>(
-        `SELECT count(*)::TEXT AS count
-           FROM knowledge_publication_update_executions
+        `SELECT count(*)::TEXT AS count FROM knowledge_publication_update_executions
           WHERE managed_page_id = $1
             AND state IN ('claimed','remote_request_dispatched','outcome_unknown','remote_applied',
               'resync_required','reconciliation_required')`,
         [completed.page.id],
       );
       expect(unresolvedCount.rows[0]?.count).toBe("1");
+
     } finally {
       await pool?.end();
       await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
@@ -872,7 +1150,7 @@ function managedPageRow(overrides: Record<string, unknown> = {}): Record<string,
 function managedUpdateClaimInput() {
   return {
     proposalId: "update-proposal-1",
-    expectedProposalVersion: 2,
+    expectedProposalVersion: 3,
     runtimeGate: {
       deploymentEnabled: true,
       globalEnabled: true,
@@ -887,11 +1165,18 @@ function managedUpdateClaimInput() {
   };
 }
 
-function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
+function managedUpdateClaimDataSource({
+  hasExactAttestation = true,
+  hasCompetingProposal = false,
+}: {
+  hasExactAttestation?: boolean;
+  hasCompetingProposal?: boolean;
+} = {}) {
   const at = new Date("2026-08-21T01:00:00.000Z");
   const statements: string[] = [];
   const statementValues: unknown[][] = [];
   const attestationFingerprints: string[] = [];
+  const terminalizedProposalIds: string[] = [];
   let claimed = false;
   let proposalExecuting = false;
   const page = () => managedPageRow({
@@ -907,7 +1192,7 @@ function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
     id: "target-1",
     draft_id: "update-draft-1",
     draft_revision: "1",
-    draft_version: "4",
+    draft_version: "1",
     conflict_candidate_id: "candidate-1",
     conflict_candidate_version: "5",
     managed_page_id: "managed-1",
@@ -941,13 +1226,15 @@ function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
     status: proposalExecuting ? "executing" : "approved",
     operation_key: "proposal-op",
     operation_fingerprint: "c".repeat(64),
-    version: proposalExecuting ? "3" : "2",
+    version: proposalExecuting ? "4" : "3",
     created_at: at,
     updated_at: at,
   });
   const execution = {
     id: "e4f1ec52-3d3d-5f72-a7e4-ecde994e3ed5",
     proposal_id: "update-proposal-1",
+    approval_id: "approval-1",
+    executor_id: "managed-update-worker",
     managed_page_id: "managed-1",
     managed_page_version: "2",
     update_target_id: "target-1",
@@ -995,6 +1282,10 @@ function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
         target_source_version: "source-version-1",
       }] };
     }
+    if (normalized.includes("FROM action_proposals proposal") &&
+      normalized.includes("proposal.id <> $2")) {
+      return { rows: hasCompetingProposal ? [{ id: "competing-proposal-1", version: "7" }] : [] };
+    }
     if (normalized.includes("FROM action_proposals")) return { rows: [proposal()] };
     if (normalized.includes("FROM knowledge_drafts")) {
       return { rows: [{
@@ -1041,9 +1332,24 @@ function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
         fetch_status: "succeeded",
       }] };
     }
+    if (normalized.includes("FROM action_approval_requirements requirement") &&
+      normalized.includes("JOIN action_approvals approval")) {
+      return { rows: [{
+        approval_id: "approval-1",
+        actor_open_id: "reviewer-1",
+        callback_event_id: "callback-1",
+        subject_revision: "1",
+        subject_version: "3",
+        presentation_id: "presentation-1",
+        proposal_version: "1",
+        state: "closed",
+        recipient_open_id: "reviewer-1",
+        requirement_id: "requirement-1",
+        satisfied_actor_open_id: "reviewer-1",
+      }] };
+    }
     if (normalized.includes("action_target_fingerprint")) {
-      const fingerprint = values.find((value) =>
-        typeof value === "string" && /^[0-9a-f]{64}$/u.test(value));
+      const fingerprint = values[6];
       if (typeof fingerprint === "string") attestationFingerprints.push(fingerprint);
       return { rows: [{ present: hasExactAttestation }] };
     }
@@ -1056,6 +1362,7 @@ function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
       return { rows: [] };
     }
     if (normalized.startsWith("UPDATE action_proposals")) {
+      if (values[0] === "competing-proposal-1") terminalizedProposalIds.push("competing-proposal-1");
       proposalExecuting = true;
       return { rows: [] };
     }
@@ -1068,6 +1375,7 @@ function managedUpdateClaimDataSource({ hasExactAttestation = true } = {}) {
     statements,
     statementValues,
     attestationFingerprints,
+    terminalizedProposalIds,
     dataSource: {
       query,
       async connect() { return { query, release() {} }; },
@@ -1079,7 +1387,7 @@ function managedUpdateTargetFingerprint(): string {
   return createHash("sha256").update(JSON.stringify([
     ["action_type", "update_knowledge_publication"],
     ["proposal_id", "update-proposal-1"],
-    ["proposal_version", 2],
+    ["proposal_version", 1],
     ["draft_id", "update-draft-1"],
     ["draft_revision", 1],
     ["proposed_content_hash", canonicalHash("New approved body")],
@@ -1097,49 +1405,6 @@ function managedUpdateTargetFingerprint(): string {
     ["target_policy_id", "policy-1"],
     ["target_policy_version", 3],
     ["authorization_group_id", "group-1"],
-  ])).digest("hex");
-}
-
-function configuredManagedUpdateTargetFingerprint(input: {
-  proposalId: string;
-  draftId: string;
-  candidateId: string;
-  candidateVersion: number;
-  managedPageId: string;
-  managedPageVersion: number;
-  sourceId: string;
-  snapshotId: string;
-  snapshotHash: string;
-  remoteDocumentToken: string;
-  managedBodyBlockId: string;
-  expectedRemoteRevision: string;
-  currentBodyHash: string;
-  proposedBodyHash: string;
-  policyId: string;
-  policyVersion: number;
-  authorizationGroupId: string;
-}): string {
-  return createHash("sha256").update(JSON.stringify([
-    ["action_type", "update_knowledge_publication"],
-    ["proposal_id", input.proposalId],
-    ["proposal_version", 1],
-    ["draft_id", input.draftId],
-    ["draft_revision", 1],
-    ["proposed_content_hash", input.proposedBodyHash],
-    ["conflict_candidate_id", input.candidateId],
-    ["candidate_version", input.candidateVersion],
-    ["managed_page_id", input.managedPageId],
-    ["managed_page_version", input.managedPageVersion],
-    ["document_source_id", input.sourceId],
-    ["target_snapshot_id", input.snapshotId],
-    ["target_snapshot_hash", input.snapshotHash],
-    ["remote_document_token", input.remoteDocumentToken],
-    ["managed_body_block_id", input.managedBodyBlockId],
-    ["expected_remote_revision", input.expectedRemoteRevision],
-    ["current_body_content_hash", input.currentBodyHash],
-    ["target_policy_id", input.policyId],
-    ["target_policy_version", input.policyVersion],
-    ["authorization_group_id", input.authorizationGroupId],
   ])).digest("hex");
 }
 
@@ -1244,8 +1509,11 @@ function managedResyncDataSource({
   let executionVersion = 3;
   let proposalState = initialProposalState;
   let proposalVersion = 3;
+  const immutableExecutorIds: string[] = [];
+  const immutableApprovalIds: string[] = [];
+  const successEventActors: string[] = [];
   const target = {
-    id: "target-1", draft_id: "update-draft-1", draft_revision: "1", draft_version: "4",
+    id: "target-1", draft_id: "update-draft-1", draft_revision: "1", draft_version: "1",
     conflict_candidate_id: "candidate-1", conflict_candidate_version: "5",
     managed_page_id: "managed-1", managed_page_version: "1",
     linked_document_source_id: "source-1", target_snapshot_id: "snapshot-old",
@@ -1263,7 +1531,8 @@ function managedResyncDataSource({
     state: pageState, version: String(pageVersion), updated_at: at,
   });
   const execution = () => ({
-    id: "execution-1", proposal_id: "update-proposal-1", managed_page_id: "managed-1",
+    id: "execution-1", proposal_id: "update-proposal-1", approval_id: "approval-1",
+    executor_id: "managed-update-worker", managed_page_id: "managed-1",
     managed_page_version: "2", update_target_id: "target-1", attempt_number: "1",
     state: executionState, operation_key: "execution-op", operation_fingerprint: "d".repeat(64),
     request_fingerprint: "e".repeat(64), expected_remote_revision_id: "12",
@@ -1275,7 +1544,8 @@ function managedResyncDataSource({
     version: String(executionVersion), created_at: at, updated_at: at,
   });
   const proposal = () => ({
-    id: "update-proposal-1", status: proposalState, version: String(proposalVersion),
+    id: "update-proposal-1", status: proposalState, subject_revision: "1",
+    subject_version: "4", version: String(proposalVersion),
   });
   const observation = {
     id: "observation-new", managed_page_id: "managed-1", managed_page_version: "2",
@@ -1301,7 +1571,11 @@ function managedResyncDataSource({
     if (normalized.includes("FROM knowledge_publication_update_targets")) return { rows: [target] };
     if (normalized.includes("FROM action_proposals")) return { rows: [proposal()] };
     if (normalized.includes("AS ready") && normalized.includes("document_snapshots")) {
-      return { rows: [{ ready: permissionUsable, approval_id: "approval-1" }] };
+      return { rows: [{
+        ready: permissionUsable,
+        approval_subject_revision: "1",
+        approval_subject_version: "3",
+      }] };
     }
     if (normalized.includes("FROM knowledge_publication_update_executions")) return { rows: [execution()] };
     if (normalized.includes("FROM managed_knowledge_snapshot_observations")) return { rows: [observation] };
@@ -1322,11 +1596,23 @@ function managedResyncDataSource({
       proposalVersion += 1;
       return { rows: [] };
     }
+    if (normalized.includes("INSERT INTO knowledge_publication_updates")) {
+      immutableApprovalIds.push(String(values[3]));
+      immutableExecutorIds.push(String(values[14]));
+      return { rows: [] };
+    }
+    if (normalized.includes("INSERT INTO action_events") && normalized.includes("execution_succeeded")) {
+      successEventActors.push(String(values[2]));
+      return { rows: [] };
+    }
     return { rows: [] };
   });
   return {
     statements,
     proposalState: () => proposalState,
+    immutableExecutorIds: () => immutableExecutorIds,
+    immutableApprovalIds: () => immutableApprovalIds,
+    successEventActors: () => successEventActors,
     dataSource: {
       query,
       async connect() { return { query, release() {} }; },

@@ -30,6 +30,7 @@ export function createManagedKnowledgeUpdateReconciler({
   managedPages: Pick<
     ManagedKnowledgePageRepository,
     | "listReconciliationRequired"
+    | "markRemoteRequestDispatched"
     | "claimRemoteRetry"
     | "recordRemoteOutcome"
     | "findResyncReadyExecution"
@@ -56,6 +57,7 @@ export function createManagedKnowledgeUpdateReconciler({
       const work = await managedPages.listReconciliationRequired({
         limit: sanitizeLimit(limit),
         dispatchedBefore: new Date(observedAt.getTime() - safeStaleDispatchMs),
+        claimedBefore: new Date(observedAt.getTime() - safeStaleDispatchMs),
       });
       const results: ManagedKnowledgeUpdateReconciliationResult[] = [];
       for (const claim of work) {
@@ -77,7 +79,8 @@ export function createManagedKnowledgeUpdateReconciler({
 async function reconcileManagedKnowledgeUpdate(input: {
   managedPages: Pick<
     ManagedKnowledgePageRepository,
-    "claimRemoteRetry" | "recordRemoteOutcome" | "findResyncReadyExecution" | "completeResync"
+    "markRemoteRequestDispatched" | "claimRemoteRetry" | "recordRemoteOutcome" |
+    "findResyncReadyExecution" | "completeResync"
   >;
   updater: ManagedKnowledgeUpdater;
   syncQueue: Pick<DocumentSyncQueue, "enqueue">;
@@ -86,6 +89,7 @@ async function reconcileManagedKnowledgeUpdate(input: {
   staleDispatchMs: number;
   now: () => Date;
 }): Promise<ManagedKnowledgeUpdateReconciliationResult> {
+  if (input.claim.execution.state === "claimed") return recoverStaleClaim(input);
   if (input.claim.execution.state === "remote_applied") {
     if (!await enqueueAndComplete(input, input.claim.execution)) {
       return { status: "reconciliation_required", executionId: input.claim.execution.id, code: "resync_enqueue_failed" };
@@ -140,6 +144,136 @@ async function reconcileManagedKnowledgeUpdate(input: {
     executionId: input.claim.execution.id,
     code: "human_edit_or_unexpected_readback",
   };
+}
+
+async function recoverStaleClaim(
+  input: Parameters<typeof reconcileManagedKnowledgeUpdate>[0],
+): Promise<ManagedKnowledgeUpdateReconciliationResult> {
+  const failPreflight = async (code: string) => {
+    await input.managedPages.recordRemoteOutcome({
+      executionId: input.claim.execution.id,
+      expectedExecutionVersion: input.claim.execution.version,
+      classification: "preflight_failed",
+      pageDisposition: "reconciliation_required",
+      responseClassification: code,
+      reconciliationReasonCode: code,
+      operationKey: stableOperationKey("managed-update-stale-claim-preflight-failed", [
+        input.claim.execution.id,
+        code,
+      ]),
+      actor: input.workerId,
+      at: requireDate(input.now()),
+    });
+    return {
+      status: "reconciliation_required" as const,
+      executionId: input.claim.execution.id,
+      code,
+    };
+  };
+  if (input.claim.execution.approvalId === undefined ||
+    input.claim.execution.executorId === undefined) {
+    return failPreflight("stale_claim_identity_missing");
+  }
+  let preflight;
+  try {
+    preflight = await input.updater.preflight(remoteIdentity(input.claim));
+  } catch {
+    return failPreflight("stale_claim_preflight_unavailable");
+  }
+  const expectedRevision = parsePositiveRevision(input.claim.execution.expectedRemoteRevisionId);
+  if (
+    expectedRevision === undefined || preflight.blockType !== "text" ||
+    preflight.revision !== expectedRevision ||
+    preflight.canonicalBodyHash !== input.claim.execution.beforeBodyContentHash
+  ) return failPreflight("stale_claim_preflight_mismatch");
+
+  let dispatched;
+  try {
+    dispatched = await input.managedPages.markRemoteRequestDispatched({
+      executionId: input.claim.execution.id,
+      expectedExecutionVersion: input.claim.execution.version,
+      operationKey: stableOperationKey("managed-update-stale-claim-dispatched", [
+        input.claim.execution.id,
+      ]),
+      actor: input.workerId,
+      at: requireDate(input.now()),
+    });
+  } catch {
+    return {
+      status: "reconciliation_required",
+      executionId: input.claim.execution.id,
+      code: "stale_claim_dispatch_not_claimed",
+    };
+  }
+  let outcome: ManagedUpdateOutcome;
+  try {
+    outcome = await input.updater.update({
+      ...remoteIdentity(input.claim),
+      expectedRevision,
+      proposedBody: input.claim.draft.content,
+      clientToken: input.claim.execution.clientToken,
+    });
+  } catch {
+    outcome = { kind: "unknown", code: "connection_lost" };
+  }
+  if (outcome.kind === "applied") {
+    const applied = await input.managedPages.recordRemoteOutcome({
+      executionId: input.claim.execution.id,
+      expectedExecutionVersion: dispatched.execution.version,
+      classification: "remote_applied",
+      pageDisposition: "resync_required",
+      responseClassification: "stale_claim_applied",
+      responseRevisionId: String(outcome.resultingRevision),
+      operationKey: stableOperationKey("managed-update-stale-claim-applied", [
+        input.claim.execution.id,
+      ]),
+      actor: input.workerId,
+      at: requireDate(input.now()),
+    });
+    if (!await enqueueAndComplete(input, applied.execution)) {
+      return {
+        status: "reconciliation_required",
+        executionId: input.claim.execution.id,
+        code: "resync_enqueue_failed",
+      };
+    }
+    return { status: "applied", executionId: input.claim.execution.id, code: "stale_claim_applied" };
+  }
+  if (outcome.kind === "rejected") {
+    const pageDisposition = outcome.code === "forbidden"
+      ? "blocked" as const
+      : outcome.code === "missing"
+        ? "retired" as const
+        : "reconciliation_required" as const;
+    await input.managedPages.recordRemoteOutcome({
+      executionId: input.claim.execution.id,
+      expectedExecutionVersion: dispatched.execution.version,
+      classification: "failed",
+      pageDisposition,
+      responseClassification: outcome.code,
+      reconciliationReasonCode: outcome.code,
+      operationKey: stableOperationKey("managed-update-stale-claim-rejected", [
+        input.claim.execution.id,
+      ]),
+      actor: input.workerId,
+      at: requireDate(input.now()),
+    });
+    return { status: "reconciliation_required", executionId: input.claim.execution.id, code: outcome.code };
+  }
+  await input.managedPages.recordRemoteOutcome({
+    executionId: input.claim.execution.id,
+    expectedExecutionVersion: dispatched.execution.version,
+    classification: "outcome_unknown",
+    pageDisposition: "reconciliation_required",
+    responseClassification: outcome.code,
+    reconciliationReasonCode: "stale_claim_outcome_unresolved",
+    operationKey: stableOperationKey("managed-update-stale-claim-outcome-unknown", [
+      input.claim.execution.id,
+    ]),
+    actor: input.workerId,
+    at: requireDate(input.now()),
+  });
+  return { status: "reconciliation_required", executionId: input.claim.execution.id, code: outcome.code };
 }
 
 async function retrySameToken(

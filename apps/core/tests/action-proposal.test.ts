@@ -62,6 +62,38 @@ describe("action proposal contracts", () => {
     }]);
   });
 
+  it("requires an explicit OAuth-reviewable owner approval for a low-risk managed update", () => {
+    expect(buildApprovalRequirementSnapshot({
+      actionType: "update_knowledge_publication",
+      sourceGroupId: "oc_group",
+      riskLevel: "low",
+      reviewer: { type: "feishu_user", ref: "ou_owner" },
+      groupConfirmation: {
+        actorOpenId: "ou_member",
+        presentationId: "presentation-1",
+      },
+      targetPolicy: { id: "policy-1", version: 4 },
+    }).map(({ kind, roleRefType, roleRef, satisfiedBy }) => ({
+      kind,
+      roleRefType,
+      roleRef,
+      satisfied: satisfiedBy !== undefined,
+    }))).toEqual([
+      {
+        kind: "group_confirmation",
+        roleRefType: "source_group",
+        roleRef: "oc_group",
+        satisfied: true,
+      },
+      {
+        kind: "designated_owner",
+        roleRefType: "feishu_user",
+        roleRef: "ou_owner",
+        satisfied: false,
+      },
+    ]);
+  });
+
   it("builds the exact medium-risk requirement snapshot", () => {
     expect(buildApprovalRequirementSnapshot({
       sourceGroupId: "oc_group",

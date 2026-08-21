@@ -26,6 +26,7 @@ import type {
   MarkManagedRemoteRequestDispatchedInput,
   ManagedExecutionMutationResult,
   ManagedKnowledgePageRepository,
+  ManagedKnowledgeUpdateClaimResult,
   ManagedPageMutationResult,
   ManagedResyncReadyExecution,
   ManagedSnapshotObservationResult,
@@ -33,6 +34,7 @@ import type {
   RecordManagedRemoteOutcomeInput,
   RecordManagedSnapshotObservationInput,
   RegisterManagedPublicationInput,
+  TerminalManagedKnowledgeUpdateClaim,
 } from "./managed-knowledge-page-repository.js";
 
 export class ManagedKnowledgePageOperationConflictError extends Error {
@@ -266,7 +268,7 @@ async function getTargetForDraft(dataSource: PostgresKnowledgeDraftDataSource, i
   return result.rows[0] === undefined ? undefined : mapTarget(result.rows[0]);
 }
 
-async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource, input: ClaimManagedUpdateInput): Promise<ClaimedManagedKnowledgeUpdate> {
+async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource, input: ClaimManagedUpdateInput): Promise<ManagedKnowledgeUpdateClaimResult> {
   const normalized = normalizeClaimInput(input);
   const fingerprint = operationFingerprint(normalized);
   return withTransaction(dataSource, async (client) => {
@@ -277,6 +279,12 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
       return buildClaimResult(client, mapExecution(replay.rows[0]), "already_applied");
     }
     const targetIdentity = await requireTargetForProposal(client, normalized.proposalId);
+    if (
+      !normalized.runtimeGate.deploymentEnabled || !normalized.runtimeGate.globalEnabled ||
+      !normalized.runtimeGate.writeKnowledgeBase || !normalized.runtimeGate.updateManagedKnowledge ||
+      normalized.runtimeGate.disabledGroupIds.includes(targetIdentity.authorizationGroupId) ||
+      !normalized.runtimeGate.allowedGroupIds.includes(targetIdentity.authorizationGroupId)
+    ) throw new ManagedKnowledgePageVersionConflictError();
     await acquireManagedKnowledgeSourceLocks(client, [targetIdentity.linkedDocumentSourceId]);
     const page = await requirePageForUpdate(client, targetIdentity.managedPageId);
     const target = await requireTargetForUpdate(client, targetIdentity.id);
@@ -324,13 +332,26 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
     );
     const snapshotRow = snapshot.rows[0];
     const candidateRow = candidate.rows[0];
+    if (proposalRow !== undefined && text(proposalRow.status) === "failed") {
+      const terminalReplay = await findManagedTerminalClaim(client, proposalRow);
+      if (terminalReplay !== undefined) return terminalReplay;
+    }
     if (
-      proposalRow === undefined || draftRow === undefined || policyRow === undefined ||
-      sourceRow === undefined || snapshotRow === undefined || candidateRow === undefined ||
-      !normalized.runtimeGate.deploymentEnabled || !normalized.runtimeGate.globalEnabled ||
-      !normalized.runtimeGate.writeKnowledgeBase || !normalized.runtimeGate.updateManagedKnowledge ||
-      normalized.runtimeGate.disabledGroupIds.includes(target.authorizationGroupId) ||
-      !normalized.runtimeGate.allowedGroupIds.includes(target.authorizationGroupId) ||
+      proposalRow === undefined || text(proposalRow.action_type) !== "update_knowledge_publication" ||
+      text(proposalRow.status) !== "approved" ||
+      number(proposalRow.version) !== normalized.expectedProposalVersion ||
+      text(proposalRow.subject_type) !== "knowledge_draft" ||
+      text(proposalRow.subject_id) !== target.draftId ||
+      number(proposalRow.subject_revision) !== target.draftRevision ||
+      text(proposalRow.target_policy_id) !== target.targetPolicyId ||
+      number(proposalRow.target_policy_version) !== target.targetPolicyVersion
+    ) throw new ManagedKnowledgePageVersionConflictError();
+    const proposalVersion = number(proposalRow.version);
+    if (draftRow === undefined || policyRow === undefined || sourceRow === undefined ||
+      snapshotRow === undefined || candidateRow === undefined) {
+      return terminalizeManagedProposal(client, proposalRow, "stale_target", normalized);
+    }
+    const staleTarget =
       page.version !== target.managedPageVersion || page.state !== "active" ||
       page.linkedDocumentSourceId !== target.linkedDocumentSourceId ||
       page.authorizationGroupId !== target.authorizationGroupId ||
@@ -339,20 +360,12 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
       page.managedBodyBlockId !== target.managedBodyBlockId ||
       page.currentRemoteRevisionId !== target.expectedRemoteRevisionId ||
       page.currentBodyContentHash !== target.currentBodyContentHash ||
-      text(proposalRow.action_type) !== "update_knowledge_publication" ||
-      text(proposalRow.status) !== "approved" ||
-      number(proposalRow.version) !== normalized.expectedProposalVersion ||
-      text(proposalRow.subject_type) !== "knowledge_draft" ||
-      text(proposalRow.subject_id) !== target.draftId ||
-      number(proposalRow.subject_revision) !== target.draftRevision ||
-      number(proposalRow.subject_version) !== target.draftVersion ||
-      text(proposalRow.target_policy_id) !== target.targetPolicyId ||
-      number(proposalRow.target_policy_version) !== target.targetPolicyVersion ||
       text(proposalRow.risk_level) !== text(draftRow.risk_level) ||
       text(draftRow.status) !== "pending_review" ||
       text(draftRow.id) !== target.draftId ||
       number(draftRow.current_revision_number) !== target.draftRevision ||
-      number(draftRow.version) !== target.draftVersion ||
+      number(draftRow.version) !== number(proposalRow.subject_version) ||
+      number(draftRow.version) < target.draftVersion ||
       text(draftRow.source_group_id) !== target.authorizationGroupId ||
       canonicalManagedBodyHash(text(draftRow.content)) !== target.proposedBodyContentHash ||
       number(candidateRow.version) !== target.conflictCandidateVersion + 1 ||
@@ -374,33 +387,21 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
       text(snapshotRow.document_source_id) !== target.linkedDocumentSourceId ||
       text(snapshotRow.content_hash) !== target.targetSnapshotHash ||
       nullableText(snapshotRow.source_version) !== target.targetSourceVersion ||
-      text(snapshotRow.fetch_status) !== "succeeded"
-    ) throw new ManagedKnowledgePageVersionConflictError();
-    const expectedActionTargetFingerprint = managedUpdateActionTargetFingerprint({
-      proposalId: normalized.proposalId,
-      proposalVersion: normalized.expectedProposalVersion,
+      text(snapshotRow.fetch_status) !== "succeeded";
+    if (staleTarget) {
+      return terminalizeManagedProposal(client, proposalRow, "stale_target", normalized);
+    }
+    const approval = await requireExactManagedApprovalChain({
+      client,
+      proposal: proposalRow,
       target,
+      draft: draftRow,
     });
-    const contentHash = createHash("sha256").update(text(draftRow.content)).digest("hex");
-    const requirements = await client.query<{ present: boolean }>(
-      `SELECT
-         NOT EXISTS (
-           SELECT 1 FROM action_approval_requirements
-           WHERE proposal_id = $2 AND state <> 'satisfied'
-         )
-         AND EXISTS (
-           SELECT 1 FROM action_approval_requirements WHERE proposal_id = $2
-         )
-         AND EXISTS (
-           SELECT 1 FROM action_review_attestations
-           WHERE proposal_id = $2 AND proposal_version = $3
-             AND subject_revision = $4 AND subject_version = $5
-             AND content_hash = $6 AND action_target_fingerprint = $1
-         ) AS present`,
-      [expectedActionTargetFingerprint, normalized.proposalId, normalized.expectedProposalVersion,
-        target.draftRevision, target.draftVersion, contentHash],
-    );
-    if (requirements.rows[0]?.present !== true) throw new ManagedKnowledgePageVersionConflictError();
+    if (approval === undefined) {
+      return terminalizeManagedProposal(
+        client, proposalRow, "approval_chain_invalid", normalized,
+      );
+    }
     const unresolved = await client.query<{ id: string }>(
       `SELECT id FROM knowledge_publication_update_executions
        WHERE managed_page_id = $1
@@ -409,18 +410,30 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
        FOR UPDATE`,
       [page.id],
     );
-    if (unresolved.rows[0] !== undefined) throw new ManagedKnowledgePageVersionConflictError();
+    if (unresolved.rows[0] !== undefined) {
+      return terminalizeManagedProposal(
+        client, proposalRow, "competing_execution", normalized,
+      );
+    }
+    await terminalizeCompetingManagedProposals(client, {
+      winningProposalId: normalized.proposalId,
+      managedPageId: page.id,
+      operationKey: normalized.operationKey,
+      actor: normalized.workerId,
+      at: normalized.at,
+    });
     const executionId = stableUuid(`${normalized.operationKey}:execution`);
     const clientToken = stableUuid(`${normalized.operationKey}:client-token`);
     await client.query(`UPDATE managed_knowledge_pages SET state = 'updating', version = version + 1, updated_at = $2 WHERE id = $1`, [page.id, normalized.at]);
     await insertPageEvent(client, { pageId: page.id, eventType: "update_claimed", fromVersion: page.version, toVersion: page.version + 1, operationKey: `${normalized.operationKey}:page`, fingerprint: operationFingerprint({ fingerprint, kind: "page" }), actor: normalized.workerId, at: normalized.at });
     const requestFingerprint = operationFingerprint({ targetId: target.id, revision: target.expectedRemoteRevisionId, before: target.currentBodyContentHash, after: target.proposedBodyContentHash, clientToken });
     await client.query(`INSERT INTO knowledge_publication_update_executions (
-      id,proposal_id,managed_page_id,managed_page_version,update_target_id,attempt_number,state,operation_key,
+      id,proposal_id,approval_id,executor_id,managed_page_id,managed_page_version,update_target_id,attempt_number,state,operation_key,
       operation_fingerprint,request_fingerprint,expected_remote_revision_id,before_body_content_hash,after_body_content_hash,
       client_token,version,created_at,updated_at
-    ) VALUES ($1,$2,$3,$4,$5,1,'claimed',$6,$7,$8,$9,$10,$11,$12,1,$13,$13)`,
-    [executionId, normalized.proposalId, page.id, page.version + 1, target.id, normalized.operationKey, fingerprint,
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,1,'claimed',$8,$9,$10,$11,$12,$13,$14,1,$15,$15)`,
+    [executionId, normalized.proposalId, approval.approvalId, normalized.workerId,
+      page.id, page.version + 1, target.id, normalized.operationKey, fingerprint,
       requestFingerprint, target.expectedRemoteRevisionId, target.currentBodyContentHash, target.proposedBodyContentHash,
       clientToken, normalized.at]);
     await insertExecutionEvent(client, executionId, "claimed", undefined, 1, `${normalized.operationKey}:execution`, operationFingerprint({ fingerprint, kind: "execution" }), undefined, normalized.at);
@@ -434,7 +447,7 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
          id,proposal_id,event_type,operation_key,from_version,to_version,reason_code,created_at
        ) VALUES ($1,$2,'execution_started',$3,$4,$5,'managed_update_execution_claimed',$6)`,
       [randomUUID(), normalized.proposalId, `${normalized.operationKey}:proposal`,
-        normalized.expectedProposalVersion, normalized.expectedProposalVersion + 1, normalized.at],
+        proposalVersion, proposalVersion + 1, normalized.at],
     );
     const execution = await requireExecution(client, executionId);
     return {
@@ -442,10 +455,199 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
       page: await requirePage(client, page.id),
       target,
       execution,
-      proposal: mapClaimProposal({ ...proposalRow, status: "executing", version: normalized.expectedProposalVersion + 1, updated_at: normalized.at }),
+      proposal: mapClaimProposal({ ...proposalRow, status: "executing", version: proposalVersion + 1, updated_at: normalized.at }),
       draft: mapClaimDraft(draftRow),
     };
   });
+}
+
+async function requireExactManagedApprovalChain(input: {
+  client: KnowledgeDraftTransactionClient;
+  proposal: Record<string, unknown>;
+  target: ManagedKnowledgeUpdateTarget;
+  draft: Record<string, unknown>;
+}): Promise<{ approvalId: string } | undefined> {
+  const approvals = await input.client.query<Record<string, unknown>>(
+    `SELECT approval.id AS approval_id,approval.actor_open_id,approval.callback_event_id,
+            approval.subject_revision,approval.subject_version,
+            presentation.id AS presentation_id,presentation.proposal_version,presentation.state,
+            presentation.recipient_open_id,requirement.id AS requirement_id,
+            requirement.satisfied_actor_open_id
+       FROM action_approval_requirements requirement
+       JOIN action_approvals approval
+         ON approval.id = requirement.satisfied_source_id
+        AND approval.proposal_id = requirement.proposal_id
+        AND approval.requirement_id = requirement.id
+       JOIN action_approval_presentations presentation
+         ON presentation.id = approval.source_presentation_id
+        AND presentation.proposal_id = approval.proposal_id
+        AND presentation.requirement_id = approval.requirement_id
+      WHERE requirement.proposal_id = $1
+        AND requirement.state = 'satisfied'
+        AND requirement.satisfied_source_type = 'action_approval'
+        AND requirement.satisfied_source_id = approval.id
+      ORDER BY approval.created_at ASC,approval.id ASC
+      FOR UPDATE OF requirement,presentation`,
+    [text(input.proposal.id)],
+  );
+  if (approvals.rows.length !== 1) return undefined;
+  const approval = approvals.rows[0]!;
+  const approvalProposalVersion = number(approval.proposal_version);
+  const approvalSubjectVersion = number(approval.subject_version);
+  const actorOpenId = text(approval.actor_open_id);
+  const contentHash = createHash("sha256").update(text(input.draft.content)).digest("hex");
+  const expectedActionTargetFingerprint = managedUpdateActionTargetFingerprint({
+    proposalId: text(input.proposal.id),
+    proposalVersion: approvalProposalVersion,
+    target: input.target,
+  });
+  if (
+    text(approval.state) !== "closed" ||
+    text(approval.recipient_open_id) !== actorOpenId ||
+    text(approval.satisfied_actor_open_id) !== actorOpenId ||
+    number(approval.subject_revision) !== input.target.draftRevision ||
+    approvalSubjectVersion < input.target.draftVersion ||
+    number(input.draft.version) !== approvalSubjectVersion + 1 ||
+    number(input.proposal.subject_version) !== approvalSubjectVersion + 1 ||
+    number(input.proposal.version) !== approvalProposalVersion + 2
+  ) return undefined;
+  const proof = await input.client.query<{ present: boolean }>(
+    `SELECT
+       NOT EXISTS (
+         SELECT 1 FROM action_approval_requirements
+          WHERE proposal_id = $1 AND state <> 'satisfied'
+       )
+       AND EXISTS (
+         SELECT 1 FROM action_review_attestations attestation
+          WHERE attestation.proposal_id = $1
+            AND attestation.actor_open_id = $2
+            AND attestation.proposal_version = $3
+            AND attestation.subject_revision = $4
+            AND attestation.subject_version = $5
+            AND attestation.content_hash = $6
+            AND attestation.action_target_fingerprint = $7
+       )
+       AND EXISTS (
+         SELECT 1 FROM action_events event
+          WHERE event.proposal_id = $1 AND event.event_type = 'approval_recorded'
+            AND event.actor_open_id = $2 AND event.from_version = $3
+            AND event.to_version = $3 + 1
+       )
+       AND EXISTS (
+         SELECT 1 FROM action_events event
+          WHERE event.proposal_id = $1 AND event.event_type = 'requirements_satisfied'
+            AND event.actor_open_id = $2 AND event.from_version = $3 + 1
+            AND event.to_version = $3 + 2
+       )
+       AND EXISTS (
+         SELECT 1 FROM knowledge_draft_events event
+          WHERE event.draft_id = $8 AND event.event_type = 'review_approved'
+            AND event.actor = $2 AND event.revision_number = $4
+            AND event.from_version = $5 AND event.to_version = $5 + 1
+       )
+       AND EXISTS (
+         SELECT 1 FROM action_approval_presentation_events event
+          WHERE event.presentation_id = $9 AND event.event_type = 'approved'
+            AND event.actor_open_id = $2 AND event.callback_event_id = $10
+       ) AS present`,
+    [text(input.proposal.id), actorOpenId, approvalProposalVersion, input.target.draftRevision,
+      approvalSubjectVersion, contentHash, expectedActionTargetFingerprint, input.target.draftId,
+      text(approval.presentation_id), text(approval.callback_event_id)],
+  );
+  return proof.rows[0]?.present === true ? { approvalId: text(approval.approval_id) } : undefined;
+}
+
+async function terminalizeManagedProposal(
+  client: KnowledgeDraftTransactionClient,
+  proposal: Record<string, unknown>,
+  code: "stale_target" | "competing_execution" | "approval_chain_invalid",
+  claim: ReturnType<typeof normalizeClaimInput>,
+): Promise<ManagedKnowledgeUpdateClaimResult> {
+  const proposalId = text(proposal.id);
+  const proposalVersion = number(proposal.version);
+  await client.query(
+    `UPDATE action_proposals SET status = 'failed',version = version + 1,updated_at = $2
+      WHERE id = $1 AND version = $3 AND status = 'approved'`,
+    [proposalId, claim.at, proposalVersion],
+  );
+  await client.query(
+    `INSERT INTO action_events (
+       id,proposal_id,event_type,operation_key,from_version,to_version,reason_code,created_at
+     ) VALUES ($1,$2,'execution_failed',$3,$4,$5,$6,$7)`,
+    [randomUUID(), proposalId, managedTerminalOperationKey(claim.operationKey, proposalId),
+      proposalVersion, proposalVersion + 1, code, claim.at],
+  );
+  return { outcome: "terminal", proposalId, proposalVersion: proposalVersion + 1, code };
+}
+
+async function terminalizeCompetingManagedProposals(
+  client: KnowledgeDraftTransactionClient,
+  input: {
+    winningProposalId: string;
+    managedPageId: string;
+    operationKey: string;
+    actor: string;
+    at: Date;
+  },
+): Promise<void> {
+  const competitors = await client.query<Record<string, unknown>>(
+    `SELECT proposal.id,proposal.version
+       FROM action_proposals proposal
+       JOIN knowledge_publication_update_targets target
+         ON target.draft_id = proposal.subject_id
+        AND target.draft_revision = proposal.subject_revision
+      WHERE target.managed_page_id = $1 AND proposal.id <> $2
+        AND proposal.action_type = 'update_knowledge_publication'
+        AND proposal.status = 'approved'
+      ORDER BY proposal.id ASC
+      FOR UPDATE OF proposal`,
+    [input.managedPageId, input.winningProposalId],
+  );
+  for (const proposal of competitors.rows) {
+    const proposalId = text(proposal.id);
+    const version = number(proposal.version);
+    await client.query(
+      `UPDATE action_proposals SET status = 'failed',version = version + 1,updated_at = $2
+        WHERE id = $1 AND version = $3 AND status = 'approved'`,
+      [proposalId, input.at, version],
+    );
+    await client.query(
+      `INSERT INTO action_events (
+         id,proposal_id,event_type,actor_open_id,operation_key,from_version,to_version,
+         reason_code,created_at
+       ) VALUES ($1,$2,'execution_failed',$3,$4,$5,$6,'competing_execution',$7)`,
+      [randomUUID(), proposalId, input.actor,
+        managedTerminalOperationKey(input.operationKey, proposalId), version, version + 1, input.at],
+    );
+  }
+}
+
+async function findManagedTerminalClaim(
+  client: KnowledgeDraftTransactionClient,
+  proposal: Record<string, unknown>,
+): Promise<TerminalManagedKnowledgeUpdateClaim | undefined> {
+  const result = await client.query<{ reason_code: string }>(
+    `SELECT reason_code FROM action_events
+      WHERE proposal_id = $1 AND event_type = 'execution_failed'
+        AND reason_code IN ('stale_target','competing_execution','approval_chain_invalid')
+      ORDER BY created_at DESC,id ASC LIMIT 1`,
+    [text(proposal.id)],
+  );
+  const code = result.rows[0]?.reason_code;
+  if (code !== "stale_target" && code !== "competing_execution" &&
+    code !== "approval_chain_invalid") return undefined;
+  return {
+    outcome: "terminal" as const,
+    proposalId: text(proposal.id),
+    proposalVersion: number(proposal.version),
+    code,
+  };
+}
+
+function managedTerminalOperationKey(operationKey: string, proposalId: string): string {
+  return `managed-update-terminal:${createHash("sha256")
+    .update(JSON.stringify([operationKey, proposalId]))
+    .digest("hex")}`;
 }
 
 async function markRemoteRequestDispatched(dataSource: PostgresKnowledgeDraftDataSource, input: MarkManagedRemoteRequestDispatchedInput): Promise<ManagedExecutionMutationResult> {
@@ -641,6 +843,8 @@ async function findResyncReadyExecution(
         AND page.state = 'resync_required'
         AND page.expected_resync_content_hash = execution.after_body_content_hash
         AND execution.state = 'remote_applied'
+        AND execution.approval_id IS NOT NULL
+        AND execution.executor_id IS NOT NULL
         AND proposal.status IN ('executing','reconciliation_required')
         AND target.managed_page_id = page.id
         AND target.linked_document_source_id = page.linked_document_source_id
@@ -695,25 +899,35 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
     const page = await requirePageForUpdate(client, executionIdentity.managedPageId);
     const target = await requireTargetForUpdate(client, executionIdentity.updateTargetId);
     const proposalResult = await client.query<Record<string, unknown>>(
-      `SELECT id,status,version FROM action_proposals WHERE id = $1 FOR UPDATE`,
+      `SELECT id,status,subject_revision,subject_version,version
+         FROM action_proposals WHERE id = $1 FOR UPDATE`,
       [executionIdentity.proposalId],
     );
     const proposal = proposalResult.rows[0];
     if (proposal === undefined) throw new ManagedKnowledgePageVersionConflictError();
     const execution = await requireExecutionForUpdate(client, normalized.executionId);
     const observation = await requireObservation(client, normalized.observationId);
-    const readiness = await client.query<{ ready: boolean; approval_id: string }>(
-      `SELECT TRUE AS ready,
-              (SELECT approval.id
-                 FROM action_approvals approval
-                WHERE approval.proposal_id = $3
-                ORDER BY approval.created_at DESC, approval.id ASC
-                LIMIT 1) AS approval_id
+    const readiness = await client.query<{
+      ready: boolean;
+      approval_subject_revision: string | number;
+      approval_subject_version: string | number;
+    }>(
+      `SELECT TRUE AS ready,approval.subject_revision AS approval_subject_revision,
+              approval.subject_version AS approval_subject_version
          FROM document_sources source
          JOIN document_snapshots snapshot
            ON snapshot.id = $4
-          AND snapshot.document_source_id = source.id
-          AND snapshot.content_hash = $5
+           AND snapshot.document_source_id = source.id
+           AND snapshot.content_hash = $5
+         JOIN action_approvals approval
+           ON approval.id = $8
+          AND approval.proposal_id = $3
+         JOIN action_approval_requirements requirement
+           ON requirement.id = approval.requirement_id
+          AND requirement.proposal_id = approval.proposal_id
+          AND requirement.state = 'satisfied'
+          AND requirement.satisfied_source_type = 'action_approval'
+          AND requirement.satisfied_source_id = approval.id
         WHERE source.id = $1
           AND source.permission_state IN ('readable','unknown')
           AND source.sync_state = 'synced'
@@ -733,7 +947,7 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
         FOR SHARE OF source,snapshot`,
       [observation.documentSourceId, page.id, execution.proposalId,
         observation.documentSnapshotId, observation.snapshotContentHash,
-        execution.remoteRequestDispatchedAt, execution.id],
+        execution.remoteRequestDispatchedAt, execution.id, execution.approvalId ?? null],
     );
     const ready = readiness.rows[0];
     if (
@@ -754,7 +968,10 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
       observation.managedBodyContentHash !== execution.afterBodyContentHash ||
       observation.observedRemoteRevisionId !== execution.responseRevisionId ||
       execution.remoteRequestDispatchedAt === undefined ||
-      ready?.ready !== true || ready.approval_id === null || ready.approval_id === undefined
+      execution.approvalId === undefined || execution.executorId === undefined ||
+      ready?.ready !== true ||
+      number(ready.approval_subject_revision) !== target.draftRevision ||
+      number(ready.approval_subject_version) + 1 !== number(proposal.subject_version)
     ) throw new ManagedKnowledgePageVersionConflictError();
     const proposalVersion = number(proposal.version);
     await client.query(`UPDATE knowledge_publication_update_executions SET state = 'succeeded', version = version + 1, updated_at = $2 WHERE id = $1`, [execution.id, normalized.at]);
@@ -766,11 +983,11 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
          before_remote_revision_id,after_remote_revision_id,before_body_content_hash,
          after_body_content_hash,executor_id,operation_key,operation_fingerprint,completed_at,created_at
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)`,
-      [randomUUID(), page.originKnowledgePublicationId, execution.proposalId, ready.approval_id,
+      [randomUUID(), page.originKnowledgePublicationId, execution.proposalId, execution.approvalId,
         target.draftId, target.draftRevision, target.conflictCandidateId, page.id,
         observation.documentSourceId, execution.id, execution.expectedRemoteRevisionId,
         observation.observedRemoteRevisionId, execution.beforeBodyContentHash,
-        execution.afterBodyContentHash, normalized.actor, `${normalized.operationKey}:success`,
+        execution.afterBodyContentHash, execution.executorId, `${normalized.operationKey}:success`,
         operationFingerprint({ fingerprint, kind: "immutable-update-success" }), normalized.at],
     );
     await client.query(
@@ -781,24 +998,27 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
     await insertPageEvent(client, { pageId: page.id, eventType: "resync_completed", fromVersion: page.version, toVersion: page.version + 1, operationKey: `${normalized.operationKey}:page`, fingerprint: operationFingerprint({ fingerprint, kind: "page" }), actor: normalized.actor, at: normalized.at });
     await client.query(
       `INSERT INTO action_events (
-         id,proposal_id,event_type,operation_key,from_version,to_version,reason_code,created_at
-       ) VALUES ($1,$2,'execution_succeeded',$3,$4,$5,NULL,$6)`,
-      [randomUUID(), execution.proposalId, `${normalized.operationKey}:proposal`,
-        proposalVersion, proposalVersion + 1, normalized.at],
+         id,proposal_id,event_type,actor_open_id,operation_key,from_version,to_version,
+         reason_code,created_at
+       ) VALUES ($1,$2,'execution_succeeded',$3,$4,$5,$6,NULL,$7)`,
+      [randomUUID(), execution.proposalId, normalized.actor,
+        `${normalized.operationKey}:proposal`, proposalVersion, proposalVersion + 1, normalized.at],
     );
     return { outcome: "applied", execution: await requireExecution(client, execution.id), page: await requirePage(client, page.id) };
   });
 }
 
-async function listReconciliationRequired(dataSource: PostgresKnowledgeDraftDataSource, input: { limit: number; dispatchedBefore?: Date }): Promise<ClaimedManagedKnowledgeUpdate[]> {
+async function listReconciliationRequired(dataSource: PostgresKnowledgeDraftDataSource, input: { limit: number; dispatchedBefore?: Date; claimedBefore?: Date }): Promise<ClaimedManagedKnowledgeUpdate[]> {
   const cutoff = input.dispatchedBefore === undefined ? null : date("dispatchedBefore", input.dispatchedBefore);
+  const claimedCutoff = input.claimedBefore === undefined ? null : date("claimedBefore", input.claimedBefore);
   const result = await dataSource.query<ExecutionRow>(
     `${executionSelect()}
       WHERE state IN ('outcome_unknown','reconciliation_required','remote_applied')
          OR (state = 'remote_request_dispatched' AND $2 IS NOT NULL AND remote_request_dispatched_at <= $2)
+         OR (state = 'claimed' AND $3 IS NOT NULL AND updated_at <= $3)
       ORDER BY created_at ASC, id ASC
       LIMIT $1`,
-    [limit(input.limit), cutoff],
+    [limit(input.limit), cutoff, claimedCutoff],
   );
   const values: ClaimedManagedKnowledgeUpdate[] = [];
   for (const row of result.rows) {
@@ -815,7 +1035,7 @@ async function pageReplay(client: KnowledgeDraftTransactionClient, operationKey:
 async function requirePage(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, id: string): Promise<ManagedKnowledgePage> { const result = await queryable.query<PageRow>(`${pageSelect()} WHERE id = $1`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapPage(result.rows[0]); }
 async function requirePageForUpdate(client: KnowledgeDraftTransactionClient, id: string): Promise<ManagedKnowledgePage> { const result = await client.query<PageRow>(`${pageSelect()} WHERE id = $1 FOR UPDATE`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapPage(result.rows[0]); }
 async function requireTarget(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, id: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await queryable.query<TargetRow>(`${targetSelect()} WHERE id = $1`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
-async function requireTargetForProposal(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, proposalId: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await queryable.query<TargetRow>(`${targetSelect()} target JOIN action_proposals proposal ON proposal.subject_id = target.draft_id AND proposal.subject_revision = target.draft_revision AND proposal.subject_version = target.draft_version WHERE proposal.id = $1`, [proposalId]); if (result.rows.length !== 1) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
+async function requireTargetForProposal(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, proposalId: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await queryable.query<TargetRow>(`${targetSelect()} target JOIN action_proposals proposal ON proposal.subject_id = target.draft_id AND proposal.subject_revision = target.draft_revision AND proposal.target_policy_id = target.target_policy_id AND proposal.target_policy_version = target.target_policy_version WHERE proposal.id = $1`, [proposalId]); if (result.rows.length !== 1) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
 async function requireTargetForUpdate(client: KnowledgeDraftTransactionClient, id: string): Promise<ManagedKnowledgeUpdateTarget> { const result = await client.query<TargetRow>(`${targetSelect()} WHERE id = $1 FOR UPDATE`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapTarget(result.rows[0]); }
 async function requireExecution(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, id: string): Promise<ManagedKnowledgeUpdateExecution> { const result = await queryable.query<ExecutionRow>(`${executionSelect()} WHERE id = $1`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapExecution(result.rows[0]); }
 async function requireExecutionForUpdate(client: KnowledgeDraftTransactionClient, id: string): Promise<ManagedKnowledgeUpdateExecution> { const result = await client.query<ExecutionRow>(`${executionSelect()} WHERE id = $1 FOR UPDATE`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapExecution(result.rows[0]); }
@@ -824,11 +1044,11 @@ async function insertPageEvent(client: KnowledgeDraftTransactionClient, value: {
 async function insertExecutionEvent(client: KnowledgeDraftTransactionClient, executionId: string, eventType: string, fromVersion: number | undefined, toVersion: number, operationKey: string, fingerprint: string, reasonCode: string | undefined, at: Date): Promise<void> { await client.query(`INSERT INTO knowledge_publication_update_execution_events (id,execution_id,event_type,from_version,to_version,operation_key,operation_fingerprint,reason_code,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [randomUUID(),executionId,eventType,fromVersion ?? null,toVersion,operationKey,fingerprint,reasonCode ?? null,at]); }
 function pageSelect(): string { return `SELECT id,origin_knowledge_publication_id,target_policy_id,target_policy_version,authorization_group_id,remote_node_token,remote_document_token,managed_body_block_id,linked_document_source_id,current_remote_revision_id,current_body_content_hash,expected_resync_content_hash,state,version,created_at,updated_at FROM managed_knowledge_pages`; }
 function targetSelect(): string { return `SELECT id,draft_id,draft_revision,draft_version,conflict_candidate_id,conflict_candidate_version,managed_page_id,managed_page_version,linked_document_source_id,target_snapshot_id,target_snapshot_hash,target_source_version,remote_document_token,managed_body_block_id,expected_remote_revision_id,current_body_content_hash,proposed_body_content_hash,authorization_group_id,target_policy_id,target_policy_version,operation_key,operation_fingerprint,created_at FROM knowledge_publication_update_targets`; }
-function executionSelect(): string { return `SELECT id,proposal_id,managed_page_id,managed_page_version,update_target_id,attempt_number,state,operation_key,operation_fingerprint,request_fingerprint,expected_remote_revision_id,before_body_content_hash,after_body_content_hash,client_token,response_revision_id,response_classification,reconciliation_reason_code,remote_request_dispatched_at,version,created_at,updated_at FROM knowledge_publication_update_executions`; }
+function executionSelect(): string { return `SELECT id,proposal_id,approval_id,executor_id,managed_page_id,managed_page_version,update_target_id,attempt_number,state,operation_key,operation_fingerprint,request_fingerprint,expected_remote_revision_id,before_body_content_hash,after_body_content_hash,client_token,response_revision_id,response_classification,reconciliation_reason_code,remote_request_dispatched_at,version,created_at,updated_at FROM knowledge_publication_update_executions`; }
 function observationSelect(): string { return `SELECT id,managed_page_id,managed_page_version,document_snapshot_id,document_source_id,snapshot_content_hash,observed_remote_revision_id,observed_managed_body_block_id,observed_block_type,managed_body_content_hash,adapter_version,operation_key,operation_fingerprint,observed_at FROM managed_knowledge_snapshot_observations`; }
 function mapPage(row: PageRow): ManagedKnowledgePage { return normalizeManagedKnowledgePage({ id:text(row.id),originKnowledgePublicationId:text(row.origin_knowledge_publication_id),targetPolicyId:text(row.target_policy_id),targetPolicyVersion:number(row.target_policy_version),authorizationGroupId:text(row.authorization_group_id),remoteNodeToken:text(row.remote_node_token),remoteDocumentToken:text(row.remote_document_token),managedBodyBlockId:text(row.managed_body_block_id),...(row.linked_document_source_id === null ? {} : {linkedDocumentSourceId:text(row.linked_document_source_id)}),...(row.current_remote_revision_id === null ? {} : {currentRemoteRevisionId:text(row.current_remote_revision_id)}),...(row.current_body_content_hash === null ? {} : {currentBodyContentHash:text(row.current_body_content_hash)}),...(row.expected_resync_content_hash === null ? {} : {expectedResyncContentHash:text(row.expected_resync_content_hash)}),state:text(row.state) as ManagedKnowledgePage["state"],version:number(row.version),createdAt:date("created_at",row.created_at),updatedAt:date("updated_at",row.updated_at) }); }
 function mapTarget(row: TargetRow): ManagedKnowledgeUpdateTarget { return { id:text(row.id),draftId:text(row.draft_id),draftRevision:number(row.draft_revision),draftVersion:number(row.draft_version),conflictCandidateId:text(row.conflict_candidate_id),conflictCandidateVersion:number(row.conflict_candidate_version),managedPageId:text(row.managed_page_id),managedPageVersion:number(row.managed_page_version),linkedDocumentSourceId:text(row.linked_document_source_id),targetSnapshotId:text(row.target_snapshot_id),targetSnapshotHash:text(row.target_snapshot_hash),...(row.target_source_version === null ? {} : {targetSourceVersion:text(row.target_source_version)}),remoteDocumentToken:text(row.remote_document_token),managedBodyBlockId:text(row.managed_body_block_id),expectedRemoteRevisionId:text(row.expected_remote_revision_id),currentBodyContentHash:text(row.current_body_content_hash),proposedBodyContentHash:text(row.proposed_body_content_hash),authorizationGroupId:text(row.authorization_group_id),targetPolicyId:text(row.target_policy_id),targetPolicyVersion:number(row.target_policy_version),operationKey:text(row.operation_key),createdAt:date("created_at",row.created_at) }; }
-function mapExecution(row: ExecutionRow): ManagedKnowledgeUpdateExecution { return { id:text(row.id),proposalId:text(row.proposal_id),managedPageId:text(row.managed_page_id),managedPageVersion:number(row.managed_page_version),updateTargetId:text(row.update_target_id),attemptNumber:number(row.attempt_number),state:text(row.state) as ManagedKnowledgeUpdateExecution["state"],operationKey:text(row.operation_key),requestFingerprint:text(row.request_fingerprint),expectedRemoteRevisionId:text(row.expected_remote_revision_id),beforeBodyContentHash:text(row.before_body_content_hash),afterBodyContentHash:text(row.after_body_content_hash),clientToken:text(row.client_token),...(row.response_revision_id === null ? {} : {responseRevisionId:text(row.response_revision_id)}),...(row.response_classification === null ? {} : {responseClassification:text(row.response_classification)}),...(row.reconciliation_reason_code === null ? {} : {reconciliationReasonCode:text(row.reconciliation_reason_code)}),...(row.remote_request_dispatched_at === null ? {} : {remoteRequestDispatchedAt:date("remote_request_dispatched_at",row.remote_request_dispatched_at)}),version:number(row.version),createdAt:date("created_at",row.created_at),updatedAt:date("updated_at",row.updated_at) }; }
+function mapExecution(row: ExecutionRow): ManagedKnowledgeUpdateExecution { return { id:text(row.id),proposalId:text(row.proposal_id),...(row.approval_id === null || row.approval_id === undefined ? {} : {approvalId:text(row.approval_id)}),...(row.executor_id === null || row.executor_id === undefined ? {} : {executorId:text(row.executor_id)}),managedPageId:text(row.managed_page_id),managedPageVersion:number(row.managed_page_version),updateTargetId:text(row.update_target_id),attemptNumber:number(row.attempt_number),state:text(row.state) as ManagedKnowledgeUpdateExecution["state"],operationKey:text(row.operation_key),requestFingerprint:text(row.request_fingerprint),expectedRemoteRevisionId:text(row.expected_remote_revision_id),beforeBodyContentHash:text(row.before_body_content_hash),afterBodyContentHash:text(row.after_body_content_hash),clientToken:text(row.client_token),...(row.response_revision_id === null ? {} : {responseRevisionId:text(row.response_revision_id)}),...(row.response_classification === null ? {} : {responseClassification:text(row.response_classification)}),...(row.reconciliation_reason_code === null ? {} : {reconciliationReasonCode:text(row.reconciliation_reason_code)}),...(row.remote_request_dispatched_at === null ? {} : {remoteRequestDispatchedAt:date("remote_request_dispatched_at",row.remote_request_dispatched_at)}),version:number(row.version),createdAt:date("created_at",row.created_at),updatedAt:date("updated_at",row.updated_at) }; }
 function mapObservation(row: ObservationRow): ManagedSnapshotObservation { return { id:text(row.id),managedPageId:text(row.managed_page_id),managedPageVersion:number(row.managed_page_version),documentSnapshotId:text(row.document_snapshot_id),documentSourceId:text(row.document_source_id),snapshotContentHash:text(row.snapshot_content_hash),observedRemoteRevisionId:text(row.observed_remote_revision_id),observedManagedBodyBlockId:text(row.observed_managed_body_block_id),observedBlockType:"text",managedBodyContentHash:text(row.managed_body_content_hash),adapterVersion:text(row.adapter_version),observedAt:date("observed_at",row.observed_at) }; }
 function normalizeRegisterInput(input: RegisterManagedPublicationInput): RegisterManagedPublicationInput { return { id:ref("id",input.id),originKnowledgePublicationId:ref("originKnowledgePublicationId",input.originKnowledgePublicationId),targetPolicyId:ref("targetPolicyId",input.targetPolicyId),targetPolicyVersion:positive("targetPolicyVersion",input.targetPolicyVersion),authorizationGroupId:ref("authorizationGroupId",input.authorizationGroupId),remoteNodeToken:ref("remoteNodeToken",input.remoteNodeToken),remoteDocumentToken:ref("remoteDocumentToken",input.remoteDocumentToken),managedBodyBlockId:ref("managedBodyBlockId",input.managedBodyBlockId),currentRemoteRevisionId:ref("currentRemoteRevisionId",input.currentRemoteRevisionId),currentBodyContentHash:hash("currentBodyContentHash",input.currentBodyContentHash),operationKey:ref("operationKey",input.operationKey),actor:ref("actor",input.actor),at:date("at",input.at) }; }
 function normalizeObservationInput(input: RecordManagedSnapshotObservationInput): RecordManagedSnapshotObservationInput { return { ...input,id:ref("id",input.id),managedPageId:ref("managedPageId",input.managedPageId),managedPageVersion:positive("managedPageVersion",input.managedPageVersion),documentSnapshotId:ref("documentSnapshotId",input.documentSnapshotId),documentSourceId:ref("documentSourceId",input.documentSourceId),snapshotContentHash:hash("snapshotContentHash",input.snapshotContentHash),observedRemoteRevisionId:ref("observedRemoteRevisionId",input.observedRemoteRevisionId),observedManagedBodyBlockId:ref("observedManagedBodyBlockId",input.observedManagedBodyBlockId),managedBodyContentHash:hash("managedBodyContentHash",input.managedBodyContentHash),adapterVersion:ref("adapterVersion",input.adapterVersion),operationKey:ref("operationKey",input.operationKey),at:date("at",input.at),observedAt:date("observedAt",input.observedAt) }; }

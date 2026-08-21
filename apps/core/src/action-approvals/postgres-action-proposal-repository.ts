@@ -651,9 +651,66 @@ export function createPostgresActionProposalRepository({
            AND ($4::TEXT[] IS NULL OR EXISTS (
              SELECT 1
              FROM knowledge_publication_update_targets target
+             JOIN managed_knowledge_pages page
+               ON page.id = target.managed_page_id
+              AND page.version = target.managed_page_version
+              AND page.state = 'active'
+              AND page.linked_document_source_id = target.linked_document_source_id
+              AND page.authorization_group_id = target.authorization_group_id
+              AND page.target_policy_id = target.target_policy_id
+              AND page.target_policy_version = target.target_policy_version
+              AND page.remote_document_token = target.remote_document_token
+              AND page.managed_body_block_id = target.managed_body_block_id
+              AND page.current_remote_revision_id = target.expected_remote_revision_id
+              AND page.current_body_content_hash = target.current_body_content_hash
+             JOIN knowledge_conflict_candidates candidate
+               ON candidate.id = target.conflict_candidate_id
+              AND candidate.version = target.conflict_candidate_version + 1
+              AND candidate.status = 'draft_created'
+              AND candidate.group_id = target.authorization_group_id
+              AND candidate.target_document_source_id = target.linked_document_source_id
+              AND candidate.target_snapshot_id = target.target_snapshot_id
+              AND candidate.target_content_hash = target.target_snapshot_hash
+              AND candidate.target_source_version IS NOT DISTINCT FROM target.target_source_version
+             JOIN knowledge_conflict_interactions interaction
+               ON interaction.candidate_id = target.conflict_candidate_id
+              AND interaction.action = 'create_draft'
+              AND interaction.result = 'applied'
+              AND interaction.draft_id = target.draft_id
+             JOIN document_snapshots snapshot
+               ON snapshot.id = target.target_snapshot_id
+              AND snapshot.document_source_id = target.linked_document_source_id
+              AND snapshot.content_hash = target.target_snapshot_hash
+              AND snapshot.source_version IS NOT DISTINCT FROM target.target_source_version
+              AND snapshot.fetch_status = 'succeeded'
+             JOIN document_sources source
+               ON source.id = target.linked_document_source_id
+              AND source.source_type = 'authorized_wiki_document'
+              AND source.permission_state IN ('readable','unknown')
+              AND source.sync_state = 'synced'
+              AND source.can_use_for_answering = TRUE
+              AND source.can_use_for_knowledge_drafts = TRUE
+             JOIN knowledge_publication_target_policies policy
+               ON policy.id = target.target_policy_id
+              AND policy.version = target.target_policy_version
+              AND policy.enabled = TRUE
+              AND target.authorization_group_id = ANY(policy.allowed_group_ids)
+             JOIN knowledge_drafts draft
+               ON draft.id = target.draft_id
+              AND draft.status = 'pending_review'
+              AND draft.current_revision_number = target.draft_revision
+              AND draft.version = action_proposals.subject_version
+             JOIN knowledge_draft_revisions revision
+               ON revision.draft_id = draft.id
+              AND revision.revision_number = target.draft_revision
+              AND revision.risk_level = action_proposals.risk_level
+              AND revision.risk_level = ANY(policy.allowed_risk_levels)
+              AND revision.suggested_space_id = policy.space_id
+              AND revision.suggested_parent_node_token IS NOT DISTINCT FROM policy.parent_node_token
              WHERE target.draft_id = action_proposals.subject_id
                AND target.draft_revision = action_proposals.subject_revision
-               AND target.draft_version = action_proposals.subject_version
+               AND target.target_policy_id = action_proposals.target_policy_id
+               AND target.target_policy_version = action_proposals.target_policy_version
                AND target.authorization_group_id = ANY($4::TEXT[])
            ))
          ORDER BY updated_at DESC, id ASC LIMIT $5`,
@@ -2969,6 +3026,7 @@ async function createProposal(
       : await requireGroupConfirmation(client, draft.id, normalized.expectedRevision);
     const reviewer = mapReviewer(draft);
     const requirements = buildApprovalRequirementSnapshot({
+      actionType: normalized.actionType,
       ...(draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id }),
       riskLevel: draft.risk_level,
       ...(reviewer === undefined ? {} : { reviewer }),
@@ -3191,17 +3249,15 @@ async function loadCurrentActionReviewManagedTarget(
       AND source.permission_state IN ('readable', 'unknown')
       AND source.sync_state = 'synced'
       AND source.can_use_for_knowledge_drafts = TRUE
-     WHERE target.draft_id = $1
-       AND target.draft_revision = $2
-       AND target.draft_version = $3
-       AND target.proposed_body_content_hash = $4
-       AND target.target_policy_id = $5
-       AND target.target_policy_version = $6
-       AND target.authorization_group_id = $7`,
+      WHERE target.draft_id = $1
+        AND target.draft_revision = $2
+        AND target.proposed_body_content_hash = $3
+        AND target.target_policy_id = $4
+        AND target.target_policy_version = $5
+        AND target.authorization_group_id = $6`,
     [
       input.draft.id,
       Number(input.draft.current_revision_number),
-      Number(input.draft.version),
       input.proposedContentHash,
       input.policy.id,
       Number(input.policy.version),
@@ -3455,15 +3511,13 @@ async function loadCurrentActionProposalManagedTarget(
       AND source.permission_state IN ('readable', 'unknown')
       AND source.sync_state = 'synced'
       AND source.can_use_for_knowledge_drafts = TRUE
-     WHERE target.draft_id = $1
-       AND target.draft_revision = $2
-       AND target.draft_version = $3
-       AND target.target_policy_id = $4
-       AND target.target_policy_version = $5`,
+      WHERE target.draft_id = $1
+        AND target.draft_revision = $2
+        AND target.target_policy_id = $3
+        AND target.target_policy_version = $4`,
     [
       proposal.subjectId,
       proposal.subjectRevision,
-      proposal.subjectVersion,
       proposal.targetPolicyId,
       proposal.targetPolicyVersion,
     ],

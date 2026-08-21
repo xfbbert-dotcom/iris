@@ -88,6 +88,25 @@ describe("ManagedKnowledgeUpdateExecutor", () => {
     expect(dependencies.updater.update).not.toHaveBeenCalled();
   });
 
+  it("reports a durably terminalized competing proposal without any remote call", async () => {
+    const dependencies = executorDependencies();
+    dependencies.managedPages.claimApprovedUpdate.mockResolvedValue({
+      outcome: "terminal",
+      proposalId: "proposal-1",
+      proposalVersion: 3,
+      code: "competing_execution",
+    } as never);
+    const executor = createManagedKnowledgeUpdateExecutor(dependencies);
+
+    await expect(executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "failed",
+      proposalId: "proposal-1",
+      code: "competing_execution",
+    }]);
+    expect(dependencies.updater.preflight).not.toHaveBeenCalled();
+    expect(dependencies.updater.update).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "revision changed",
@@ -358,7 +377,7 @@ function executorDependencies({ order = [] }: { order?: string[] } = {}) {
       id: "target-1",
       draftId: "draft-1",
       draftRevision: 1,
-      draftVersion: 4,
+      draftVersion: 1,
       conflictCandidateId: "candidate-1",
       conflictCandidateVersion: 5,
       managedPageId: "managed-1",
@@ -379,6 +398,8 @@ function executorDependencies({ order = [] }: { order?: string[] } = {}) {
     },
     execution: {
       id: "execution-1",
+      approvalId: "approval-1",
+      executorId: "managed-update-worker-1",
       proposalId: "proposal-1",
       managedPageId: "managed-1",
       managedPageVersion: 2,

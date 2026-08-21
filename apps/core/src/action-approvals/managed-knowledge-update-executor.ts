@@ -16,6 +16,7 @@ import { canonicalManagedBodyHash } from "./managed-knowledge-page.js";
 import type {
   ClaimedManagedKnowledgeUpdate,
   ManagedKnowledgePageRepository,
+  ManagedKnowledgeUpdateClaimResult,
 } from "./managed-knowledge-page-repository.js";
 
 const MAX_BATCH_LIMIT = 100;
@@ -86,9 +87,9 @@ export function createManagedKnowledgeUpdateExecutor({
           results.push({ status: "skipped", proposalId: proposal.id, code: "runtime_disabled" });
           continue;
         }
-        let claim: ClaimedManagedKnowledgeUpdate;
+        let claimResult: ManagedKnowledgeUpdateClaimResult;
         try {
-          claim = await managedPages.claimApprovedUpdate({
+          claimResult = await managedPages.claimApprovedUpdate({
             proposalId: proposal.id,
             expectedProposalVersion: proposal.version,
             runtimeGate: {
@@ -107,6 +108,15 @@ export function createManagedKnowledgeUpdateExecutor({
           results.push({ status: "skipped", proposalId: proposal.id, code: "claim_rejected" });
           continue;
         }
+        if (claimResult.outcome === "terminal") {
+          results.push({
+            status: "failed",
+            proposalId: claimResult.proposalId,
+            code: claimResult.code,
+          });
+          continue;
+        }
+        const claim: ClaimedManagedKnowledgeUpdate = claimResult;
         results.push(await executeClaim({
           managedPages,
           updater,
@@ -135,7 +145,7 @@ async function executeClaim(input: {
     proposalId: input.claim.proposal.id,
     executionId: input.claim.execution.id,
   };
-  const bindingFailure = validateClaimBinding(input.claim);
+  const bindingFailure = validateClaimBinding(input.claim, input.workerId);
   if (bindingFailure !== undefined) {
     return persistPreflightFailure(input, bindingFailure);
   }
@@ -420,19 +430,22 @@ async function persistOutcome(
   });
 }
 
-function validateClaimBinding(claim: ClaimedManagedKnowledgeUpdate): string | undefined {
+function validateClaimBinding(
+  claim: ClaimedManagedKnowledgeUpdate,
+  workerId: string,
+): string | undefined {
   const { page, target, execution, draft, proposal } = claim;
   if (
     proposal.actionType !== "update_knowledge_publication" ||
     proposal.status !== "executing" ||
     proposal.subjectId !== target.draftId ||
     proposal.subjectRevision !== target.draftRevision ||
-    proposal.subjectVersion !== target.draftVersion ||
     proposal.targetPolicyId !== target.targetPolicyId ||
     proposal.targetPolicyVersion !== target.targetPolicyVersion ||
     draft.id !== target.draftId ||
     draft.revisionNumber !== target.draftRevision ||
-    draft.version !== target.draftVersion ||
+    draft.version < target.draftVersion ||
+    proposal.subjectVersion !== draft.version ||
     canonicalManagedBodyHash(draft.content) !== target.proposedBodyContentHash ||
     page.id !== target.managedPageId ||
     page.state !== "updating" ||
@@ -447,6 +460,8 @@ function validateClaimBinding(claim: ClaimedManagedKnowledgeUpdate): string | un
     page.targetPolicyId !== target.targetPolicyId ||
     page.targetPolicyVersion !== target.targetPolicyVersion ||
     execution.proposalId !== proposal.id ||
+    execution.approvalId === undefined ||
+    execution.executorId !== workerId ||
     execution.updateTargetId !== target.id ||
     execution.managedPageId !== page.id ||
     execution.state !== "claimed" ||

@@ -85,6 +85,25 @@ describe("runMigrations", () => {
     );
   });
 
+  it("reserves ordered 0055 compatibility for exact managed update execution identity", async () => {
+    const migrationNames = (await readdir(defaultMigrationsDir())).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const migrationName = "0055_managed_update_execution_identity.sql";
+    expect(migrationNames.filter((name) => name.startsWith("0055_"))).toEqual([migrationName]);
+    expect(migrationNames.indexOf(migrationName))
+      .toBeGreaterThan(migrationNames.indexOf("0054_managed_knowledge_runtime_capability.sql"));
+
+    const normalized = (await readFile(join(defaultMigrationsDir(), migrationName), "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("add column approval_id text references action_approvals(id)");
+    expect(normalized).toContain("add column executor_id text");
+    expect(normalized).toContain("before insert or update on knowledge_publication_update_executions");
+    expect(normalized).not.toMatch(/update knowledge_publication_update_executions/iu);
+  });
+
   it("reserves exactly one ordered 0046 knowledge-conflict migration", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
     expect(migrationNames.filter((name) => name.startsWith("0046_"))).toEqual([
@@ -878,6 +897,47 @@ describe("defaultMigrationsDir", () => {
       "request_id text not null references group_memory_extraction_requests(id) on delete restrict",
     );
     expect(normalized).toContain("content_hash ~ '^[0-9a-f]{64}$'");
+  });
+});
+
+runIfDatabase("managed update execution identity migration upgrades with Postgres", () => {
+  it("keeps legacy rows readable while requiring identity for every new execution", async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `managed_update_identity_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await client.query("CREATE TABLE action_approvals (id TEXT PRIMARY KEY)");
+      await client.query("CREATE TABLE knowledge_publication_update_executions (id TEXT PRIMARY KEY)");
+      await client.query("INSERT INTO knowledge_publication_update_executions (id) VALUES ('legacy')");
+
+      await client.query(await readFile(
+        join(defaultMigrationsDir(), "0055_managed_update_execution_identity.sql"),
+        "utf8",
+      ));
+
+      await expect(client.query(
+        "SELECT id,approval_id,executor_id FROM knowledge_publication_update_executions WHERE id = 'legacy'",
+      )).resolves.toMatchObject({
+        rows: [{ id: "legacy", approval_id: null, executor_id: null }],
+      });
+      await expect(client.query(
+        "INSERT INTO knowledge_publication_update_executions (id) VALUES ('identity-less')",
+      )).rejects.toThrow(/requires approval and executor identity/iu);
+      await client.query("INSERT INTO action_approvals (id) VALUES ('approval-1')");
+      await expect(client.query(
+        "INSERT INTO knowledge_publication_update_executions (id,approval_id,executor_id) VALUES ('new','approval-1','worker-1')",
+      )).resolves.toMatchObject({ rowCount: 1 });
+      await expect(client.query(
+        "UPDATE knowledge_publication_update_executions SET executor_id = 'worker-2' WHERE id = 'new'",
+      )).rejects.toThrow(/identity is immutable/iu);
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
   });
 });
 

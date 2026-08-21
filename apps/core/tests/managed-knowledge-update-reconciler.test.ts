@@ -6,7 +6,7 @@ import {
 } from "../src/action-approvals/managed-knowledge-update-reconciler.js";
 import type { ManagedKnowledgeUpdater } from
   "../src/action-approvals/feishu-managed-knowledge-updater.js";
-import type { ManagedKnowledgePageRepository } from
+import type { ClaimedManagedKnowledgeUpdate, ManagedKnowledgePageRepository } from
   "../src/action-approvals/managed-knowledge-page-repository.js";
 
 const at = new Date("2026-08-21T03:00:00.000Z");
@@ -86,7 +86,72 @@ describe("ManagedKnowledgeUpdateReconciler", () => {
     expect(dependencies.managedPages.listReconciliationRequired).toHaveBeenCalledWith({
       limit: 5,
       dispatchedBefore: new Date("2026-08-21T02:59:00.000Z"),
+      claimedBefore: new Date("2026-08-21T02:59:00.000Z"),
     });
+  });
+
+  it("recovers a stale post-claim crash only after exact preflight and durable dispatch", async () => {
+    const dependencies = reconcilerDependencies();
+    dependencies.claim.execution = {
+      ...dependencies.claim.execution,
+      state: "claimed",
+      version: 1,
+    };
+    dependencies.claim.page = {
+      ...dependencies.claim.page,
+      state: "updating",
+      version: 2,
+    };
+    dependencies.claim.proposal = {
+      ...dependencies.claim.proposal,
+      status: "executing",
+      version: 4,
+    };
+    dependencies.updater.preflight.mockResolvedValue({
+      revision: 12,
+      blockType: "text",
+      canonicalBodyHash: oldHash,
+    });
+    const reconciler = createManagedKnowledgeUpdateReconciler(dependencies);
+
+    await expect(reconciler.reconcileOne(dependencies.claim)).resolves.toMatchObject({
+      status: "applied",
+      code: "stale_claim_applied",
+    });
+
+    expect(dependencies.updater.preflight.mock.invocationCallOrder[0])
+      .toBeLessThan(dependencies.managedPages.markRemoteRequestDispatched.mock.invocationCallOrder[0]!);
+    expect(dependencies.managedPages.markRemoteRequestDispatched).toHaveBeenCalledWith(
+      expect.objectContaining({ executionId: "execution-1", expectedExecutionVersion: 1 }),
+    );
+    expect(dependencies.updater.update).toHaveBeenCalledWith(expect.objectContaining({
+      clientToken: "9d8f9c68-9d9a-5f1c-9f5b-d4fa75c9d4ef",
+    }));
+  });
+
+  it("bars a stale claimed execution whose exact preflight no longer matches", async () => {
+    const dependencies = reconcilerDependencies();
+    dependencies.claim.execution = { ...dependencies.claim.execution, state: "claimed", version: 1 };
+    dependencies.claim.page = { ...dependencies.claim.page, state: "updating", version: 2 };
+    dependencies.updater.preflight.mockResolvedValue({
+      revision: 13,
+      blockType: "text",
+      canonicalBodyHash: proposedHash,
+    });
+    const reconciler = createManagedKnowledgeUpdateReconciler(dependencies);
+
+    await expect(reconciler.reconcileOne(dependencies.claim)).resolves.toMatchObject({
+      status: "reconciliation_required",
+      code: "stale_claim_preflight_mismatch",
+    });
+    expect(dependencies.managedPages.recordRemoteOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classification: "preflight_failed",
+        pageDisposition: "reconciliation_required",
+      }),
+    );
+    expect(dependencies.managedPages.markRemoteRequestDispatched).not.toHaveBeenCalled();
+    expect(dependencies.updater.update).not.toHaveBeenCalled();
   });
 
   it("claims one same-token retry for stale dispatched exact-old readback using the durable cutoff", async () => {
@@ -191,7 +256,7 @@ function reconcilerDependencies() {
     riskLevel: "low" as const, status: "reconciliation_required" as const,
     operationKey: "proposal-op", version: 4, createdAt: at, updatedAt: at,
   };
-  const claim = {
+  const claim: ClaimedManagedKnowledgeUpdate = {
     outcome: "applied" as const,
     proposal,
     draft: {
@@ -207,7 +272,7 @@ function reconcilerDependencies() {
       createdAt: at, updatedAt: at,
     },
     target: {
-      id: "target-1", draftId: "draft-1", draftRevision: 1, draftVersion: 4,
+      id: "target-1", draftId: "draft-1", draftRevision: 1, draftVersion: 1,
       conflictCandidateId: "candidate-1", conflictCandidateVersion: 5,
       managedPageId: "managed-1", managedPageVersion: 1, linkedDocumentSourceId: "source-1",
       targetSnapshotId: "snapshot-old", targetSnapshotHash: "a".repeat(64),
@@ -218,8 +283,9 @@ function reconcilerDependencies() {
     },
     execution: {
       id: "execution-1", proposalId: "proposal-1", managedPageId: "managed-1",
+      approvalId: "approval-1", executorId: "managed-update-worker-1",
       managedPageVersion: 2, updateTargetId: "target-1", attemptNumber: 1,
-      state: "outcome_unknown" as "outcome_unknown" | "remote_applied" | "remote_request_dispatched",
+      state: "outcome_unknown" as "claimed" | "outcome_unknown" | "remote_applied" | "remote_request_dispatched",
       operationKey: "execution-op", requestFingerprint: "b".repeat(64),
       expectedRemoteRevisionId: "12", beforeBodyContentHash: oldHash,
       afterBodyContentHash: proposedHash,
@@ -231,6 +297,15 @@ function reconcilerDependencies() {
   };
   const managedPages = {
     listReconciliationRequired: vi.fn<ManagedKnowledgePageRepository["listReconciliationRequired"]>(async () => []),
+    markRemoteRequestDispatched: vi.fn<ManagedKnowledgePageRepository["markRemoteRequestDispatched"]>(async (input) => ({
+      outcome: "applied" as const,
+      page: claim.page,
+      execution: {
+        ...claim.execution,
+        state: "remote_request_dispatched" as const,
+        version: input.expectedExecutionVersion + 1,
+      },
+    })),
     claimRemoteRetry: vi.fn<ManagedKnowledgePageRepository["claimRemoteRetry"]>(async (input) => ({
       outcome: "applied" as const,
       page: claim.page,
