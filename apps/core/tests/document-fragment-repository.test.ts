@@ -479,6 +479,60 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it.each(["answering", "knowledge_drafts"] as const)(
+    "excludes unavailable managed sources from %s fragment search before vector ordering",
+    async (usage) => {
+      const query = vi.fn(async (sql: string) => {
+        const normalized = normalizeSql(sql);
+        const barrier = "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and managed.state <> 'active' )";
+        expect(normalized).toContain(barrier);
+        expect(normalized.indexOf(barrier)).toBeLessThan(
+          normalized.indexOf("order by e.embedding <=> $2::vector asc"),
+        );
+        return { rows: [] };
+      });
+      const repository = createDocumentFragmentRepository({
+        queryable: queryableFrom(query),
+        embeddingProfiles: {
+          getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+        },
+      });
+
+      await expect(repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 3,
+        usage,
+      })).resolves.toEqual([]);
+    },
+  );
+
+  it("excludes unavailable managed sources from knowledge-draft candidates before ranking", async () => {
+    const query = vi.fn(async (sql: string) => {
+      const normalized = normalizeSql(sql);
+      const barrier = "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and managed.state <> 'active' )";
+      expect(normalized).toContain(barrier);
+      expect(normalized.indexOf(barrier)).toBeLessThan(
+        normalized.indexOf("join document_fragment_embeddings_6 e"),
+      );
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.searchSimilarFragmentCandidates({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 3,
+      usage: "knowledge_drafts",
+      authorizedSpaceId: "space-1",
+    })).resolves.toEqual([]);
+  });
+
   it("carries source metadata through similarity search results", async () => {
     const query = vi.fn(async (sql: string) => {
       const normalized = normalizeSql(sql);

@@ -989,6 +989,7 @@ describe("GET /internal/status", () => {
             proactiveSpeech: true,
             generateKnowledgeDrafts: true,
             writeKnowledgeBase: false,
+            updateManagedKnowledge: false,
             callExternalTools: false,
           },
           revision: 0,

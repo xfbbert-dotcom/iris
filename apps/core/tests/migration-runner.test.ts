@@ -794,6 +794,25 @@ describe("defaultMigrationsDir", () => {
     });
   });
 
+  it("backfills the managed-update capability off without overwriting an existing value", async () => {
+    const migrationName = "0054_managed_knowledge_runtime_capability.sql";
+    const migrationPath = join(defaultMigrationsDir(), migrationName);
+    expect(existsSync(migrationPath)).toBe(true);
+    if (!existsSync(migrationPath)) return;
+
+    const normalized = (await readFile(migrationPath, "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("update runtime_control_state");
+    expect(normalized).toContain(
+      "capabilities = capabilities || '{\"updatemanagedknowledge\":false}'::jsonb",
+    );
+    expect(normalized).toContain(
+      "where not (capabilities ? 'updatemanagedknowledge')",
+    );
+  });
+
   it("includes durable group memories with same-group idempotency and message evidence", async () => {
     const migration = await readFile(
       join(defaultMigrationsDir(), "0017_group_memories.sql"),

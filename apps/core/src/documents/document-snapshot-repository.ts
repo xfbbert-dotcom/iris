@@ -228,6 +228,12 @@ where s.body_text is not null
   and ds.permission_state in ('unknown', 'readable')
   and not exists (
     select 1
+    from managed_knowledge_pages managed
+    where managed.linked_document_source_id = ds.id
+      and managed.state <> 'active'
+  )
+  and not exists (
+    select 1
     from document_fragments f
     where f.document_snapshot_id = s.id
       and f.embedding_profile_id = $1

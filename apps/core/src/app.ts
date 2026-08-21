@@ -320,6 +320,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
   "proactiveSpeech",
   "generateKnowledgeDrafts",
   "writeKnowledgeBase",
+  "updateManagedKnowledge",
   "callExternalTools",
 ]);
 const deadLettersPresentReason = "dead_letters_present" as const;

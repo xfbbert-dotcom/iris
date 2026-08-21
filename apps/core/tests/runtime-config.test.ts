@@ -9,6 +9,13 @@ import {
 } from "../src/config/env.js";
 
 describe("createDefaultRuntimeConfig", () => {
+  it("defaults managed knowledge updates off independently of knowledge-base writes", () => {
+    const capabilities = createDefaultRuntimeConfig({}).capabilities;
+
+    expect(capabilities.updateManagedKnowledge).toBe(false);
+    expect(capabilities.writeKnowledgeBase).toBe(false);
+  });
+
   it("keeps the development default enabled when startup configuration is absent", () => {
     expect(createDefaultRuntimeConfig({}).globalEnabled).toBe(true);
   });

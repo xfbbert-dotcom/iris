@@ -504,6 +504,9 @@ describe("DocumentSnapshotRepository", () => {
       expect(normalized).toContain("ds.can_use_for_answering = true");
       expect(normalized).toContain("ds.permission_state in ('unknown', 'readable')");
       expect(normalized).toContain(
+        "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and managed.state <> 'active' )",
+      );
+      expect(normalized).toContain(
         "order by s.document_source_id asc, s.fetched_at desc, s.id asc",
       );
       expect(normalized).toContain("select s.* from latest_successful_snapshots s");

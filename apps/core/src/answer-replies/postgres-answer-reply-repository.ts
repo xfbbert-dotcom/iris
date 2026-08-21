@@ -365,6 +365,7 @@ export function createPostgresAnswerReplyRepository(input: {
       return withTransaction(dataSource, async (client) => {
         await acquireAdvisoryLock(client, normalized.deliveryId);
         const prelockedSources = await loadSources(client, normalized.deliveryId);
+        await lockManagedSourceFreshness(client, prelockedSources);
         await lockCurrentSourceGrantBindings(client, prelockedSources);
         const binding = await loadKnowledgeConflictBinding(client, normalized.deliveryId);
         const lockedCandidate = binding === undefined
@@ -745,6 +746,43 @@ type SourceGrantBinding = {
   grantorGroupId: string;
   granteeGroupId: string;
 };
+
+type ManagedSourceStateRow = {
+  linked_document_source_id: unknown;
+  state: unknown;
+};
+
+async function lockManagedSourceFreshness(
+  client: AnswerReplyTransactionClient,
+  sources: readonly AnswerReplySourceTraceInput[],
+): Promise<void> {
+  const documentSourceIds = [...new Set(
+    sources.map(({ documentSourceId }) => documentSourceId),
+  )].sort();
+  if (documentSourceIds.length === 0) return;
+
+  const result = await client.query<ManagedSourceStateRow>(
+    `SELECT linked_document_source_id, state
+     FROM managed_knowledge_pages
+     WHERE linked_document_source_id = ANY($1::text[])
+     ORDER BY linked_document_source_id ASC
+     FOR SHARE`,
+    [documentSourceIds],
+  );
+  const requested = new Set(documentSourceIds);
+  const seen = new Set<string>();
+  for (const row of result.rows) {
+    if (
+      typeof row.linked_document_source_id !== "string"
+      || !requested.has(row.linked_document_source_id)
+      || seen.has(row.linked_document_source_id)
+      || row.state !== "active"
+    ) {
+      throw new AnswerReplyGrantStaleError();
+    }
+    seen.add(row.linked_document_source_id);
+  }
+}
 
 async function lockCurrentSourceGrantBindings(
   client: AnswerReplyTransactionClient,

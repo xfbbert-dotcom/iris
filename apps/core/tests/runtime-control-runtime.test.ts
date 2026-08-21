@@ -202,6 +202,7 @@ function defaultCapabilities(): IrisCapability {
     proactiveSpeech: true,
     generateKnowledgeDrafts: true,
     writeKnowledgeBase: false,
+    updateManagedKnowledge: false,
     callExternalTools: false,
   };
 }

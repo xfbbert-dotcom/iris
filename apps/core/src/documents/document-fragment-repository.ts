@@ -280,6 +280,12 @@ join document_sources ds
   on ds.id = f.document_source_id
   and ds.${usageColumn} = true
   and ds.permission_state in ('unknown', 'readable')
+  and not exists (
+    select 1
+    from managed_knowledge_pages managed
+    where managed.linked_document_source_id = ds.id
+      and managed.state <> 'active'
+  )
 ${filters.sourceTypeClause}${filters.grantJoinClause}join ${embeddingTable} e
   on e.document_fragment_id = f.id
 where f.embedding_profile_id = $1
@@ -351,6 +357,12 @@ ${filters.grantSelectClause}
     on ds.id = f.document_source_id
     and ds.${usageColumn} = true
     and ds.permission_state in ('unknown', 'readable')
+    and not exists (
+      select 1
+      from managed_knowledge_pages managed
+      where managed.linked_document_source_id = ds.id
+        and managed.state <> 'active'
+    )
 ${knowledgeEligibilityClause}${filters.sourceTypeClause}${filters.grantJoinClause}  join ${embeddingTable} e
     on e.document_fragment_id = f.id
   where f.embedding_profile_id = $1

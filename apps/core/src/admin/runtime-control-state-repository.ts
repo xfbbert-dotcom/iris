@@ -25,6 +25,7 @@ export const runtimeCapabilityNames = [
   "proactiveSpeech",
   "generateKnowledgeDrafts",
   "writeKnowledgeBase",
+  "updateManagedKnowledge",
   "callExternalTools",
 ] as const satisfies readonly (keyof IrisCapability)[];
 

@@ -464,6 +464,7 @@ export function createAnswerDraftRuntime({
           runtimeController,
           livePermissionChecker,
         }),
+        managedSourceQueryable: pool,
       })
     : createUnavailableAnswerSourcePermissionVerifier();
 

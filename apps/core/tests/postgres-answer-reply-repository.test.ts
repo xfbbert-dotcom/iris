@@ -414,6 +414,50 @@ describe("answer reply cross-group grant boundary", () => {
     })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
     expect(deliveryLocked).toBe(false);
   });
+
+  it.each([
+    "updating",
+    "resync_required",
+    "reconciliation_required",
+    "blocked",
+    "retired",
+  ])("rejects a managed source in %s before locking or mutating its prepared delivery", async (state) => {
+    const incomingMessageId = `incoming-managed-${state}`;
+    const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+    const sources = [sourceTraceRow({
+      id: testSourceTraceId(deliveryId, 1),
+      delivery_id: deliveryId,
+      document_source_id: "source-managed",
+    })];
+    let deliveryLocked = false;
+    const query = async (sql: string) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+        || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+      if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
+      if (normalized.includes("FROM managed_knowledge_pages")) {
+        return { rows: [{ linked_document_source_id: "source-managed", state }] };
+      }
+      if (normalized.includes("FROM answer_reply_deliveries")
+        && normalized.includes("FOR UPDATE")) {
+        deliveryLocked = true;
+      }
+      return { rows: [] };
+    };
+    const repository = createPostgresAnswerReplyRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresAnswerReplyDataSource,
+    });
+
+    await expect(repository.beginAnswerSend({
+      deliveryId,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    expect(deliveryLocked).toBe(false);
+  });
 });
 
 runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
