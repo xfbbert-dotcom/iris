@@ -4,8 +4,12 @@ ALTER TABLE action_proposals ADD CONSTRAINT action_proposals_action_type_check
 
 ALTER TABLE action_review_attestations
   ADD COLUMN action_target_fingerprint TEXT;
+DROP TRIGGER action_review_attestations_append_only ON action_review_attestations;
 UPDATE action_review_attestations
 SET action_target_fingerprint = content_hash;
+CREATE TRIGGER action_review_attestations_append_only
+BEFORE UPDATE OR DELETE ON action_review_attestations
+FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
 ALTER TABLE action_review_attestations
   ADD CONSTRAINT action_review_attestations_action_target_fingerprint_check
     CHECK (action_target_fingerprint ~ '^[0-9a-f]{64}$');

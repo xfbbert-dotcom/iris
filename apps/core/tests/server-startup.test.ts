@@ -1495,7 +1495,7 @@ function fakeActionReviewRuntime(
     getStatus: vi.fn(async () => ({
       configured: true as const,
       running: true,
-      migration0034Applied: true,
+      migration0053Applied: true,
     })),
     close: vi.fn(async () => undefined),
     ...overrides,

@@ -2227,7 +2227,7 @@ async function getActionReviewStatus(runtime: ActionReviewRuntime | undefined) {
     return {
       configured: true,
       running: false,
-      migration0034Applied: false,
+      migration0053Applied: false,
     };
   }
 }

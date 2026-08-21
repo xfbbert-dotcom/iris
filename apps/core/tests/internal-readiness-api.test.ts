@@ -154,7 +154,7 @@ describe("GET /internal/readiness", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({
       id: "actionReviews",
       status: "fail",
-      detail: "Action-review migration 0034 is not applied.",
+      detail: "Action-review migration 0053 is not applied.",
     }));
     await app.close();
   });
@@ -831,7 +831,7 @@ function readyActionReviewEnv(): EnvLike {
   };
 }
 
-function readyActionReviewRuntimeDependencies(migration0034Applied: boolean) {
+function readyActionReviewRuntimeDependencies(migration0053Applied: boolean) {
   const zeroOutbox = {
     pending: 0,
     processing: 0,
@@ -866,7 +866,7 @@ function readyActionReviewRuntimeDependencies(migration0034Applied: boolean) {
   } as unknown as ActionApprovalRuntime;
   const actionReviewRuntime = {
     close: vi.fn(async () => undefined),
-    getStatus: vi.fn(async () => ({ configured: true, running: true, migration0034Applied })),
+    getStatus: vi.fn(async () => ({ configured: true, running: true, migration0053Applied })),
   } as unknown as ActionReviewRuntime;
   return {
     createKnowledgeCardRuntime: () => knowledgeCardRuntime,

@@ -148,7 +148,7 @@ export type InternalRolloutReadinessContext = {
   actionReviewStatus?: {
     configured: boolean;
     running: boolean;
-    migration0034Applied: boolean;
+    migration0053Applied: boolean;
   };
 };
 type CheckDefinition = Pick<InternalRolloutReadinessCheck, "id" | "title" | "envVars"> & {
@@ -672,11 +672,11 @@ const checkDefinitions: CheckDefinition[] = [
       if (status === undefined) return fail("Action-review runtime status is unavailable.");
       if (!status.configured) return fail("Action-review runtime is not configured.");
       if (!status.running) return fail("Action-review runtime is not running.");
-      if (!status.migration0034Applied) {
-        return fail("Action-review migration 0034 is not applied.");
+      if (!status.migration0053Applied) {
+        return fail("Action-review migration 0053 is not applied.");
       }
 
-      return pass("Action-review runtime is configured and running with migration 0034 applied.");
+      return pass("Action-review runtime is configured and running with migration 0053 applied.");
     },
   },
 ];

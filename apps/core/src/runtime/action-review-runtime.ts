@@ -24,7 +24,7 @@ export type ActionReviewRuntime = {
 export type ActionReviewRuntimeStatus = {
   configured: true;
   running: boolean;
-  migration0034Applied: boolean;
+  migration0053Applied: boolean;
 };
 
 export type ActionReviewRuntimeDependencies = {
@@ -66,16 +66,16 @@ export function createActionReviewRuntime({
     codec,
     oauthClient,
     async getStatus() {
-      let migration0034Applied = false;
+      let migration0053Applied = false;
       try {
-        migration0034Applied = await actionApprovalRuntime.repository.hasActionReviewMigration?.() === true;
+        migration0053Applied = await actionApprovalRuntime.repository.hasActionReviewMigration?.() === true;
       } catch {
-        migration0034Applied = false;
+        migration0053Applied = false;
       }
       return {
         configured: true,
         running: !closed,
-        migration0034Applied,
+        migration0053Applied,
       };
     },
     close() {

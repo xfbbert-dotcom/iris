@@ -32,6 +32,13 @@ const managedUpdateMigrationUrl = new URL(
 const managedUpdateMigration = existsSync(managedUpdateMigrationUrl)
   ? readFileSync(managedUpdateMigrationUrl, "utf8")
   : "";
+const compatibilityMigrationUrl = new URL(
+  "../migrations/0053_action_review_target_fingerprint_compatibility.sql",
+  import.meta.url,
+);
+const compatibilityMigration = existsSync(compatibilityMigrationUrl)
+  ? readFileSync(compatibilityMigrationUrl, "utf8")
+  : "";
 
 describe("action review attestation migration contract", () => {
   it("defines append-only review attestation facts", () => {
@@ -44,6 +51,32 @@ describe("action review attestation migration contract", () => {
     expect(managedUpdateMigration).toContain("ADD COLUMN action_target_fingerprint");
     expect(managedUpdateMigration).toContain("action_target_fingerprint ~ '^[0-9a-f]{64}$'");
     expect(managedUpdateMigration).toContain("action_target_fingerprint SET NOT NULL");
+  });
+
+  it("defines append-only-safe 0053 compatibility and exact renewal uniqueness", () => {
+    expect(compatibilityMigration).toContain("ADD COLUMN IF NOT EXISTS action_target_fingerprint");
+    expect(compatibilityMigration).toContain("DROP TRIGGER IF EXISTS action_review_attestations_append_only");
+    expect(compatibilityMigration).toContain("CREATE TRIGGER action_review_attestations_append_only");
+    expect(compatibilityMigration).toContain(
+      "UNIQUE (proposal_id, proposal_version, actor_open_id, content_hash, action_target_fingerprint)",
+    );
+    expect(compatibilityMigration).not.toContain("DELETE FROM action_review_attestations");
+  });
+
+  it("probes schema history for target-bound review compatibility", async () => {
+    let queryText = "";
+    const repository = createPostgresActionProposalRepository({
+      dataSource: {
+        async query(sql: string) {
+          queryText = sql;
+          return { rows: [{ present: true }] };
+        },
+      } as unknown as PostgresKnowledgeDraftDataSource,
+    });
+
+    await expect(repository.hasActionReviewMigration?.()).resolves.toBe(true);
+    expect(queryText).toContain("0053_action_review_target_fingerprint_compatibility.sql");
+    expect(queryText).not.toContain("0034_action_review_attestations.sql");
   });
 });
 
@@ -69,9 +102,16 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     await adminPool?.end();
   });
 
-  it("reports the applied action-review migration from schema history", async () => {
+  it("requires the target-bound 0053 action-review migration from schema history", async () => {
     const repository = createPostgresActionProposalRepository({ dataSource: pool });
     await expect(repository.hasActionReviewMigration?.()).resolves.toBe(true);
+    await pool.query(
+      "DELETE FROM schema_migrations WHERE name = '0053_action_review_target_fingerprint_compatibility.sql'",
+    );
+    await expect(repository.hasActionReviewMigration?.()).resolves.toBe(false);
+    await pool.query(
+      "INSERT INTO schema_migrations (name) VALUES ('0053_action_review_target_fingerprint_compatibility.sql')",
+    );
   });
 
   it("returns the full current review context only to the designated owner", async () => {
@@ -282,6 +322,43 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       ...input,
       sessionIdHash: sha256("different-session"),
     })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+  });
+
+  it("keeps a fail-closed legacy attestation while recording one fresh exact review", async () => {
+    const acceptance = await createReviewCase("legacy-renewal", "medium", `ou_legacy_${suffix}`);
+    const context = await requireReviewContext(acceptance);
+    await pool.query(
+      `INSERT INTO action_review_attestations (
+        id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
+        content_hash, action_target_fingerprint, session_id_hash, operation_key,
+        operation_fingerprint, reviewed_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11)`,
+      [
+        randomUUID(),
+        acceptance.proposal.id,
+        acceptance.actorOpenId,
+        context.subjectRevision,
+        context.subjectVersion,
+        context.proposalVersion,
+        context.contentHash,
+        sha256("legacy-session"),
+        `review-attestation:legacy:${suffix}`,
+        sha256("legacy-operation"),
+        at,
+      ],
+    );
+    const fresh = reviewAttestationInput(acceptance, context, "legacy-renewal");
+
+    await expect(acceptance.repository.recordReviewAttestation(fresh)).resolves.toEqual({
+      outcome: "applied",
+    });
+    await expect(acceptance.repository.recordReviewAttestation(fresh)).resolves.toEqual({
+      outcome: "already_applied",
+    });
+    await expect(pool.query(
+      "SELECT count(*)::int AS count FROM action_review_attestations WHERE proposal_id = $1",
+      [acceptance.proposal.id],
+    )).resolves.toMatchObject({ rows: [{ count: 2 }] });
   });
 
   it("requires an exact current review attestation before approving", async () => {

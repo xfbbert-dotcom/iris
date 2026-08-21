@@ -71,22 +71,22 @@ describe("buildInternalRolloutReadinessReport", () => {
       actionReviewStatus: {
         configured: true,
         running: true,
-        migration0034Applied: false,
+        migration0053Applied: false,
       },
     })).actionReviews).toMatchObject({
       status: "fail",
-      detail: "Action-review migration 0034 is not applied.",
+      detail: "Action-review migration 0053 is not applied.",
     });
 
     expect(checksById(buildInternalRolloutReadinessReport(env, {
       actionReviewStatus: {
         configured: true,
         running: true,
-        migration0034Applied: true,
+        migration0053Applied: true,
       },
     })).actionReviews).toMatchObject({
       status: "pass",
-      detail: "Action-review runtime is configured and running with migration 0034 applied.",
+      detail: "Action-review runtime is configured and running with migration 0053 applied.",
     });
   });
 
@@ -716,7 +716,7 @@ function actionReviewStatus(overrides: Record<string, unknown> = {}) {
   return {
     configured: true,
     running: true,
-    migration0034Applied: true,
+    migration0053Applied: true,
     ...overrides,
   };
 }

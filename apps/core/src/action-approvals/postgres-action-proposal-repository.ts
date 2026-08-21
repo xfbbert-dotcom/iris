@@ -412,7 +412,7 @@ export function createPostgresActionProposalRepository({
       const result = await dataSource.query<{ present: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM schema_migrations
-           WHERE name = '0034_action_review_attestations.sql'
+           WHERE name = '0053_action_review_target_fingerprint_compatibility.sql'
          ) AS present`,
       );
       return result.rows[0]?.present === true;
