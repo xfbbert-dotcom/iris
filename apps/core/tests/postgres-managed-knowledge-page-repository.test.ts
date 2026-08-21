@@ -252,7 +252,7 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         ) VALUES ($1, 'update_knowledge_publication', 'knowledge_draft', $2, 1, 1, $3, 1,
           'low', 'approved', $4, repeat('b', 64), 1, $5, $5)
       `, [updateProposalId, draftId, policyId, `update-proposal:${suffix}`, at]);
-      await pool.query(`INSERT INTO action_review_attestations (id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version, content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at) VALUES ($1,$2,'reviewer',1,1,1,repeat('c',64),repeat('d',64),$3,repeat('e',64),$4)`, [`attestation-${suffix}`, updateProposalId, `attestation:${suffix}`, at]);
+      await pool.query(`INSERT INTO action_review_attestations (id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version, content_hash, action_target_fingerprint, session_id_hash, operation_key, operation_fingerprint, reviewed_at) VALUES ($1,$2,'reviewer',1,1,1,repeat('c',64),repeat('f',64),repeat('d',64),$3,repeat('e',64),$4)`, [`attestation-${suffix}`, updateProposalId, `attestation:${suffix}`, at]);
       const claimInput = {
         id: `update-execution-${suffix}`,
         proposalId: updateProposalId,

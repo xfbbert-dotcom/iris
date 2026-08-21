@@ -25,12 +25,25 @@ const schema = `action_review_${suffix.replaceAll("-", "")}`;
 const at = new Date("2026-07-22T12:00:00.000Z");
 const migrationUrl = new URL("../migrations/0034_action_review_attestations.sql", import.meta.url);
 const migration = existsSync(migrationUrl) ? readFileSync(migrationUrl, "utf8") : "";
+const managedUpdateMigrationUrl = new URL(
+  "../migrations/0052_managed_knowledge_publication_updates.sql",
+  import.meta.url,
+);
+const managedUpdateMigration = existsSync(managedUpdateMigrationUrl)
+  ? readFileSync(managedUpdateMigrationUrl, "utf8")
+  : "";
 
 describe("action review attestation migration contract", () => {
   it("defines append-only review attestation facts", () => {
     expect(migration).toContain("CREATE TABLE action_review_attestations");
     expect(migration).toContain("action_review_attestations_append_only");
     expect(migration).toContain("UNIQUE (proposal_id, proposal_version, actor_open_id, content_hash)");
+  });
+
+  it("adds one non-null action target fingerprint to review attestations", () => {
+    expect(managedUpdateMigration).toContain("ADD COLUMN action_target_fingerprint");
+    expect(managedUpdateMigration).toContain("action_target_fingerprint ~ '^[0-9a-f]{64}$'");
+    expect(managedUpdateMigration).toContain("action_target_fingerprint SET NOT NULL");
   });
 });
 
@@ -70,6 +83,8 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     })).resolves.toMatchObject({
       proposalId: acceptance.proposal.id,
       proposalVersion: 1,
+      actionType: "publish_knowledge_draft",
+      actionTargetFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/u),
       subjectRevision: 1,
       subjectVersion: 1,
       title: "Pilot SOP",
@@ -79,6 +94,62 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       targetDisplayName: acceptance.policy.displayName,
       requirements: [{ kind: "designated_owner", state: "pending" }],
     });
+  });
+
+  it("binds an update review and its attestation to the exact managed target", async () => {
+    const acceptance = await createManagedUpdateReviewCase(
+      "managed-target",
+      `ou_managed_target_${suffix}`,
+    );
+    const context = await acceptance.repository.getAuthorizedReviewContext({
+      proposalId: acceptance.proposal.id,
+      actorOpenId: acceptance.actorOpenId,
+    });
+
+    expect(context).toMatchObject({
+      actionType: "update_knowledge_publication",
+      actionTargetFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      targetPolicyId: acceptance.policy.id,
+      targetPolicyVersion: acceptance.policy.version,
+      managedTarget: {
+        managedPageId: acceptance.managedPageId,
+        managedPageVersion: 1,
+        documentSourceId: acceptance.documentSourceId,
+        targetSourceUri: acceptance.targetSourceUri,
+        targetSnapshotId: acceptance.targetSnapshotId,
+        targetSnapshotHash: acceptance.targetSnapshotHash,
+        conflictCandidateId: acceptance.conflictCandidateId,
+        conflictCandidateVersion: 1,
+        remoteDocumentToken: acceptance.remoteDocumentToken,
+        managedBodyBlockId: "blk_body",
+        expectedRemoteRevisionId: "12",
+        currentBodyContentHash: acceptance.currentBodyContentHash,
+        authorizationGroupId: acceptance.authorizationGroupId,
+      },
+    });
+
+    const attestation = reviewAttestationInput(acceptance, context!, "managed-target");
+    await acceptance.repository.recordReviewAttestation(attestation);
+    await expect(acceptance.repository.hasCurrentReviewAttestation(
+      currentAttestationInput(attestation),
+    )).resolves.toBe(true);
+
+    await pool.query(
+      "UPDATE managed_knowledge_pages SET version = version + 1 WHERE id = $1",
+      [acceptance.managedPageId],
+    );
+    await expect(acceptance.repository.hasCurrentReviewAttestation(
+      currentAttestationInput(attestation),
+    )).resolves.toBe(false);
+
+    await pool.query(
+      "UPDATE action_proposals SET action_type = 'publish_knowledge_draft' WHERE id = $1",
+      [acceptance.proposal.id],
+    );
+    await expect(acceptance.repository.getAuthorizedReviewContext({
+      proposalId: acceptance.proposal.id,
+      actorOpenId: acceptance.actorOpenId,
+    })).resolves.toBeUndefined();
   });
 
   it("returns undefined without disclosing why a review context is unavailable", async () => {
@@ -186,6 +257,7 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       expectedSubjectRevision: context!.subjectRevision,
       expectedSubjectVersion: context!.subjectVersion,
       expectedContentHash: context!.contentHash,
+      expectedActionTargetFingerprint: context!.actionTargetFingerprint,
       sessionIdHash: sha256("session"),
       operationKey: `review-attestation:${suffix}`,
       at,
@@ -204,6 +276,7 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       expectedSubjectRevision: input.expectedSubjectRevision,
       expectedSubjectVersion: input.expectedSubjectVersion,
       expectedContentHash: input.expectedContentHash,
+      expectedActionTargetFingerprint: input.expectedActionTargetFingerprint,
     })).resolves.toBe(true);
     await expect(acceptance.repository.recordReviewAttestation({
       ...input,
@@ -268,20 +341,24 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     await expect(pool.query(
       `INSERT INTO action_review_attestations (
         id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
-        content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
+        content_hash, action_target_fingerprint, session_id_hash, operation_key,
+        operation_fingerprint, reviewed_at
       )
       SELECT $1, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
-             content_hash, session_id_hash, $2, operation_fingerprint, reviewed_at
+             content_hash, action_target_fingerprint, session_id_hash, $2,
+             operation_fingerprint, reviewed_at
       FROM action_review_attestations WHERE operation_key = $3`,
       [randomUUID(), `review-attestation:duplicate-identity:${suffix}`, input.operationKey],
     )).rejects.toMatchObject({ code: "23505" });
     await expect(pool.query(
       `INSERT INTO action_review_attestations (
         id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
-        content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
+        content_hash, action_target_fingerprint, session_id_hash, operation_key,
+        operation_fingerprint, reviewed_at
       )
       SELECT $1, proposal_id, $2, subject_revision, subject_version, proposal_version,
-             content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
+             content_hash, action_target_fingerprint, session_id_hash, operation_key,
+             operation_fingerprint, reviewed_at
       FROM action_review_attestations WHERE operation_key = $3`,
       [randomUUID(), `ou_other_${suffix}`, input.operationKey],
     )).rejects.toMatchObject({ code: "23505" });
@@ -601,6 +678,215 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     return { ...acceptance, requirementId: requirement.id, presentationId };
   }
 
+  async function createManagedUpdateReviewCase(label: string, actorOpenId: string) {
+    const acceptance = await createReviewCase(label, "medium", actorOpenId);
+    const authorizationGroupId = `review-group-${label}-${suffix}`;
+    const targetSourceUri = `https://example.test/wiki/${label}-${suffix}`;
+    const targetSnapshotId = `review-snapshot-${label}-${suffix}`;
+    const targetSnapshotHash = "d".repeat(64);
+    const currentBodyContentHash = "e".repeat(64);
+    const managedPageId = `review-page-${label}-${suffix}`;
+    const remoteDocumentToken = `review-doc-${label}-${suffix}`;
+    const conflictCandidateId = `review-candidate-${label}-${suffix}`;
+    const originDraftId = `review-origin-draft-${label}-${suffix}`;
+    const originProposalId = `review-origin-proposal-${label}-${suffix}`;
+    const originExecutionId = `review-origin-execution-${label}-${suffix}`;
+    const originPublicationId = `review-origin-publication-${label}-${suffix}`;
+    const messageId = `review-message-${label}-${suffix}`;
+    const memoryId = `review-memory-${label}-${suffix}`;
+
+    await pool.query(
+      "UPDATE knowledge_drafts SET source_group_id = $2 WHERE id = $1",
+      [acceptance.draft.id, authorizationGroupId],
+    );
+    await pool.query(
+      "UPDATE knowledge_draft_revisions SET content = $3 WHERE draft_id = $1 AND revision_number = $2",
+      [acceptance.draft.id, 1, "  full body\r\n"],
+    );
+    await pool.query(
+      "UPDATE document_sources SET origin_group_id = $2, source_uri = $3 WHERE id = $1",
+      [acceptance.documentSourceId, authorizationGroupId, targetSourceUri],
+    );
+    await pool.query(
+      `INSERT INTO document_snapshots (
+        id, document_source_id, source_uri, fetch_status, body_text, content_hash,
+        fetched_at, created_at
+      ) VALUES ($1, $2, $3, 'succeeded', 'Prior body', $4, $5, $5)`,
+      [targetSnapshotId, acceptance.documentSourceId, targetSourceUri, targetSnapshotHash, at],
+    );
+    await pool.query(
+      `INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, message_type, sent_at,
+        raw_event_idempotency_key, created_at
+      ) VALUES ($1, 'feishu', $2, $3, 'text', $4, $5, $4)`,
+      [messageId, `provider-${label}-${suffix}`, authorizationGroupId, at, `raw-${label}-${suffix}`],
+    );
+    await pool.query(
+      `INSERT INTO group_memories (
+        id, group_id, memory_scope, category, content, importance, confidence, status,
+        idempotency_key, origin, created_by, request_fingerprint
+      ) VALUES ($1, $2, 'group', 'decision', 'Current', 1, 0.9, 'active', $3,
+        'system', 'test', repeat('a', 64))`,
+      [memoryId, authorizationGroupId, `memory-${label}-${suffix}`],
+    );
+    await pool.query(
+      `INSERT INTO knowledge_conflict_candidates (
+        id, idempotency_key, group_id, group_memory_id, memory_updated_at,
+        source_message_id, target_document_source_id, target_source_updated_at,
+        target_snapshot_id, target_content_hash, detector_contract_version, status,
+        subject, knowledge_base_statement, group_conclusion_statement, difference,
+        suggested_update, target_document_ref, confidence, version, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $5, $8, $9, 'v1', 'draft_created',
+        'Subject', 'Prior', 'Current', 'Difference', 'Update', 'D1', 'high', 2, $5, $5)`,
+      [
+        conflictCandidateId,
+        `candidate-${label}-${suffix}`,
+        authorizationGroupId,
+        memoryId,
+        at,
+        messageId,
+        acceptance.documentSourceId,
+        targetSnapshotId,
+        targetSnapshotHash,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO knowledge_conflict_interactions (
+        id, candidate_id, callback_operation_key, actor_ref, action, result, draft_id, created_at
+      ) VALUES ($1, $2, $3, $4, 'create_draft', 'applied', $5, $6)`,
+      [
+        `review-interaction-${label}-${suffix}`,
+        conflictCandidateId,
+        `review-interaction-${label}-${suffix}`,
+        actorOpenId,
+        acceptance.draft.id,
+        at,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO knowledge_drafts (
+        id, origin_kind, status, current_revision_number, version, created_by, created_at, updated_at
+      ) VALUES ($1, 'user_requested', 'published', 1, 1, 'test', $2, $2)`,
+      [originDraftId, at],
+    );
+    await pool.query(
+      `INSERT INTO knowledge_draft_revisions (
+        draft_id, revision_number, title, content, risk_level, author, created_at
+      ) VALUES ($1, 1, 'Origin', 'Prior body', 'medium', 'test', $2)`,
+      [originDraftId, at],
+    );
+    await pool.query(
+      `INSERT INTO action_proposals (
+        id, action_type, subject_type, subject_id, subject_revision, subject_version,
+        target_policy_id, target_policy_version, risk_level, status, operation_key,
+        operation_fingerprint, version, created_at, updated_at
+      ) VALUES ($1, 'publish_knowledge_draft', 'knowledge_draft', $2, 1, 1, $3, $4,
+        'medium', 'succeeded', $5, repeat('b', 64), 1, $6, $6)`,
+      [
+        originProposalId,
+        originDraftId,
+        acceptance.policy.id,
+        acceptance.policy.version,
+        `origin-proposal-${label}-${suffix}`,
+        at,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO action_executions (
+        id, proposal_id, attempt_number, state, request_fingerprint, provider,
+        version, created_at, updated_at
+      ) VALUES ($1, $2, 1, 'succeeded', repeat('c', 64), 'feishu_wiki', 1, $3, $3)`,
+      [originExecutionId, originProposalId, at],
+    );
+    await pool.query(
+      `INSERT INTO knowledge_publications (
+        id, proposal_id, execution_id, draft_id, revision_number, draft_version,
+        target_policy_id, target_policy_version, space_id, remote_node_token,
+        remote_document_token, remote_document_type, content_hash,
+        permission_check_summary, operation_key, operation_fingerprint, published_at, created_at
+      ) VALUES ($1, $2, $3, $4, 1, 1, $5, $6, $7, $8, $9, 'docx',
+        repeat('d', 64), 'verified', $10, repeat('e', 64), $11, $11)`,
+      [
+        originPublicationId,
+        originProposalId,
+        originExecutionId,
+        originDraftId,
+        acceptance.policy.id,
+        acceptance.policy.version,
+        acceptance.policy.spaceId,
+        `review-node-${label}-${suffix}`,
+        remoteDocumentToken,
+        `origin-publication-${label}-${suffix}`,
+        at,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO managed_knowledge_pages (
+        id, origin_knowledge_publication_id, target_policy_id, target_policy_version,
+        authorization_group_id, remote_node_token, remote_document_token,
+        managed_body_block_id, linked_document_source_id, current_remote_revision_id,
+        current_body_content_hash, state, version, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blk_body', $8, '12', $9,
+        'active', 1, $10, $10)`,
+      [
+        managedPageId,
+        originPublicationId,
+        acceptance.policy.id,
+        acceptance.policy.version,
+        authorizationGroupId,
+        `review-node-${label}-${suffix}`,
+        remoteDocumentToken,
+        acceptance.documentSourceId,
+        currentBodyContentHash,
+        at,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO knowledge_publication_update_targets (
+        id, draft_id, draft_revision, draft_version, conflict_candidate_id,
+        conflict_candidate_version, managed_page_id, managed_page_version,
+        linked_document_source_id, target_snapshot_id, target_snapshot_hash,
+        remote_document_token, managed_body_block_id, expected_remote_revision_id,
+        current_body_content_hash, proposed_body_content_hash, authorization_group_id,
+        target_policy_id, target_policy_version, operation_key, operation_fingerprint, created_at
+      ) VALUES ($1, $2, 1, 1, $3, 1, $4, 1, $5, $6, $7, $8, 'blk_body', '12',
+        $9, $10, $11, $12, $13, $14, repeat('f', 64), $15)`,
+      [
+        `review-target-${label}-${suffix}`,
+        acceptance.draft.id,
+        conflictCandidateId,
+        managedPageId,
+        acceptance.documentSourceId,
+        targetSnapshotId,
+        targetSnapshotHash,
+        remoteDocumentToken,
+        currentBodyContentHash,
+        sha256("full body"),
+        authorizationGroupId,
+        acceptance.policy.id,
+        acceptance.policy.version,
+        `review-target-${label}-${suffix}`,
+        at,
+      ],
+    );
+    await pool.query(
+      "UPDATE action_proposals SET action_type = 'update_knowledge_publication' WHERE id = $1",
+      [acceptance.proposal.id],
+    );
+
+    return {
+      ...acceptance,
+      authorizationGroupId,
+      targetSourceUri,
+      targetSnapshotId,
+      targetSnapshotHash,
+      currentBodyContentHash,
+      managedPageId,
+      remoteDocumentToken,
+      conflictCandidateId,
+    };
+  }
+
   function approvalInput(
     acceptance: Awaited<ReturnType<typeof createReviewApprovalCase>>,
   ) {
@@ -629,6 +915,7 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       expectedSubjectRevision: context.subjectRevision,
       expectedSubjectVersion: context.subjectVersion,
       expectedContentHash: context.contentHash,
+      expectedActionTargetFingerprint: context.actionTargetFingerprint,
       sessionIdHash: sha256(`session-${label}`),
       operationKey: `review-attestation:${label}:${suffix}`,
       at,
@@ -654,6 +941,7 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       expectedSubjectRevision: input.expectedSubjectRevision,
       expectedSubjectVersion: input.expectedSubjectVersion,
       expectedContentHash: input.expectedContentHash,
+      expectedActionTargetFingerprint: input.expectedActionTargetFingerprint,
     };
   }
 

@@ -65,6 +65,7 @@ describe("action review API", () => {
       proposalId: "proposal-1",
       actorOpenId: "ou_owner",
       expectedContentHash: fixture.context.contentHash,
+      expectedActionTargetFingerprint: fixture.context.actionTargetFingerprint,
       sessionIdHash: createHash("sha256").update(session?.sessionId ?? "").digest("hex"),
     }));
     await app.close();
@@ -175,6 +176,8 @@ function createFixture() {
   const context: ActionReviewContext = {
     proposalId: "proposal-1",
     proposalVersion: 7,
+    actionType: "publish_knowledge_draft",
+    actionTargetFingerprint: "b".repeat(64),
     draftId: "draft-1",
     subjectRevision: 3,
     subjectVersion: 11,
@@ -182,6 +185,8 @@ function createFixture() {
     content: "Full draft body",
     contentHash: "a".repeat(64),
     riskLevel: "medium",
+    targetPolicyId: "policy-1",
+    targetPolicyVersion: 3,
     targetDisplayName: "Knowledge base",
     requirements: [{ kind: "designated_owner", state: "pending" }],
   };

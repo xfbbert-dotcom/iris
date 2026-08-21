@@ -31,6 +31,7 @@ import {
   type ActionProposalStatus,
   type ActionRoleGrantType,
 } from "./action-proposal.js";
+import { canonicalManagedBodyHash } from "./managed-knowledge-page.js";
 import type {
   ActionApproval,
   ActionApprovalDeliveryContext,
@@ -218,6 +219,16 @@ type ManagedUpdateTargetRoutingRow = {
   target_policy_version: string | number;
 };
 
+type ActionReviewManagedTargetRow = ManagedUpdateTargetRoutingRow & {
+  source_uri: string;
+};
+
+type ActionProposalManagedTargetRow = {
+  managed_page_id: string;
+  linked_document_source_id: string;
+  source_uri: string;
+};
+
 type EvidenceRow = {
   evidence_type: "conversation_message" | "discussion_thread" | "action_item" | "document_source";
   reference_id: string;
@@ -254,6 +265,7 @@ type ActionReviewAttestationRow = {
   subject_version: string | number;
   proposal_version: string | number;
   content_hash: string;
+  action_target_fingerprint: string;
   session_id_hash: string;
   operation_key: string;
   operation_fingerprint: string;
@@ -831,18 +843,21 @@ async function recordReviewAttestation(
       context.proposalVersion !== normalized.expectedProposalVersion ||
       context.subjectRevision !== normalized.expectedSubjectRevision ||
       context.subjectVersion !== normalized.expectedSubjectVersion ||
-      context.contentHash !== normalized.expectedContentHash
+      context.contentHash !== normalized.expectedContentHash ||
+      context.actionTargetFingerprint !== normalized.expectedActionTargetFingerprint
     ) throw new ActionProposalVersionConflictError();
 
     const existing = await client.query<ActionReviewAttestationRow>(
       `${actionReviewAttestationSelect()}
        WHERE proposal_id = $1 AND proposal_version = $2 AND actor_open_id = $3 AND content_hash = $4
+         AND action_target_fingerprint = $5
        FOR UPDATE`,
       [
         normalized.proposalId,
         normalized.expectedProposalVersion,
         normalized.actorOpenId,
         normalized.expectedContentHash,
+        normalized.expectedActionTargetFingerprint,
       ],
     );
     if (existing.rows[0] !== undefined) throw new ActionProposalOperationConflictError();
@@ -850,8 +865,9 @@ async function recordReviewAttestation(
     await client.query(
       `INSERT INTO action_review_attestations (
         id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
-        content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        content_hash, action_target_fingerprint, session_id_hash, operation_key,
+        operation_fingerprint, reviewed_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         randomUUID(),
         normalized.proposalId,
@@ -860,6 +876,7 @@ async function recordReviewAttestation(
         normalized.expectedSubjectVersion,
         normalized.expectedProposalVersion,
         normalized.expectedContentHash,
+        normalized.expectedActionTargetFingerprint,
         normalized.sessionIdHash,
         normalized.operationKey,
         fingerprint,
@@ -901,6 +918,7 @@ async function requireCurrentReviewAttestation(
     expectedSubjectRevision: input.expectedSubjectRevision,
     expectedSubjectVersion: input.expectedSubjectVersion,
     expectedContentHash: context.contentHash,
+    expectedActionTargetFingerprint: context.actionTargetFingerprint,
   })) throw new ActionProposalReviewRequiredError();
 }
 
@@ -914,13 +932,15 @@ async function hasCurrentReviewAttestationInTransaction(
     context.proposalVersion !== input.expectedProposalVersion ||
     context.subjectRevision !== input.expectedSubjectRevision ||
     context.subjectVersion !== input.expectedSubjectVersion ||
-    context.contentHash !== input.expectedContentHash
+    context.contentHash !== input.expectedContentHash ||
+    context.actionTargetFingerprint !== input.expectedActionTargetFingerprint
   ) return false;
   const result = await client.query<{ present: boolean }>(
     `SELECT EXISTS (
       SELECT 1 FROM action_review_attestations
       WHERE proposal_id = $1 AND proposal_version = $2 AND actor_open_id = $3
         AND subject_revision = $4 AND subject_version = $5 AND content_hash = $6
+        AND action_target_fingerprint = $7
     ) AS present`,
     [
       input.proposalId,
@@ -929,6 +949,7 @@ async function hasCurrentReviewAttestationInTransaction(
       input.expectedSubjectRevision,
       input.expectedSubjectVersion,
       input.expectedContentHash,
+      input.expectedActionTargetFingerprint,
     ],
   );
   return result.rows[0]?.present === true;
@@ -975,17 +996,47 @@ async function loadAuthorizedReviewContext(
       evidence,
     });
     if (invalidEvidence !== undefined) return undefined;
+    const contentHash = createHash("sha256").update(draft.content).digest("hex");
+    const proposedContentHash = proposal.action_type === "update_knowledge_publication"
+      ? canonicalManagedBodyHash(draft.content)
+      : contentHash;
+    const hasManagedTargetBinding = await hasActionReviewManagedTargetBinding(client, draft.id);
+    if (proposal.action_type === "publish_knowledge_draft" && hasManagedTargetBinding) return undefined;
+    if (proposal.action_type === "update_knowledge_publication" && !hasManagedTargetBinding) return undefined;
+    const managedTarget = proposal.action_type === "update_knowledge_publication"
+      ? await loadCurrentActionReviewManagedTarget(client, {
+        proposal,
+        draft,
+        proposedContentHash,
+        policy,
+      })
+      : undefined;
+    if (proposal.action_type === "update_knowledge_publication" && managedTarget === undefined) {
+      return undefined;
+    }
+    const actionTargetFingerprint = buildActionTargetFingerprint({
+      proposal,
+      draft,
+      contentHash,
+      proposedContentHash,
+      managedTarget,
+    });
     return {
       proposalId: proposal.id,
       proposalVersion: Number(proposal.version),
+      actionType: proposal.action_type,
+      actionTargetFingerprint,
       draftId: draft.id,
       subjectRevision: Number(draft.current_revision_number),
       subjectVersion: Number(draft.version),
       title: draft.title,
       content: draft.content,
-      contentHash: createHash("sha256").update(draft.content).digest("hex"),
+      contentHash,
       riskLevel: draft.risk_level,
+      targetPolicyId: policy.id,
+      targetPolicyVersion: Number(policy.version),
       targetDisplayName: policy.display_name,
+      ...(managedTarget === undefined ? {} : { managedTarget: mapActionReviewManagedTarget(managedTarget) }),
       requirements: requirements.rows.map((requirement) => ({
         kind: requirement.requirement_kind,
         state: requirement.state,
@@ -3057,6 +3108,158 @@ async function validatePublicationExecutionReplay(
   }
 }
 
+async function hasActionReviewManagedTargetBinding(
+  client: KnowledgeDraftTransactionClient,
+  draftId: string,
+): Promise<boolean> {
+  const result = await client.query<{ present: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM knowledge_publication_update_targets WHERE draft_id = $1
+     ) AS present`,
+    [draftId],
+  );
+  return result.rows[0]?.present === true;
+}
+
+async function loadCurrentActionReviewManagedTarget(
+  client: KnowledgeDraftTransactionClient,
+  input: {
+    proposal: ProposalRow;
+    draft: DraftRevisionRow;
+    proposedContentHash: string;
+    policy: PolicyRow;
+  },
+): Promise<ActionReviewManagedTargetRow | undefined> {
+  const result = await client.query<ActionReviewManagedTargetRow>(
+    `SELECT target.id, target.draft_revision, target.conflict_candidate_id,
+            target.conflict_candidate_version, target.managed_page_id,
+            target.managed_page_version, target.linked_document_source_id,
+            target.target_snapshot_id, target.target_snapshot_hash,
+            target.target_source_version, target.remote_document_token,
+            target.managed_body_block_id, target.expected_remote_revision_id,
+            target.current_body_content_hash, target.proposed_body_content_hash,
+            target.authorization_group_id, target.target_policy_id,
+            target.target_policy_version, source.source_uri
+     FROM knowledge_publication_update_targets target
+     JOIN managed_knowledge_pages page
+       ON page.id = target.managed_page_id
+      AND page.version = target.managed_page_version
+      AND page.state = 'active'
+      AND page.linked_document_source_id = target.linked_document_source_id
+      AND page.authorization_group_id = target.authorization_group_id
+      AND page.target_policy_id = target.target_policy_id
+      AND page.target_policy_version = target.target_policy_version
+      AND page.remote_document_token = target.remote_document_token
+      AND page.managed_body_block_id = target.managed_body_block_id
+      AND page.current_remote_revision_id = target.expected_remote_revision_id
+      AND page.current_body_content_hash = target.current_body_content_hash
+     JOIN knowledge_conflict_candidates conflict_candidate
+       ON conflict_candidate.id = target.conflict_candidate_id
+      AND conflict_candidate.version = target.conflict_candidate_version + 1
+      AND conflict_candidate.status = 'draft_created'
+      AND conflict_candidate.group_id = target.authorization_group_id
+      AND conflict_candidate.target_document_source_id = target.linked_document_source_id
+      AND conflict_candidate.target_snapshot_id = target.target_snapshot_id
+      AND conflict_candidate.target_content_hash = target.target_snapshot_hash
+      AND conflict_candidate.target_source_version IS NOT DISTINCT FROM target.target_source_version
+     JOIN knowledge_conflict_interactions interaction
+       ON interaction.candidate_id = target.conflict_candidate_id
+      AND interaction.action = 'create_draft'
+      AND interaction.result = 'applied'
+      AND interaction.draft_id = target.draft_id
+     JOIN document_snapshots snapshot
+       ON snapshot.id = target.target_snapshot_id
+      AND snapshot.document_source_id = target.linked_document_source_id
+      AND snapshot.content_hash = target.target_snapshot_hash
+      AND snapshot.source_version IS NOT DISTINCT FROM target.target_source_version
+      AND snapshot.fetch_status = 'succeeded'
+     JOIN document_sources source
+       ON source.id = target.linked_document_source_id
+      AND source.source_type = 'authorized_wiki_document'
+      AND source.permission_state IN ('readable', 'unknown')
+      AND source.sync_state = 'synced'
+      AND source.can_use_for_knowledge_drafts = TRUE
+     WHERE target.draft_id = $1
+       AND target.draft_revision = $2
+       AND target.draft_version = $3
+       AND target.proposed_body_content_hash = $4
+       AND target.target_policy_id = $5
+       AND target.target_policy_version = $6
+       AND target.authorization_group_id = $7`,
+    [
+      input.draft.id,
+      Number(input.draft.current_revision_number),
+      Number(input.draft.version),
+      input.proposedContentHash,
+      input.policy.id,
+      Number(input.policy.version),
+      input.draft.source_group_id,
+    ],
+  );
+  return result.rows.length === 1 ? result.rows[0] : undefined;
+}
+
+function buildActionTargetFingerprint(input: {
+  proposal: ProposalRow;
+  draft: DraftRevisionRow;
+  contentHash: string;
+  proposedContentHash: string;
+  managedTarget: ActionReviewManagedTargetRow | undefined;
+}): string {
+  const commonFields: Array<readonly [string, string | number | null]> = [
+    ["action_type", input.proposal.action_type],
+    ["proposal_id", input.proposal.id],
+    ["proposal_version", Number(input.proposal.version)],
+    ["draft_id", input.draft.id],
+    ["draft_revision", Number(input.draft.current_revision_number)],
+    ["proposed_content_hash", input.proposedContentHash],
+  ];
+  const targetFields: Array<readonly [string, string | number | null]> = input.managedTarget === undefined
+    ? []
+    : [
+      ["conflict_candidate_id", input.managedTarget.conflict_candidate_id],
+      ["candidate_version", Number(input.managedTarget.conflict_candidate_version)],
+      ["managed_page_id", input.managedTarget.managed_page_id],
+      ["managed_page_version", Number(input.managedTarget.managed_page_version)],
+      ["document_source_id", input.managedTarget.linked_document_source_id],
+      ["target_snapshot_id", input.managedTarget.target_snapshot_id],
+      ["target_snapshot_hash", input.managedTarget.target_snapshot_hash],
+      ["remote_document_token", input.managedTarget.remote_document_token],
+      ["managed_body_block_id", input.managedTarget.managed_body_block_id],
+      ["expected_remote_revision", input.managedTarget.expected_remote_revision_id],
+      ["current_body_content_hash", input.managedTarget.current_body_content_hash],
+    ];
+  const policyAndAuthorizationFields: Array<readonly [string, string | number | null]> = [
+    ["target_policy_id", input.proposal.target_policy_id],
+    ["target_policy_version", Number(input.proposal.target_policy_version)],
+    [
+      "authorization_group_id",
+      input.managedTarget?.authorization_group_id ?? input.draft.source_group_id,
+    ],
+  ];
+  return createHash("sha256")
+    .update(JSON.stringify([...commonFields, ...targetFields, ...policyAndAuthorizationFields]))
+    .digest("hex");
+}
+
+function mapActionReviewManagedTarget(row: ActionReviewManagedTargetRow) {
+  return {
+    managedPageId: row.managed_page_id,
+    managedPageVersion: Number(row.managed_page_version),
+    documentSourceId: row.linked_document_source_id,
+    targetSourceUri: row.source_uri,
+    targetSnapshotId: row.target_snapshot_id,
+    targetSnapshotHash: row.target_snapshot_hash,
+    conflictCandidateId: row.conflict_candidate_id,
+    conflictCandidateVersion: Number(row.conflict_candidate_version),
+    remoteDocumentToken: row.remote_document_token,
+    managedBodyBlockId: row.managed_body_block_id,
+    expectedRemoteRevisionId: row.expected_remote_revision_id,
+    currentBodyContentHash: row.current_body_content_hash,
+    authorizationGroupId: row.authorization_group_id,
+  };
+}
+
 function publicationRequestFingerprint(proposal: ProposalRow): string {
   return operationFingerprint({
     operation: "feishu_wiki_publish_request",
@@ -3187,7 +3390,8 @@ async function loadProposalContext(
 ): Promise<ActionProposalContext | undefined> {
   const proposalResult = await dataSource.query<ProposalRow>(`${proposalSelect()} WHERE id = $1`, [id]);
   if (proposalResult.rows[0] === undefined) return undefined;
-  const [requirements, approvals] = await Promise.all([
+  const proposal = mapProposal(proposalResult.rows[0]);
+  const [requirements, approvals, managedTarget] = await Promise.all([
     dataSource.query<RequirementRow>(
       `${requirementSelect()} WHERE proposal_id = $1
        ORDER BY CASE requirement_kind
@@ -3202,11 +3406,61 @@ async function loadProposalContext(
       `${approvalSelect()} WHERE proposal_id = $1 ORDER BY created_at ASC, id ASC`,
       [id],
     ),
+    proposal.actionType === "update_knowledge_publication"
+      ? loadCurrentActionProposalManagedTarget(dataSource, proposal)
+      : Promise.resolve(undefined),
   ]);
   return {
-    proposal: mapProposal(proposalResult.rows[0]),
+    proposal,
     requirements: requirements.rows.map(mapRequirement),
     approvals: approvals.rows.map(mapApproval),
+    ...(managedTarget === undefined ? {} : { managedTarget }),
+  };
+}
+
+async function loadCurrentActionProposalManagedTarget(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  proposal: ActionProposal,
+) {
+  const result = await dataSource.query<ActionProposalManagedTargetRow>(
+    `SELECT target.managed_page_id, target.linked_document_source_id, source.source_uri
+     FROM knowledge_publication_update_targets target
+     JOIN managed_knowledge_pages page
+       ON page.id = target.managed_page_id
+      AND page.version = target.managed_page_version
+      AND page.state = 'active'
+      AND page.linked_document_source_id = target.linked_document_source_id
+      AND page.authorization_group_id = target.authorization_group_id
+      AND page.target_policy_id = target.target_policy_id
+      AND page.target_policy_version = target.target_policy_version
+      AND page.remote_document_token = target.remote_document_token
+      AND page.managed_body_block_id = target.managed_body_block_id
+      AND page.current_remote_revision_id = target.expected_remote_revision_id
+      AND page.current_body_content_hash = target.current_body_content_hash
+     JOIN document_sources source
+       ON source.id = target.linked_document_source_id
+      AND source.source_type = 'authorized_wiki_document'
+      AND source.permission_state IN ('readable', 'unknown')
+      AND source.sync_state = 'synced'
+      AND source.can_use_for_knowledge_drafts = TRUE
+     WHERE target.draft_id = $1
+       AND target.draft_revision = $2
+       AND target.draft_version = $3
+       AND target.target_policy_id = $4
+       AND target.target_policy_version = $5`,
+    [
+      proposal.subjectId,
+      proposal.subjectRevision,
+      proposal.subjectVersion,
+      proposal.targetPolicyId,
+      proposal.targetPolicyVersion,
+    ],
+  );
+  const row = result.rows.length === 1 ? result.rows[0] : undefined;
+  return row === undefined ? undefined : {
+    managedPageId: row.managed_page_id,
+    documentSourceId: row.linked_document_source_id,
+    targetSourceUri: row.source_uri,
   };
 }
 
@@ -3374,7 +3628,8 @@ function approvalSelect(): string {
 
 function actionReviewAttestationSelect(): string {
   return `SELECT proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
-                 content_hash, session_id_hash, operation_key, operation_fingerprint
+                 content_hash, action_target_fingerprint, session_id_hash, operation_key,
+                 operation_fingerprint
           FROM action_review_attestations`;
 }
 
@@ -3729,6 +3984,10 @@ function normalizeCurrentReviewAttestationInput(input: CurrentActionReviewAttest
       input.expectedSubjectVersion,
     ),
     expectedContentHash: requireSha256("expectedContentHash", input.expectedContentHash),
+    expectedActionTargetFingerprint: requireSha256(
+      "expectedActionTargetFingerprint",
+      input.expectedActionTargetFingerprint,
+    ),
   };
 }
 

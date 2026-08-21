@@ -107,9 +107,13 @@ export function renderActionApprovalCard(
   ];
   const metadata = [
     "Iris / publication_approval",
-    "Action: publish_knowledge_draft",
+    `Action: ${actionDescription(proposal.actionType)}`,
     `Risk: ${proposal.riskLevel}`,
     `Target: ${requireDisplayName(input.policy.displayName)}`,
+    ...(input.context.managedTarget === undefined ? [] : [
+      `Managed page ID: ${requireDisplayName(input.context.managedTarget.managedPageId)}`,
+      `[Target Wiki page](${requireSafeTargetUrl(input.context.managedTarget.targetSourceUri)})`,
+    ]),
     `Draft revision: ${proposal.subjectRevision}`,
     `Proposal version: ${proposal.version}`,
   ].join("\n");
@@ -168,10 +172,33 @@ function assertExactBinding(input: ActionApprovalCardRenderInput): void {
     input.requirement.targetPolicyVersion !== proposal.targetPolicyVersion ||
     input.policy.id !== proposal.targetPolicyId ||
     input.policy.version !== proposal.targetPolicyVersion ||
-    !input.policy.enabled
+    !input.policy.enabled ||
+    (proposal.actionType === "publish_knowledge_draft" && input.context.managedTarget !== undefined) ||
+    (proposal.actionType === "update_knowledge_publication" && input.context.managedTarget === undefined)
   ) {
     throw new ActionApprovalCardBindingError();
   }
+}
+
+function actionDescription(actionType: ActionProposalContext["proposal"]["actionType"]): string {
+  return actionType === "publish_knowledge_draft"
+    ? "Publish new Wiki page"
+    : "Replace the single managed body block on existing Wiki page";
+}
+
+function requireSafeTargetUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ActionApprovalCardBindingError();
+  }
+  if (
+    !(url.protocol === "https:" || url.protocol === "http:") ||
+    url.username !== "" ||
+    url.password !== ""
+  ) throw new ActionApprovalCardBindingError();
+  return url.toString().replaceAll("(", "%28").replaceAll(")", "%29");
 }
 
 function isPresentationRecipientBound(

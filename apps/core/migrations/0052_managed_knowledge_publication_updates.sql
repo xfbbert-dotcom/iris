@@ -2,6 +2,16 @@ ALTER TABLE action_proposals DROP CONSTRAINT action_proposals_action_type_check;
 ALTER TABLE action_proposals ADD CONSTRAINT action_proposals_action_type_check
   CHECK (action_type IN ('publish_knowledge_draft', 'update_knowledge_publication'));
 
+ALTER TABLE action_review_attestations
+  ADD COLUMN action_target_fingerprint TEXT;
+UPDATE action_review_attestations
+SET action_target_fingerprint = content_hash;
+ALTER TABLE action_review_attestations
+  ADD CONSTRAINT action_review_attestations_action_target_fingerprint_check
+    CHECK (action_target_fingerprint ~ '^[0-9a-f]{64}$');
+ALTER TABLE action_review_attestations
+  ALTER COLUMN action_target_fingerprint SET NOT NULL;
+
 CREATE TABLE managed_knowledge_pages (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   origin_knowledge_publication_id TEXT NOT NULL UNIQUE

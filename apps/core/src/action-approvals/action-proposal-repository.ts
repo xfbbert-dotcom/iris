@@ -95,11 +95,18 @@ export type ActionProposalContext = {
   proposal: ActionProposal;
   requirements: ActionApprovalRequirement[];
   approvals: ActionApproval[];
+  managedTarget?: {
+    managedPageId: string;
+    documentSourceId: string;
+    targetSourceUri: string;
+  };
 };
 
 export type ActionReviewContext = {
   proposalId: string;
   proposalVersion: number;
+  actionType: ActionProposalActionType;
+  actionTargetFingerprint: string;
   draftId: string;
   subjectRevision: number;
   subjectVersion: number;
@@ -107,7 +114,24 @@ export type ActionReviewContext = {
   content: string;
   contentHash: string;
   riskLevel: KnowledgeDraftRiskLevel;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
   targetDisplayName: string;
+  managedTarget?: {
+    managedPageId: string;
+    managedPageVersion: number;
+    documentSourceId: string;
+    targetSourceUri: string;
+    targetSnapshotId: string;
+    targetSnapshotHash: string;
+    conflictCandidateId: string;
+    conflictCandidateVersion: number;
+    remoteDocumentToken: string;
+    managedBodyBlockId: string;
+    expectedRemoteRevisionId: string;
+    currentBodyContentHash: string;
+    authorizationGroupId: string;
+  };
   requirements: Array<{
     kind: ActionApprovalRequirementKind;
     state: "pending" | "satisfied" | "invalidated";
@@ -121,6 +145,7 @@ export type RecordActionReviewAttestationInput = {
   expectedSubjectRevision: number;
   expectedSubjectVersion: number;
   expectedContentHash: string;
+  expectedActionTargetFingerprint: string;
   sessionIdHash: string;
   operationKey: string;
   at: Date;
@@ -134,6 +159,7 @@ export type CurrentActionReviewAttestationInput = Pick<
   | "expectedSubjectRevision"
   | "expectedSubjectVersion"
   | "expectedContentHash"
+  | "expectedActionTargetFingerprint"
 >;
 
 export type ActionApprovalPresentationState =
