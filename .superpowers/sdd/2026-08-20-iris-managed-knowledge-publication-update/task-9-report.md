@@ -67,7 +67,9 @@
 - `npm run test:pilot` — final process exit `0`; 174 passed, 1 Docker-daemon probe skipped, duration `361357ms`.
 - `npm exec --workspace apps/core -- tsc --noEmit` — passed.
 - `git diff --check` — passed with no whitespace errors (Git printed only CRLF conversion warnings).
-- The required single `npm test` full-suite run completed once: 3,666 passed, 287 configured-environment skips, and 2 failures in `answer-draft-api.test.ts` because its pre-Task-9 exact snapshot still expected 12 components. I updated those two expectations for the intentional default-off 13th component; the follow-up targeted command `npm exec --workspace apps/core -- vitest run tests/admin-console-assets.test.ts tests/action-proposal-api.test.ts tests/internal-readiness-api.test.ts tests/answer-draft-api.test.ts tests/postgres-managed-knowledge-page-repository.test.ts --reporter=dot` passed 263 tests with 1 configured-Postgres skip. Per the instruction to run the full suite only once, it was not rerun.
+- The initial full-suite diagnostic completed with 3,666 passed, 287 configured-environment skips, and 2 failures in `answer-draft-api.test.ts` because its pre-Task-9 exact snapshot still expected 12 components. I updated those two expectations for the intentional default-off 13th component; the follow-up targeted command `npm exec --workspace apps/core -- vitest run tests/admin-console-assets.test.ts tests/action-proposal-api.test.ts tests/internal-readiness-api.test.ts tests/answer-draft-api.test.ts tests/postgres-managed-knowledge-page-repository.test.ts --reporter=dot` passed 263 tests with 1 configured-Postgres skip.
+- Final acceptance: `npm test -- --reporter=dot` — passed: 199 test files, 3 configured-environment skips; 3,668 passed and 287 skipped tests (3,955 total). npm printed a non-failing warning that `--reporter` is an unknown npm config, but the workspace Vitest suite completed with exit 0.
+- Final read-only `git status --short` was clean; final `git diff --check` passed with no output.
 
 ### Files changed
 
@@ -84,5 +86,4 @@ Across `2b0cdfc3..HEAD`: the checkpoint files listed above plus `apps/core/src/a
 ### Concerns
 
 - `IRIS_TEST_DATABASE_URL` and `DATABASE_URL` are absent locally. Configured-Postgres integration cases were therefore honestly skipped; local repository boundary behavior is covered by the injected data-source tests.
-- The two explicitly named temporary directories `.tmp-iris-backup-test-HRA4QZ` and `.tmp-iris-backup-test-Mg0Ev4` were left untouched after the cleanup policy rejected the prescribed cleanup command; no retry, move, or broad cleanup was attempted. They are non-product artifacts.
-- The only full-suite attempt was before synchronizing two old exact status snapshots; their targeted corrected test passed, but the full suite was not repeated to honor the one-full-run constraint.
+- The earlier cleanup-policy rejection was not retried: no deletion, move, or broad cleanup was attempted. The final read-only worktree status is clean and lists no temporary directories.
