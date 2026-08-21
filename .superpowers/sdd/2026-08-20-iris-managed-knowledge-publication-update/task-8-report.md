@@ -104,6 +104,11 @@ Review found one Critical and three Important gaps. This round fixed all four wi
 
 ### Fix Round 1 verification
 
+- The original Fix Round 1 artifact recorded only the three focused-suite file/test totals, not the
+  exact command lines that produced them. Those command lines cannot be reconstructed faithfully
+  from the report or commit history, so this report does not invent them. The pre-existing Task 8
+  plan's final focused command was
+  `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-update-executor.test.ts tests/managed-knowledge-update-reconciler.test.ts tests/managed-knowledge-sync-observer.test.ts tests/action-approval-runtime.test.ts`; it is retained as plan context, not claimed as the unrecorded Fix Round 1 command.
 - Final merged focused suite before the configured race fixture: **10 files passed; 132 passed / 34 skipped**.
 - Final repository-focused suite after adding the configured race fixture: **6 files passed; 105 passed / 34 skipped**.
 - Final migration/repository check after making persisted identities immutable: **2 files passed; 55 passed / 12 skipped**.

@@ -91,13 +91,13 @@
 - Consumes: `Queryable` transaction conventions from `postgres-action-proposal-repository.ts`; append-only guard from migration `0030_knowledge_draft_facts.sql`; publication facts from migration `0035_knowledge_publications.sql`.
 - Produces: `canonicalManagedBodyHash(body: string): string`, `ManagedKnowledgePageRepository`, `ManagedKnowledgePage`, `ManagedKnowledgeUpdateTarget`, `ManagedKnowledgeUpdateExecution`, and all tables used by later tasks.
 
-- [ ] **Step 1: Write failing domain tests**
+- [x] **Step 1: Write failing domain tests**
 
 ```ts
 it("normalizes the managed body identically across CRLF and trailing outer whitespace", () => {
   expect(canonicalManagedBody("  Line one\r\nLine two  ")).toBe("Line one\nLine two");
   expect(canonicalManagedBodyHash("  Line one\r\nLine two  ")).toBe(
-    "a6676e05f024ad816a8f47201ef2f94971ce1afd709a4a60f263e5165e3d8397",
+    "6991ce0a6fcde71f7e4c492b1746e1f04727fe3b124691803aab99fccdb4d8c6",
   );
 });
 
@@ -109,13 +109,13 @@ it("rejects an active page without exact positive revision and block identity", 
 });
 ```
 
-- [ ] **Step 2: Run the domain tests and verify RED**
+- [x] **Step 2: Run the domain tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-page.test.ts`
 
 Expected: FAIL because `managed-knowledge-page.ts` and its exports do not exist.
 
-- [ ] **Step 3: Implement canonical domain primitives**
+- [x] **Step 3: Implement canonical domain primitives**
 
 ```ts
 export const MANAGED_KNOWLEDGE_PAGE_STATES = [
@@ -137,7 +137,7 @@ export function canonicalManagedBodyHash(value: string): string {
 
 Define explicit page, target, observation, execution, event, and status-count types with no body-text fields.
 
-- [ ] **Step 4: Write failing migration/repository tests**
+- [x] **Step 4: Write failing migration/repository tests**
 
 ```ts
 it("installs exact managed-page and update invariants", async () => {
@@ -161,13 +161,13 @@ it("registers one exact managed page idempotently and rejects a conflicting oper
 });
 ```
 
-- [ ] **Step 5: Run repository tests and verify RED**
+- [x] **Step 5: Run repository tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/postgres-managed-knowledge-page-repository.test.ts tests/migration-runner.test.ts`
 
 Expected: FAIL because migration 0052 and the repository are absent.
 
-- [ ] **Step 6: Implement migration 0052**
+- [x] **Step 6: Implement migration 0052**
 
 Create:
 
@@ -187,7 +187,7 @@ CREATE TABLE knowledge_publication_updates (...);
 
 Use composite foreign keys for source/snapshot/hash identity, `CHECK` constraints for state-dependent nullable columns, operation-key/fingerprint replay tables or columns, append-only triggers on fact/event tables, and a partial unique index over update execution states `('claimed','remote_request_dispatched','outcome_unknown','remote_applied','resync_required','reconciliation_required')` by managed page.
 
-- [ ] **Step 7: Implement the focused PostgreSQL repository**
+- [x] **Step 7: Implement the focused PostgreSQL repository**
 
 ```ts
 export interface ManagedKnowledgePageRepository {
@@ -207,13 +207,13 @@ export interface ManagedKnowledgePageRepository {
 
 Every replay compares an SHA-256 operation fingerprint. Transactions lock `managed_knowledge_pages` before update targets, proposals, and executions and commit before returning data used for external calls.
 
-- [ ] **Step 8: Run Task 1 tests and verify GREEN**
+- [x] **Step 8: Run Task 1 tests and verify GREEN**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-page.test.ts tests/postgres-managed-knowledge-page-repository.test.ts tests/migration-runner.test.ts`
 
 Expected: PASS, including append-only trigger and concurrent-claim tests.
 
-- [ ] **Step 9: Commit Task 1**
+- [x] **Step 9: Commit Task 1**
 
 ```powershell
 git add apps/core/migrations/0052_managed_knowledge_publication_updates.sql apps/core/src/action-approvals/managed-knowledge-page.ts apps/core/src/action-approvals/managed-knowledge-page-repository.ts apps/core/src/action-approvals/postgres-managed-knowledge-page-repository.ts apps/core/tests/managed-knowledge-page.test.ts apps/core/tests/postgres-managed-knowledge-page-repository.test.ts apps/core/tests/migration-runner.test.ts
@@ -234,7 +234,7 @@ git commit -m "feat: add managed knowledge page ledger"
 - Consumes: `ManagedKnowledgePageRepository.registerPublication` and `canonicalManagedBodyHash` from Task 1.
 - Produces: `KnowledgePublicationPublisherResult.managedBodyBlockId?: string`; successful, exact publications are registered without making registration failure alter the existing publication success fact.
 
-- [ ] **Step 1: Write failing publisher tests**
+- [x] **Step 1: Write failing publisher tests**
 
 ```ts
 it("returns the exact created text block and revision for managed eligibility", async () => {
@@ -253,13 +253,13 @@ it("publishes successfully but omits managed identity when Feishu omits the crea
 });
 ```
 
-- [ ] **Step 2: Run publisher tests and verify RED**
+- [x] **Step 2: Run publisher tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/feishu-knowledge-publication-publisher.test.ts`
 
 Expected: FAIL because the publisher does not parse or return the created block ID.
 
-- [ ] **Step 3: Parse exact created-block identity**
+- [x] **Step 3: Parse exact created-block identity**
 
 Change `appendDocxContent` to return:
 
@@ -272,7 +272,7 @@ type AppendedManagedBody = {
 
 Accept a block only when the response contains exactly one created `block_type: 2` item with a non-blank `block_id`. Do not infer the document root token as the body block.
 
-- [ ] **Step 4: Write failing executor registration tests**
+- [x] **Step 4: Write failing executor registration tests**
 
 ```ts
 it("registers an exact publication as a managed page after durable completion", async () => {
@@ -293,13 +293,13 @@ it("does not register an inexact publication", async () => {
 });
 ```
 
-- [ ] **Step 5: Run executor tests and verify RED**
+- [x] **Step 5: Run executor tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/knowledge-publication-executor.test.ts tests/postgres-knowledge-publication-repository.test.ts`
 
 Expected: FAIL because the executor has no managed-page dependency or registration call.
 
-- [ ] **Step 6: Register eligible publication results**
+- [x] **Step 6: Register eligible publication results**
 
 Extend dependencies with:
 
@@ -309,13 +309,13 @@ managedPages?: Pick<ManagedKnowledgePageRepository, "registerPublication">;
 
 After `completePublicationExecution` returns its durable `publication`, call `registerPublication` only when block ID and positive revision exist. Use operation key `managed-publication-register:<sha256(publication.id)>`. Catch registration failure, emit only `managed_registration_failed`, and preserve the already-confirmed publication result.
 
-- [ ] **Step 7: Run Task 2 tests and regress the publication path**
+- [x] **Step 7: Run Task 2 tests and regress the publication path**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/feishu-knowledge-publication-publisher.test.ts tests/knowledge-publication-executor.test.ts tests/postgres-knowledge-publication-repository.test.ts`
 
 Expected: PASS; publication remains successful with incomplete identity and only exact results become managed.
 
-- [ ] **Step 8: Commit Task 2**
+- [x] **Step 8: Commit Task 2**
 
 ```powershell
 git add apps/core/src/action-approvals/feishu-knowledge-publication-publisher.ts apps/core/src/action-approvals/knowledge-publication-executor.ts apps/core/src/action-approvals/action-proposal-repository.ts apps/core/tests/feishu-knowledge-publication-publisher.test.ts apps/core/tests/knowledge-publication-executor.test.ts apps/core/tests/postgres-knowledge-publication-repository.test.ts
@@ -338,7 +338,7 @@ git commit -m "feat: capture managed publication block identity"
 - Consumes: exact token parsers in `feishu-document-body-fetcher.ts`, page lookup/linking/observation from Task 1, and `DocumentSnapshot` from the existing snapshot repository.
 - Produces: `ManagedKnowledgeSyncObserver.observe({ source, snapshot }): Promise<void>` and `ManagedBlockReader.readManagedBlock(...)` for exact block/revision observation.
 
-- [ ] **Step 1: Write failing observer tests**
+- [x] **Step 1: Write failing observer tests**
 
 ```ts
 it("links a source only by exact wiki or docx token and records the exact block observation", async () => {
@@ -361,13 +361,13 @@ it("does not use title or body similarity when no exact token matches", async ()
 });
 ```
 
-- [ ] **Step 2: Run observer tests and verify RED**
+- [x] **Step 2: Run observer tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-sync-observer.test.ts`
 
 Expected: FAIL because the observer does not exist.
 
-- [ ] **Step 3: Implement exact observer behavior**
+- [x] **Step 3: Implement exact observer behavior**
 
 ```ts
 export interface ManagedKnowledgeSyncObserver {
@@ -384,7 +384,7 @@ export interface ManagedBlockReader {
 
 Resolve by parsed Wiki node token or Docx document token only. The observer may record/link after snapshot insertion; failure does not erase an ordinary successful snapshot and cannot reactivate a page.
 
-- [ ] **Step 4: Write failing pipeline/runtime tests**
+- [x] **Step 4: Write failing pipeline/runtime tests**
 
 ```ts
 it("observes a successful snapshot before marking the source synced", async () => {
@@ -393,23 +393,23 @@ it("observes a successful snapshot before marking the source synced", async () =
 });
 ```
 
-- [ ] **Step 5: Run pipeline/runtime tests and verify RED**
+- [x] **Step 5: Run pipeline/runtime tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/document-sync-pipeline.test.ts tests/document-sync-runtime.test.ts tests/feishu-document-body-fetcher.test.ts`
 
 Expected: FAIL because the pipeline has no managed observation hook.
 
-- [ ] **Step 6: Add the optional sync hook and runtime wiring**
+- [x] **Step 6: Add the optional sync hook and runtime wiring**
 
 Extend `createDocumentSyncRunner` with optional `managedKnowledgeObserver`. Invoke it after snapshot insertion and before reindex/mark-synced. Use the existing bounded Feishu JSON helper to implement exact block reads; reject missing block, unsupported type, invalid revision, oversized response, and non-HTTPS base URL.
 
-- [ ] **Step 7: Run Task 3 tests and verify GREEN**
+- [x] **Step 7: Run Task 3 tests and verify GREEN**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-sync-observer.test.ts tests/document-sync-pipeline.test.ts tests/document-sync-runtime.test.ts tests/feishu-document-body-fetcher.test.ts`
 
 Expected: PASS with no similarity-based linking.
 
-- [ ] **Step 8: Commit Task 3**
+- [x] **Step 8: Commit Task 3**
 
 ```powershell
 git add apps/core/src/action-approvals/managed-knowledge-sync-observer.ts apps/core/src/documents/document-sync-pipeline.ts apps/core/src/documents/feishu-document-body-fetcher.ts apps/core/src/runtime/document-sync-runtime.ts apps/core/tests/managed-knowledge-sync-observer.test.ts apps/core/tests/document-sync-pipeline.test.ts apps/core/tests/document-sync-runtime.test.ts apps/core/tests/feishu-document-body-fetcher.test.ts
@@ -437,7 +437,7 @@ git commit -m "feat: observe managed pages during document sync"
 - Consumes: exact eligible page lookup and update-target table from Task 1.
 - Produces: `ActionProposalActionType`, `CreateKnowledgeDraftInput.managedUpdateTarget?`, candidate `actionType`, exclusive planner routing, and update-aware conflict card metadata.
 
-- [ ] **Step 1: Write failing conflict-binding tests**
+- [x] **Step 1: Write failing conflict-binding tests**
 
 ```ts
 it("creates an immutable update target in the same transaction as an eligible conflict draft", async () => {
@@ -460,13 +460,13 @@ it("renders publication wording when no exact managed target exists", () => {
 });
 ```
 
-- [ ] **Step 2: Run conflict tests and verify RED**
+- [x] **Step 2: Run conflict tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/knowledge-conflict-interaction-worker.test.ts tests/knowledge-conflict-card-renderer.test.ts tests/postgres-knowledge-draft-repository.test.ts`
 
 Expected: FAIL because draft creation cannot accept or persist a managed target.
 
-- [ ] **Step 3: Persist exact target binding during draft creation**
+- [x] **Step 3: Persist exact target binding during draft creation**
 
 Add:
 
@@ -487,7 +487,7 @@ managedUpdateTarget?: {
 
 The Postgres draft transaction inserts `knowledge_publication_update_targets` with the newly created revision and proposed canonical hash. The interaction worker resolves eligibility before draft creation. If resolution returns none or throws, it creates an unbound publication draft and the card uses publication wording.
 
-- [ ] **Step 4: Write failing proposal-routing tests**
+- [x] **Step 4: Write failing proposal-routing tests**
 
 ```ts
 it("creates only an update proposal for a confirmed update-bound revision", async () => {
@@ -507,13 +507,13 @@ it("retains publish-new routing for an unbound draft", async () => {
 });
 ```
 
-- [ ] **Step 5: Run action tests and verify RED**
+- [x] **Step 5: Run action tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/action-proposal.test.ts tests/action-proposal-planner.test.ts tests/postgres-action-proposal-repository.test.ts`
 
 Expected: FAIL because the domain and SQL accept only publication actions.
 
-- [ ] **Step 6: Generalize proposal action type and planner**
+- [x] **Step 6: Generalize proposal action type and planner**
 
 ```ts
 export const ACTION_PROPOSAL_ACTION_TYPES = [
@@ -525,13 +525,13 @@ export type ActionProposalActionType = typeof ACTION_PROPOSAL_ACTION_TYPES[numbe
 
 `listEligibleDrafts` uses an exact left join to the current draft revision’s target. It reports update only when page, source, snapshot, policy, group, and target versions are current and the page is `active`; a stale bound target is omitted entirely, not returned as publication. `createProposal` stores the supplied action type and includes it in the operation fingerprint.
 
-- [ ] **Step 7: Run Task 4 tests and regress publication planning**
+- [x] **Step 7: Run Task 4 tests and regress publication planning**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/knowledge-conflict-interaction-worker.test.ts tests/knowledge-conflict-card-renderer.test.ts tests/action-proposal.test.ts tests/action-proposal-planner.test.ts tests/postgres-action-proposal-repository.test.ts`
 
 Expected: PASS; one draft revision cannot have concurrent live publish and update proposals.
 
-- [ ] **Step 8: Commit Task 4**
+- [x] **Step 8: Commit Task 4**
 
 ```powershell
 git add apps/core/src/knowledge-governance/knowledge-draft-repository.ts apps/core/src/knowledge-governance/postgres-knowledge-draft-repository.ts apps/core/src/knowledge-conflicts/knowledge-conflict-interaction-worker.ts apps/core/src/knowledge-conflicts/knowledge-conflict-card-renderer.ts apps/core/src/action-approvals/action-proposal.ts apps/core/src/action-approvals/action-proposal-repository.ts apps/core/src/action-approvals/postgres-action-proposal-repository.ts apps/core/src/action-approvals/action-proposal-planner.ts apps/core/tests/knowledge-conflict-interaction-worker.test.ts apps/core/tests/knowledge-conflict-card-renderer.test.ts apps/core/tests/action-proposal.test.ts apps/core/tests/action-proposal-planner.test.ts apps/core/tests/postgres-action-proposal-repository.test.ts
@@ -555,7 +555,7 @@ git commit -m "feat: route governed managed knowledge updates"
 - Consumes: update target and `ActionProposal.actionType` from Task 4.
 - Produces: `ActionReviewContext.actionTargetFingerprint`, metadata-only target summary, and review attestations that become stale when any execution-critical target field changes.
 
-- [ ] **Step 1: Write failing review-binding tests**
+- [x] **Step 1: Write failing review-binding tests**
 
 ```ts
 it("includes exact managed target metadata and fingerprint in update review context", async () => {
@@ -577,25 +577,25 @@ it("invalidates an attestation after managed page version changes", async () => 
 });
 ```
 
-- [ ] **Step 2: Run review tests and verify RED**
+- [x] **Step 2: Run review tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/postgres-action-review-repository.test.ts tests/action-review-api.test.ts tests/action-review-renderer.test.ts tests/action-approval-card-renderer.test.ts`
 
 Expected: FAIL because review context has no action-specific target fingerprint.
 
-- [ ] **Step 3: Implement target-bound review context and attestation**
+- [x] **Step 3: Implement target-bound review context and attestation**
 
 Compute the fingerprint from the exact ordered fields in design section 10. Store it in `action_review_attestations.action_target_fingerprint`. Publication actions use a fingerprint over their existing target policy/draft identity so the field is always non-null after migration.
 
 Update cards and HTML review to state either “Publish new Wiki page” or “Replace the single managed body block on existing Wiki page.” Render only safe target links/IDs outside the full-text OAuth review.
 
-- [ ] **Step 4: Run Task 5 tests and verify GREEN**
+- [x] **Step 4: Run Task 5 tests and verify GREEN**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/postgres-action-review-repository.test.ts tests/action-review-api.test.ts tests/action-review-renderer.test.ts tests/action-approval-card-renderer.test.ts tests/action-approval-worker.test.ts`
 
 Expected: PASS with changed target identity invalidating review approval.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 ```powershell
 git add apps/core/src/action-approvals/action-proposal-repository.ts apps/core/src/action-approvals/postgres-action-proposal-repository.ts apps/core/src/action-approvals/action-approval-card-renderer.ts apps/core/src/action-reviews/action-review-renderer.ts apps/core/src/action-reviews/action-review-api.ts apps/core/tests/action-approval-card-renderer.test.ts apps/core/tests/action-review-renderer.test.ts apps/core/tests/action-review-api.test.ts apps/core/tests/postgres-action-review-repository.test.ts
@@ -621,7 +621,7 @@ git commit -m "feat: bind update approval to exact managed target"
 - Consumes: managed page state/source binding from Task 1.
 - Produces: `IrisCapability.updateManagedKnowledge`, SQL search exclusion, and send-time `managed_source_unavailable` decision.
 
-- [ ] **Step 1: Write failing capability tests**
+- [x] **Step 1: Write failing capability tests**
 
 ```ts
 it("defaults managed knowledge updates off", () => {
@@ -633,17 +633,17 @@ it("requires updateManagedKnowledge in durable capability snapshots", () => {
 });
 ```
 
-- [ ] **Step 2: Run capability tests and verify RED**
+- [x] **Step 2: Run capability tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/runtime-config.test.ts tests/postgres-runtime-control-state-repository.test.ts tests/runtime-control-service.test.ts`
 
 Expected: FAIL because the capability does not exist.
 
-- [ ] **Step 3: Add the default-off durable capability**
+- [x] **Step 3: Add the default-off durable capability**
 
 Add `updateManagedKnowledge: boolean` to `IrisCapability`, `runtimeCapabilityNames`, the app capability-name set, all test fixtures, and persisted JSON validation. Do not derive it from `writeKnowledgeBase`; both values remain independently controllable.
 
-- [ ] **Step 4: Write failing retrieval/send-time barrier tests**
+- [x] **Step 4: Write failing retrieval/send-time barrier tests**
 
 ```ts
 it.each(["updating", "resync_required", "reconciliation_required", "blocked", "retired"])(
@@ -662,13 +662,13 @@ it("blocks a prepared reply when its source enters the managed freshness barrier
 });
 ```
 
-- [ ] **Step 5: Run barrier tests and verify RED**
+- [x] **Step 5: Run barrier tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/document-fragment-repository.test.ts tests/answer-source-permission-verifier.test.ts tests/postgres-answer-reply-repository.test.ts`
 
 Expected: FAIL because active fragment SQL and send-time verification ignore managed-page state.
 
-- [ ] **Step 6: Implement barrier queries**
+- [x] **Step 6: Implement barrier queries**
 
 Add the following predicate to answer search, candidate search, draft evidence search, and missing-profile indexing:
 
@@ -683,13 +683,13 @@ AND NOT EXISTS (
 
 Extend the answer trace preflight query to return managed-page state and fail closed when a linked page is absent from `active`. Preserve existing permission/grant checks and safe-notice behavior.
 
-- [ ] **Step 7: Run Task 6 tests and verify GREEN**
+- [x] **Step 7: Run Task 6 tests and verify GREEN**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/runtime-config.test.ts tests/postgres-runtime-control-state-repository.test.ts tests/document-fragment-repository.test.ts tests/answer-source-permission-verifier.test.ts tests/postgres-answer-reply-repository.test.ts`
 
 Expected: PASS; active managed sources and unmanaged sources remain retrievable.
 
-- [ ] **Step 8: Commit Task 6**
+- [x] **Step 8: Commit Task 6**
 
 ```powershell
 git add apps/core/src/config/runtime-config.ts apps/core/src/admin/runtime-control-state-repository.ts apps/core/src/app.ts apps/core/src/documents/document-fragment-repository.ts apps/core/src/answer-replies/answer-source-permission-verifier.ts apps/core/src/answer-replies/postgres-answer-reply-repository.ts apps/core/tests/runtime-config.test.ts apps/core/tests/postgres-runtime-control-state-repository.test.ts apps/core/tests/document-fragment-repository.test.ts apps/core/tests/answer-source-permission-verifier.test.ts apps/core/tests/postgres-answer-reply-repository.test.ts
@@ -706,7 +706,7 @@ git commit -m "feat: enforce managed knowledge freshness barrier"
 - Consumes: tenant token provider, bounded JSON reader, numeric guards, and canonical body functions.
 - Produces: `ManagedKnowledgeUpdater.preflight`, `ManagedKnowledgeUpdater.update`, `ManagedKnowledgeUpdater.readBack`, and typed outcome results for the executor/reconciler.
 
-- [ ] **Step 1: Write failing boundary tests**
+- [x] **Step 1: Write failing boundary tests**
 
 ```ts
 it("sends one exact text-element replacement at the bound revision", async () => {
@@ -735,13 +735,13 @@ it("rejects wildcard or non-positive revisions before fetching", async () => {
 });
 ```
 
-- [ ] **Step 2: Run updater tests and verify RED**
+- [x] **Step 2: Run updater tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/feishu-managed-knowledge-updater.test.ts`
 
 Expected: FAIL because the updater does not exist.
 
-- [ ] **Step 3: Implement typed Feishu boundary**
+- [x] **Step 3: Implement typed Feishu boundary**
 
 ```ts
 export type ManagedUpdateOutcome =
@@ -753,17 +753,17 @@ export type ManagedUpdateOutcome =
 
 Preflight reads the exact block and document revision, requires text block type, and returns its canonical hash. Update constructs one request, bounded body/response, deterministic client token, exact positive revision, and redacted typed errors. Readback returns only revision, block type, and canonical hash to orchestration code.
 
-- [ ] **Step 4: Add classification/readback tests**
+- [x] **Step 4: Add classification/readback tests**
 
 Cover explicit stale revision, permission denial, missing block, invalid request, 429, 5xx, abort timeout after dispatch, network loss, oversized response, invalid JSON, proposed-hash readback, old-hash readback, and unrelated human-edit hash.
 
-- [ ] **Step 5: Run Task 7 tests and verify GREEN**
+- [x] **Step 5: Run Task 7 tests and verify GREEN**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/feishu-managed-knowledge-updater.test.ts`
 
 Expected: PASS and serialized test observations contain neither body text nor access token.
 
-- [ ] **Step 6: Commit Task 7**
+- [x] **Step 6: Commit Task 7**
 
 ```powershell
 git add apps/core/src/action-approvals/feishu-managed-knowledge-updater.ts apps/core/tests/feishu-managed-knowledge-updater.test.ts
@@ -787,7 +787,7 @@ git commit -m "feat: add exact Feishu managed block updater"
 - Consumes: repository transitions from Task 1, action routing/review binding from Tasks 4–5, capability from Task 6, updater from Task 7, document-sync queue, and snapshot observer from Task 3.
 - Produces: complete claim/preflight/mutate/readback/resync loop and safe reconciliation worker.
 
-- [ ] **Step 1: Write failing executor gate/claim tests**
+- [x] **Step 1: Write failing executor gate/claim tests**
 
 ```ts
 it("requires all runtime gates before listing or claiming update proposals", async () => {
@@ -804,19 +804,19 @@ it("claims and activates the barrier before remote preflight", async () => {
 });
 ```
 
-- [ ] **Step 2: Run executor tests and verify RED**
+- [x] **Step 2: Run executor tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-update-executor.test.ts`
 
 Expected: FAIL because the executor does not exist.
 
-- [ ] **Step 3: Implement claim and exact preflight**
+- [x] **Step 3: Implement claim and exact preflight**
 
 The executor lists only approved `update_knowledge_publication` proposals. Claim transaction revalidates action, approval fingerprint, draft/target/page/source/snapshot/policy versions, group, permissions, gates, and one-unresolved-update constraint; then creates execution and sets page `updating`.
 
 Outside the transaction, preflight must equal the bound revision, block type, and before hash. Any mismatch records a typed terminal stale result without calling update.
 
-- [ ] **Step 4: Write failing outcome tests**
+- [x] **Step 4: Write failing outcome tests**
 
 ```ts
 it("records remote success as resync_required and enqueues the exact source", async () => {
@@ -841,11 +841,11 @@ it("keeps the page barred when request delivery is unknown", async () => {
 });
 ```
 
-- [ ] **Step 5: Implement remote outcome persistence**
+- [x] **Step 5: Implement remote outcome persistence**
 
 Use deterministic UUID-format client token derived from the durable execution operation key. Explicit pre-dispatch failures may restore `active`; confirmed applied moves to `resync_required`; unknown or local completion failure moves to `reconciliation_required`; stale/forbidden/missing outcomes use the page state specified by the design. Agent observations use tool name `iris.knowledge.updateManagedPublication` and contain only IDs, versions, state, and reason code.
 
-- [ ] **Step 6: Write failing reconciler tests**
+- [x] **Step 6: Write failing reconciler tests**
 
 ```ts
 it.each([
@@ -858,27 +858,27 @@ it.each([
 });
 ```
 
-- [ ] **Step 7: Run reconciler tests and verify RED**
+- [x] **Step 7: Run reconciler tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-update-reconciler.test.ts tests/managed-knowledge-sync-observer.test.ts`
 
 Expected: FAIL because reconciliation and resync completion are absent.
 
-- [ ] **Step 8: Implement readback reconciliation and exact reactivation**
+- [x] **Step 8: Implement readback reconciliation and exact reactivation**
 
 Proposed hash confirms applied. Old hash with the exact old revision permits one bounded retry with the same token. Any other state stays reconciliation-required. The sync observer calls `completeResync` only when its exact observation matches managed page, block ID, resulting revision, and expected canonical hash; the transaction writes immutable update success/event facts, marks proposal/execution succeeded, and changes the page to `active`.
 
-- [ ] **Step 9: Wire polling loops into action runtime**
+- [x] **Step 9: Wire polling loops into action runtime**
 
 Create updater/executor/reconciler only when database, token provider, sync queue, and feature configuration exist. Start/stop loops with existing runtime lifecycle helpers and expose content-free snapshots alongside publication executor status.
 
-- [ ] **Step 10: Run Task 8 tests and verify GREEN**
+- [x] **Step 10: Run Task 8 tests and verify GREEN**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/managed-knowledge-update-executor.test.ts tests/managed-knowledge-update-reconciler.test.ts tests/managed-knowledge-sync-observer.test.ts tests/action-approval-runtime.test.ts`
 
 Expected: PASS, including update-versus-answer, duplicate executor, human edit, and sync-before-commit races.
 
-- [ ] **Step 11: Commit Task 8**
+- [x] **Step 11: Commit Task 8**
 
 ```powershell
 git add apps/core/src/action-approvals/managed-knowledge-update-executor.ts apps/core/src/action-approvals/managed-knowledge-update-executor-loop.ts apps/core/src/action-approvals/managed-knowledge-update-reconciler.ts apps/core/src/action-approvals/managed-knowledge-sync-observer.ts apps/core/src/runtime/action-approval-runtime.ts apps/core/tests/managed-knowledge-update-executor.test.ts apps/core/tests/managed-knowledge-update-reconciler.test.ts apps/core/tests/managed-knowledge-sync-observer.test.ts apps/core/tests/action-approval-runtime.test.ts
@@ -907,7 +907,7 @@ git commit -m "feat: execute and reconcile managed knowledge updates"
 - Consumes: managed repository status methods and runtime loop snapshots.
 - Produces: metadata-only page/update views, operator reconciliation action, readiness reasons, feature flag, and allowlist deployment contract.
 
-- [ ] **Step 1: Write failing API/privacy tests**
+- [x] **Step 1: Write failing API/privacy tests**
 
 ```ts
 it("returns managed update metadata without draft or document bodies", async () => {
@@ -918,17 +918,17 @@ it("returns managed update metadata without draft or document bodies", async () 
 });
 ```
 
-- [ ] **Step 2: Run API/readiness tests and verify RED**
+- [x] **Step 2: Run API/readiness tests and verify RED**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/action-proposal-api.test.ts tests/internal-rollout-readiness.test.ts tests/admin-console-assets.test.ts tests/admin-console-api.test.ts tests/internal-readiness-api.test.ts tests/server-startup.test.ts`
 
 Expected: FAIL because update metadata and readiness components are absent.
 
-- [ ] **Step 3: Add metadata-only APIs and Admin presentation**
+- [x] **Step 3: Add metadata-only APIs and Admin presentation**
 
 Expose page state, internal page/source IDs, safe Wiki URL, revisions, hashes, proposal/execution states, timestamps, and reason codes. Reconciliation requires internal token plus operator header and accepts expected versions/operation key. Never return content fields or raw Feishu payloads.
 
-- [ ] **Step 4: Add readiness and deployment configuration tests**
+- [x] **Step 4: Add readiness and deployment configuration tests**
 
 ```ts
 it("keeps readiness healthy while managed updates are disabled", async () => {
@@ -940,7 +940,7 @@ it("fails closed when enabled without allowlist or update worker", async () => {
 });
 ```
 
-- [ ] **Step 5: Implement default-off feature and allowlist parsing**
+- [x] **Step 5: Implement default-off feature and allowlist parsing**
 
 Use:
 
@@ -951,7 +951,7 @@ IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST=
 
 Reject invalid booleans, blank allowlist entries, duplicates, and enabled-with-empty-allowlist. Readiness reports unresolved outcome-unknown/reconciliation counts without identifiers or bodies.
 
-- [ ] **Step 6: Run Task 9 tests and pilot configuration validation**
+- [x] **Step 6: Run Task 9 tests and pilot configuration validation**
 
 Run: `npm exec --workspace apps/core -- vitest run tests/action-proposal-api.test.ts tests/internal-rollout-readiness.test.ts tests/admin-console-assets.test.ts tests/admin-console-api.test.ts tests/internal-readiness-api.test.ts tests/server-startup.test.ts`
 
@@ -961,7 +961,7 @@ Run: `npm run pilot:config`
 
 Expected: all PASS and the rendered Compose config keeps the feature disabled by default.
 
-- [ ] **Step 7: Commit Task 9**
+- [x] **Step 7: Commit Task 9**
 
 ```powershell
 git add apps/core/src/action-approvals/action-proposal-api.ts apps/core/src/admin/internal-rollout-readiness.ts apps/core/src/admin-console/admin-console-assets.ts apps/core/src/app.ts apps/core/tests/action-proposal-api.test.ts apps/core/tests/internal-rollout-readiness.test.ts apps/core/tests/admin-console-assets.test.ts apps/core/tests/admin-console-api.test.ts apps/core/tests/internal-readiness-api.test.ts apps/core/tests/server-startup.test.ts .env.example deploy/pilot/ci.env deploy/pilot/docker-compose.yml scripts/pilot-compose.test.mjs
@@ -980,7 +980,7 @@ git commit -m "feat: expose managed update rollout controls"
 - Consumes: all previous tasks.
 - Produces: verified repository state, exact controlled-pilot commands/evidence fields, updated coverage truth, and completed plan checkboxes.
 
-- [ ] **Step 1: Run focused action and document suites**
+- [x] **Step 1: Run focused action and document suites**
 
 Run:
 
@@ -990,7 +990,7 @@ npm exec --workspace apps/core -- vitest run tests/managed-knowledge-page.test.t
 
 Expected: all PASS with zero unhandled errors.
 
-- [ ] **Step 2: Run static and build gates**
+- [x] **Step 2: Run static and build gates**
 
 Run: `npm run typecheck`
 
@@ -1006,11 +1006,11 @@ Run: `npm run verify`
 
 Expected: TypeScript, build, all Node/Vitest tests, Python tests, pilot tests, Compose validation, readiness, and pilot configuration all exit 0.
 
-- [ ] **Step 4: Write the controlled Feishu pilot runbook**
+- [x] **Step 4: Write the controlled Feishu pilot runbook**
 
 Document exact prerequisites, environment flags, allowlisted group, fresh managed-page creation, source sync, conflict creation, group confirmation, OAuth review, approval, one-block mutation, revision advance, barrier observation, exact resync, retrieval proof, control-page proof, queue/DLQ zero check, rollback-by-disable, deployed image/tag/SHA fields, timestamps, and operator identities. Mark the live result `not yet run` until real evidence exists.
 
-- [ ] **Step 5: Correct repository documentation without overclaiming**
+- [x] **Step 5: Correct repository documentation without overclaiming**
 
 Update README and coverage baseline to distinguish:
 
@@ -1020,7 +1020,7 @@ Update README and coverage baseline to distinguish:
 
 Do not mark the loop delivered merely because local tests pass.
 
-- [ ] **Step 6: Run documentation and status checks**
+- [x] **Step 6: Run documentation and status checks**
 
 Run: `git diff --check`
 
@@ -1028,7 +1028,7 @@ Run: `rg -n "managed knowledge|update_knowledge_publication|not yet run|controll
 
 Expected: no whitespace errors; documentation uses the correct acceptance state.
 
-- [ ] **Step 7: Commit Task 10**
+- [x] **Step 7: Commit Task 10**
 
 ```powershell
 git add README.md docs/development/iris-managed-knowledge-update-pilot.md docs/superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md docs/superpowers/plans/2026-08-20-iris-managed-knowledge-publication-update.md

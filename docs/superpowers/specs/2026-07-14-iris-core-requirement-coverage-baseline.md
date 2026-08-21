@@ -31,6 +31,21 @@
 | IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 最小 Admin Console 已实现 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收；`/admin` 浏览器控制台可读取系统状态、readiness、runtime control，并可操作全局、群和 capability 开关；同一控制台可查看文档源摘要、同步健康、权限状态，并可按源切换回答/知识草稿策略与触发手动同步；知识草稿队列可查看状态计数和摘要并执行请求修改/拒绝；发布队列可查看 pending/approved/executing/failed/reconciliation action proposals 并执行安全请求修改/拒绝；主动候选治理可扫描单个显式群、查看候选并执行 dismiss / approve delivery；审计摘要视图可按事件类型/文档过滤查看 retained/dropped/inspected/matching 与聚合事件窗口；Caddy 仅放行精确静态 console 路由，`/internal/*` 仍保持 404 | 仍需增加持久化审计仓库和正式管理员身份模型；当前版本先满足 20-30 人内部运行控制 |
 | IRIS-CORE-015 | 多人安装和多公司使用 | 按白皮书延期 | 白皮书演进阶段 4 明确 multi-company / multi-tenant productization | 内部 MVP 稳定后增加 tenant ID、安装流程、租户密钥/数据隔离、租户管理员和计费 |
 
+## Status Amendment - 2026-08-22 Managed Existing-Page Updates
+
+- Managed existing-page update code is implemented and locally verified behind the independent
+  default-off deployment contract `IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED=false` and an empty group
+  allowlist. It is limited to fresh Iris-created pages with one captured managed plain-text block;
+  legacy adoption, arbitrary documents, multi-block/rich-content edits, and title/delete changes are
+  out of scope.
+- This is **not** a new passed Feishu write loop. Controlled Feishu acceptance is pending until one
+  authorized allowlisted group completes the runbook with a fresh target, managed/unmanaged control
+  pages, exact one-block/revision evidence, barrier/resync/retrieval evidence, drained queues/DLQs,
+  and real immutable image/tag/SHA, timestamps, and operator records.
+- The existing real publication-pilot facts for IRIS-CORE-008 remain true. Local verification of
+  `update_knowledge_publication` does not upgrade existing-page update acceptance to delivered or
+  deployed status.
+
 ## 3. 当前真实结论
 
 当前 Iris 不是“只有一句话问答”的空壳：安全接收群聊、共享最近上下文、读取群文档、读取授权知识库、实时权限防泄露、回答与引用、运行时停用和恢复、知识草稿确认审批与知识库发布都已经工作；主动信号发现和投递链路也已完成默认关闭代码路径，最小 Admin Console 已经可以承担基础运行控制、文档源治理、知识草稿队列观察、发布队列治理、主动候选治理和审计摘要查看。
