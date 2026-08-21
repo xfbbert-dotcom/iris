@@ -159,25 +159,39 @@ describe("ManagedKnowledgeSyncObserver", () => {
     expect(repository.recordSnapshotObservation).not.toHaveBeenCalled();
   });
 
-  it("rejects an inexact snapshot before linking the source", async () => {
-    const repository = {
-      findByRemoteIdentity: vi.fn(async () => managedPage()),
-      linkSource: vi.fn(),
-      recordSnapshotObservation: vi.fn(),
-    };
-    const blockReader = { readManagedBlock: vi.fn() };
-    const observer = createManagedKnowledgeSyncObserver({ repository, blockReader });
+  it.each([
+    { name: "blank snapshot ID", overrides: { id: " " } },
+    { name: "oversized snapshot ID", overrides: { id: "s".repeat(513) } },
+    { name: "different source ID", overrides: { documentSourceId: "source-other" } },
+    {
+      name: "different source URI",
+      overrides: { sourceUri: "https://docs.feishu.cn/docx/docx-other" },
+    },
+    { name: "malformed snapshot hash", overrides: { contentHash: "B".repeat(64) } },
+    { name: "invalid fetched date", overrides: { fetchedAt: new Date("invalid") } },
+    { name: "invalid created date", overrides: { createdAt: new Date("invalid") } },
+  ] satisfies Array<{ name: string; overrides: Partial<DocumentSnapshot> }>)(
+    "rejects $name before any managed-page side effect",
+    async ({ overrides }) => {
+      const repository = {
+        findByRemoteIdentity: vi.fn(async () => managedPage()),
+        linkSource: vi.fn(),
+        recordSnapshotObservation: vi.fn(),
+      };
+      const blockReader = { readManagedBlock: vi.fn() };
+      const observer = createManagedKnowledgeSyncObserver({ repository, blockReader });
 
-    await expect(observer.observe({
-      source: documentSource(),
-      snapshot: documentSnapshot({ documentSourceId: "source-other" }),
-    })).rejects.toThrow("requires the source's successful snapshot");
+      await expect(observer.observe({
+        source: documentSource(),
+        snapshot: documentSnapshot(overrides),
+      })).rejects.toThrow("requires the source's successful snapshot");
 
-    expect(repository.findByRemoteIdentity).not.toHaveBeenCalled();
-    expect(repository.linkSource).not.toHaveBeenCalled();
-    expect(blockReader.readManagedBlock).not.toHaveBeenCalled();
-    expect(repository.recordSnapshotObservation).not.toHaveBeenCalled();
-  });
+      expect(repository.findByRemoteIdentity).not.toHaveBeenCalled();
+      expect(repository.linkSource).not.toHaveBeenCalled();
+      expect(blockReader.readManagedBlock).not.toHaveBeenCalled();
+      expect(repository.recordSnapshotObservation).not.toHaveBeenCalled();
+    },
+  );
 });
 
 function managedPage(overrides: Partial<ManagedKnowledgePage> = {}): ManagedKnowledgePage {

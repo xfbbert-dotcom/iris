@@ -100,13 +100,24 @@ function parseExactRemoteIdentity(sourceUri: string):
 
 function requireSuccessfulSnapshot(source: DocumentSource, snapshot: DocumentSnapshot): string {
   if (
+    typeof snapshot.id !== "string" ||
+    [...snapshot.id.trim()].length < 1 ||
+    [...snapshot.id.trim()].length > 512 ||
     snapshot.fetchStatus !== "succeeded" ||
     snapshot.documentSourceId !== source.id ||
-    snapshot.contentHash === undefined
+    snapshot.sourceUri !== source.sourceUri ||
+    typeof snapshot.contentHash !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(snapshot.contentHash) ||
+    !isValidDate(snapshot.fetchedAt) ||
+    !isValidDate(snapshot.createdAt)
   ) {
     throw new Error("managed knowledge observation requires the source's successful snapshot");
   }
   return snapshot.contentHash;
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
 function operationKey(prefix: string, identity: string[]): string {

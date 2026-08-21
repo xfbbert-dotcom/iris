@@ -87,6 +87,38 @@ describe("FeishuManagedKnowledgeBlockReader", () => {
     })).rejects.toThrow(message);
   });
 
+  it.each([
+    { name: "boolean", value: true },
+    { name: "float", value: 1.5 },
+    { name: "unsafe integer", value: Number.MAX_SAFE_INTEGER + 1 },
+    { name: "digit string", value: "12" },
+    { name: "exponent string", value: "1e2" },
+    { name: "positive signed string", value: "+12" },
+    { name: "negative signed string", value: "-12" },
+    { name: "leading-whitespace string", value: " 12" },
+    { name: "trailing-whitespace string", value: "12 " },
+    { name: "blank string", value: "" },
+    { name: "null", value: null },
+  ])("rejects a $name document revision", async ({ value }) => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { document: { revision_id: value } },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: {} }));
+    const reader = createFeishuManagedKnowledgeBlockReader({
+      baseUrl: "https://open.example.com",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: fetch as typeof globalThis.fetch,
+    });
+
+    await expect(reader.readManagedBlock({
+      remoteDocumentToken: "docx_managed",
+      managedBodyBlockId: "blk_body",
+    })).rejects.toThrow("invalid revision");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("rejects oversized block responses before parsing JSON", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(jsonResponse({

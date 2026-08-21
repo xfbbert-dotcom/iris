@@ -122,11 +122,10 @@ function readDocumentRevision(responseBody: unknown): number {
     throw new Error("Feishu managed document response returned invalid revision");
   }
   const value = responseBody.data.document.revision_id;
-  const revision = typeof value === "number" ? value : Number(value);
-  if (!Number.isSafeInteger(revision) || revision < 1) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
     throw new Error("Feishu managed document response returned invalid revision");
   }
-  return revision;
+  return value;
 }
 
 function readPlainTextBlock(
