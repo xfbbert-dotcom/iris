@@ -220,3 +220,75 @@ STATIC_no_bare_psql_invocation=true
 
 No live/network/database/`psql` command, full suite, deployment, real Feishu action, push, or PR was
 performed. The live pilot remains **not yet run / controlled Feishu acceptance pending**.
+
+## Final Whole-Branch Fix
+
+### Review-finding closure
+
+- **Production managed-page registration:** the action-approval runtime now constructs one shared
+  PostgreSQL managed-page repository before either executor and passes it to publication execution
+  even while managed mutations are default-off. Composition and publication-lifecycle tests prove
+  the exact dependency and persisted page/source/document/block/revision identity.
+- **Durable reindex and answer snapshot binding:** migration 0056 adds an append-only successful
+  reindex-completion fact keyed by exact snapshot and embedding profile, plus the page's current
+  reconciled snapshot pointer. The reindex worker records completion only after successful indexing
+  or a proven already-indexed result, including a successful zero-fragment snapshot. Resync readiness
+  and completion require the exact active profile fact, all prior bindings, no newer unresolved work,
+  and a readable/synced source. Search eligibility, permission verification, and the atomic send
+  transaction all require citations to the still-current reconciled snapshot, so a prepared answer
+  from an older snapshot cannot pass after later reactivation.
+- **Coherent managed observation:** Feishu raw fetches now carry the remote revision as
+  `sourceVersion`. A managed observation is recorded only when that revision equals the managed
+  block revision and the canonical full-body snapshot equals the managed block body. Missing,
+  changing, or mismatched revision/body facts fail closed for managed observation while preserving
+  ordinary snapshot sync.
+- **Permission revalidation:** durable claim and reactivation gates require `readable`, never
+  `unknown`. Both the update executor and uncertainty reconciler perform a live, group-scoped
+  Feishu permission preflight immediately before every remote mutation. Denied or unavailable live
+  proof blocks mutation; the existing write-policy, capability, authorization-group, and approval
+  bindings remain exact.
+
+Migration 0056 is append-only and backward-compatible with existing 0052-0055 history. Existing
+managed rows remain safely unavailable until they acquire an exact reconciled snapshot and reindex
+completion. The migration runner and startup/readiness checks require 0056.
+
+### RED to GREEN evidence
+
+- The initial focused RED run reported 16 failed, 243 passed, and 1 skipped across the eight selected
+  files. Additional isolated RED cases covered live permission enforcement and completion
+  idempotence before their implementations were added.
+- The broader focused regression run completed with 450 passed and 83 skipped. The final
+  configured-PostgreSQL-focused subset completed with 189 passed and 83 skipped across eight files,
+  covering queue-pending, failed/wrong-profile reindex, zero-fragment success, permission states,
+  real transaction races, and delayed prepared-answer invalidation.
+- Those 83 configured-PostgreSQL tests were skipped because neither `IRIS_TEST_DATABASE_URL` nor
+  `DATABASE_URL` was present. They were written but were not executed against PostgreSQL; this is an
+  explicit environment caveat, not a passing PostgreSQL claim.
+- TypeScript typecheck passed during focused stabilization. The first repository verification
+  attempt found one stale runtime fixture expectation after the intentional dependency addition;
+  its single focused test file then passed 5/5. No other broad gate was rerun before the final gate.
+
+### Final verification
+
+The single final `npm run verify` completed with terminal exit 0:
+
+| Gate | Result |
+| --- | --- |
+| TypeScript typecheck | PASS |
+| Build | PASS |
+| Core Vitest | PASS — 200 files passed / 3 skipped; 3,699 tests passed / 288 skipped |
+| Python pytest | PASS — 181 passed |
+| Pilot/static Node tests | PASS — 174 passed / 1 skipped |
+| Compose and pilot configuration | PASS |
+| Readiness | PASS — 19/19 checks |
+| Final `git diff --check` after report | PASS (line-ending warnings only) |
+
+The one pilot/static skip was the executable Caddy boundary probe because the Docker daemon was
+unavailable. Docker Compose configuration validation still passed. No live pilot, network request,
+Feishu mutation, deployment, push, or merge was performed; controlled Feishu acceptance remains
+pending.
+
+During the final gate, the backup test briefly exposed an untracked
+`.tmp-iris-backup-test-L1FPGz` directory. At gate completion, a literal-path check found it already
+absent, an exact top-level scan found zero `.tmp-iris-backup-test-*` entries, and `git status` did not
+list it. No temporary backup artifact is included in the commit.

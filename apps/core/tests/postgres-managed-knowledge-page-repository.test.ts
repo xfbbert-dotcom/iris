@@ -39,6 +39,18 @@ describe("managed knowledge page migration contract", () => {
     expect(sql).not.toMatch(/UPDATE knowledge_publication_update_executions/iu);
   });
 
+  it("adds append-only exact-profile reindex completion and reconciled snapshot identity", async () => {
+    const sql = await readFile(
+      new URL("../migrations/0056_managed_resync_index_completion.sql", import.meta.url),
+      "utf8",
+    );
+    expect(sql).toMatch(/CREATE TABLE document_snapshot_reindex_completions/iu);
+    expect(sql).toMatch(/UNIQUE\s*\(document_snapshot_id, embedding_profile_id\)/iu);
+    expect(sql).toMatch(/fragment_count[^\n]+CHECK\s*\(fragment_count >= 0\)/iu);
+    expect(sql).toMatch(/current_reconciled_snapshot_id/iu);
+    expect(sql).toMatch(/document_snapshot_reindex_completions_append_only/iu);
+  });
+
   it("exposes a focused managed-page repository", () => {
     const repository = createPostgresManagedKnowledgePageRepository({
       dataSource: { query: async () => ({ rows: [], rowCount: 0 }) } as never,
@@ -309,6 +321,25 @@ describe("managed update claim contract", () => {
       sql.includes("INSERT INTO knowledge_publication_update_executions"))).toBe(false);
   });
 
+  it.each(["unknown", "denied", "stale"])(
+    "terminalizes a claim whose durable source permission is %s",
+    async (permissionState) => {
+      const fixture = managedUpdateClaimDataSource({ permissionState });
+      const repository = createPostgresManagedKnowledgePageRepository({
+        dataSource: fixture.dataSource,
+      });
+
+      await expect(repository.claimApprovedUpdate(managedUpdateClaimInput())).resolves.toEqual({
+        outcome: "terminal",
+        proposalId: "update-proposal-1",
+        proposalVersion: 4,
+        code: "stale_target",
+      });
+      expect(fixture.statements.some((sql) =>
+        sql.includes("INSERT INTO knowledge_publication_update_executions"))).toBe(false);
+    },
+  );
+
   it("atomically terminalizes an approved loser before starting the winning page execution", async () => {
     const fixture = managedUpdateClaimDataSource({ hasCompetingProposal: true });
     const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
@@ -487,6 +518,7 @@ describe("managed update exact resync contract", () => {
 
     await expect(repository.findResyncReadyExecution({
       observationId: "observation-new",
+      activeEmbeddingProfileId: "profile-active",
     })).resolves.toEqual({
       executionId: "execution-1",
       executionVersion: 3,
@@ -498,6 +530,7 @@ describe("managed update exact resync contract", () => {
       expectedExecutionVersion: 3,
       expectedManagedPageVersion: 3,
       observationId: "observation-new",
+      activeEmbeddingProfileId: "profile-active",
       operationKey: "managed-resync-complete:test",
       actor: "document-sync",
       at: new Date("2026-08-21T04:00:00.000Z"),
@@ -520,6 +553,9 @@ describe("managed update exact resync contract", () => {
       sql.includes("INSERT INTO managed_knowledge_page_events"))).toBe(true);
     expect(fixture.statements.some((sql) =>
       sql.includes("INSERT INTO action_events") && sql.includes("execution_succeeded"))).toBe(true);
+    expect(fixture.statements.some((sql) =>
+      sql.includes("document_snapshot_reindex_completions") &&
+      sql.includes("embedding_profile_id"))).toBe(true);
     expect(fixture.proposalState()).toBe("succeeded");
     expect(fixture.immutableExecutorIds()).toEqual(["managed-update-worker"]);
     expect(fixture.immutableApprovalIds()).toEqual(["approval-1"]);
@@ -532,7 +568,34 @@ describe("managed update exact resync contract", () => {
 
     await expect(repository.findResyncReadyExecution({
       observationId: "observation-new",
+      activeEmbeddingProfileId: "profile-active",
     })).resolves.toBeUndefined();
+  });
+
+  it("requires readable durable permission and the exact active-profile completion at both resync gates", async () => {
+    const fixture = managedResyncDataSource();
+    const repository = createPostgresManagedKnowledgePageRepository({ dataSource: fixture.dataSource });
+
+    await repository.findResyncReadyExecution({
+      observationId: "observation-new",
+      activeEmbeddingProfileId: "profile-active",
+    });
+    await repository.completeResync({
+      executionId: "execution-1",
+      expectedExecutionVersion: 3,
+      expectedManagedPageVersion: 3,
+      observationId: "observation-new",
+      activeEmbeddingProfileId: "profile-active",
+      operationKey: "managed-resync-complete:profile-proof",
+      actor: "document-sync",
+      at: new Date("2026-08-21T04:00:00.000Z"),
+    });
+
+    const gates = fixture.statements.filter((sql) =>
+      sql.includes("document_snapshot_reindex_completions"));
+    expect(gates).toHaveLength(2);
+    expect(gates.every((sql) => sql.includes("source.permission_state = 'readable'"))).toBe(true);
+    expect(gates.every((sql) => sql.includes("completion.embedding_profile_id"))).toBe(true);
   });
 
   it("completes a proven apply after an earlier local queue failure barred the proposal", async () => {
@@ -544,6 +607,7 @@ describe("managed update exact resync contract", () => {
       expectedExecutionVersion: 3,
       expectedManagedPageVersion: 3,
       observationId: "observation-new",
+      activeEmbeddingProfileId: "profile-active",
       operationKey: "managed-resync-complete:queue-recovery",
       actor: "managed-update-reconciler",
       at: new Date("2026-08-21T04:00:00.000Z"),
@@ -698,6 +762,22 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         documentSourceId: sourceId,
         operationKey: `managed-link:${suffix}`,
         actor: "test",
+        at,
+      });
+      await repository.recordSnapshotObservation({
+        id: `initial-observation-${suffix}`,
+        managedPageId: linked.page.id,
+        managedPageVersion: linked.page.version,
+        documentSnapshotId: snapshotId,
+        documentSourceId: sourceId,
+        snapshotContentHash: "a".repeat(64),
+        observedRemoteRevisionId: linked.page.currentRemoteRevisionId!,
+        observedManagedBodyBlockId: linked.page.managedBodyBlockId,
+        observedBlockType: "text",
+        managedBodyContentHash: "f".repeat(64),
+        adapterVersion: "configured-pg-initial-v1",
+        observedAt: at,
+        operationKey: `initial-observation:${suffix}`,
         at,
       });
       await repository.bindConflictDraft({
@@ -992,8 +1072,49 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         operationKey: `observation:${suffix}`,
         at: syncedAt,
       });
+      await expect(repository.findResyncReadyExecution({
+        observationId: observation.observation.id,
+        activeEmbeddingProfileId: "static-dev-6d",
+      })).resolves.toBeUndefined();
+
+      const wrongProfileId = `wrong-profile-${suffix}`;
+      await pool.query(`
+        INSERT INTO embedding_profiles (
+          id,provider,model,dimensions,display_name,status,created_at
+        ) VALUES ($1,'configured-test',$1,6,'Wrong configured test profile','active',$2)
+      `, [wrongProfileId, syncedAt]);
+      await pool.query(`
+        INSERT INTO document_snapshot_reindex_completions (
+          id,document_snapshot_id,embedding_profile_id,completion_kind,fragment_count,
+          completed_at,created_at
+        ) VALUES ($1,$2,$3,'indexed',0,$4,$4)
+      `, [`wrong-completion-${suffix}`, newSnapshotId, wrongProfileId, syncedAt]);
+      await expect(repository.findResyncReadyExecution({
+        observationId: observation.observation.id,
+        activeEmbeddingProfileId: "static-dev-6d",
+      })).resolves.toBeUndefined();
+
+      await pool.query(`
+        INSERT INTO document_snapshot_reindex_completions (
+          id,document_snapshot_id,embedding_profile_id,completion_kind,fragment_count,
+          completed_at,created_at
+        ) VALUES ($1,$2,'static-dev-6d','indexed',0,$3,$3)
+      `, [`active-completion-${suffix}`, newSnapshotId, syncedAt]);
+      await pool.query(
+        "UPDATE document_sources SET permission_state = 'unknown' WHERE id = $1",
+        [sourceId],
+      );
+      await expect(repository.findResyncReadyExecution({
+        observationId: observation.observation.id,
+        activeEmbeddingProfileId: "static-dev-6d",
+      })).resolves.toBeUndefined();
+      await pool.query(
+        "UPDATE document_sources SET permission_state = 'readable' WHERE id = $1",
+        [sourceId],
+      );
       const ready = await repository.findResyncReadyExecution({
         observationId: observation.observation.id,
+        activeEmbeddingProfileId: "static-dev-6d",
       });
       expect(ready).toEqual({
         executionId: claimed.execution.id,
@@ -1006,6 +1127,7 @@ runIfDatabase("PostgresManagedKnowledgePageRepository", () => {
         expectedExecutionVersion: ready!.executionVersion,
         expectedManagedPageVersion: ready!.managedPageVersion,
         observationId: ready!.observationId,
+        activeEmbeddingProfileId: "static-dev-6d",
         operationKey: `complete-resync:${suffix}`,
         actor: "test-worker",
         at: new Date(at.getTime() + 4_000),
@@ -1306,6 +1428,7 @@ function managedPageRow(overrides: Record<string, unknown> = {}): Record<string,
     current_remote_revision_id: "12",
     current_body_content_hash: "a".repeat(64),
     expected_resync_content_hash: null,
+    current_reconciled_snapshot_id: null,
     state: "active",
     version: "1",
     created_at: at,
@@ -1364,11 +1487,13 @@ function managedUpdateClaimDataSource({
   hasCompetingProposal = false,
   executionState: initialExecutionState = "claimed",
   executionVersion: initialExecutionVersion = 1,
+  permissionState = "readable",
 }: {
   hasExactAttestation?: boolean;
   hasCompetingProposal?: boolean;
   executionState?: string;
   executionVersion?: number;
+  permissionState?: string;
 } = {}) {
   const at = new Date("2026-08-21T01:00:00.000Z");
   const statements: string[] = [];
@@ -1383,6 +1508,7 @@ function managedUpdateClaimDataSource({
     linked_document_source_id: "source-1",
     current_remote_revision_id: "12",
     current_body_content_hash: canonicalHash("Old approved body"),
+    current_reconciled_snapshot_id: "snapshot-old",
     state: claimed ? "updating" : "active",
     version: claimed ? "2" : "1",
     updated_at: at,
@@ -1520,7 +1646,7 @@ function managedUpdateClaimDataSource({
       return { rows: [{
         id: "source-1",
         source_type: "authorized_wiki_document",
-        permission_state: "readable",
+        permission_state: permissionState,
         sync_state: "synced",
         can_use_for_answering: true,
         can_use_for_knowledge_drafts: true,

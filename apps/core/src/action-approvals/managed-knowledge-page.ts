@@ -25,6 +25,7 @@ export type ManagedKnowledgePage = {
   currentRemoteRevisionId?: string;
   currentBodyContentHash?: string;
   expectedResyncContentHash?: string;
+  currentReconciledSnapshotId?: string;
   state: ManagedKnowledgePageState;
   version: number;
   createdAt: Date;
@@ -159,6 +160,12 @@ export function normalizeManagedKnowledgePage(value: ManagedKnowledgePage): Mana
     }),
     ...(page.expectedResyncContentHash === undefined ? {} : {
       expectedResyncContentHash: requireHash("expectedResyncContentHash", page.expectedResyncContentHash),
+    }),
+    ...(page.currentReconciledSnapshotId === undefined ? {} : {
+      currentReconciledSnapshotId: requireReference(
+        "currentReconciledSnapshotId",
+        page.currentReconciledSnapshotId,
+      ),
     }),
     state,
     version: requirePositiveInteger("version", page.version),

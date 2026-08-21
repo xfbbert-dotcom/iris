@@ -41,6 +41,12 @@ import type {
 import { createPostgresActionProposalRepository } from "../action-approvals/postgres-action-proposal-repository.js";
 import { createPostgresManagedKnowledgePageRepository } from
   "../action-approvals/postgres-managed-knowledge-page-repository.js";
+import { createManagedKnowledgeMutationPermissionVerifier } from
+  "../action-approvals/managed-knowledge-mutation-permission-verifier.js";
+import { createPostgresDocumentSourceRegistry } from
+  "../documents/postgres-document-source-registry.js";
+import { createFeishuDocumentPermissionChecker } from
+  "../permissions/feishu-document-permission-checker.js";
 import {
   readActionApprovalRuntimeConfig,
   readFeishuOpenApiConfig,
@@ -78,6 +84,7 @@ export type ActionApprovalRuntimeStatus = {
   publicationExecutor: KnowledgePublicationExecutorLoopSnapshot;
   managedKnowledgeUpdates?: ManagedKnowledgeUpdateExecutorLoopSnapshot & {
     migration0055Applied: boolean;
+    migration0056Applied: boolean;
     reconciliation: {
       outcomeUnknown: number;
       reconciliationRequired: number;
@@ -90,6 +97,7 @@ export type ActionApprovalRuntimeStatus = {
 export type ManagedKnowledgeUpdateRuntimeConfiguration = {
   deploymentEnabled: boolean;
   groupAllowlist: readonly string[];
+  activeEmbeddingProfileId: string;
   syncQueue: Pick<DocumentSyncQueue, "enqueue">;
   intervalMs: number;
   batchLimit: number;
@@ -131,6 +139,9 @@ export type ActionApprovalRuntimeDependencies = {
   createManagedUpdateExecutor?: typeof createManagedKnowledgeUpdateExecutor;
   createManagedUpdateReconciler?: typeof createManagedKnowledgeUpdateReconciler;
   createManagedUpdateLoop?: typeof createManagedKnowledgeUpdateExecutorLoop;
+  createDocumentSourceRegistry?: typeof createPostgresDocumentSourceRegistry;
+  createDocumentPermissionChecker?: typeof createFeishuDocumentPermissionChecker;
+  createManagedMutationPermissionVerifier?: typeof createManagedKnowledgeMutationPermissionVerifier;
   onStartupCleanup?: (cleanup: Promise<void>) => void;
 };
 
@@ -182,6 +193,12 @@ export function createActionApprovalRuntime({
     createManagedKnowledgeUpdateReconciler;
   const createManagedUpdatePollingLoop = dependencies.createManagedUpdateLoop ??
     createManagedKnowledgeUpdateExecutorLoop;
+  const createDocumentSources = dependencies.createDocumentSourceRegistry ??
+    createPostgresDocumentSourceRegistry;
+  const createPermissionChecker = dependencies.createDocumentPermissionChecker ??
+    createFeishuDocumentPermissionChecker;
+  const createMutationPermissionVerifier = dependencies.createManagedMutationPermissionVerifier ??
+    createManagedKnowledgeMutationPermissionVerifier;
   const enabledGroups = new Set(config.enabledGroupIds);
   const requireReviewAttestation = env.IRIS_ACTION_REVIEW_ENABLED === "true";
   let pool: ActionApprovalPool | undefined;
@@ -207,6 +224,7 @@ export function createActionApprovalRuntime({
   try {
     pool = createPool({ databaseUrl: config.databaseUrl });
     const repository = createRepository({ dataSource: pool });
+    const managedPages = createManagedPageRepository({ dataSource: pool });
     const feishuConfig = readFeishuOpenApiConfig(env);
     const tokenProvider = createTokenProvider({
       baseUrl: feishuConfig.baseUrl,
@@ -246,6 +264,7 @@ export function createActionApprovalRuntime({
     const publicationExecutor = createPublicationExecution({
       repository,
       publisher,
+      managedPages,
       runtimeSnapshot: () => {
         const snapshot = runtimeController.getSnapshot();
         return {
@@ -262,7 +281,15 @@ export function createActionApprovalRuntime({
       const groupAllowlist = managedKnowledgeUpdates.deploymentEnabled
         ? normalizeGroupAllowlist(managedKnowledgeUpdates.groupAllowlist)
         : [];
-      const managedPages = createManagedPageRepository({ dataSource: pool });
+      const documentSources = createDocumentSources(pool as never);
+      const permissionChecker = createPermissionChecker({
+        baseUrl: feishuConfig.baseUrl,
+        tokenProvider,
+      });
+      const permissionVerifier = createMutationPermissionVerifier({
+        documentSources,
+        permissionChecker,
+      });
       const managedBlockReader = createManagedBlockReader({
         baseUrl: feishuConfig.baseUrl,
         tokenProvider,
@@ -276,6 +303,7 @@ export function createActionApprovalRuntime({
         proposals: repository,
         managedPages,
         updater: managedUpdater,
+        permissionVerifier,
         syncQueue: managedKnowledgeUpdates.syncQueue,
         runtimeSnapshot: () => {
           const snapshot = runtimeController.getSnapshot();
@@ -296,9 +324,11 @@ export function createActionApprovalRuntime({
       const managedUpdateReconciler = createManagedUpdateReconciliation({
         managedPages,
         updater: managedUpdater,
+        permissionVerifier,
         syncQueue: managedKnowledgeUpdates.syncQueue,
         workerId: "managed-knowledge-update-reconciler",
         staleDispatchMs: managedKnowledgeUpdates.staleDispatchMs,
+        activeEmbeddingProfileId: managedKnowledgeUpdates.activeEmbeddingProfileId,
       });
       managedUpdateLoop = createManagedUpdatePollingLoop({
         executor: managedUpdateExecutor,
@@ -424,16 +454,21 @@ async function getManagedKnowledgeUpdateReadiness(
   pool: Pick<PostgresKnowledgeDraftDataSource, "query">,
 ): Promise<{
   migration0055Applied: boolean;
+  migration0056Applied: boolean;
   reconciliation: { outcomeUnknown: number; reconciliationRequired: number };
 }> {
   const result = await pool.query<{
-    present: boolean;
+    migration_0055_present: boolean;
+    migration_0056_present: boolean;
     outcome_unknown: string | number;
     reconciliation_required: string | number;
   }>(
     `SELECT EXISTS (
        SELECT 1 FROM schema_migrations WHERE name = '0055_managed_update_execution_identity.sql'
-     ) AS present,
+     ) AS migration_0055_present,
+     EXISTS (
+       SELECT 1 FROM schema_migrations WHERE name = '0056_managed_resync_index_completion.sql'
+     ) AS migration_0056_present,
      COUNT(*) FILTER (WHERE state = 'outcome_unknown') AS outcome_unknown,
      COUNT(*) FILTER (WHERE state = 'reconciliation_required') AS reconciliation_required
      FROM knowledge_publication_update_executions`,
@@ -441,7 +476,8 @@ async function getManagedKnowledgeUpdateReadiness(
   const row = result.rows[0];
   if (row === undefined) throw new Error("managed knowledge update readiness is unavailable");
   return {
-    migration0055Applied: row.present === true,
+    migration0055Applied: row.migration_0055_present === true,
+    migration0056Applied: row.migration_0056_present === true,
     reconciliation: {
       outcomeUnknown: requireSafeCount(row.outcome_unknown),
       reconciliationRequired: requireSafeCount(row.reconciliation_required),

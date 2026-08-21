@@ -345,6 +345,7 @@ function runtimeBackedReconciliationProducer() {
     } as never,
     managedKnowledgeUpdates: {
       deploymentEnabled: true, groupAllowlist: ["oc_pilot"], syncQueue: { enqueue: async () => undefined },
+      activeEmbeddingProfileId: "profile-active",
       intervalMs: 1_000, batchLimit: 10, staleDispatchMs: 60_000,
     },
   })!;

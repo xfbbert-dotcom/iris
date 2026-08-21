@@ -55,7 +55,9 @@ describe("ManagedKnowledgeUpdateExecutor", () => {
       authorizationGroupIds: ["group-1"],
       limit: 1,
     });
-    expect(order.slice(0, 2)).toEqual(["claim-and-barrier", "remote-preflight"]);
+    expect(order.slice(0, 3)).toEqual([
+      "claim-and-barrier", "live-permission", "remote-preflight",
+    ]);
     expect(dependencies.managedPages.claimApprovedUpdate).toHaveBeenCalledWith({
       proposalId: "proposal-1",
       expectedProposalVersion: 2,
@@ -71,6 +73,41 @@ describe("ManagedKnowledgeUpdateExecutor", () => {
       operationKey: expect.stringMatching(/^managed-update-claim:[0-9a-f]{64}$/u),
       at,
     });
+  });
+
+  it.each([
+    [false, "permission_denied"],
+    [undefined, "permission_unavailable"],
+  ] as const)("blocks before remote preflight when the fresh permission result is %s", async (
+    allowed,
+    code,
+  ) => {
+    const dependencies = executorDependencies();
+    dependencies.permissionVerifier.verify.mockImplementation(async () => {
+      if (allowed === undefined) throw new Error("permission probe unavailable");
+      return allowed;
+    });
+
+    await expect(createManagedKnowledgeUpdateExecutor(dependencies).processBatch({ limit: 1 }))
+      .resolves.toEqual([{
+        status: "failed",
+        proposalId: "proposal-1",
+        executionId: "execution-1",
+        code,
+      }]);
+    expect(dependencies.permissionVerifier.verify).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      authorizationGroupId: "group-1",
+    });
+    expect(dependencies.updater.preflight).not.toHaveBeenCalled();
+    expect(dependencies.updater.update).not.toHaveBeenCalled();
+    expect(dependencies.managedPages.recordRemoteOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classification: "preflight_failed",
+        pageDisposition: "blocked",
+        responseClassification: code,
+      }),
+    );
   });
 
   it("rejects a claimed execution whose exact durable tuple is inconsistent before remote preflight", async () => {
@@ -459,12 +496,19 @@ function executorDependencies({ order = [] }: { order?: string[] } = {}) {
     update: vi.fn<ManagedKnowledgeUpdater["update"]>(async () => ({ kind: "applied" as const, resultingRevision: 13 })),
     readBack: vi.fn<ManagedKnowledgeUpdater["readBack"]>(),
   };
+  const permissionVerifier = {
+    verify: vi.fn(async () => {
+      order.push("live-permission");
+      return true;
+    }),
+  };
   const syncQueue = { enqueue: vi.fn(async () => undefined) };
   return {
     claim,
     proposals,
     managedPages,
     updater,
+    permissionVerifier,
     syncQueue,
     runtimeSnapshot: () => runtimeSnapshot(),
     workerId: "managed-update-worker-1",

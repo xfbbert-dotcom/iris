@@ -230,7 +230,10 @@ where s.body_text is not null
     select 1
     from managed_knowledge_pages managed
     where managed.linked_document_source_id = ds.id
-      and managed.state <> 'active'
+      and (
+        managed.state <> 'active'
+        or managed.current_reconciled_snapshot_id is distinct from s.id
+      )
   )
   and not exists (
     select 1

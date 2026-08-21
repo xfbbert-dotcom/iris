@@ -487,11 +487,13 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     )({
       runtimeController,
       knowledgeCardRuntime,
-      ...(documentSyncRuntime?.managedKnowledgeUpdateQueue !== undefined
+      ...(documentSyncRuntime?.managedKnowledgeUpdateQueue !== undefined &&
+        documentSyncRuntime.activeEmbeddingProfileId !== undefined
         ? {
             managedKnowledgeUpdates: {
               deploymentEnabled: managedKnowledgeUpdateDeployment.enabled,
               groupAllowlist: managedKnowledgeUpdateDeployment.groupAllowlist,
+              activeEmbeddingProfileId: documentSyncRuntime.activeEmbeddingProfileId,
               syncQueue: documentSyncRuntime.managedKnowledgeUpdateQueue,
               intervalMs: 1_000,
               batchLimit: 10,
@@ -2208,6 +2210,7 @@ function projectManagedKnowledgeUpdateStatus(status: {
   intervalMs: number;
   batchLimit: number;
   migration0055Applied: boolean;
+  migration0056Applied: boolean;
   reconciliation: { outcomeUnknown: number; reconciliationRequired: number };
 }) {
   return {
@@ -2215,6 +2218,7 @@ function projectManagedKnowledgeUpdateStatus(status: {
     intervalMs: status.intervalMs,
     batchLimit: status.batchLimit,
     migration0055Applied: status.migration0055Applied,
+    migration0056Applied: status.migration0056Applied,
     reconciliation: {
       outcomeUnknown: status.reconciliation.outcomeUnknown,
       reconciliationRequired: status.reconciliation.reconciliationRequired,
@@ -2234,13 +2238,20 @@ function getManagedKnowledgeUpdateStatus({
     ? actionApprovalStatus.managedKnowledgeUpdates
     : undefined;
   if (status === undefined) {
-    return { ok: false, enabled: true, running: false, migration0055Applied: false };
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      migration0055Applied: false,
+      migration0056Applied: false,
+    };
   }
   return {
     ok: actionApprovalStatus?.ok === true && status.running,
     enabled: true,
     running: status.running,
     migration0055Applied: status.migration0055Applied,
+    migration0056Applied: status.migration0056Applied,
     worker: { running: status.running },
     reconciliation: status.reconciliation,
   };

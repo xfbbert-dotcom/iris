@@ -525,6 +525,47 @@ describe("answer reply cross-group grant boundary", () => {
     })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
     expect(deliveryLocked).toBe(false);
   });
+
+  it("rejects an active managed source when the prepared citation snapshot is no longer current", async () => {
+    const incomingMessageId = "incoming-managed-stale-snapshot";
+    const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+    const sources = [sourceTraceRow({
+      id: testSourceTraceId(deliveryId, 1),
+      delivery_id: deliveryId,
+      document_source_id: "source-managed",
+      document_snapshot_id: "snapshot-old",
+    })];
+    let deliveryLocked = false;
+    const query = async (sql: string) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+        || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+      if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
+      if (normalized.includes("FROM managed_knowledge_pages")) {
+        return { rows: [{
+          linked_document_source_id: "source-managed",
+          state: "active",
+          current_reconciled_snapshot_id: "snapshot-new",
+        }] };
+      }
+      if (normalized.includes("FROM answer_reply_deliveries")
+        && normalized.includes("FOR UPDATE")) deliveryLocked = true;
+      return { rows: [] };
+    };
+    const repository = createPostgresAnswerReplyRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresAnswerReplyDataSource,
+    });
+
+    await expect(repository.beginAnswerSend({
+      deliveryId,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    expect(deliveryLocked).toBe(false);
+  });
 });
 
 runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
@@ -711,16 +752,19 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     const suffix = randomUUID().replaceAll("-", "");
     const documentSourceId = `managed-send-${state}-${suffix}`;
     const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
-    await insertAnswerDocumentSource(pool!, { documentSourceId, sourceUri });
+    const documentSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
     await insertManagedKnowledgePageFixture({
       queryable: pool!,
       state,
       documentSourceId,
+      currentReconciledSnapshotId: documentSnapshotId,
       suffix: `send-${state}-${suffix}`,
     });
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const prepared = await repository.prepare(prepareInput(`managed-send-${state}-${suffix}`, {
-      sourceTraces: [sourceTrace({ documentSourceId, sourceUri })],
+      sourceTraces: [sourceTrace({ documentSourceId, documentSnapshotId, sourceUri })],
     }));
 
     await expect(repository.beginAnswerSend({
@@ -741,18 +785,21 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     const suffix = randomUUID().replaceAll("-", "");
     const documentSourceId = `managed-send-control-${suffix}`;
     const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
-    await insertAnswerDocumentSource(pool!, { documentSourceId, sourceUri });
+    const documentSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
     if (managed) {
       await insertManagedKnowledgePageFixture({
         queryable: pool!,
         state: "active",
         documentSourceId,
+        currentReconciledSnapshotId: documentSnapshotId,
         suffix: `send-active-${suffix}`,
       });
     }
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const prepared = await repository.prepare(prepareInput(`managed-send-control-${suffix}`, {
-      sourceTraces: [sourceTrace({ documentSourceId, sourceUri })],
+      sourceTraces: [sourceTrace({ documentSourceId, documentSnapshotId, sourceUri })],
     }));
 
     await expect(repository.beginAnswerSend({
@@ -762,12 +809,61 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     })).resolves.toMatchObject({ delivery: { state: "sending", version: 2 } });
   });
 
+  it("atomically rejects a prepared managed answer after a later snapshot becomes current", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const documentSourceId = `managed-send-snapshot-race-${suffix}`;
+    const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
+    const oldSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
+    const page = await insertManagedKnowledgePageFixture({
+      queryable: pool!,
+      state: "active",
+      documentSourceId,
+      currentReconciledSnapshotId: oldSnapshotId,
+      suffix: `send-snapshot-race-${suffix}`,
+    });
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput(`managed-send-snapshot-race-${suffix}`, {
+      sourceTraces: [sourceTrace({
+        documentSourceId,
+        documentSnapshotId: oldSnapshotId,
+        sourceUri,
+      })],
+    }));
+    const newSnapshotId = `answer-snapshot-new-${suffix}`;
+    await pool!.query(
+      `INSERT INTO document_snapshots (
+         id,document_source_id,source_uri,fetch_status,body_text,content_hash,
+         source_version,fetched_at,created_at
+       ) VALUES ($1,$2,$3,'succeeded','New managed answer snapshot',repeat('b',64),
+         'revision-2',$4,$4)`,
+      [newSnapshotId, documentSourceId, sourceUri, new Date("2026-08-20T00:00:30.000Z")],
+    );
+    await pool!.query(
+      "UPDATE managed_knowledge_pages SET current_reconciled_snapshot_id = $2 WHERE id = $1",
+      [page.pageId, newSnapshotId],
+    );
+
+    await expect(repository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: prepared.receipt.delivery.version,
+      at: new Date("2026-08-20T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: prepared.receipt.delivery.incomingMessageId,
+    })).resolves.toMatchObject({ delivery: { state: "prepared", version: 1 } });
+  });
+
   it("serializes an initially unmanaged send against concurrent source linking", async () => {
     const suffix = randomUUID().replaceAll("-", "");
     const documentSourceId = `managed-send-link-race-${suffix}`;
     const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
     const applicationName = `managed_link_race_${suffix}`;
-    await insertAnswerDocumentSource(pool!, { documentSourceId, sourceUri });
+    const documentSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
     const page = await insertManagedKnowledgePageFixture({
       queryable: pool!,
       state: "active",
@@ -775,7 +871,7 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     });
     const answerRepository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const prepared = await answerRepository.prepare(prepareInput(`managed-send-link-race-${suffix}`, {
-      sourceTraces: [sourceTrace({ documentSourceId, sourceUri })],
+      sourceTraces: [sourceTrace({ documentSourceId, documentSnapshotId, sourceUri })],
     }));
     const blocker = await pool!.connect();
     const linkPool = new pg.Pool({
@@ -2118,7 +2214,7 @@ function sourceTrace(
 async function insertAnswerDocumentSource(inputPool: pg.Pool, input: {
   documentSourceId: string;
   sourceUri: string;
-}): Promise<void> {
+}): Promise<string> {
   const at = new Date("2026-08-20T00:00:00.000Z");
   await inputPool.query(
     `INSERT INTO document_sources (
@@ -2128,6 +2224,16 @@ async function insertAnswerDocumentSource(inputPool: pg.Pool, input: {
        TRUE, TRUE, $3, $3)`,
     [input.documentSourceId, input.sourceUri, at],
   );
+  const documentSnapshotId = `answer-snapshot-${input.documentSourceId}`;
+  await inputPool.query(
+    `INSERT INTO document_snapshots (
+       id,document_source_id,source_uri,fetch_status,body_text,content_hash,
+       source_version,fetched_at,created_at
+     ) VALUES ($1,$2,$3,'succeeded','Managed answer snapshot',repeat('a',64),
+       'revision-1',$4,$4)`,
+    [documentSnapshotId, input.documentSourceId, input.sourceUri, at],
+  );
+  return documentSnapshotId;
 }
 
 async function waitForAdvisoryLockHeld(inputPool: pg.Pool, key: string): Promise<void> {

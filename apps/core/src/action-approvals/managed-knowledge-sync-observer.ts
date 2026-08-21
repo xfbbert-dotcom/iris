@@ -18,8 +18,7 @@ export interface ManagedKnowledgeSyncObserver {
 export type ManagedKnowledgeSyncObserverDependencies = {
   repository: Pick<
     ManagedKnowledgePageRepository,
-    "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation" |
-    "findResyncReadyExecution" | "completeResync"
+    "findByRemoteIdentity" | "linkSource" | "recordSnapshotObservation"
   >;
   blockReader: ManagedBlockReader;
   createId?: () => string;
@@ -37,7 +36,7 @@ export function createManagedKnowledgeSyncObserver({
 }: ManagedKnowledgeSyncObserverDependencies): ManagedKnowledgeSyncObserver {
   return {
     async observe({ source, snapshot }) {
-      const snapshotContentHash = requireSuccessfulSnapshot(source, snapshot);
+      const coherentSnapshot = requireSuccessfulSnapshot(source, snapshot);
       const identity = parseExactRemoteIdentity(source.sourceUri);
       if (identity === undefined) return;
 
@@ -50,6 +49,26 @@ export function createManagedKnowledgeSyncObserver({
         return;
       }
 
+      let block: Awaited<ReturnType<ManagedBlockReader["readManagedBlock"]>>;
+      try {
+        block = await blockReader.readManagedBlock({
+          remoteDocumentToken: page.remoteDocumentToken,
+          managedBodyBlockId: page.managedBodyBlockId,
+        });
+      } catch {
+        return;
+      }
+      let snapshotBodyContentHash: string;
+      let managedBodyContentHash: string;
+      try {
+        snapshotBodyContentHash = canonicalManagedBodyHash(coherentSnapshot.bodyText);
+        managedBodyContentHash = canonicalManagedBodyHash(block.body);
+      } catch {
+        return;
+      }
+      if (block.blockType !== "text" || coherentSnapshot.sourceVersion !== String(block.revision) ||
+        snapshotBodyContentHash !== managedBodyContentHash) return;
+
       const observedAt = now();
       const linkedPage = page.linkedDocumentSourceId === source.id
         ? page
@@ -61,47 +80,23 @@ export function createManagedKnowledgeSyncObserver({
             actor: ACTOR,
             at: observedAt,
           })).page;
-      const block = await blockReader.readManagedBlock({
-        remoteDocumentToken: linkedPage.remoteDocumentToken,
-        managedBodyBlockId: linkedPage.managedBodyBlockId,
-      });
-      if (block.blockType !== "text") {
-        throw new Error("managed knowledge observation requires a text block");
-      }
 
-      const recorded = await repository.recordSnapshotObservation({
+      await repository.recordSnapshotObservation({
         id: createId(),
         managedPageId: linkedPage.id,
         managedPageVersion: linkedPage.version,
         documentSnapshotId: snapshot.id,
         documentSourceId: source.id,
-        snapshotContentHash,
+        snapshotContentHash: coherentSnapshot.contentHash,
         observedRemoteRevisionId: String(block.revision),
         observedManagedBodyBlockId: linkedPage.managedBodyBlockId,
         observedBlockType: "text",
-        managedBodyContentHash: canonicalManagedBodyHash(block.body),
+        managedBodyContentHash,
         adapterVersion: ADAPTER_VERSION,
         observedAt,
         operationKey: operationKey("managed-snapshot-observation", [linkedPage.id, snapshot.id]),
         at: observedAt,
       });
-      const ready = await repository.findResyncReadyExecution({
-        observationId: recorded.observation.id,
-      });
-      if (ready !== undefined) {
-        await repository.completeResync({
-          executionId: ready.executionId,
-          expectedExecutionVersion: ready.executionVersion,
-          expectedManagedPageVersion: ready.managedPageVersion,
-          observationId: ready.observationId,
-          operationKey: operationKey("managed-resync-complete", [
-            ready.executionId,
-            ready.observationId,
-          ]),
-          actor: ACTOR,
-          at: observedAt,
-        });
-      }
     },
   };
 }
@@ -116,7 +111,10 @@ function parseExactRemoteIdentity(sourceUri: string):
   return remoteDocumentToken === undefined ? undefined : { remoteDocumentToken };
 }
 
-function requireSuccessfulSnapshot(source: DocumentSource, snapshot: DocumentSnapshot): string {
+function requireSuccessfulSnapshot(
+  source: DocumentSource,
+  snapshot: DocumentSnapshot,
+): { contentHash: string; sourceVersion?: string; bodyText: string } {
   if (
     typeof snapshot.id !== "string" ||
     [...snapshot.id.trim()].length < 1 ||
@@ -126,12 +124,17 @@ function requireSuccessfulSnapshot(source: DocumentSource, snapshot: DocumentSna
     snapshot.sourceUri !== source.sourceUri ||
     typeof snapshot.contentHash !== "string" ||
     !/^[0-9a-f]{64}$/u.test(snapshot.contentHash) ||
+    typeof snapshot.bodyText !== "string" ||
     !isValidDate(snapshot.fetchedAt) ||
     !isValidDate(snapshot.createdAt)
   ) {
     throw new Error("managed knowledge observation requires the source's successful snapshot");
   }
-  return snapshot.contentHash;
+  return {
+    contentHash: snapshot.contentHash,
+    ...(snapshot.sourceVersion === undefined ? {} : { sourceVersion: snapshot.sourceVersion }),
+    bodyText: snapshot.bodyText,
+  };
 }
 
 function isValidDate(value: unknown): value is Date {

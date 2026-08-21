@@ -486,7 +486,7 @@ describe("DocumentFragmentRepository", () => {
     async (usage) => {
       const query = vi.fn(async (sql: string) => {
         const normalized = normalizeSql(sql);
-        const barrier = "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and managed.state <> 'active' )";
+        const barrier = "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and ( managed.state <> 'active' or managed.current_reconciled_snapshot_id is distinct from f.document_snapshot_id ) )";
         expect(normalized).toContain(barrier);
         expect(normalized.indexOf(barrier)).toBeLessThan(
           normalized.indexOf("order by e.embedding <=> $2::vector asc"),
@@ -512,7 +512,7 @@ describe("DocumentFragmentRepository", () => {
   it("excludes unavailable managed sources from knowledge-draft candidates before ranking", async () => {
     const query = vi.fn(async (sql: string) => {
       const normalized = normalizeSql(sql);
-      const barrier = "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and managed.state <> 'active' )";
+      const barrier = "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and ( managed.state <> 'active' or managed.current_reconciled_snapshot_id is distinct from f.document_snapshot_id ) )";
       expect(normalized).toContain(barrier);
       expect(normalized.indexOf(barrier)).toBeLessThan(
         normalized.indexOf("join document_fragment_embeddings_6 e"),
@@ -1592,6 +1592,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
           queryable: client,
           state,
           documentSourceId: managedSourceId,
+          currentReconciledSnapshotId: `managed-fragment-snapshot-${managedSourceId}`,
           suffix: `fragment-${state}-${suffix}`,
         });
         const repository = createDocumentFragmentRepository({
@@ -1665,6 +1666,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         queryable: client,
         state: "active",
         documentSourceId: activeSourceId,
+        currentReconciledSnapshotId: `managed-fragment-snapshot-${activeSourceId}`,
         suffix: `fragment-active-${suffix}`,
       });
       const expectedIds = new Set([activeSourceId, unmanagedSourceId]);

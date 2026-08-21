@@ -120,6 +120,7 @@ type ManagedKnowledgeUpdateReadinessStatus = {
   enabled: boolean;
   running: boolean;
   migration0055Applied?: boolean;
+  migration0056Applied?: boolean;
   worker?: { running: boolean };
   reconciliation?: {
     outcomeUnknown: number;
@@ -729,6 +730,9 @@ const checkDefinitions: CheckDefinition[] = [
       if (status.migration0055Applied !== true) {
         return fail("Managed knowledge update migration 0055 is not applied.");
       }
+      if (status.migration0056Applied !== true) {
+        return fail("Managed knowledge update migration 0056 is not applied.");
+      }
       if (!status.ok) return fail("Managed knowledge update runtime status is unreadable.");
       if (!status.enabled || !status.running || status.worker?.running !== true) {
         return fail("Managed knowledge update worker is not running.");
@@ -742,7 +746,7 @@ const checkDefinitions: CheckDefinition[] = [
       if (status.reconciliation.reconciliationRequired > 0) {
         return fail("Managed knowledge updates have reconciliation-required executions.");
       }
-      return pass("Managed knowledge update worker is running with migration 0055 applied.");
+      return pass("Managed knowledge update worker is running with migrations 0055 and 0056 applied.");
     },
   },
 ];

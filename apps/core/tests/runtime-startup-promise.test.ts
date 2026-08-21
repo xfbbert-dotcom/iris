@@ -300,6 +300,7 @@ function reindexWorkerDependencies({
     createDocumentFragmentRepository: vi.fn(() => ({
       replaceFragmentsForSnapshot: vi.fn(),
       hasFragmentsForSnapshotProfile: vi.fn(),
+      countFragmentsForSnapshotProfile: vi.fn(async () => 1),
     })),
     createEmbeddingProvider: vi.fn(() => ({ embedTexts: vi.fn(async () => []) })),
     createWorkerLoop: vi.fn(() => ({

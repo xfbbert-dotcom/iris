@@ -63,7 +63,11 @@ describe("ActionApprovalRuntime", () => {
     }));
     expect(dependencies.createPublicationExecutor).toHaveBeenCalledWith(expect.objectContaining({
       agentExecutionObserver: { observe },
+      managedPages: dependencies.managedPageRepository,
     }));
+    expect(dependencies.createManagedPageRepository).toHaveBeenCalledWith({
+      dataSource: dependencies.pool,
+    });
     expect(knowledgeCards.bindActionApprovalWorker).toHaveBeenCalledWith(dependencies.actionWorker);
     const dispatcherGate = dependencies.createDispatcher.mock.calls[0]?.[0].canDeliverApprovalCards;
     expect(dispatcherGate?.("oc_pilot")).toBe(false);
@@ -144,6 +148,7 @@ describe("ActionApprovalRuntime", () => {
       managedKnowledgeUpdates: {
         deploymentEnabled: true,
         groupAllowlist: ["oc_pilot"],
+        activeEmbeddingProfileId: "profile-active",
         syncQueue,
         intervalMs: 2_000,
         batchLimit: 7,
@@ -166,6 +171,7 @@ describe("ActionApprovalRuntime", () => {
       proposals: dependencies.repository,
       managedPages: dependencies.managedPageRepository,
       updater: dependencies.managedUpdater,
+      permissionVerifier: dependencies.managedMutationPermissionVerifier,
       syncQueue,
     }));
     const runtimeSnapshot = dependencies.createManagedUpdateExecutor.mock.calls[0]?.[0].runtimeSnapshot;
@@ -178,8 +184,14 @@ describe("ActionApprovalRuntime", () => {
     });
     expect(dependencies.createManagedUpdateReconciler).toHaveBeenCalledWith(expect.objectContaining({
       staleDispatchMs: 60_000,
+      activeEmbeddingProfileId: "profile-active",
+      permissionVerifier: dependencies.managedMutationPermissionVerifier,
       syncQueue,
     }));
+    expect(dependencies.createManagedMutationPermissionVerifier).toHaveBeenCalledWith({
+      documentSources: dependencies.documentSourceRegistry,
+      permissionChecker: dependencies.documentPermissionChecker,
+    });
 
     await runtime.start();
     expect(order).toEqual([
@@ -191,6 +203,7 @@ describe("ActionApprovalRuntime", () => {
         intervalMs: 2_000,
         batchLimit: 7,
         migration0055Applied: true,
+        migration0056Applied: true,
         reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
       },
     });
@@ -216,6 +229,7 @@ describe("ActionApprovalRuntime", () => {
       managedKnowledgeUpdates: {
         deploymentEnabled: false,
         groupAllowlist: [],
+        activeEmbeddingProfileId: "profile-active",
         syncQueue,
         intervalMs: 2_000,
         batchLimit: 7,
@@ -258,7 +272,8 @@ describe("ActionApprovalRuntime", () => {
     const runtime = createActionApprovalRuntime({
       env: enabledEnv(), runtimeController: enabledController(), knowledgeCardRuntime: knowledgeCardRuntime(), dependencies,
       managedKnowledgeUpdates: {
-        deploymentEnabled: true, groupAllowlist: ["oc_pilot"], syncQueue: { enqueue: vi.fn() },
+        deploymentEnabled: true, groupAllowlist: ["oc_pilot"],
+        activeEmbeddingProfileId: "profile-active", syncQueue: { enqueue: vi.fn() },
         intervalMs: 2_000, batchLimit: 7, staleDispatchMs: 60_000,
       },
     })!;
@@ -347,7 +362,12 @@ function knowledgeCardRuntime(): KnowledgeCardRuntime {
 function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
   const pool = {
     query: async <T>() => ({
-      rows: [{ present: true, outcome_unknown: 0, reconciliation_required: 0 } as unknown as T],
+      rows: [{
+        migration_0055_present: true,
+        migration_0056_present: true,
+        outcome_unknown: 0,
+        reconciliation_required: 0,
+      } as unknown as T],
     }),
     connect: vi.fn(),
     end: vi.fn(async () => { order.push("pool-end"); }),
@@ -408,6 +428,9 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     isRunning: vi.fn(() => true),
     getSnapshot: vi.fn(() => ({ running: true, intervalMs: 2_000, batchLimit: 7 })),
   };
+  const documentSourceRegistry = { findSourceById: vi.fn() };
+  const documentPermissionChecker = { canReadSource: vi.fn() };
+  const managedMutationPermissionVerifier = { verify: vi.fn() };
   const dependencies = {
     createPostgresPool: vi.fn(() => pool),
     createRepository: vi.fn(() => repository),
@@ -428,6 +451,9 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     createManagedUpdateExecutor: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedUpdateExecutor"]>>(() => managedUpdateExecutor),
     createManagedUpdateReconciler: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedUpdateReconciler"]>>(() => managedUpdateReconciler),
     createManagedUpdateLoop: vi.fn<NonNullable<ActionApprovalRuntimeDependencies["createManagedUpdateLoop"]>>(() => managedUpdateLoop),
+    createDocumentSourceRegistry: vi.fn(() => documentSourceRegistry as never),
+    createDocumentPermissionChecker: vi.fn(() => documentPermissionChecker),
+    createManagedMutationPermissionVerifier: vi.fn(() => managedMutationPermissionVerifier),
   } satisfies ActionApprovalRuntimeDependencies;
   return Object.assign(dependencies, {
     pool,
@@ -445,5 +471,8 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     managedUpdateExecutor,
     managedUpdateReconciler,
     managedUpdateLoop,
+    documentSourceRegistry,
+    documentPermissionChecker,
+    managedMutationPermissionVerifier,
   });
 }

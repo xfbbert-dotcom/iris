@@ -218,6 +218,12 @@ async function recordSnapshotObservation(
       if (text(replay.rows[0].operation_fingerprint) !== fingerprint) throw new ManagedKnowledgePageOperationConflictError();
       return { outcome: "already_applied", observation: mapObservation(replay.rows[0]) };
     }
+    const page = await requirePageForUpdate(client, normalized.managedPageId);
+    if (page.version !== normalized.managedPageVersion ||
+      page.linkedDocumentSourceId !== normalized.documentSourceId ||
+      page.managedBodyBlockId !== normalized.observedManagedBodyBlockId) {
+      throw new ManagedKnowledgePageVersionConflictError();
+    }
     await client.query(`INSERT INTO managed_knowledge_snapshot_observations (
       id, managed_page_id, managed_page_version, document_snapshot_id, document_source_id, snapshot_content_hash,
       observed_remote_revision_id, observed_managed_body_block_id, observed_block_type, managed_body_content_hash,
@@ -227,6 +233,16 @@ async function recordSnapshotObservation(
       normalized.documentSourceId, normalized.snapshotContentHash, normalized.observedRemoteRevisionId,
       normalized.observedManagedBodyBlockId, normalized.managedBodyContentHash, normalized.adapterVersion,
       normalized.operationKey, fingerprint, normalized.at]);
+    if (page.state === "active" &&
+      page.currentRemoteRevisionId === normalized.observedRemoteRevisionId &&
+      page.currentBodyContentHash === normalized.managedBodyContentHash) {
+      await client.query(
+        `UPDATE managed_knowledge_pages
+            SET current_reconciled_snapshot_id = $2,updated_at = $3
+          WHERE id = $1`,
+        [page.id, normalized.documentSnapshotId, normalized.at],
+      );
+    }
     return { outcome: "applied", observation: await requireObservation(client, normalized.id) };
   });
 }
@@ -362,6 +378,7 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
       page.managedBodyBlockId !== target.managedBodyBlockId ||
       page.currentRemoteRevisionId !== target.expectedRemoteRevisionId ||
       page.currentBodyContentHash !== target.currentBodyContentHash ||
+      page.currentReconciledSnapshotId !== target.targetSnapshotId ||
       text(proposalRow.risk_level) !== text(draftRow.risk_level) ||
       text(draftRow.status) !== "pending_review" ||
       text(draftRow.id) !== target.draftId ||
@@ -382,7 +399,7 @@ async function claimApprovedUpdate(dataSource: PostgresKnowledgeDraftDataSource,
       !stringArray(policyRow.allowed_risk_levels).includes(text(draftRow.risk_level)) ||
       text(sourceRow.id) !== target.linkedDocumentSourceId ||
       text(sourceRow.source_type) !== "authorized_wiki_document" ||
-      !["readable", "unknown"].includes(text(sourceRow.permission_state)) ||
+      text(sourceRow.permission_state) !== "readable" ||
       text(sourceRow.sync_state) !== "synced" || sourceRow.can_use_for_answering !== true ||
       sourceRow.can_use_for_knowledge_drafts !== true ||
       text(snapshotRow.id) !== target.targetSnapshotId ||
@@ -813,7 +830,7 @@ async function recordRemoteOutcome(dataSource: PostgresKnowledgeDraftDataSource,
 
 async function findResyncReadyExecution(
   dataSource: PostgresKnowledgeDraftDataSource,
-  input: { executionId?: string; observationId?: string },
+  input: { executionId?: string; observationId?: string; activeEmbeddingProfileId: string },
 ): Promise<ManagedResyncReadyExecution | undefined> {
   const executionId = input.executionId === undefined ? undefined : ref("executionId", input.executionId);
   const observationId = input.observationId === undefined ? undefined : ref("observationId", input.observationId);
@@ -822,6 +839,10 @@ async function findResyncReadyExecution(
   }
   const lookupColumn = executionId === undefined ? "observation.id" : "execution.id";
   const lookupValue = executionId ?? observationId!;
+  const activeEmbeddingProfileId = ref(
+    "activeEmbeddingProfileId",
+    input.activeEmbeddingProfileId,
+  );
   const result = await dataSource.query<Record<string, unknown>>(
     `SELECT execution.id AS execution_id,
             execution.version AS execution_version,
@@ -842,6 +863,9 @@ async function findResyncReadyExecution(
          ON snapshot.id = observation.document_snapshot_id
         AND snapshot.document_source_id = observation.document_source_id
         AND snapshot.content_hash = observation.snapshot_content_hash
+       JOIN document_snapshot_reindex_completions completion
+         ON completion.document_snapshot_id = snapshot.id
+        AND completion.embedding_profile_id = $2
       WHERE ${lookupColumn} = $1
         AND page.state = 'resync_required'
         AND page.expected_resync_content_hash = execution.after_body_content_hash
@@ -857,7 +881,7 @@ async function findResyncReadyExecution(
         AND observation.observed_block_type = 'text'
         AND snapshot.fetch_status = 'succeeded'
         AND snapshot.fetched_at >= execution.remote_request_dispatched_at
-        AND source.permission_state IN ('readable','unknown')
+        AND source.permission_state = 'readable'
         AND source.sync_state = 'synced'
         AND source.can_use_for_answering = TRUE
         AND source.can_use_for_knowledge_drafts = TRUE
@@ -872,7 +896,7 @@ async function findResyncReadyExecution(
         )
       ORDER BY observation.observed_at DESC, observation.id ASC
       LIMIT 1`,
-    [lookupValue],
+    [lookupValue, activeEmbeddingProfileId],
   );
   if (result.rows.length !== 1) return undefined;
   return {
@@ -889,6 +913,10 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
     expectedExecutionVersion: positive("expectedExecutionVersion", input.expectedExecutionVersion),
     expectedManagedPageVersion: positive("expectedManagedPageVersion", input.expectedManagedPageVersion),
     observationId: ref("observationId", input.observationId),
+    activeEmbeddingProfileId: ref(
+      "activeEmbeddingProfileId",
+      input.activeEmbeddingProfileId,
+    ),
     operationKey: ref("operationKey", input.operationKey),
     actor: ref("actor", input.actor),
     at: date("at", input.at),
@@ -922,6 +950,9 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
            ON snapshot.id = $4
            AND snapshot.document_source_id = source.id
            AND snapshot.content_hash = $5
+         JOIN document_snapshot_reindex_completions completion
+           ON completion.document_snapshot_id = snapshot.id
+          AND completion.embedding_profile_id = $9
          JOIN action_approvals approval
            ON approval.id = $8
           AND approval.proposal_id = $3
@@ -932,7 +963,7 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
           AND requirement.satisfied_source_type = 'action_approval'
           AND requirement.satisfied_source_id = approval.id
         WHERE source.id = $1
-          AND source.permission_state IN ('readable','unknown')
+          AND source.permission_state = 'readable'
           AND source.sync_state = 'synced'
           AND source.can_use_for_answering = TRUE
           AND source.can_use_for_knowledge_drafts = TRUE
@@ -950,7 +981,8 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
         FOR SHARE OF source,snapshot`,
       [observation.documentSourceId, page.id, execution.proposalId,
         observation.documentSnapshotId, observation.snapshotContentHash,
-        execution.remoteRequestDispatchedAt, execution.id, execution.approvalId ?? null],
+        execution.remoteRequestDispatchedAt, execution.id, execution.approvalId ?? null,
+        normalized.activeEmbeddingProfileId],
     );
     const ready = readiness.rows[0];
     if (
@@ -978,7 +1010,7 @@ async function completeResync(dataSource: PostgresKnowledgeDraftDataSource, inpu
     ) throw new ManagedKnowledgePageVersionConflictError();
     const proposalVersion = number(proposal.version);
     await client.query(`UPDATE knowledge_publication_update_executions SET state = 'succeeded', version = version + 1, updated_at = $2 WHERE id = $1`, [execution.id, normalized.at]);
-    await client.query(`UPDATE managed_knowledge_pages SET state = 'active', current_remote_revision_id = $2, current_body_content_hash = $3, expected_resync_content_hash = NULL, version = version + 1, updated_at = $4 WHERE id = $1`, [page.id, observation.observedRemoteRevisionId, observation.managedBodyContentHash, normalized.at]);
+    await client.query(`UPDATE managed_knowledge_pages SET state = 'active', current_remote_revision_id = $2, current_body_content_hash = $3, expected_resync_content_hash = NULL, current_reconciled_snapshot_id = $4, version = version + 1, updated_at = $5 WHERE id = $1`, [page.id, observation.observedRemoteRevisionId, observation.managedBodyContentHash, observation.documentSnapshotId, normalized.at]);
     await client.query(
       `INSERT INTO knowledge_publication_updates (
          id,origin_knowledge_publication_id,proposal_id,approval_id,draft_id,draft_revision,
@@ -1031,7 +1063,7 @@ async function listReconciliationRequired(dataSource: PostgresKnowledgeDraftData
 }
 
 async function getSourceAvailability(dataSource: PostgresKnowledgeDraftDataSource, documentSourceId: string): Promise<"available" | "barred"> {
-  const result = await dataSource.query<{ barred: boolean }>(`SELECT EXISTS (SELECT 1 FROM managed_knowledge_pages WHERE linked_document_source_id = $1 AND state <> 'active') AS barred`, [ref("documentSourceId", documentSourceId)]); return result.rows[0]?.barred === true ? "barred" : "available";
+  const result = await dataSource.query<{ barred: boolean }>(`SELECT EXISTS (SELECT 1 FROM managed_knowledge_pages WHERE linked_document_source_id = $1 AND (state <> 'active' OR current_reconciled_snapshot_id IS NULL)) AS barred`, [ref("documentSourceId", documentSourceId)]); return result.rows[0]?.barred === true ? "barred" : "available";
 }
 
 async function getMetadataForProposal(dataSource: PostgresKnowledgeDraftDataSource, proposalId: string) {
@@ -1166,11 +1198,11 @@ async function requireExecutionForUpdate(client: KnowledgeDraftTransactionClient
 async function requireObservation(queryable: Pick<PostgresKnowledgeDraftDataSource, "query">, id: string): Promise<ManagedSnapshotObservation> { const result = await queryable.query<ObservationRow>(`${observationSelect()} WHERE id = $1`, [id]); if (result.rows[0] === undefined) throw new ManagedKnowledgePageVersionConflictError(); return mapObservation(result.rows[0]); }
 async function insertPageEvent(client: KnowledgeDraftTransactionClient, value: { pageId: string; eventType: string; fromVersion?: number; toVersion: number; operationKey: string; fingerprint: string; actor?: string; reasonCode?: string; at: Date }): Promise<void> { await client.query(`INSERT INTO managed_knowledge_page_events (id,managed_page_id,event_type,from_version,to_version,operation_key,operation_fingerprint,actor,reason_code,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [randomUUID(),value.pageId,value.eventType,value.fromVersion ?? null,value.toVersion,value.operationKey,value.fingerprint,value.actor ?? null,value.reasonCode ?? null,value.at]); }
 async function insertExecutionEvent(client: KnowledgeDraftTransactionClient, executionId: string, eventType: string, fromVersion: number | undefined, toVersion: number, operationKey: string, fingerprint: string, reasonCode: string | undefined, at: Date): Promise<void> { await client.query(`INSERT INTO knowledge_publication_update_execution_events (id,execution_id,event_type,from_version,to_version,operation_key,operation_fingerprint,reason_code,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [randomUUID(),executionId,eventType,fromVersion ?? null,toVersion,operationKey,fingerprint,reasonCode ?? null,at]); }
-function pageSelect(): string { return `SELECT id,origin_knowledge_publication_id,target_policy_id,target_policy_version,authorization_group_id,remote_node_token,remote_document_token,managed_body_block_id,linked_document_source_id,current_remote_revision_id,current_body_content_hash,expected_resync_content_hash,state,version,created_at,updated_at FROM managed_knowledge_pages`; }
+function pageSelect(): string { return `SELECT id,origin_knowledge_publication_id,target_policy_id,target_policy_version,authorization_group_id,remote_node_token,remote_document_token,managed_body_block_id,linked_document_source_id,current_remote_revision_id,current_body_content_hash,expected_resync_content_hash,current_reconciled_snapshot_id,state,version,created_at,updated_at FROM managed_knowledge_pages`; }
 function targetSelect(): string { return `SELECT id,draft_id,draft_revision,draft_version,conflict_candidate_id,conflict_candidate_version,managed_page_id,managed_page_version,linked_document_source_id,target_snapshot_id,target_snapshot_hash,target_source_version,remote_document_token,managed_body_block_id,expected_remote_revision_id,current_body_content_hash,proposed_body_content_hash,authorization_group_id,target_policy_id,target_policy_version,operation_key,operation_fingerprint,created_at FROM knowledge_publication_update_targets`; }
 function executionSelect(): string { return `SELECT id,proposal_id,approval_id,executor_id,managed_page_id,managed_page_version,update_target_id,attempt_number,state,operation_key,operation_fingerprint,request_fingerprint,expected_remote_revision_id,before_body_content_hash,after_body_content_hash,client_token,response_revision_id,response_classification,reconciliation_reason_code,remote_request_dispatched_at,version,created_at,updated_at FROM knowledge_publication_update_executions`; }
 function observationSelect(): string { return `SELECT id,managed_page_id,managed_page_version,document_snapshot_id,document_source_id,snapshot_content_hash,observed_remote_revision_id,observed_managed_body_block_id,observed_block_type,managed_body_content_hash,adapter_version,operation_key,operation_fingerprint,observed_at FROM managed_knowledge_snapshot_observations`; }
-function mapPage(row: PageRow): ManagedKnowledgePage { return normalizeManagedKnowledgePage({ id:text(row.id),originKnowledgePublicationId:text(row.origin_knowledge_publication_id),targetPolicyId:text(row.target_policy_id),targetPolicyVersion:number(row.target_policy_version),authorizationGroupId:text(row.authorization_group_id),remoteNodeToken:text(row.remote_node_token),remoteDocumentToken:text(row.remote_document_token),managedBodyBlockId:text(row.managed_body_block_id),...(row.linked_document_source_id === null ? {} : {linkedDocumentSourceId:text(row.linked_document_source_id)}),...(row.current_remote_revision_id === null ? {} : {currentRemoteRevisionId:text(row.current_remote_revision_id)}),...(row.current_body_content_hash === null ? {} : {currentBodyContentHash:text(row.current_body_content_hash)}),...(row.expected_resync_content_hash === null ? {} : {expectedResyncContentHash:text(row.expected_resync_content_hash)}),state:text(row.state) as ManagedKnowledgePage["state"],version:number(row.version),createdAt:date("created_at",row.created_at),updatedAt:date("updated_at",row.updated_at) }); }
+function mapPage(row: PageRow): ManagedKnowledgePage { return normalizeManagedKnowledgePage({ id:text(row.id),originKnowledgePublicationId:text(row.origin_knowledge_publication_id),targetPolicyId:text(row.target_policy_id),targetPolicyVersion:number(row.target_policy_version),authorizationGroupId:text(row.authorization_group_id),remoteNodeToken:text(row.remote_node_token),remoteDocumentToken:text(row.remote_document_token),managedBodyBlockId:text(row.managed_body_block_id),...(row.linked_document_source_id === null ? {} : {linkedDocumentSourceId:text(row.linked_document_source_id)}),...(row.current_remote_revision_id === null ? {} : {currentRemoteRevisionId:text(row.current_remote_revision_id)}),...(row.current_body_content_hash === null ? {} : {currentBodyContentHash:text(row.current_body_content_hash)}),...(row.expected_resync_content_hash === null ? {} : {expectedResyncContentHash:text(row.expected_resync_content_hash)}),...(row.current_reconciled_snapshot_id === null || row.current_reconciled_snapshot_id === undefined ? {} : {currentReconciledSnapshotId:text(row.current_reconciled_snapshot_id)}),state:text(row.state) as ManagedKnowledgePage["state"],version:number(row.version),createdAt:date("created_at",row.created_at),updatedAt:date("updated_at",row.updated_at) }); }
 function mapTarget(row: TargetRow): ManagedKnowledgeUpdateTarget { return { id:text(row.id),draftId:text(row.draft_id),draftRevision:number(row.draft_revision),draftVersion:number(row.draft_version),conflictCandidateId:text(row.conflict_candidate_id),conflictCandidateVersion:number(row.conflict_candidate_version),managedPageId:text(row.managed_page_id),managedPageVersion:number(row.managed_page_version),linkedDocumentSourceId:text(row.linked_document_source_id),targetSnapshotId:text(row.target_snapshot_id),targetSnapshotHash:text(row.target_snapshot_hash),...(row.target_source_version === null ? {} : {targetSourceVersion:text(row.target_source_version)}),remoteDocumentToken:text(row.remote_document_token),managedBodyBlockId:text(row.managed_body_block_id),expectedRemoteRevisionId:text(row.expected_remote_revision_id),currentBodyContentHash:text(row.current_body_content_hash),proposedBodyContentHash:text(row.proposed_body_content_hash),authorizationGroupId:text(row.authorization_group_id),targetPolicyId:text(row.target_policy_id),targetPolicyVersion:number(row.target_policy_version),operationKey:text(row.operation_key),createdAt:date("created_at",row.created_at) }; }
 function mapExecution(row: ExecutionRow): ManagedKnowledgeUpdateExecution { return { id:text(row.id),proposalId:text(row.proposal_id),...(row.approval_id === null || row.approval_id === undefined ? {} : {approvalId:text(row.approval_id)}),...(row.executor_id === null || row.executor_id === undefined ? {} : {executorId:text(row.executor_id)}),managedPageId:text(row.managed_page_id),managedPageVersion:number(row.managed_page_version),updateTargetId:text(row.update_target_id),attemptNumber:number(row.attempt_number),state:text(row.state) as ManagedKnowledgeUpdateExecution["state"],operationKey:text(row.operation_key),requestFingerprint:text(row.request_fingerprint),expectedRemoteRevisionId:text(row.expected_remote_revision_id),beforeBodyContentHash:text(row.before_body_content_hash),afterBodyContentHash:text(row.after_body_content_hash),clientToken:text(row.client_token),...(row.response_revision_id === null ? {} : {responseRevisionId:text(row.response_revision_id)}),...(row.response_classification === null ? {} : {responseClassification:text(row.response_classification)}),...(row.reconciliation_reason_code === null ? {} : {reconciliationReasonCode:text(row.reconciliation_reason_code)}),...(row.remote_request_dispatched_at === null ? {} : {remoteRequestDispatchedAt:date("remote_request_dispatched_at",row.remote_request_dispatched_at)}),version:number(row.version),createdAt:date("created_at",row.created_at),updatedAt:date("updated_at",row.updated_at) }; }
 function mapObservation(row: ObservationRow): ManagedSnapshotObservation { return { id:text(row.id),managedPageId:text(row.managed_page_id),managedPageVersion:number(row.managed_page_version),documentSnapshotId:text(row.document_snapshot_id),documentSourceId:text(row.document_source_id),snapshotContentHash:text(row.snapshot_content_hash),observedRemoteRevisionId:text(row.observed_remote_revision_id),observedManagedBodyBlockId:text(row.observed_managed_body_block_id),observedBlockType:"text",managedBodyContentHash:text(row.managed_body_content_hash),adapterVersion:text(row.adapter_version),observedAt:date("observed_at",row.observed_at) }; }

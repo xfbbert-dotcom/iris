@@ -16,6 +16,7 @@ export async function insertManagedKnowledgePageFixture(input: {
   queryable: FixtureQueryable;
   state: ManagedKnowledgePageFixtureState;
   documentSourceId?: string;
+  currentReconciledSnapshotId?: string;
   suffix?: string;
   at?: Date;
 }): Promise<{ pageId: string; pageVersion: number }> {
@@ -82,13 +83,15 @@ export async function insertManagedKnowledgePageFixture(input: {
        id, origin_knowledge_publication_id, target_policy_id, target_policy_version,
        authorization_group_id, remote_node_token, remote_document_token,
        managed_body_block_id, linked_document_source_id, current_remote_revision_id,
-       current_body_content_hash, expected_resync_content_hash, state, version, created_at, updated_at
+       current_body_content_hash, expected_resync_content_hash, current_reconciled_snapshot_id,
+       state, version, created_at, updated_at
      ) VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, 'revision-1', repeat('f', 64),
-       $9, $10, 1, $11, $11)`,
+       $9, $10, $11, 1, $12, $12)`,
     [pageId, publicationId, policyId, `managed-fixture-group-${suffix}`,
       `managed-fixture-node-${suffix}`, `managed-fixture-document-${suffix}`,
       `managed-fixture-block-${suffix}`, input.documentSourceId ?? null,
-      input.state === "resync_required" ? "0".repeat(64) : null, input.state, at],
+      input.state === "resync_required" ? "0".repeat(64) : null,
+      input.currentReconciledSnapshotId ?? null, input.state, at],
   );
 
   return { pageId, pageVersion: 1 };

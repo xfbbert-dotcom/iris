@@ -11,7 +11,13 @@ export interface AnswerSourcePermissionVerifier {
     chatId: string;
     documentSourceIds: readonly string[];
     crossGroupGrantBindings?: readonly AnswerSourcePermissionGrantBinding[];
+    sourceSnapshotBindings?: readonly AnswerSourceSnapshotBinding[];
   }): Promise<AnswerSourcePermissionDecision[]>;
+};
+
+export type AnswerSourceSnapshotBinding = {
+  documentSourceId: string;
+  documentSnapshotId: string;
 };
 
 export type AnswerSourcePermissionGrantBinding = {
@@ -40,6 +46,7 @@ export type AnswerSourceFreshnessQueryable = {
 type ManagedSourceStateRow = {
   linked_document_source_id: unknown;
   state: unknown;
+  current_reconciled_snapshot_id: unknown;
 };
 
 type NormalizedSourceId = {
@@ -56,7 +63,12 @@ export function createAnswerSourcePermissionVerifier({
   managedSourceQueryable?: AnswerSourceFreshnessQueryable;
 }): AnswerSourcePermissionVerifier {
   return {
-    async verify({ chatId, documentSourceIds, crossGroupGrantBindings }) {
+    async verify({
+      chatId,
+      documentSourceIds,
+      crossGroupGrantBindings,
+      sourceSnapshotBindings,
+    }) {
       const decisions: AnswerSourcePermissionDecision[] = [];
       const seen = new Set<string>();
       const grantBoundDocumentSourceIds = normalizeGrantBoundDocumentSourceIds({
@@ -72,12 +84,25 @@ export function createAnswerSourcePermissionVerifier({
           outcome: "error" as const,
         }));
       }
+      const expectedSnapshots = normalizeSourceSnapshotBindings({
+        documentSourceIds,
+        sourceSnapshotBindings,
+      });
+      if (expectedSnapshots === undefined) {
+        return documentSourceIds.map((documentSourceId) => ({
+          documentSourceId: typeof documentSourceId === "string"
+            ? documentSourceId
+            : invalidSourceId(`type:${typeof documentSourceId}`).documentSourceId,
+          outcome: "error" as const,
+        }));
+      }
       const normalizedSourceIds = uniqueValidSourceIds(documentSourceIds);
       let managedSourceStates: Map<string, "active" | "barred"> | undefined;
       try {
         managedSourceStates = await loadManagedSourceStates(
           managedSourceQueryable,
           normalizedSourceIds,
+          expectedSnapshots,
         );
       } catch {
         managedSourceStates = undefined;
@@ -147,12 +172,13 @@ function uniqueValidSourceIds(documentSourceIds: readonly string[]): string[] {
 async function loadManagedSourceStates(
   queryable: AnswerSourceFreshnessQueryable | undefined,
   documentSourceIds: readonly string[],
+  expectedSnapshots: ReadonlyMap<string, string>,
 ): Promise<Map<string, "active" | "barred">> {
   const states = new Map<string, "active" | "barred">();
   if (queryable === undefined || documentSourceIds.length === 0) return states;
 
   const result = await queryable.query<ManagedSourceStateRow>(
-    `SELECT linked_document_source_id, state
+    `SELECT linked_document_source_id, state, current_reconciled_snapshot_id
      FROM managed_knowledge_pages
      WHERE linked_document_source_id = ANY($1::text[])
      ORDER BY linked_document_source_id ASC`,
@@ -168,9 +194,41 @@ async function loadManagedSourceStates(
     ) {
       throw new Error("managed source freshness result is invalid");
     }
-    states.set(row.linked_document_source_id, row.state === "active" ? "active" : "barred");
+    const expectedSnapshotId = expectedSnapshots.get(row.linked_document_source_id);
+    const snapshotIsCurrent = typeof row.current_reconciled_snapshot_id === "string"
+      && row.current_reconciled_snapshot_id.trim().length > 0
+      && (expectedSnapshotId === undefined
+        || row.current_reconciled_snapshot_id === expectedSnapshotId);
+    states.set(
+      row.linked_document_source_id,
+      row.state === "active" && snapshotIsCurrent ? "active" : "barred",
+    );
   }
   return states;
+}
+
+function normalizeSourceSnapshotBindings(input: {
+  documentSourceIds: readonly string[];
+  sourceSnapshotBindings: readonly AnswerSourceSnapshotBinding[] | undefined;
+}): Map<string, string> | undefined {
+  if (input.sourceSnapshotBindings === undefined) return new Map();
+  if (!Array.isArray(input.sourceSnapshotBindings)) return undefined;
+  const requested = new Set(input.documentSourceIds);
+  const result = new Map<string, string>();
+  for (const binding of input.sourceSnapshotBindings) {
+    if (
+      binding === null || typeof binding !== "object"
+      || typeof binding.documentSourceId !== "string"
+      || !requested.has(binding.documentSourceId)
+      || typeof binding.documentSnapshotId !== "string"
+      || binding.documentSnapshotId.trim().length === 0
+      || result.has(binding.documentSourceId)
+    ) {
+      return undefined;
+    }
+    result.set(binding.documentSourceId, binding.documentSnapshotId);
+  }
+  return result.size === requested.size ? result : undefined;
 }
 
 function normalizeGrantBoundDocumentSourceIds(input: {

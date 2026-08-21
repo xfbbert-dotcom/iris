@@ -129,6 +129,7 @@ const MAX_DOCUMENT_SYNC_RUNTIME_LIST_LIMIT = 100;
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
   managedKnowledgeUpdateQueue?: Pick<DocumentSyncQueue, "enqueue">;
+  activeEmbeddingProfileId?: string;
   sources: {
     list(input: DocumentSourceInventoryListInput): Promise<DocumentSource[]>;
     get(id: string): Promise<DocumentSource | undefined>;
@@ -583,6 +584,9 @@ function createEnabledDocumentSyncRuntime({
 
   return {
     managedKnowledgeUpdateQueue: queue,
+    ...(syncedSnapshotReindexer === undefined
+      ? {}
+      : { activeEmbeddingProfileId: syncedSnapshotReindexer.activeEmbeddingProfileId }),
     start() {
       loop.start();
       wikiSpaceLoop?.start();
@@ -1030,6 +1034,7 @@ function createSyncedSnapshotReindexer({
   const reindexPlanner = createReindexPlanner({ snapshots, queue: reindexQueue });
 
   return {
+    activeEmbeddingProfileId: embeddingProfileId,
     enqueueSyncedSnapshotReindex(input: { documentSnapshotId: string }) {
       return reindexPlanner.enqueueSyncedSnapshotReindex({
         embeddingProfileId,

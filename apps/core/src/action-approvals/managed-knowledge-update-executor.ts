@@ -18,6 +18,8 @@ import type {
   ManagedKnowledgePageRepository,
   ManagedKnowledgeUpdateClaimResult,
 } from "./managed-knowledge-page-repository.js";
+import type { ManagedKnowledgeMutationPermissionVerifier } from
+  "./managed-knowledge-mutation-permission-verifier.js";
 
 const MAX_BATCH_LIMIT = 100;
 
@@ -49,6 +51,7 @@ export type ManagedKnowledgeUpdateExecutorDependencies = {
     | "recordRemoteOutcome"
   >;
   updater: ManagedKnowledgeUpdater;
+  permissionVerifier: ManagedKnowledgeMutationPermissionVerifier;
   syncQueue: Pick<DocumentSyncQueue, "enqueue">;
   runtimeSnapshot(): ManagedKnowledgeUpdateRuntimeSnapshot;
   workerId: string;
@@ -60,6 +63,7 @@ export function createManagedKnowledgeUpdateExecutor({
   proposals,
   managedPages,
   updater,
+  permissionVerifier,
   syncQueue,
   runtimeSnapshot,
   workerId,
@@ -120,6 +124,7 @@ export function createManagedKnowledgeUpdateExecutor({
         results.push(await executeClaim({
           managedPages,
           updater,
+          permissionVerifier,
           syncQueue,
           claim,
           workerId: safeWorkerId,
@@ -135,6 +140,7 @@ export function createManagedKnowledgeUpdateExecutor({
 async function executeClaim(input: {
   managedPages: ManagedKnowledgeUpdateExecutorDependencies["managedPages"];
   updater: ManagedKnowledgeUpdater;
+  permissionVerifier: ManagedKnowledgeMutationPermissionVerifier;
   syncQueue: Pick<DocumentSyncQueue, "enqueue">;
   claim: ClaimedManagedKnowledgeUpdate;
   workerId: string;
@@ -149,6 +155,16 @@ async function executeClaim(input: {
   if (bindingFailure !== undefined) {
     return persistPreflightFailure(input, bindingFailure);
   }
+  let permissionAllowed: boolean;
+  try {
+    permissionAllowed = await input.permissionVerifier.verify({
+      documentSourceId: input.claim.target.linkedDocumentSourceId,
+      authorizationGroupId: input.claim.target.authorizationGroupId,
+    });
+  } catch {
+    return persistPermissionFailure(input, "permission_unavailable");
+  }
+  if (!permissionAllowed) return persistPermissionFailure(input, "permission_denied");
   let preflight: ManagedKnowledgeBlockObservation;
   try {
     preflight = await input.updater.preflight(remoteIdentity(input.claim));
@@ -206,6 +222,27 @@ async function executeClaim(input: {
     return { status: "failed", ...base, code: outcome.code };
   }
   return handleExplicitTransient(input, dispatched.execution.version, outcome.code);
+}
+
+async function persistPermissionFailure(
+  input: Parameters<typeof executeClaim>[0],
+  code: "permission_denied" | "permission_unavailable",
+): Promise<ManagedKnowledgeUpdateExecutorResult> {
+  const failed = await persistOutcome(input, {
+    expectedExecutionVersion: input.claim.execution.version,
+    classification: "preflight_failed",
+    pageDisposition: "blocked",
+    responseClassification: code,
+    reconciliationReasonCode: code,
+    operationPrefix: "managed-update-permission-failed",
+  });
+  await observe(input, failed.execution.version, "action_execution_failed", code);
+  return {
+    status: "failed",
+    proposalId: input.claim.proposal.id,
+    executionId: input.claim.execution.id,
+    code,
+  };
 }
 
 async function handleExplicitTransient(

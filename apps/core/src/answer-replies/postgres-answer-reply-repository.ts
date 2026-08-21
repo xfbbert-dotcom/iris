@@ -756,6 +756,7 @@ type SourceGrantBinding = {
 type ManagedSourceStateRow = {
   linked_document_source_id: unknown;
   state: unknown;
+  current_reconciled_snapshot_id: unknown;
 };
 
 async function lockManagedSourceFreshness(
@@ -768,7 +769,7 @@ async function lockManagedSourceFreshness(
   if (documentSourceIds.length === 0) return;
 
   const result = await client.query<ManagedSourceStateRow>(
-    `SELECT linked_document_source_id, state
+    `SELECT linked_document_source_id, state, current_reconciled_snapshot_id
      FROM managed_knowledge_pages
      WHERE linked_document_source_id = ANY($1::text[])
      ORDER BY linked_document_source_id ASC
@@ -776,6 +777,12 @@ async function lockManagedSourceFreshness(
     [documentSourceIds],
   );
   const requested = new Set(documentSourceIds);
+  const snapshotsBySource = new Map<string, Set<string>>();
+  for (const source of sources) {
+    const snapshotIds = snapshotsBySource.get(source.documentSourceId) ?? new Set<string>();
+    snapshotIds.add(source.documentSnapshotId);
+    snapshotsBySource.set(source.documentSourceId, snapshotIds);
+  }
   const seen = new Set<string>();
   for (const row of result.rows) {
     if (
@@ -783,6 +790,9 @@ async function lockManagedSourceFreshness(
       || !requested.has(row.linked_document_source_id)
       || seen.has(row.linked_document_source_id)
       || row.state !== "active"
+      || snapshotsBySource.get(row.linked_document_source_id)?.size !== 1
+      || row.current_reconciled_snapshot_id
+        !== [...snapshotsBySource.get(row.linked_document_source_id)!][0]
     ) {
       throw new AnswerReplyGrantStaleError();
     }

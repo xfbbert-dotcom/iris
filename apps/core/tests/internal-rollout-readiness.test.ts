@@ -152,6 +152,7 @@ describe("buildInternalRolloutReadinessReport", () => {
       enabled: true,
       running: true,
       migration0055Applied: true,
+      migration0056Applied: true,
       worker: { running: true },
       reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
     };
@@ -161,6 +162,12 @@ describe("buildInternalRolloutReadinessReport", () => {
     })).managedKnowledgeUpdates).toMatchObject({
       status: "fail",
       detail: "Managed knowledge update migration 0055 is not applied.",
+    });
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: { ...baseStatus, migration0056Applied: false },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge update migration 0056 is not applied.",
     });
     expect(checksById(buildInternalRolloutReadinessReport(env, {
       managedKnowledgeUpdateStatus: {

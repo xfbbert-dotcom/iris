@@ -135,6 +135,31 @@ describe("AnswerReplyDeliveryService", () => {
     expect(beginOrder).toBeLessThan(sendOrder);
   });
 
+  it("binds final permission verification to the prepared citation snapshot", async () => {
+    const harness = createHarness({
+      verifierResults: [[{
+        documentSourceId: "source-a",
+        outcome: "denied",
+        reason: "managed_source_unavailable",
+      }]],
+    });
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer())));
+
+    expect(harness.verifier.verify).toHaveBeenCalledWith({
+      chatId: "oc_1",
+      documentSourceIds: ["source-a"],
+      sourceSnapshotBindings: [{
+        documentSourceId: "source-a",
+        documentSnapshotId: "snapshot-a",
+      }],
+    });
+    expect(harness.repository.receipt?.delivery.state).toBe("permission_blocked");
+    expect(harness.replier.replyText).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: preparedText }),
+    );
+  });
+
   it.each([
     ["missing", {}],
     ["throwing", {
@@ -614,10 +639,18 @@ describe("AnswerReplyDeliveryService", () => {
     expect(harness.verifier.verify).toHaveBeenNthCalledWith(1, {
       chatId: "oc_1",
       documentSourceIds: ["source-a", "source-b"],
+      sourceSnapshotBindings: [
+        { documentSourceId: "source-a", documentSnapshotId: "snapshot-a" },
+        { documentSourceId: "source-b", documentSnapshotId: "snapshot-b" },
+      ],
     });
     expect(harness.verifier.verify).toHaveBeenNthCalledWith(2, {
       chatId: "oc_1",
       documentSourceIds: ["source-a", "source-b"],
+      sourceSnapshotBindings: [
+        { documentSourceId: "source-a", documentSnapshotId: "snapshot-a" },
+        { documentSourceId: "source-b", documentSnapshotId: "snapshot-b" },
+      ],
     });
   });
 
@@ -761,6 +794,10 @@ describe("AnswerReplyDeliveryService", () => {
     expect(harness.verifier.verify).toHaveBeenCalledWith({
       chatId: "oc_1",
       documentSourceIds: ["source-quello"],
+      sourceSnapshotBindings: [{
+        documentSourceId: "source-quello",
+        documentSnapshotId: "snapshot-quello",
+      }],
     });
     expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
     expect(harness.replier.replyText).toHaveBeenCalledOnce();
@@ -1002,6 +1039,10 @@ describe("AnswerReplyDeliveryService", () => {
     expect(harness.verifier.verify).toHaveBeenCalledWith({
       chatId: "oc_1",
       documentSourceIds: ["source-a"],
+      sourceSnapshotBindings: [{
+        documentSourceId: "source-a",
+        documentSnapshotId: "snapshot-a",
+      }],
       crossGroupGrantBindings: [{
         documentSourceId: "source-a",
         grantId: "grant-a",

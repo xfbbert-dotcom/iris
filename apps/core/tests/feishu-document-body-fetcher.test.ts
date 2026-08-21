@@ -85,7 +85,10 @@ describe("FeishuDocumentBodyFetcher", () => {
 
   it("fetches raw content for docx document sources", async () => {
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
-    const fetch = vi.fn(async () => jsonResponse({ code: 0, data: { content: "Doc body" } }));
+    const fetch = vi.fn(async () => jsonResponse({
+      code: 0,
+      data: { content: "Doc body", revision_id: 12 },
+    }));
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn",
       tokenProvider,
@@ -95,6 +98,7 @@ describe("FeishuDocumentBodyFetcher", () => {
 
     await expect(fetcher.fetch(source())).resolves.toEqual({
       bodyText: "Doc body",
+      sourceVersion: "12",
       fetchedAt: new Date("2026-07-03T03:00:00.000Z"),
     });
     expect(tokenProvider.getTenantAccessToken).toHaveBeenCalledOnce();

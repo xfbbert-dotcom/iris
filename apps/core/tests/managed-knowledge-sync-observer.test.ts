@@ -109,6 +109,71 @@ describe("ManagedKnowledgeSyncObserver", () => {
     expect(repository.recordSnapshotObservation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["missing source revision", undefined, "Managed body"],
+    ["concurrent revision change", "11", "Managed body"],
+    ["raw-body mismatch", "12", "Different raw body"],
+  ])("does not record an incoherent managed observation for %s", async (
+    _label,
+    sourceVersion,
+    snapshotBody,
+  ) => {
+    const repository = {
+      findByRemoteIdentity: vi.fn(async () => managedPage({
+        linkedDocumentSourceId: "source-1",
+      })),
+      linkSource: vi.fn(),
+      recordSnapshotObservation: vi.fn(),
+      findResyncReadyExecution: vi.fn(),
+      completeResync: vi.fn(),
+    };
+    const observer = createManagedKnowledgeSyncObserver({
+      repository,
+      blockReader: {
+        readManagedBlock: vi.fn(async () => ({
+          revision: 12,
+          blockType: "text" as const,
+          body: "Managed body",
+        })),
+      },
+    });
+
+    await observer.observe({
+      source: documentSource(),
+      snapshot: documentSnapshot({
+        bodyText: snapshotBody,
+        sourceVersion,
+      }),
+    });
+
+    expect(repository.recordSnapshotObservation).not.toHaveBeenCalled();
+    expect(repository.completeResync).not.toHaveBeenCalled();
+  });
+
+  it("preserves an ordinary successful snapshot when managed block readback is unavailable", async () => {
+    const repository = {
+      findByRemoteIdentity: vi.fn(async () => managedPage({
+        linkedDocumentSourceId: "source-1",
+      })),
+      linkSource: vi.fn(),
+      recordSnapshotObservation: vi.fn(),
+    };
+    const observer = createManagedKnowledgeSyncObserver({
+      repository,
+      blockReader: {
+        readManagedBlock: vi.fn(async () => {
+          throw new Error("managed block unavailable");
+        }),
+      },
+    });
+
+    await expect(observer.observe({
+      source: documentSource(),
+      snapshot: documentSnapshot(),
+    })).resolves.toBeUndefined();
+    expect(repository.recordSnapshotObservation).not.toHaveBeenCalled();
+  });
+
   it("observes an already linked exact source without relinking it", async () => {
     const page = managedPage({ linkedDocumentSourceId: "source-1", version: 4 });
     const repository = {
@@ -135,7 +200,7 @@ describe("ManagedKnowledgeSyncObserver", () => {
 
     await observer.observe({
       source: documentSource(),
-      snapshot: documentSnapshot(),
+      snapshot: documentSnapshot({ sourceVersion: "13" }),
     });
 
     expect(repository.linkSource).not.toHaveBeenCalled();
@@ -144,7 +209,7 @@ describe("ManagedKnowledgeSyncObserver", () => {
     }));
   });
 
-  it("completes resync only through an exact durable observation candidate", async () => {
+  it("records an exact resync observation but defers activation until reindex completion", async () => {
     const page = managedPage({
       linkedDocumentSourceId: "source-1",
       state: "resync_required",
@@ -192,20 +257,18 @@ describe("ManagedKnowledgeSyncObserver", () => {
       now: () => observedAt,
     });
 
-    await observer.observe({ source: documentSource(), snapshot: documentSnapshot({ id: "snapshot-new" }) });
+    await observer.observe({
+      source: documentSource(),
+      snapshot: documentSnapshot({
+        id: "snapshot-new",
+        bodyText: "New approved body",
+        sourceVersion: "13",
+      }),
+    });
 
-    expect(repository.findResyncReadyExecution).toHaveBeenCalledWith({
-      observationId: "observation-resync",
-    });
-    expect(repository.completeResync).toHaveBeenCalledWith({
-      executionId: "execution-1",
-      expectedExecutionVersion: 3,
-      expectedManagedPageVersion: 3,
-      observationId: "observation-resync",
-      operationKey: expect.stringMatching(/^managed-resync-complete:[0-9a-f]{64}$/u),
-      actor: "document-sync",
-      at: observedAt,
-    });
+    expect(repository.recordSnapshotObservation).toHaveBeenCalledOnce();
+    expect(repository.findResyncReadyExecution).not.toHaveBeenCalled();
+    expect(repository.completeResync).not.toHaveBeenCalled();
   });
 
   it("records but does not activate a sync callback that arrives before remote_applied is durable", async () => {
@@ -232,7 +295,14 @@ describe("ManagedKnowledgeSyncObserver", () => {
       createId: () => "observation-early",
     });
 
-    await observer.observe({ source: documentSource(), snapshot: documentSnapshot({ id: "snapshot-new" }) });
+    await observer.observe({
+      source: documentSource(),
+      snapshot: documentSnapshot({
+        id: "snapshot-new",
+        bodyText: "New approved body",
+        sourceVersion: "13",
+      }),
+    });
 
     expect(repository.recordSnapshotObservation).toHaveBeenCalledOnce();
     expect(repository.completeResync).not.toHaveBeenCalled();
@@ -342,7 +412,8 @@ function documentSnapshot(overrides: Partial<DocumentSnapshot> = {}): DocumentSn
     documentSourceId: "source-1",
     sourceUri: "https://docs.feishu.cn/docx/docx-1",
     fetchStatus: "succeeded",
-    bodyText: "Whole document body",
+    bodyText: "Approved body",
+    sourceVersion: "12",
     contentHash: "b".repeat(64),
     fetchedAt: new Date("2026-08-20T01:00:00.000Z"),
     createdAt: new Date("2026-08-20T01:00:01.000Z"),

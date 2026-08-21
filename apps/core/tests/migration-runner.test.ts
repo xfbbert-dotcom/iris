@@ -104,6 +104,26 @@ describe("runMigrations", () => {
     expect(normalized).not.toMatch(/update knowledge_publication_update_executions/iu);
   });
 
+  it("reserves ordered 0056 compatibility for exact-profile reindex completion", async () => {
+    const migrationNames = (await readdir(defaultMigrationsDir())).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const migrationName = "0056_managed_resync_index_completion.sql";
+    expect(migrationNames.filter((name) => name.startsWith("0056_"))).toEqual([migrationName]);
+    expect(migrationNames.indexOf(migrationName))
+      .toBeGreaterThan(migrationNames.indexOf("0055_managed_update_execution_identity.sql"));
+
+    const normalized = (await readFile(join(defaultMigrationsDir(), migrationName), "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("create table document_snapshot_reindex_completions");
+    expect(normalized).toContain("unique (document_snapshot_id, embedding_profile_id)");
+    expect(normalized).toContain("add column current_reconciled_snapshot_id text");
+    expect(normalized).not.toMatch(/update managed_knowledge_pages/iu);
+    expect(normalized).not.toMatch(/delete from/iu);
+  });
+
   it("reserves exactly one ordered 0046 knowledge-conflict migration", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
     expect(migrationNames.filter((name) => name.startsWith("0046_"))).toEqual([

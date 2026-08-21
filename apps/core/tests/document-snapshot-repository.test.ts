@@ -506,7 +506,7 @@ describe("DocumentSnapshotRepository", () => {
       expect(normalized).toContain("ds.can_use_for_answering = true");
       expect(normalized).toContain("ds.permission_state in ('unknown', 'readable')");
       expect(normalized).toContain(
-        "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and managed.state <> 'active' )",
+        "and not exists ( select 1 from managed_knowledge_pages managed where managed.linked_document_source_id = ds.id and ( managed.state <> 'active' or managed.current_reconciled_snapshot_id is distinct from s.id ) )",
       );
       expect(normalized).toContain(
         "order by s.document_source_id asc, s.fetched_at desc, s.id asc",
@@ -788,6 +788,7 @@ values ($1, 'group_visible_document', $2, 'Whitespace snapshot source', 'group-1
         queryable: client,
         state,
         documentSourceId: managedSourceId,
+        currentReconciledSnapshotId: `managed-snapshot-${managedSourceId}`,
         suffix: `snapshot-${state}-${suffix}`,
       });
       const repository = createDocumentSnapshotRepository({ queryable: client });
@@ -828,6 +829,7 @@ values ($1, 'group_visible_document', $2, 'Whitespace snapshot source', 'group-1
         queryable: client,
         state: "active",
         documentSourceId: activeSourceId,
+        currentReconciledSnapshotId: `managed-snapshot-${activeSourceId}`,
         suffix: `snapshot-active-${suffix}`,
       });
       const repository = createDocumentSnapshotRepository({ queryable: client });

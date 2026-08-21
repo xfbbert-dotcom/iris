@@ -106,6 +106,7 @@ export type CompleteManagedResyncInput = {
   expectedExecutionVersion: number;
   expectedManagedPageVersion: number;
   observationId: string;
+  activeEmbeddingProfileId: string;
   operationKey: string;
   actor: string;
   at: Date;
@@ -229,6 +230,7 @@ export interface ManagedKnowledgePageRepository {
   findResyncReadyExecution(input: {
     executionId?: string;
     observationId?: string;
+    activeEmbeddingProfileId: string;
   }): Promise<ManagedResyncReadyExecution | undefined>;
   listReconciliationRequired(input: {
     limit: number;

@@ -129,6 +129,24 @@ describe("ManagedKnowledgeUpdateReconciler", () => {
     }));
   });
 
+  it("blocks stale claimed work when live source permission is denied before remote preflight", async () => {
+    const dependencies = reconcilerDependencies();
+    dependencies.claim.execution = { ...dependencies.claim.execution, state: "claimed", version: 1 };
+    dependencies.claim.page = { ...dependencies.claim.page, state: "updating", version: 2 };
+    dependencies.permissionVerifier.verify.mockResolvedValue(false);
+    const reconciler = createManagedKnowledgeUpdateReconciler(dependencies);
+
+    await expect(reconciler.reconcileOne(dependencies.claim)).resolves.toMatchObject({
+      status: "reconciliation_required",
+      code: "permission_denied",
+    });
+    expect(dependencies.managedPages.recordRemoteOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ classification: "preflight_failed", pageDisposition: "blocked" }),
+    );
+    expect(dependencies.updater.preflight).not.toHaveBeenCalled();
+    expect(dependencies.updater.update).not.toHaveBeenCalled();
+  });
+
   it("bars a stale claimed execution whose exact preflight no longer matches", async () => {
     const dependencies = reconcilerDependencies();
     dependencies.claim.execution = { ...dependencies.claim.execution, state: "claimed", version: 1 };
@@ -175,6 +193,27 @@ describe("ManagedKnowledgeUpdateReconciler", () => {
       executionId: "execution-1",
       staleDispatchedBefore: new Date("2026-08-21T02:59:00.000Z"),
     }));
+  });
+
+  it("does not claim or send a same-token retry when live source permission is unavailable", async () => {
+    const dependencies = reconcilerDependencies();
+    dependencies.updater.readBack.mockResolvedValue({
+      revision: 12,
+      blockType: "text",
+      canonicalBodyHash: oldHash,
+    });
+    dependencies.permissionVerifier.verify.mockRejectedValue(new Error("permission unavailable"));
+    const reconciler = createManagedKnowledgeUpdateReconciler(dependencies);
+
+    await expect(reconciler.reconcileOne(dependencies.claim)).resolves.toMatchObject({
+      status: "reconciliation_required",
+      code: "permission_unavailable",
+    });
+    expect(dependencies.managedPages.recordRemoteOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ classification: "failed", pageDisposition: "blocked" }),
+    );
+    expect(dependencies.managedPages.claimRemoteRetry).not.toHaveBeenCalled();
+    expect(dependencies.updater.update).not.toHaveBeenCalled();
   });
 
   it("re-enqueues durable remote_applied work without another remote mutation or readback", async () => {
@@ -241,6 +280,7 @@ describe("ManagedKnowledgeUpdateReconciler", () => {
       expectedExecutionVersion: 3,
       expectedManagedPageVersion: 3,
       observationId: "observation-early",
+      activeEmbeddingProfileId: "profile-active",
       operationKey: expect.stringMatching(/^managed-update-resync-complete:[0-9a-f]{64}$/u),
       actor: "managed-update-reconciler-1",
       at,
@@ -341,8 +381,10 @@ function reconcilerDependencies() {
     claim,
     managedPages,
     updater,
+    permissionVerifier: { verify: vi.fn(async () => true) },
     syncQueue: { enqueue: vi.fn(async () => undefined) },
     workerId: "managed-update-reconciler-1",
+    activeEmbeddingProfileId: "profile-active",
     staleDispatchMs: 60_000,
     now: () => at,
   };

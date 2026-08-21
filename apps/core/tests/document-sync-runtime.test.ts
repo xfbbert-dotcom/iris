@@ -665,6 +665,7 @@ describe("createDocumentSyncRuntime", () => {
       fetcher,
       managedKnowledgeObserver,
       syncedSnapshotReindexer: {
+        activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
         enqueueSyncedSnapshotReindex: expect.any(Function),
       },
     });

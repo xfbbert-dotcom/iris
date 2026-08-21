@@ -44,6 +44,7 @@ describe("GET /internal/readiness", () => {
       managedKnowledgeUpdates: {
         deploymentEnabled: true,
         groupAllowlist: ["oc_pilot"],
+        activeEmbeddingProfileId: "profile-active",
         syncQueue,
         intervalMs: 1_000,
         batchLimit: 10,
@@ -98,7 +99,8 @@ describe("GET /internal/readiness", () => {
         outbox: { pending: 0, processing: 0, external_attempting: 0, sent: 0, failed: 0,
           outcome_unknown: 0, terminalFailed: 0 },
         managedKnowledgeUpdates: {
-          running: true, intervalMs: 1_000, batchLimit: 10, migration0055Applied: true,
+          running: true, intervalMs: 1_000, batchLimit: 10,
+          migration0055Applied: true, migration0056Applied: true,
           reconciliation: { outcomeUnknown: 1, reconciliationRequired: 1 },
           draftBody: "Approved body", documentToken: "docx_secret", remoteError: "raw timeout body",
         },
@@ -121,6 +123,7 @@ describe("GET /internal/readiness", () => {
     expect(status.json().components.managedKnowledgeUpdates).toMatchObject({
       enabled: true,
       migration0055Applied: true,
+      migration0056Applied: true,
       reconciliation: { outcomeUnknown: 1, reconciliationRequired: 1 },
     });
     expect(status.body + readiness.body).not.toMatch(/Approved body|docx_secret|raw timeout body/iu);
@@ -875,6 +878,7 @@ function fakeDocumentSyncRuntimeForReadiness(
     registerUserSubmittedDocument: vi.fn(),
     deadLetters: {} as DocumentSyncRuntime["deadLetters"],
     wikiSpaces: {} as DocumentSyncRuntime["wikiSpaces"],
+    activeEmbeddingProfileId: "profile-active",
   };
 }
 

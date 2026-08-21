@@ -151,9 +151,12 @@ export function createFeishuDocumentBodyFetcher({
         );
       }
 
-      const bodyText = readRawContent(responseBody, safeMaxContentChars);
+      const rawContent = readRawContent(responseBody, safeMaxContentChars);
       return {
-        bodyText,
+        bodyText: rawContent.bodyText,
+        ...(rawContent.sourceVersion === undefined
+          ? {}
+          : { sourceVersion: rawContent.sourceVersion }),
         fetchedAt: now(),
       };
     },
@@ -327,7 +330,10 @@ function normalizeFeishuDocumentToken(value: unknown): string | undefined {
   return token;
 }
 
-function readRawContent(responseBody: unknown, maxContentChars: number): string {
+function readRawContent(
+  responseBody: unknown,
+  maxContentChars: number,
+): { bodyText: string; sourceVersion?: string } {
   if (!isRecord(responseBody)) {
     throw new Error("Feishu document raw content response did not include content");
   }
@@ -356,7 +362,14 @@ function readRawContent(responseBody: unknown, maxContentChars: number): string 
     throw new Error(`Feishu document raw content exceeds ${maxContentChars} characters`);
   }
 
-  return bodyText;
+  const revision = responseBody.data.revision_id;
+  const sourceVersion = typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
+    ? String(revision)
+    : typeof revision === "string" && /^[1-9][0-9]*$/u.test(revision) &&
+        Number.isSafeInteger(Number(revision))
+      ? revision
+      : undefined;
+  return { bodyText, ...(sourceVersion === undefined ? {} : { sourceVersion }) };
 }
 
 function trimTrailingSlash(value: string): string {

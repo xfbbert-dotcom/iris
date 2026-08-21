@@ -10,6 +10,8 @@ import type {
   ClaimedManagedKnowledgeUpdate,
   ManagedKnowledgePageRepository,
 } from "./managed-knowledge-page-repository.js";
+import type { ManagedKnowledgeMutationPermissionVerifier } from
+  "./managed-knowledge-mutation-permission-verifier.js";
 
 const MAX_BATCH_LIMIT = 100;
 
@@ -25,6 +27,8 @@ export function createManagedKnowledgeUpdateReconciler({
   syncQueue,
   workerId,
   staleDispatchMs,
+  activeEmbeddingProfileId,
+  permissionVerifier,
   now = () => new Date(),
 }: {
   managedPages: Pick<
@@ -40,13 +44,21 @@ export function createManagedKnowledgeUpdateReconciler({
   syncQueue: Pick<DocumentSyncQueue, "enqueue">;
   workerId: string;
   staleDispatchMs: number;
+  activeEmbeddingProfileId: string;
+  permissionVerifier: ManagedKnowledgeMutationPermissionVerifier;
   now?: () => Date;
 }) {
   const safeWorkerId = requireIdentifier("workerId", workerId);
   const safeStaleDispatchMs = requirePositiveInteger("staleDispatchMs", staleDispatchMs);
+  const safeActiveEmbeddingProfileId = requireIdentifier(
+    "activeEmbeddingProfileId",
+    activeEmbeddingProfileId,
+  );
   const dependencies = {
-    managedPages, updater, syncQueue, workerId: safeWorkerId,
-    staleDispatchMs: safeStaleDispatchMs, now,
+    managedPages, updater, permissionVerifier, syncQueue, workerId: safeWorkerId,
+    staleDispatchMs: safeStaleDispatchMs,
+    activeEmbeddingProfileId: safeActiveEmbeddingProfileId,
+    now,
   };
   const reconcileOne = (claim: ClaimedManagedKnowledgeUpdate) =>
     reconcileManagedKnowledgeUpdate({ ...dependencies, claim });
@@ -87,6 +99,8 @@ async function reconcileManagedKnowledgeUpdate(input: {
   claim: ClaimedManagedKnowledgeUpdate;
   workerId: string;
   staleDispatchMs: number;
+  activeEmbeddingProfileId: string;
+  permissionVerifier: ManagedKnowledgeMutationPermissionVerifier;
   now: () => Date;
 }): Promise<ManagedKnowledgeUpdateReconciliationResult> {
   if (input.claim.execution.state === "claimed") return recoverStaleClaim(input);
@@ -149,12 +163,15 @@ async function reconcileManagedKnowledgeUpdate(input: {
 async function recoverStaleClaim(
   input: Parameters<typeof reconcileManagedKnowledgeUpdate>[0],
 ): Promise<ManagedKnowledgeUpdateReconciliationResult> {
-  const failPreflight = async (code: string) => {
+  const failPreflight = async (
+    code: string,
+    pageDisposition: "reconciliation_required" | "blocked" = "reconciliation_required",
+  ) => {
     await input.managedPages.recordRemoteOutcome({
       executionId: input.claim.execution.id,
       expectedExecutionVersion: input.claim.execution.version,
       classification: "preflight_failed",
-      pageDisposition: "reconciliation_required",
+      pageDisposition,
       responseClassification: code,
       reconciliationReasonCode: code,
       operationKey: stableOperationKey("managed-update-stale-claim-preflight-failed", [
@@ -174,6 +191,8 @@ async function recoverStaleClaim(
     input.claim.execution.executorId === undefined) {
     return failPreflight("stale_claim_identity_missing");
   }
+  const permissionFailure = await livePermissionFailure(input);
+  if (permissionFailure !== undefined) return failPreflight(permissionFailure, "blocked");
   let preflight;
   try {
     preflight = await input.updater.preflight(remoteIdentity(input.claim));
@@ -279,6 +298,28 @@ async function recoverStaleClaim(
 async function retrySameToken(
   input: Parameters<typeof reconcileManagedKnowledgeUpdate>[0],
 ): Promise<ManagedKnowledgeUpdateReconciliationResult> {
+  const permissionFailure = await livePermissionFailure(input);
+  if (permissionFailure !== undefined) {
+    await input.managedPages.recordRemoteOutcome({
+      executionId: input.claim.execution.id,
+      expectedExecutionVersion: input.claim.execution.version,
+      classification: "failed",
+      pageDisposition: "blocked",
+      responseClassification: permissionFailure,
+      reconciliationReasonCode: permissionFailure,
+      operationKey: stableOperationKey("managed-update-retry-permission-failed", [
+        input.claim.execution.id,
+        permissionFailure,
+      ]),
+      actor: input.workerId,
+      at: requireDate(input.now()),
+    });
+    return {
+      status: "reconciliation_required",
+      executionId: input.claim.execution.id,
+      code: permissionFailure,
+    };
+  }
   let retry;
   try {
     const claimedAt = requireDate(input.now());
@@ -374,6 +415,20 @@ async function retrySameToken(
   };
 }
 
+async function livePermissionFailure(
+  input: Parameters<typeof reconcileManagedKnowledgeUpdate>[0],
+): Promise<"permission_denied" | "permission_unavailable" | undefined> {
+  try {
+    const allowed = await input.permissionVerifier.verify({
+      documentSourceId: input.claim.target.linkedDocumentSourceId,
+      authorizationGroupId: input.claim.target.authorizationGroupId,
+    });
+    return allowed ? undefined : "permission_denied";
+  } catch {
+    return "permission_unavailable";
+  }
+}
+
 async function requireReconciliation(
   input: Parameters<typeof reconcileManagedKnowledgeUpdate>[0],
   reasonCode: string,
@@ -428,6 +483,7 @@ async function enqueueAndComplete(
   }
   const candidate = await input.managedPages.findResyncReadyExecution({
     executionId: input.claim.execution.id,
+    activeEmbeddingProfileId: input.activeEmbeddingProfileId,
   });
   if (candidate === undefined) return true;
   await input.managedPages.completeResync({
@@ -435,6 +491,7 @@ async function enqueueAndComplete(
     expectedExecutionVersion: candidate.executionVersion,
     expectedManagedPageVersion: candidate.managedPageVersion,
     observationId: candidate.observationId,
+    activeEmbeddingProfileId: input.activeEmbeddingProfileId,
     operationKey: stableOperationKey("managed-update-resync-complete", [
       candidate.executionId,
       candidate.observationId,
