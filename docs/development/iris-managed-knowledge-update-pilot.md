@@ -93,9 +93,13 @@ function Assert-CapabilityShape([object]$s,[string]$label) { $caps=Prop $s capab
 function Assert-ManagedDatabaseDrain {
   $hasPrivatePg=(-not [string]::IsNullOrWhiteSpace([string]$env:PGSERVICE)) -or ((-not [string]::IsNullOrWhiteSpace([string]$env:PGHOST)) -and (-not [string]::IsNullOrWhiteSpace([string]$env:PGDATABASE)))
   if (-not $hasPrivatePg) { throw 'Missing private read-only libpq PG* environment for managed drain' }
+  try { $psqlCommand=Get-Command -Name 'psql' -CommandType Application -ErrorAction Stop | Select-Object -First 1 } catch { throw 'PostgreSQL client is unavailable for managed drain' }
+  if ($null -eq $psqlCommand) { throw 'PostgreSQL client is unavailable for managed drain' }
   $sql="BEGIN READ ONLY; SELECT state, count(*)::bigint FROM knowledge_publication_update_executions WHERE state IN ('claimed','remote_request_dispatched','outcome_unknown','remote_applied','resync_required','reconciliation_required') GROUP BY state ORDER BY state; COMMIT;"
-  $rows=@(& psql -X -v ON_ERROR_STOP=1 -At -F ',' -q -c $sql 2>$null)
-  if ($LASTEXITCODE -ne 0) { throw 'Managed durable-state drain query failed' }
+  $global:LASTEXITCODE=$null
+  $rows=@(& $psqlCommand -X -v ON_ERROR_STOP=1 -At -F ',' -q -c $sql 2>$null)
+  $invocationSucceeded=$?; $psqlExitCode=$global:LASTEXITCODE
+  if (-not $invocationSucceeded -or $psqlExitCode -isnot [int] -or $psqlExitCode -ne 0) { throw 'Managed durable-state drain query failed' }
   foreach ($row in $rows) { $parts=([string]$row).Split(',',2); if ($parts.Count -ne 2 -or $parts[0] -notin @('claimed','remote_request_dispatched','outcome_unknown','remote_applied','resync_required','reconciliation_required') -or $parts[1] -notmatch '^[0-9]+$' -or [long]$parts[1] -ne 0) { throw 'Managed durable-state drain is not zero' } }
 }
 ```
