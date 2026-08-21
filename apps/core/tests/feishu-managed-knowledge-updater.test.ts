@@ -148,6 +148,11 @@ describe("FeishuManagedKnowledgeUpdater", () => {
       expected: { kind: "not_applied_retryable", code: "rate_limited" },
     },
     {
+      name: "application rate limit",
+      response: jsonResponse({ code: 99991400, msg: "rate limited" }, { status: 400 }),
+      expected: { kind: "not_applied_retryable", code: "rate_limited" },
+    },
+    {
       name: "server error",
       response: jsonResponse({ code: 1771001, msg: "server error" }, { status: 500 }),
       expected: { kind: "not_applied_retryable", code: "server_error" },
@@ -161,6 +166,38 @@ describe("FeishuManagedKnowledgeUpdater", () => {
   it("fails closed when Feishu status and application code disagree", async () => {
     const updater = createUpdater({
       fetch: vi.fn(async () => jsonResponse({ code: 1770032, msg: "forbidden" })),
+    });
+
+    await expect(updater.update(validUpdateInput)).resolves.toEqual({
+      kind: "unknown",
+      code: "malformed_success",
+    });
+  });
+
+  it.each([
+    { status: 429, code: 1770021, name: "rate-limit HTTP with stale code" },
+    { status: 500, code: 1770021, name: "server-error HTTP with stale code" },
+    { status: 403, code: 1770021, name: "forbidden HTTP with stale code" },
+    { status: 404, code: 1770021, name: "missing HTTP with stale code" },
+    { status: 429, code: 1770002, name: "rate-limit HTTP with missing code" },
+    { status: 500, code: 1770002, name: "server-error HTTP with missing code" },
+    { status: 403, code: 1770002, name: "forbidden HTTP with missing code" },
+    { status: 404, code: 99991400, name: "missing HTTP with rate-limit code" },
+    { status: 400, code: 1771001, name: "client-error HTTP with server code" },
+  ])("fails closed for $name", async ({ status, code }) => {
+    const updater = createUpdater({
+      fetch: vi.fn(async () => jsonResponse({ code, msg: "contradictory" }, { status })),
+    });
+
+    await expect(updater.update(validUpdateInput)).resolves.toEqual({
+      kind: "unknown",
+      code: "malformed_success",
+    });
+  });
+
+  it("does not infer invalid from an unknown ordinary 4xx application code", async () => {
+    const updater = createUpdater({
+      fetch: vi.fn(async () => jsonResponse({ code: 123456, msg: "unknown" }, { status: 400 })),
     });
 
     await expect(updater.update(validUpdateInput)).resolves.toEqual({
@@ -185,6 +222,25 @@ describe("FeishuManagedKnowledgeUpdater", () => {
       });
     },
   );
+
+  it.each([
+    { name: "equal", documentRevisionId: 12 },
+    { name: "lower", documentRevisionId: 1 },
+  ])("rejects a positive resulting revision that is $name to the bound revision", async ({
+    documentRevisionId,
+  }) => {
+    const updater = createUpdater({
+      fetch: vi.fn(async () => jsonResponse({
+        code: 0,
+        data: { document_revision_id: documentRevisionId },
+      })),
+    });
+
+    await expect(updater.update(validUpdateInput)).resolves.toEqual({
+      kind: "unknown",
+      code: "malformed_success",
+    });
+  });
 
   it("returns timeout when the dispatched request is aborted by its deadline", async () => {
     vi.useFakeTimers();
@@ -247,6 +303,29 @@ describe("FeishuManagedKnowledgeUpdater", () => {
       kind: "unknown",
       code: "connection_lost",
     });
+  });
+
+  it.each([
+    {
+      name: "fetch rejection",
+      fetch: vi.fn(async () => {
+        throw new DOMException("upstream abort", "AbortError");
+      }),
+      expected: { kind: "unknown", code: "connection_lost" },
+    },
+    {
+      name: "response-body rejection",
+      fetch: vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new DOMException("upstream abort", "AbortError"));
+        },
+      }), { status: 200 })),
+      expected: { kind: "unknown", code: "malformed_success" },
+    },
+  ])("does not treat an upstream AbortError $name as a local timeout", async ({ fetch, expected }) => {
+    const updater = createUpdater({ fetch });
+
+    await expect(updater.update(validUpdateInput)).resolves.toEqual(expected);
   });
 
   it.each([
@@ -361,6 +440,27 @@ describe("FeishuManagedKnowledgeUpdater", () => {
       expect(String(error)).not.toMatch(/tenant-secret|New approved body|upstream response/iu);
     });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://open.feishu.cn?tenant=secret",
+    "https://open.feishu.cn#fragment",
+  ])("rejects a base URL with query or fragment before requesting a token: %s", (baseUrl) => {
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-secret") };
+
+    expect(() => createFeishuManagedKnowledgeUpdater({
+      baseUrl,
+      blockReader: {
+        readManagedBlock: vi.fn(async () => ({
+          revision: 12,
+          blockType: "text" as const,
+          body: "Old approved body",
+        })),
+      },
+      tokenProvider,
+      fetch: vi.fn() as unknown as typeof globalThis.fetch,
+    })).toThrow("baseUrl is invalid");
+    expect(tokenProvider.getTenantAccessToken).not.toHaveBeenCalled();
   });
 });
 

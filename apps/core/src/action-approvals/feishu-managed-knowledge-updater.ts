@@ -53,7 +53,43 @@ const MAX_FEISHU_TEXT_UTF16_UNITS = 100_000;
 
 const FEISHU_RATE_LIMIT_CODE = 99_991_400;
 const FEISHU_STALE_REVISION_CODE = 1_770_021;
-const FEISHU_MISSING_CODES = new Set([1_770_002, 1_770_003, 1_770_038]);
+const FEISHU_FORBIDDEN_CODE = 1_770_032;
+const FEISHU_INVALID_CODES = new Set([
+  1_770_001,
+  1_770_004,
+  1_770_005,
+  1_770_006,
+  1_770_007,
+  1_770_008,
+  1_770_010,
+  1_770_011,
+  1_770_012,
+  1_770_013,
+  1_770_014,
+  1_770_015,
+  1_770_019,
+  1_770_020,
+  1_770_022,
+  1_770_024,
+  1_770_025,
+  1_770_026,
+  1_770_027,
+  1_770_028,
+  1_770_029,
+  1_770_030,
+  1_770_031,
+  1_770_033,
+  1_770_034,
+  1_770_035,
+]);
+const FEISHU_SERVER_ERROR_STATUSES = new Map([
+  [1_771_001, 500],
+  [1_771_002, 500],
+  [1_771_003, 500],
+  [1_771_004, 500],
+  [1_771_005, 503],
+  [1_771_006, 500],
+]);
 
 export function createFeishuManagedKnowledgeUpdater({
   baseUrl,
@@ -137,9 +173,9 @@ export function createFeishuManagedKnowledgeUpdater({
           maxResponseBytes: MAX_RESPONSE_BYTES,
           responseSizeErrorMessage: `Feishu managed block update response exceeds ${MAX_RESPONSE_BYTES} bytes`,
         });
-        return classifyResponse(response.status, responseBody);
+        return classifyResponse(response.status, responseBody, expectedRevision);
       } catch (error) {
-        if (isAbortError(error) || controller.signal.aborted) {
+        if (controller.signal.aborted) {
           return { kind: "unknown", code: "timeout" };
         }
         return responseReceived
@@ -184,7 +220,11 @@ async function observeManagedBlock(
   }
 }
 
-function classifyResponse(status: number, responseBody: unknown): ManagedUpdateOutcome {
+function classifyResponse(
+  status: number,
+  responseBody: unknown,
+  expectedRevision: number,
+): ManagedUpdateOutcome {
   if (!isRecord(responseBody) || !Number.isSafeInteger(responseBody.code)) {
     return { kind: "unknown", code: "malformed_success" };
   }
@@ -194,7 +234,7 @@ function classifyResponse(status: number, responseBody: unknown): ManagedUpdateO
     if (code !== 0) {
       return { kind: "unknown", code: "malformed_success" };
     }
-    const resultingRevision = readResultingRevision(responseBody);
+    const resultingRevision = readResultingRevision(responseBody, expectedRevision);
     return resultingRevision === undefined
       ? { kind: "unknown", code: "malformed_success" }
       : { kind: "applied", resultingRevision };
@@ -203,36 +243,73 @@ function classifyResponse(status: number, responseBody: unknown): ManagedUpdateO
   if (code === 0) {
     return { kind: "unknown", code: "malformed_success" };
   }
-  if (status === 429 || (status === 400 && code === FEISHU_RATE_LIMIT_CODE)) {
+  const knownOutcome = classifyKnownFeishuError(status, code);
+  if (knownOutcome !== undefined) {
+    return knownOutcome;
+  }
+  if (status === 429) {
     return { kind: "not_applied_retryable", code: "rate_limited" };
   }
   if (status >= 500 && status <= 599) {
     return { kind: "not_applied_retryable", code: "server_error" };
   }
-  if (status === 401 || status === 403) {
-    return { kind: "rejected", code: "forbidden" };
-  }
-  if (status === 404) {
-    return { kind: "rejected", code: "missing" };
-  }
-  if (status >= 400 && status <= 499) {
-    if (code === FEISHU_STALE_REVISION_CODE) {
-      return { kind: "rejected", code: "stale_revision" };
-    }
-    if (FEISHU_MISSING_CODES.has(code)) {
-      return { kind: "rejected", code: "missing" };
-    }
-    return { kind: "rejected", code: "invalid" };
-  }
   return { kind: "unknown", code: "malformed_success" };
 }
 
-function readResultingRevision(responseBody: Record<string, unknown>): number | undefined {
+function classifyKnownFeishuError(
+  status: number,
+  code: number,
+): ManagedUpdateOutcome | undefined {
+  if (code === FEISHU_RATE_LIMIT_CODE) {
+    return status === 400 || status === 429
+      ? { kind: "not_applied_retryable", code: "rate_limited" }
+      : { kind: "unknown", code: "malformed_success" };
+  }
+  if (code === FEISHU_STALE_REVISION_CODE) {
+    return status === 400
+      ? { kind: "rejected", code: "stale_revision" }
+      : { kind: "unknown", code: "malformed_success" };
+  }
+  if (code === FEISHU_FORBIDDEN_CODE) {
+    return status === 403
+      ? { kind: "rejected", code: "forbidden" }
+      : { kind: "unknown", code: "malformed_success" };
+  }
+  if (code === 1_770_002) {
+    return status === 404
+      ? { kind: "rejected", code: "missing" }
+      : { kind: "unknown", code: "malformed_success" };
+  }
+  if (code === 1_770_003 || code === 1_770_038) {
+    return status === 400
+      ? { kind: "rejected", code: "missing" }
+      : { kind: "unknown", code: "malformed_success" };
+  }
+  if (FEISHU_INVALID_CODES.has(code)) {
+    return status === 400
+      ? { kind: "rejected", code: "invalid" }
+      : { kind: "unknown", code: "malformed_success" };
+  }
+  const serverStatus = FEISHU_SERVER_ERROR_STATUSES.get(code);
+  if (serverStatus !== undefined) {
+    return status === serverStatus
+      ? { kind: "not_applied_retryable", code: "server_error" }
+      : { kind: "unknown", code: "malformed_success" };
+  }
+  return undefined;
+}
+
+function readResultingRevision(
+  responseBody: Record<string, unknown>,
+  expectedRevision: number,
+): number | undefined {
   if (!isRecord(responseBody.data)) {
     return undefined;
   }
   const value = responseBody.data.document_revision_id;
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > expectedRevision
     ? value
     : undefined;
 }
@@ -251,6 +328,9 @@ function requireHttpsUrl(name: string, value: unknown): string {
     throw new Error(`${name} must be HTTPS`);
   }
   if (url.username.length > 0 || url.password.length > 0) {
+    throw new Error(`${name} is invalid`);
+  }
+  if (url.search.length > 0 || url.hash.length > 0) {
     throw new Error(`${name} is invalid`);
   }
   return url.href;
@@ -317,10 +397,6 @@ function requireTextBlockType(value: unknown): "text" {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
