@@ -56,7 +56,7 @@ $ApprovedImageDigest = $env:IRIS_PILOT_IMAGE_DIGEST
 $InternalToken = $env:IRIS_INTERNAL_API_TOKEN
 function Require-PrivateText([object]$value,[string]$label,[int]$min,[int]$max) {
   $text=[string]$value
-  if ([string]::IsNullOrWhiteSpace($text) -or $text.Length -lt $min -or $text.Length -gt $max -or $text -match '[\x00-\x1f\x7f]' -or $text -match '\s' -or $text -match '(?i)^(pending|change[_-]?me|placeholder|example|dummy|todo|tbd|null|undefined|none|n/?a|<[^>]+>)$' -or $text -match '(?i)(change[_-]?me|placeholder|example|dummy|<[^>]*>)') { throw "Invalid $label" }
+  if ([string]::IsNullOrWhiteSpace($text) -or $text.Length -lt $min -or $text.Length -gt $max -or $text -match '[\x00-\x1f\x7f]' -or $text -match '\s' -or $text -match '(?i)(pending|change[_-]?me|placeholder|example|dummy|[<>])') { throw "Invalid $label" }
   return $text
 }
 function Require-Id([object]$value,[string]$label) { $text=Require-PrivateText $value $label 1 512; if ($text -notmatch '^[A-Za-z0-9][A-Za-z0-9._:@/-]*$') { throw "Invalid $label" }; return $text }
@@ -82,9 +82,22 @@ function Zero([object]$v,[string]$l) { if ($v -isnot [int] -and $v -isnot [long]
 function Get-InternalUri([string]$path) { if ($path -notmatch '^/[A-Za-z0-9._~!$&''()*+,;=:@/%?&=-]+$' -or $path -match '\.\.') { throw 'Invalid internal route' }; $uri=[uri]($IrisBaseUri+$path); if ($uri.Scheme -ne $approved.Scheme -or $uri.Host -ne $approved.Host -or $uri.Port -ne $approved.Port) { throw 'Blocked unapproved bearer destination' }; return $uri.AbsoluteUri }
 function Get-Internal([string]$path) { Invoke-RestMethod -Headers $irisHeaders -Uri (Get-InternalUri $path) -Method Get }
 function Confirm-LiveWrite([string]$action) { if ((Read-Host "Type $ChangeTicket to authorize $action against $ApprovedImageDigest") -cne $ChangeTicket) { throw "Human authority gate rejected $action" } }
-function Invoke-InternalWrite([ValidateSet('Post','Patch')][string]$method,[string]$path,[object]$body,[string]$label) { Confirm-LiveWrite $label; Invoke-RestMethod -Headers $irisHeaders -Method $method -ContentType application/json -Uri (Get-InternalUri $path) -Body ($body | ConvertTo-Json -Compress) }
+function Invoke-InternalWrite([ValidateSet('Post','Patch')][string]$method,[string]$path,[object]$body,[string]$label,[scriptblock]$precondition) { Confirm-LiveWrite $label; $current=Get-Internal '/internal/runtime-control/status'; & $precondition $current; Invoke-RestMethod -Headers $irisHeaders -Method $method -ContentType application/json -Uri (Get-InternalUri $path) -Body ($body | ConvertTo-Json -Compress) }
 function Durable([object]$r,[bool]$global,[string]$label) { if ($r.ok -ne $true -or $r.durable -ne $true) { throw "$label is not durable" }; $p=Prop $r persistence $label; if ((Prop $p ok "$label.persistence") -ne $true -or (Prop $p storage "$label.persistence") -ne 'postgres') { throw "$label is not PostgreSQL durable" }; if ((Prop $r globalEnabled $label) -ne $global -or (Prop $r desiredGlobalEnabled $label) -ne $global) { throw "$label desired/current state mismatches" } }
 function Assert-RuntimeState([object]$s,[bool]$global,[bool]$pilotDisabled,[bool]$writeKnowledgeBase,[bool]$updateManagedKnowledge,[string]$label) { if ((Prop $s ok $label) -ne $true) { throw "$label is not readable" }; $p=Prop $s persistence $label; if ((Prop $p ok "$label.persistence") -ne $true -or (Prop $p storage "$label.persistence") -ne 'postgres') { throw "$label is not PostgreSQL durable" }; if ((Prop $s globalEnabled $label) -ne $global -or (Prop $s desiredGlobalEnabled $label) -ne $global) { throw "$label global desired/current mismatch" }; $groups=@(Prop $s disabledGroupIds $label); if ((($groups -contains $PilotGroupId) -ne $pilotDisabled)) { throw "$label pilot-group state mismatch" }; $caps=Prop $s capabilities $label; if ((Prop $caps writeKnowledgeBase "$label.capabilities") -ne $writeKnowledgeBase -or (Prop $caps updateManagedKnowledge "$label.capabilities") -ne $updateManagedKnowledge) { throw "$label capability state mismatch" } }
+function Assert-RuntimeCoherent([object]$s,[string]$label) { if ((Prop $s ok $label) -ne $true) { throw "$label is not readable" }; $p=Prop $s persistence $label; if ((Prop $p ok "$label.persistence") -ne $true -or (Prop $p storage "$label.persistence") -ne 'postgres') { throw "$label is not PostgreSQL durable" }; if ((Prop $s globalEnabled $label) -ne (Prop $s desiredGlobalEnabled $label)) { throw "$label global current/desired mismatch" } }
+function Assert-GlobalDisabled([object]$s,[string]$label) { Assert-RuntimeCoherent $s $label; if ((Prop $s globalEnabled $label) -ne $false) { throw "$label global runtime is not disabled" } }
+function Assert-PilotGroupShape([object]$s,[string]$label) { $null=@(Prop $s disabledGroupIds $label) }
+function Assert-PilotGroupDisabled([object]$s,[string]$label) { Assert-GlobalDisabled $s $label; Assert-PilotGroupShape $s $label; if (-not (@(Prop $s disabledGroupIds $label) -contains $PilotGroupId)) { throw "$label pilot group is not disabled" } }
+function Assert-CapabilityShape([object]$s,[string]$label) { $caps=Prop $s capabilities $label; foreach ($name in @('writeKnowledgeBase','updateManagedKnowledge')) { if ((Prop $caps $name "$label.capabilities") -isnot [bool]) { throw "$label capability state is invalid" } } }
+function Assert-ManagedDatabaseDrain {
+  $hasPrivatePg=(-not [string]::IsNullOrWhiteSpace([string]$env:PGSERVICE)) -or ((-not [string]::IsNullOrWhiteSpace([string]$env:PGHOST)) -and (-not [string]::IsNullOrWhiteSpace([string]$env:PGDATABASE)))
+  if (-not $hasPrivatePg) { throw 'Missing private read-only libpq PG* environment for managed drain' }
+  $sql="BEGIN READ ONLY; SELECT state, count(*)::bigint FROM knowledge_publication_update_executions WHERE state IN ('claimed','remote_request_dispatched','outcome_unknown','remote_applied','resync_required','reconciliation_required') GROUP BY state ORDER BY state; COMMIT;"
+  $rows=@(& psql -X -v ON_ERROR_STOP=1 -At -F ',' -q -c $sql 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'Managed durable-state drain query failed' }
+  foreach ($row in $rows) { $parts=([string]$row).Split(',',2); if ($parts.Count -ne 2 -or $parts[0] -notin @('claimed','remote_request_dispatched','outcome_unknown','remote_applied','resync_required','reconciliation_required') -or $parts[1] -notmatch '^[0-9]+$' -or [long]$parts[1] -ne 0) { throw 'Managed durable-state drain is not zero' } }
+}
 ```
 
 Expected: no exception and no secret output. Stop for placeholders, whitespace/control characters,
@@ -138,7 +151,7 @@ rollback. Real shape is `status.components.managedKnowledgeUpdates`; approval-in
 top-level `status.knowledgeCards.queue`, not a managed-update property.
 
 ```powershell
-function Assert-ContentFreeDrain {
+function Assert-ContentFreeDrain([bool]$requireManagedDisabled=$false) {
 $readiness = Get-Internal '/internal/readiness'; $status = Get-Internal '/internal/status'
 if ($readiness.ok -ne $true -or $status.ok -ne $true -or $status.status -ne 'healthy') { throw 'Readiness/internal status is not healthy' }
 $gate=@($readiness.checks | Where-Object { $_.id -eq 'managedKnowledgeUpdates' }); if ($gate.Count -ne 1 -or $gate[0].status -ne 'pass') { throw 'Managed-update readiness is not pass' }
@@ -152,17 +165,20 @@ if ($managed.enabled -eq $true) {
   $recon=Prop $managed reconciliation 'status.components.managedKnowledgeUpdates'
   foreach ($n in @('outcomeUnknown','reconciliationRequired')) { Zero (Prop $recon $n 'managedUpdates.reconciliation') "managedUpdates.$n" }
 } elseif ($managed.ok -ne $true -or $managed.enabled -ne $false -or $managed.running -ne $false) { throw 'Managed-update feature is neither safely disabled nor healthy' }
+if ($requireManagedDisabled -and $managed.enabled -ne $false) { throw 'Managed-update deployment is not disabled for closeout' }
+if ($managed.enabled -eq $false) { Assert-ManagedDatabaseDrain }
 }
 Assert-ContentFreeDrain
 ```
 
 Expected: every supported count is present and zero. Before deployment enablement, managed updates
 must be safely `ok/enabled=false/running=false`; its reconciliation object is intentionally absent,
-so the durable-state projection below supplies the unresolved check. Post-enable additionally requires
+so `Assert-ManagedDatabaseDrain` executes and parses the durable-state SQL below to supply the
+unresolved check. Post-enable additionally requires
 managed `ok/enabled/running/migration0055Applied/worker.running=true` and both reconciliation counters
 at zero. Stop on a missing field, degraded worker, nonzero count, or failed readiness. There is no unified status counter for every durable
-managed state; use this audited count-only projection (same read-only wrapper) and stop if it returns
-any row. Do not inspect raw Redis payloads.
+managed state; the helper uses this audited count-only projection (same read-only private `psql`
+environment) and stops if it parses any nonzero row. Do not inspect raw Redis payloads.
 
 ```sql
 BEGIN READ ONLY;
@@ -184,19 +200,17 @@ COMMIT;
    review, or approval. Each has its human gate, durable response/readback, and rollback below.
 
    ```powershell
-   $before=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $before $false $true $false $false 'Pre-capability enable'
-   $r=Invoke-InternalWrite Patch '/internal/runtime-control/capabilities' @{writeKnowledgeBase=$true;updateManagedKnowledge=$true} 'enable managed-update capabilities'; Durable $r $false 'Capability enable'
-   $beforeGroup=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeGroup $false $true $true $true 'Pre-group enable'
-   $r=Invoke-InternalWrite Post ('/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) @{enabled=$true} 'enable one pilot group'; Durable $r $false 'Group enable'
-   $beforeGlobal=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeGlobal $false $false $true $true 'Pre-global enable'
-   $r=Invoke-InternalWrite Post '/internal/runtime-control/global' @{enabled=$true} 'enable global runtime'; Durable $r $true 'Global enable'
+   $r=Invoke-InternalWrite Patch '/internal/runtime-control/capabilities' @{writeKnowledgeBase=$true;updateManagedKnowledge=$true} 'enable managed-update capabilities' { param($s) Assert-RuntimeState $s $false $true $false $false 'Post-confirm capability precondition' }; Durable $r $false 'Capability enable'
+   $r=Invoke-InternalWrite Post ('/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) @{enabled=$true} 'enable one pilot group' { param($s) Assert-RuntimeState $s $false $true $true $true 'Post-confirm group precondition' }; Durable $r $false 'Group enable'
+   $r=Invoke-InternalWrite Post '/internal/runtime-control/global' @{enabled=$true} 'enable global runtime' { param($s) Assert-RuntimeState $s $false $false $true $true 'Post-confirm global precondition' }; Durable $r $true 'Global enable'
    $after=Get-Internal '/internal/runtime-control/status'
    Assert-RuntimeState $after $true $false $true $true 'Post-enable readback'
    ```
 
-   Expected: every capability/group/global write has a fresh fail-closed precondition, human ticket
-   entry, content-free durable acknowledgement, and exact current/desired readback. Stop and roll
-   back for a non-durable/storage mismatch, unexpected pilot-group state, or capability mismatch.
+   Expected order for every capability/group/global write is human ticket entry, immediate status GET,
+   stage-specific fail-closed assertion, then dispatch; the durable response/readback is authoritative.
+   There remains an unavoidable GET-to-route race, so no stale prompt-time read is accepted. Stop and
+   roll back for a non-durable/storage mismatch, unexpected pilot-group state, or capability mismatch.
 
 ## Acceptance actions for the already prepared target
 
@@ -307,19 +321,22 @@ Then, after `Confirm-LiveWrite` before each mutation, disable global, pilot grou
 capabilities with the same actual routes/payloads:
 
 ```powershell
-$beforeRollback=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeRollback $true $false $true $true 'Pre-global disable'
-$r=Invoke-InternalWrite Post '/internal/runtime-control/global' @{enabled=$false} 'disable global runtime'; Durable $r $false 'Global disable'
-$beforeGroupDisable=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeGroupDisable $false $false $true $true 'Pre-group disable'
-$r=Invoke-InternalWrite Post ('/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) @{enabled=$false} 'disable pilot group'; Durable $r $false 'Group disable'
-$beforeCapabilityDisable=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $beforeCapabilityDisable $false $true $true $true 'Pre-capability disable'
-$r=Invoke-InternalWrite Patch '/internal/runtime-control/capabilities' @{writeKnowledgeBase=$false;updateManagedKnowledge=$false} 'disable managed-update capabilities'; Durable $r $false 'Capability disable'
+$r=Invoke-InternalWrite Post '/internal/runtime-control/global' @{enabled=$false} 'disable global runtime' { param($s) Assert-RuntimeCoherent $s 'Post-confirm global disable precondition' }; Durable $r $false 'Global disable'
+$afterGlobal=Get-Internal '/internal/runtime-control/status'; Assert-GlobalDisabled $afterGlobal 'Post-global disable readback'
+$r=Invoke-InternalWrite Post ('/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) @{enabled=$false} 'disable pilot group' { param($s) Assert-GlobalDisabled $s 'Post-confirm group disable precondition'; Assert-PilotGroupShape $s 'Post-confirm group disable precondition' }; Durable $r $false 'Group disable'
+$afterGroup=Get-Internal '/internal/runtime-control/status'; Assert-PilotGroupDisabled $afterGroup 'Post-group disable readback'
+$r=Invoke-InternalWrite Patch '/internal/runtime-control/capabilities' @{writeKnowledgeBase=$false;updateManagedKnowledge=$false} 'disable managed-update capabilities' { param($s) Assert-PilotGroupDisabled $s 'Post-confirm capability disable precondition'; Assert-CapabilityShape $s 'Post-confirm capability disable precondition' }; Durable $r $false 'Capability disable'
 $final=Get-Internal '/internal/runtime-control/status'; Assert-RuntimeState $final $false $true $false $false 'Final disable readback'
-Assert-ContentFreeDrain
+$recovery=Get-Internal '/internal/action-approvals/status'; if ((Prop $recovery ok 'action-approvals status') -ne $true) { throw 'Action-approvals recovery status is unreadable' }; $recoveryManaged=Prop $recovery managedKnowledgeUpdates 'action-approvals status'; if ((Prop $recoveryManaged running 'action-approvals status.managedKnowledgeUpdates') -ne $true) { throw 'Managed recovery/admin runtime is not running' }
+Assert-ContentFreeDrain $true
 ```
 
-Expected: durable disabled readback, while recovery/admin converges existing resync/reconciliation to
-zero. The final drain helper must stay available after disabling new claims and must reach zero before
-closeout. Stop closeout if recovery/admin is unavailable, any queue/DLQ/unresolved count remains
-nonzero, or a page remains barred. Never delete history/queues/facts or blind-retry remote work. Mark **passed**
+Expected: this idempotent rollback accepts any coherent partial-enable stage, and each post-human-gate
+read verifies the next disable action's actual state before dispatch. Durable response/readbacks prove
+global false, then group disabled, then both capabilities false. It then proves the action-approval
+managed recovery/admin loop remains running, requires the managed-update deployment's disabled status
+shape, and executes the final content-free queue/DLQ plus durable-SQL drain to zero. Stop/escalate for persistence current/desired mismatch, unavailable
+recovery/admin, a nonzero queue/DLQ/unresolved count, or a barred page. Never delete
+history/queues/facts or blind-retry remote work. Mark **passed**
 only when every evidence field is non-pending; otherwise it remains **not yet run / controlled Feishu
 acceptance pending**.

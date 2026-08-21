@@ -135,3 +135,41 @@ controlled Feishu acceptance pending.
 This fix changes Markdown/report evidence only. It does not execute a documented network, database,
 or runtime command; it performs no live Feishu call, deployment, enablement, push, or merge. The live
 pilot remains `not yet run` / controlled Feishu acceptance pending.
+
+## Fix Round 3/5 — post-confirm runtime and durable-drain gates
+
+### Changes
+
+- Strengthened placeholder rejection to fail on any case-insensitive occurrence of `pending`,
+  `change_me`/`change-me`, `dummy`, `example`, or either angle bracket, so values such as
+  `pending-draft-1` cannot pass; validation messages never include the supplied value.
+- Refactored `Invoke-InternalWrite` to accept a stage precondition scriptblock and enforce the exact
+  order: ticket `Read-Host` confirmation, immediate internal runtime-status GET, stage assertion,
+  then dispatch. The three enable stages bind their prescribed PG/global/group/capability predicates
+  after confirmation; durable response/readback remains authoritative despite the unavoidable GET-to-route race.
+- Made rollback idempotent for coherent partial enablement: global, group, and capability disables
+  each take a post-confirm fresh state read, allow an already-disabled state, and verify their own
+  successive durable disable readback; persistence/current-desired divergence stops escalation.
+- Added `Assert-ManagedDatabaseDrain`, which executes and parses the named content-free unresolved
+  execution-state projection through private PostgreSQL environment configuration without printing a
+  connection string or raw error. The disabled status branch calls it instead of treating SQL as a
+  display-only check.
+- Final closeout now reads `/internal/action-approvals/status` and requires the managed recovery/admin
+  loop to be running, requires the managed-update disabled status shape, then proves final
+  PostgreSQL/global/group/capability state and runs queue/DLQ plus durable-SQL drain to zero.
+
+### Documentation checks
+
+- Parsed all three fenced PowerShell blocks with `System.Management.Automation.Language.Parser`:
+  zero parse errors; Markdown fence count was 12.
+- Static contract assertions: 14 required safety fragments passed (substring sentinel rejection,
+  post-confirm ordering, enable/rollback stages, PostgreSQL drain, recovery-status read); five stale
+  fragments were absent. Exactly six guarded runtime writes were found.
+- `git diff --check` passed (line-ending warnings only); focused `rg` found the required helpers,
+  routes, post-confirm predicates, recovery status, and pending live wording.
+
+### Scope and remaining gate
+
+This fix changes Markdown/report evidence only. It does not execute a documented network, database,
+or runtime command, and no live Feishu action, deployment, enablement, push, or merge occurred. The
+live pilot remains `not yet run` / controlled Feishu acceptance pending.
