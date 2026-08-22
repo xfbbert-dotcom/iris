@@ -2209,6 +2209,17 @@ function projectManagedKnowledgeUpdateStatus(status: {
   running: boolean;
   intervalMs: number;
   batchLimit: number;
+  latestBatch?: {
+    status: "succeeded" | "partial_failed" | "failed";
+    startedAt: Date;
+    finishedAt: Date;
+    executionCount: number;
+    reconciliationCount: number;
+    executorFailed: boolean;
+    reconcilerFailed: boolean;
+    failed: boolean;
+    errorCode?: "managed_update_worker_failed";
+  };
   migration0055Applied: boolean;
   migration0056Applied: boolean;
   reconciliation: { outcomeUnknown: number; reconciliationRequired: number };
@@ -2217,6 +2228,23 @@ function projectManagedKnowledgeUpdateStatus(status: {
     running: status.running,
     intervalMs: status.intervalMs,
     batchLimit: status.batchLimit,
+    ...(status.latestBatch === undefined
+      ? {}
+      : {
+          latestBatch: {
+            status: status.latestBatch.status,
+            startedAt: new Date(status.latestBatch.startedAt),
+            finishedAt: new Date(status.latestBatch.finishedAt),
+            executionCount: status.latestBatch.executionCount,
+            reconciliationCount: status.latestBatch.reconciliationCount,
+            executorFailed: status.latestBatch.executorFailed,
+            reconcilerFailed: status.latestBatch.reconcilerFailed,
+            failed: status.latestBatch.failed,
+            ...(status.latestBatch.errorCode === undefined
+              ? {}
+              : { errorCode: status.latestBatch.errorCode }),
+          },
+        }),
     migration0055Applied: status.migration0055Applied,
     migration0056Applied: status.migration0056Applied,
     reconciliation: {
@@ -2246,13 +2274,22 @@ function getManagedKnowledgeUpdateStatus({
       migration0056Applied: false,
     };
   }
+  const latestBatchFailed = status.latestBatch !== undefined && (
+    status.latestBatch.failed ||
+    status.latestBatch.status !== "succeeded" ||
+    status.latestBatch.executorFailed ||
+    status.latestBatch.reconcilerFailed
+  );
   return {
-    ok: actionApprovalStatus?.ok === true && status.running,
+    ok: actionApprovalStatus?.ok === true && status.running && !latestBatchFailed,
     enabled: true,
     running: status.running,
     migration0055Applied: status.migration0055Applied,
     migration0056Applied: status.migration0056Applied,
-    worker: { running: status.running },
+    worker: {
+      running: status.running,
+      ...(status.latestBatch === undefined ? {} : { latestBatch: status.latestBatch }),
+    },
     reconciliation: status.reconciliation,
   };
 }

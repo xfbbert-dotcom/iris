@@ -190,6 +190,24 @@ describe("buildInternalRolloutReadinessReport", () => {
       status: "fail",
       detail: "Managed knowledge updates have unresolved outcome-unknown executions.",
     });
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: {
+        ...baseStatus,
+        ok: false,
+        worker: {
+          running: true,
+          latestBatch: {
+            status: "partial_failed",
+            failed: true,
+            executorFailed: true,
+            reconcilerFailed: false,
+          },
+        },
+      },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge update worker latest batch failed.",
+    });
   });
 
   it("treats knowledge conflicts as safely disabled by default", () => {

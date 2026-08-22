@@ -121,7 +121,15 @@ type ManagedKnowledgeUpdateReadinessStatus = {
   running: boolean;
   migration0055Applied?: boolean;
   migration0056Applied?: boolean;
-  worker?: { running: boolean };
+  worker?: {
+    running: boolean;
+    latestBatch?: {
+      status: "succeeded" | "partial_failed" | "failed";
+      failed: boolean;
+      executorFailed: boolean;
+      reconcilerFailed: boolean;
+    };
+  };
   reconciliation?: {
     outcomeUnknown: number;
     reconciliationRequired: number;
@@ -732,6 +740,15 @@ const checkDefinitions: CheckDefinition[] = [
       }
       if (status.migration0056Applied !== true) {
         return fail("Managed knowledge update migration 0056 is not applied.");
+      }
+      if (
+        status.worker?.latestBatch?.failed === true ||
+        status.worker?.latestBatch?.status === "partial_failed" ||
+        status.worker?.latestBatch?.status === "failed" ||
+        status.worker?.latestBatch?.executorFailed === true ||
+        status.worker?.latestBatch?.reconcilerFailed === true
+      ) {
+        return fail("Managed knowledge update worker latest batch failed.");
       }
       if (!status.ok) return fail("Managed knowledge update runtime status is unreadable.");
       if (!status.enabled || !status.running || status.worker?.running !== true) {

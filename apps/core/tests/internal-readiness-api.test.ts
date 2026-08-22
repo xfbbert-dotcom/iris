@@ -101,7 +101,18 @@ describe("GET /internal/readiness", () => {
         managedKnowledgeUpdates: {
           running: true, intervalMs: 1_000, batchLimit: 10,
           migration0055Applied: true, migration0056Applied: true,
-          reconciliation: { outcomeUnknown: 1, reconciliationRequired: 1 },
+          reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
+          latestBatch: {
+            status: "partial_failed",
+            startedAt: new Date("2026-08-22T03:00:00.000Z"),
+            finishedAt: new Date("2026-08-22T03:00:01.000Z"),
+            executionCount: 0,
+            reconciliationCount: 1,
+            executorFailed: true,
+            reconcilerFailed: false,
+            failed: true,
+            errorCode: "managed_update_worker_failed",
+          },
           draftBody: "Approved body", documentToken: "docx_secret", remoteError: "raw timeout body",
         },
       })),
@@ -121,10 +132,23 @@ describe("GET /internal/readiness", () => {
     const status = await app.inject({ method: "GET", url: "/internal/status" });
     const readiness = await app.inject({ method: "GET", url: "/internal/readiness" });
     expect(status.json().components.managedKnowledgeUpdates).toMatchObject({
+      ok: false,
       enabled: true,
       migration0055Applied: true,
       migration0056Applied: true,
-      reconciliation: { outcomeUnknown: 1, reconciliationRequired: 1 },
+      worker: {
+        running: true,
+        latestBatch: {
+          status: "partial_failed",
+          executionCount: 0,
+          reconciliationCount: 1,
+          executorFailed: true,
+          reconcilerFailed: false,
+          failed: true,
+          errorCode: "managed_update_worker_failed",
+        },
+      },
+      reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
     });
     expect(status.body + readiness.body).not.toMatch(/Approved body|docx_secret|raw timeout body/iu);
     await app.close();
