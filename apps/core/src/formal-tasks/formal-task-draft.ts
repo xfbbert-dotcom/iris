@@ -50,6 +50,7 @@ export function normalizeFormalTaskSpec(input: unknown): FormalTaskSpec {
     "description",
     "assigneeOpenId",
     "dueAt",
+    "dueAtUtc",
     "reminderMinutes",
     "sourceGroupId",
     "targetPolicyId",
@@ -65,7 +66,12 @@ export function normalizeFormalTaskSpec(input: unknown): FormalTaskSpec {
     "targetPolicyVersion",
     input.targetPolicyVersion,
   );
-  const dueAtUtc = normalizeDueAt(input.dueAt);
+  if (input.dueAt !== undefined && input.dueAtUtc !== undefined) {
+    throw validationError("dueAt and dueAtUtc are mutually exclusive");
+  }
+  const dueAtUtc = input.dueAtUtc === undefined
+    ? normalizeDueAt(input.dueAt)
+    : normalizeDueAtUtc(input.dueAtUtc);
   const reminderMinutes = normalizeReminderMinutes(input.reminderMinutes);
   if (reminderMinutes !== undefined && dueAtUtc === undefined) {
     throw validationError("reminderMinutes requires dueAt");
@@ -84,7 +90,17 @@ export function normalizeFormalTaskSpec(input: unknown): FormalTaskSpec {
 }
 
 export function canonicalFormalTaskSpec(input: unknown): string {
-  return JSON.stringify(normalizeFormalTaskSpec(input));
+  const spec = normalizeFormalTaskSpec(input);
+  return JSON.stringify({
+    title: spec.title,
+    description: spec.description,
+    assigneeOpenId: spec.assigneeOpenId,
+    dueAtUtc: spec.dueAtUtc ?? null,
+    reminderMinutes: spec.reminderMinutes ?? null,
+    sourceGroupId: spec.sourceGroupId,
+    targetPolicyId: spec.targetPolicyId,
+    targetPolicyVersion: spec.targetPolicyVersion,
+  });
 }
 
 export function canonicalFormalTaskSpecHash(input: unknown): string {
@@ -167,6 +183,15 @@ function normalizeDueAt(value: unknown): string | undefined {
     throw validationError("dueAt must be a valid Date");
   }
   return value.toISOString();
+}
+
+function normalizeDueAtUtc(value: unknown): string {
+  if (typeof value !== "string") throw validationError("dueAtUtc must be a string");
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) {
+    throw validationError("dueAtUtc must be an exact UTC timestamp");
+  }
+  return value;
 }
 
 function normalizeReminderMinutes(value: unknown): FormalTaskReminderMinutes | undefined {

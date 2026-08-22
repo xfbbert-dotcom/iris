@@ -23,12 +23,15 @@ describe("formal task draft domain", () => {
     expect(canonicalFormalTaskSpec(validSpec)).toBe(
       '{"title":"Follow up on the pilot","description":"Confirm the evidence.\\nPublish the result.","assigneeOpenId":"ou_assignee","dueAtUtc":"2026-08-25T09:30:00.123Z","reminderMinutes":30,"sourceGroupId":"group-pilot","targetPolicyId":"task-policy-1","targetPolicyVersion":2}',
     );
+    expect(canonicalFormalTaskSpec(normalizeFormalTaskSpec(validSpec))).toBe(
+      canonicalFormalTaskSpec(validSpec),
+    );
     expect(canonicalFormalTaskSpecHash(validSpec)).toBe(
       "7bf7f75e8b22a4b51363886dc7469833d323802d8e6d8a007a178a7ef96d6516",
     );
   });
 
-  it("omits due and reminder together when the approved draft has no due time", () => {
+  it("keeps absent due and reminder as explicit nulls in the canonical review contract", () => {
     const normalized = normalizeFormalTaskSpec({
       ...validSpec,
       dueAt: undefined,
@@ -37,7 +40,9 @@ describe("formal task draft domain", () => {
 
     expect(normalized).not.toHaveProperty("dueAtUtc");
     expect(normalized).not.toHaveProperty("reminderMinutes");
-    expect(canonicalFormalTaskSpec(normalized)).toContain('"assigneeOpenId":"ou_assignee"');
+    expect(canonicalFormalTaskSpec(normalized)).toBe(
+      '{"title":"Follow up on the pilot","description":"Confirm the evidence.\\nPublish the result.","assigneeOpenId":"ou_assignee","dueAtUtc":null,"reminderMinutes":null,"sourceGroupId":"group-pilot","targetPolicyId":"task-policy-1","targetPolicyVersion":2}',
+    );
   });
 
   it.each([
