@@ -1,11 +1,15 @@
-import type { KnowledgeCardDispatcherResult } from "./knowledge-card-dispatcher.js";
-
 type TimerHandle = ReturnType<typeof setTimeout>;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_BATCH_LIMIT = 100;
+type DispatcherResultStatus =
+  "sent" | "updated" | "retrying" | "permanent_failure" | "outcome_unknown";
 
 export type KnowledgeCardDispatcherLoopDependencies = {
-  worker: { processBatch(input: { limit: number }): Promise<KnowledgeCardDispatcherResult[]> };
+  worker: {
+    processBatch(input: { limit: number }): Promise<Array<{
+      status: DispatcherResultStatus;
+    }>>;
+  };
   intervalMs: number;
   batchLimit: number;
   onError?: (error: unknown) => void;
@@ -140,7 +144,7 @@ export function createKnowledgeCardDispatcherLoop({
   };
 }
 
-function count(results: KnowledgeCardDispatcherResult[], status: KnowledgeCardDispatcherResult["status"]): number {
+function count(results: Array<{ status: DispatcherResultStatus }>, status: DispatcherResultStatus): number {
   return results.filter((result) => result.status === status).length;
 }
 

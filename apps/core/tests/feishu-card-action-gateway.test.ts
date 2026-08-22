@@ -427,6 +427,47 @@ describe("FeishuCardActionGateway", () => {
     });
   });
 
+  it("enqueues a content-free formal task confirmation job with exact bindings", async () => {
+    const now = new Date("2026-08-22T00:00:00.000Z");
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true, now: () => now });
+    const body = cardAction();
+    const event = body.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.value = {
+      kind: "formal_task_draft_confirmation",
+      action: "confirm",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: "2",
+      draftVersion: "3",
+      taskSpecHash: "b".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: "4",
+    };
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toMatchObject({ statusCode: 200 });
+    expect(queue.enqueue).toHaveBeenCalledWith({
+      kind: "formal_task_draft_confirmation",
+      idempotencyKey: "feishu-card:cli_approval:event-1",
+      eventId: "event-1",
+      appId: "cli_approval",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_approval",
+      messageId: "om_approval",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: 2,
+      draftVersion: 3,
+      taskSpecHash: "b".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 4,
+      action: "confirm",
+      receivedAt: now,
+      attempts: 0,
+    });
+  });
+
   it("derives the conflict presentation identity and verified actor/message context", async () => {
     const now = new Date("2026-08-13T00:00:00.000Z");
     const queue = { enqueue: vi.fn(async () => "enqueued" as const) };

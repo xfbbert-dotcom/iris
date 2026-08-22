@@ -295,6 +295,7 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
     actionTagButton: action?.tag === "button",
     callbackKindRecognized:
       callbackKind === "knowledge_draft_confirmation" ||
+      callbackKind === "formal_task_draft_confirmation" ||
       callbackKind === "action_proposal_approval" ||
       callbackKind === "proactive_signal_feedback" ||
       callbackKind === "knowledge_conflict_confirmation",
@@ -309,7 +310,7 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
 }
 
 function isRecognizedDiagnosticAction(kind: unknown, action: unknown): boolean {
-  if (kind === "knowledge_draft_confirmation") {
+  if (kind === "knowledge_draft_confirmation" || kind === "formal_task_draft_confirmation") {
     return action === "confirm" || action === "request_revision" || action === "reject";
   }
   if (kind === "action_proposal_approval") {
@@ -328,6 +329,14 @@ function hasValidDiagnosticIdentifiers(value: Record<string, unknown> | undefine
   if (value?.kind === "knowledge_draft_confirmation") {
     return [value.presentationId, value.draftId].every(isDiagnosticReference);
   }
+  if (value?.kind === "formal_task_draft_confirmation") {
+    return [
+      value.presentationId,
+      value.draftId,
+      value.targetPolicyId,
+      value.taskSpecHash,
+    ].every(isDiagnosticReference);
+  }
   if (value?.kind === "action_proposal_approval") {
     return [value.presentationId, value.proposalId, value.requirementId].every(isDiagnosticReference);
   }
@@ -343,6 +352,13 @@ function hasValidDiagnosticIdentifiers(value: Record<string, unknown> | undefine
 function hasCanonicalDiagnosticVersions(value: Record<string, unknown> | undefined): boolean {
   if (value?.kind === "knowledge_draft_confirmation") {
     return [value.revisionNumber, value.draftVersion].every(isCanonicalPositiveIntegerString);
+  }
+  if (value?.kind === "formal_task_draft_confirmation") {
+    return [
+      value.revisionNumber,
+      value.draftVersion,
+      value.targetPolicyVersion,
+    ].every(isCanonicalPositiveIntegerString);
   }
   if (value?.kind === "action_proposal_approval") {
     return [
@@ -478,6 +494,17 @@ async function createJob(
       draftId: action.draftId,
       revisionNumber: action.revisionNumber,
       draftVersion: action.draftVersion,
+    });
+  } else if (action.kind === "formal_task_draft_confirmation") {
+    interaction = normalizeApprovalInteractionIntentIdentity({
+      ...common,
+      kind: action.kind,
+      draftId: action.draftId,
+      revisionNumber: action.revisionNumber,
+      draftVersion: action.draftVersion,
+      taskSpecHash: action.taskSpecHash,
+      targetPolicyId: action.targetPolicyId,
+      targetPolicyVersion: action.targetPolicyVersion,
     });
   } else if (action.kind === "action_proposal_approval") {
     interaction = normalizeApprovalInteractionIntentIdentity({

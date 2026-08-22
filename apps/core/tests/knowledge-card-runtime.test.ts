@@ -67,6 +67,59 @@ describe("KnowledgeCardRuntime", () => {
     await runtime.close();
   });
 
+  it("wires the governed formal-task dispatcher and interaction worker into shared lifecycle", async () => {
+    const dependencies = runtimeDependencies();
+    const cardRepository = {
+      createPresentation: vi.fn(),
+      claimPresentationSend: vi.fn(async () => undefined),
+      beginExternalAttempt: vi.fn(),
+      failPresentationPreparation: vi.fn(),
+      completePresentationSend: vi.fn(),
+      failPresentationSend: vi.fn(),
+      applyInteraction: vi.fn(),
+      getPresentation: vi.fn(),
+      getPresentationContext: vi.fn(),
+      getPresentationStatusCounts: vi.fn(async () => ({
+        pending_send: 1,
+        active: 0,
+        superseded: 0,
+        closed: 0,
+        send_failed: 0,
+      })),
+      getOutboxStatusCounts: vi.fn(async () => ({
+        pending: 1,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 0,
+        outcome_unknown: 0,
+        terminalFailed: 0,
+      })),
+    };
+    const canUseFormalTaskCards = vi.fn(() => true);
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      formalTaskRuntime: { cardRepository: cardRepository as never, canUseFormalTaskCards },
+      dependencies,
+    })!;
+
+    expect(dependencies.createDispatcherLoop).toHaveBeenCalledTimes(2);
+    const interactionDependencies = dependencies.createInteractionWorker.mock.calls[0]?.[0];
+    expect(interactionDependencies?.formalTaskCardInteractionWorker).toBeDefined();
+    await runtime.start();
+    expect(dependencies.dispatcherLoop.start).toHaveBeenCalledTimes(2);
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      running: true,
+      formalTasks: {
+        presentations: { pending_send: 1 },
+        outbox: { pending: 1 },
+      },
+    });
+    await runtime.close();
+    expect(dependencies.dispatcherLoop.stop).toHaveBeenCalledTimes(2);
+  });
+
   it("constructs proactive feedback processing with the shared membership checker and live gate", async () => {
     const dependencies = runtimeDependencies();
     const controller = enabledController();

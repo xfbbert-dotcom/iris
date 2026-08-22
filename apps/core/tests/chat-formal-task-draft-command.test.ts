@@ -22,6 +22,13 @@ describe("chat formal task draft command", () => {
     expect(result).toEqual({
       status: "created",
       draftId: expect.stringMatching(/^chat-formal-task-draft-[a-f0-9]{40}$/u),
+      presentationId: "task-presentation-1",
+    });
+    expect(harness.presentDraft).toHaveBeenCalledWith({
+      draftId: result.status === "created" ? result.draftId : "unexpected",
+      expectedVersion: 1,
+      operationKey: expect.stringMatching(/^chat-formal-task-card-[a-f0-9]{64}$/u),
+      at: observedAt,
     });
     expect(harness.generator.generate).toHaveBeenCalledWith({
       messageId: "om_task",
@@ -125,10 +132,12 @@ describe("chat formal task draft command", () => {
     await expect(harness.command.execute(commandInput())).resolves.toEqual({
       status: "already_created",
       draftId: existing.id,
+      presentationId: "task-presentation-1",
     });
     expect(harness.repository.getTargetPolicyForGroup).not.toHaveBeenCalled();
     expect(harness.generator.generate).not.toHaveBeenCalled();
     expect(harness.repository.createDraft).not.toHaveBeenCalled();
+    expect(harness.presentDraft).toHaveBeenCalledOnce();
   });
 });
 
@@ -158,18 +167,35 @@ function commandHarness(overrides: {
       draft: draft({ id: input.id }),
     })),
   };
+  const presentDraft = vi.fn(async (input: { draftId: string; expectedVersion: number }) => ({
+    outcome: "applied" as const,
+    presentation: {
+      id: "task-presentation-1",
+      draftId: input.draftId,
+      draftRevision: 1,
+      draftVersion: input.expectedVersion,
+      taskSpecHash: "a".repeat(64),
+      groupId: "oc_pilot",
+      state: "pending_send" as const,
+      createdAt: observedAt,
+      version: 1,
+    },
+  }));
   const dependencies: ChatFormalTaskDraftCommandDependencies = {
     generator,
     canReadGroupContext: vi.fn(() => overrides.disabledGate !== "context"),
     runtime: {
       repository: repository as unknown as ChatFormalTaskDraftCommandDependencies["runtime"]["repository"],
       canCreateDraft: vi.fn(() => overrides.disabledGate !== "draft"),
+      canUseFormalTaskCards: vi.fn(() => true),
+      presentDraft,
     },
   };
   return {
     command: createChatFormalTaskDraftCommand(dependencies),
     generator,
     repository,
+    presentDraft,
   };
 }
 

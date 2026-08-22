@@ -21,6 +21,7 @@ describe("createFormalTaskRuntime", () => {
         created: 0,
       })),
     };
+    const cardRepository = {};
     const controller = new RuntimeController(createDefaultRuntimeConfig());
     const runtime = createFormalTaskRuntime({
       env: { DATABASE_URL: "postgresql://example/iris" },
@@ -28,15 +29,22 @@ describe("createFormalTaskRuntime", () => {
       dependencies: {
         createPostgresPool: vi.fn(() => pool as never),
         createRepository: vi.fn(() => repository as never),
+        createCardRepository: vi.fn(() => cardRepository as never),
       },
     });
 
     expect(runtime?.repository).toBe(repository);
+    expect(runtime?.cardRepository).toBe(cardRepository);
     expect(runtime?.canCreateDraft({ sourceGroupId: "group-active" })).toBe(false);
     controller.setCapability("generateTaskDrafts", true);
     expect(runtime?.canCreateDraft({ sourceGroupId: "group-active" })).toBe(true);
+    expect(controller.canCreateFeishuTasks({ sourceGroupId: "group-active" })).toBe(false);
+    controller.setCapability("createFeishuTasks", true);
+    expect(controller.canCreateFeishuTasks({ sourceGroupId: "group-active" })).toBe(true);
+    expect(runtime?.canUseFormalTaskCards("group-active")).toBe(true);
     controller.disableGroup("group-active");
     expect(runtime?.canCreateDraft({ sourceGroupId: "group-active" })).toBe(false);
+    expect(runtime?.canUseFormalTaskCards("group-active")).toBe(false);
     await expect(runtime?.getStatus()).resolves.toEqual({
       enabled: true,
       companyCreationEnabled: true,

@@ -11,6 +11,10 @@ import type {
 import type {
   KnowledgeConflictInteractionWorkerResult,
 } from "../knowledge-conflicts/knowledge-conflict-interaction-worker.js";
+import type {
+  FormalTaskCardInteractionWorkerCode,
+  FormalTaskCardInteractionWorkerResult,
+} from "../formal-tasks/formal-task-card-interaction-worker.js";
 import {
   KnowledgeConflictCallbackIdentityConflictError,
   type AuthenticatedKnowledgeConflictConfirmationInteraction,
@@ -75,6 +79,7 @@ export type ApprovalInteractionWorkerCode =
   | "repository_unavailable"
   | "redis_unavailable"
   | "internal_error"
+  | FormalTaskCardInteractionWorkerCode
   | ActionApprovalWorkerCode;
 
 export type ApprovalInteractionWorkerDependencies = {
@@ -98,6 +103,12 @@ export type ApprovalInteractionWorkerDependencies = {
       intent?: ApprovalInteractionIntent,
     ):
       Promise<ActionApprovalWorkerResult>;
+  };
+  formalTaskCardInteractionWorker?: {
+    processInteraction(
+      job: Extract<ApprovalInteractionJob, { kind: "formal_task_draft_confirmation" }>,
+      intent?: ApprovalInteractionIntent,
+    ): Promise<FormalTaskCardInteractionWorkerResult>;
   };
   proactiveSignalFeedbackWorker?: {
     processFeedback(
@@ -124,6 +135,7 @@ export function createApprovalInteractionWorker({
   intentStore,
   callbackIdentityStore,
   actionApprovalWorker,
+  formalTaskCardInteractionWorker,
   proactiveSignalFeedbackWorker,
   knowledgeConflictInteractionWorker,
 }: ApprovalInteractionWorkerDependencies) {
@@ -155,6 +167,7 @@ export function createApprovalInteractionWorker({
           intentStore,
           callbackIdentityStore,
           actionApprovalWorker,
+          formalTaskCardInteractionWorker,
           proactiveSignalFeedbackWorker,
           knowledgeConflictInteractionWorker,
         }));
@@ -181,6 +194,8 @@ type ProcessJobInput = {
   callbackIdentityStore?: ApprovalInteractionWorkerDependencies["callbackIdentityStore"];
   resolvedIntent?: ApprovalInteractionIntent;
   actionApprovalWorker?: ApprovalInteractionWorkerDependencies["actionApprovalWorker"];
+  formalTaskCardInteractionWorker?:
+    ApprovalInteractionWorkerDependencies["formalTaskCardInteractionWorker"];
   proactiveSignalFeedbackWorker?:
     ApprovalInteractionWorkerDependencies["proactiveSignalFeedbackWorker"];
   knowledgeConflictInteractionWorker?:
@@ -200,7 +215,9 @@ async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractio
     return handleTransientFailure(rawInput, "repository_unavailable");
   }
   if (resolution.status === "conflict") {
-    await attemptCommittedResultDisplay(rawInput);
+    if (rawJob.kind !== "formal_task_draft_confirmation") {
+      await attemptCommittedResultDisplay(rawInput);
+    }
     const ackFailure = await acknowledge(rawInput, false);
     if (ackFailure !== undefined) return ackFailure;
     return {
@@ -219,6 +236,9 @@ async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractio
 
   if (job.kind === "action_proposal_approval") {
     return processActionApprovalJob({ ...input, job });
+  }
+  if (job.kind === "formal_task_draft_confirmation") {
+    return processFormalTaskInteractionJob({ ...input, job });
   }
 
   const initiallyEnabled = readRuntimeGate(input.canUseKnowledgeCards, job.chatId);
@@ -296,6 +316,38 @@ async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractio
     status: mutation.outcome,
     idempotencyKey: job.idempotencyKey,
     code,
+  };
+}
+
+async function processFormalTaskInteractionJob(
+  input: Parameters<typeof processJob>[0] & {
+    job: Extract<ApprovalInteractionJob, { kind: "formal_task_draft_confirmation" }>;
+  },
+): Promise<ApprovalInteractionWorkerResult> {
+  if (input.formalTaskCardInteractionWorker === undefined) {
+    return handleTransientFailure(input, "internal_error");
+  }
+  let result: FormalTaskCardInteractionWorkerResult;
+  try {
+    result = await input.formalTaskCardInteractionWorker.processInteraction(
+      input.job,
+      input.resolvedIntent,
+    );
+  } catch {
+    return handleTransientFailure(input, "internal_error");
+  }
+  if (result.status === "retryable") {
+    return handleTransientFailure(input, result.code as Extract<
+      FormalTaskCardInteractionWorkerCode,
+      "membership_unavailable" | "repository_unavailable" | "internal_error"
+    >);
+  }
+  const ackFailure = await acknowledge(input, result.code !== "immutable_intent_conflict");
+  if (ackFailure !== undefined) return ackFailure;
+  return {
+    status: result.status,
+    idempotencyKey: input.job.idempotencyKey,
+    code: result.code,
   };
 }
 
@@ -473,7 +525,9 @@ async function handleTransientFailure(
     "membership_unavailable" | "repository_unavailable" | "redis_unavailable" | "internal_error"
   >,
 ): Promise<ApprovalInteractionWorkerResult> {
-  await attemptCommittedResultDisplay(input);
+  if (input.job.kind !== "formal_task_draft_confirmation") {
+    await attemptCommittedResultDisplay(input);
+  }
   const failure = await input.queue.handleFailure({
     job: input.job,
     workerId: input.workerId,
@@ -712,6 +766,7 @@ function renderStatusCard(code: ApprovalInteractionWorkerCode): string {
     repository_unavailable: "The action could not be recorded. Try again later.",
     redis_unavailable: "The action could not be queued. Try again later.",
     internal_error: "The action could not be processed. Try again later.",
+    formal_task_action_applied: "Formal task draft action recorded.",
   };
   return JSON.stringify({
     schema: "2.0",

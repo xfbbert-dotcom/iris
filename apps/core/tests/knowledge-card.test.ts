@@ -26,6 +26,7 @@ describe("knowledge card contracts", () => {
     expect(ACTION_PROPOSAL_CARD_ACTIONS).toEqual(["approve", "request_revision", "reject"]);
     expect(APPROVAL_INTERACTION_KINDS).toEqual([
       "knowledge_draft_confirmation",
+      "formal_task_draft_confirmation",
       "action_proposal_approval",
       "proactive_signal_feedback",
       "knowledge_conflict_confirmation",
@@ -106,6 +107,82 @@ describe("knowledge card contracts", () => {
     });
     expect(job).not.toHaveProperty("draftId");
     expect(job).not.toHaveProperty("content");
+  });
+
+  it("normalizes an exact content-free formal task confirmation job", () => {
+    const job = normalizeApprovalInteractionJob({
+      kind: "formal_task_draft_confirmation",
+      idempotencyKey: "feishu-card:cli_a:event-task-1",
+      eventId: "event-task-1",
+      appId: "cli_a",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_group",
+      messageId: "om_task",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: 2,
+      draftVersion: 3,
+      taskSpecHash: "a".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 4,
+      action: "confirm",
+      receivedAt: new Date("2026-08-22T00:00:00.000Z"),
+      attempts: 0,
+    });
+
+    expect(job).toMatchObject({
+      kind: "formal_task_draft_confirmation",
+      draftId: "task-draft-1",
+      taskSpecHash: "a".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 4,
+      action: "confirm",
+    });
+    expect(normalizeApprovalInteractionIntentIdentity(job)).toEqual({
+      kind: "formal_task_draft_confirmation",
+      idempotencyKey: "feishu-card:cli_a:event-task-1",
+      eventId: "event-task-1",
+      appId: "cli_a",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_group",
+      messageId: "om_task",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: 2,
+      draftVersion: 3,
+      taskSpecHash: "a".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 4,
+      action: "confirm",
+    });
+    expect(job).not.toHaveProperty("title");
+    expect(job).not.toHaveProperty("description");
+  });
+
+  it.each([
+    ["non-hash task specification", { taskSpecHash: "not-a-hash" }],
+    ["mixed proposal field", { proposalId: "proposal-1" }],
+    ["missing target policy", { targetPolicyId: undefined }],
+  ])("rejects formal task callback %s", (_label, mutation) => {
+    expect(() => normalizeApprovalInteractionJob({
+      kind: "formal_task_draft_confirmation",
+      idempotencyKey: "feishu-card:cli_a:event-task-1",
+      eventId: "event-task-1",
+      appId: "cli_a",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_group",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: 2,
+      draftVersion: 3,
+      taskSpecHash: "a".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 4,
+      action: "confirm",
+      receivedAt: new Date("2026-08-22T00:00:00.000Z"),
+      attempts: 0,
+      ...mutation,
+    })).toThrow(KnowledgeCardValidationError);
   });
 
   it("parses an ISO receivedAt value from durable queue storage", () => {

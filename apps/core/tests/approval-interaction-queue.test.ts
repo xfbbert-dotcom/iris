@@ -77,4 +77,31 @@ describe("ApprovalInteractionQueue contract", () => {
       "unknown approval interaction field: reason",
     );
   });
+
+  it("normalizes a content-free formal task job for durable queue transport", () => {
+    const formalTask = {
+      kind: "formal_task_draft_confirmation" as const,
+      idempotencyKey: "feishu-card:cli_task:event-1",
+      eventId: "event-1",
+      appId: "cli_task",
+      actorOpenId: "ou_member",
+      chatId: "oc_group",
+      messageId: "om_task",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: 1,
+      draftVersion: 1,
+      taskSpecHash: "c".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 3,
+      action: "confirm" as const,
+      receivedAt: new Date("2026-08-22T00:00:00.000Z"),
+      attempts: 0,
+    };
+
+    expect(normalizeApprovalInteractionJob(formalTask)).toEqual(formalTask);
+    expect(normalizeApprovalInteractionIntentIdentity(formalTask)).not.toHaveProperty("receivedAt");
+    expect(() => normalizeApprovalInteractionJob({ ...formalTask, title: "private task title" }))
+      .toThrow("unknown approval interaction field: title");
+  });
 });

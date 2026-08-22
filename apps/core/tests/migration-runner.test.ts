@@ -890,6 +890,12 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain(
       "where not (capabilities ? 'generatetaskdrafts')",
     );
+    expect(normalized).toContain(
+      "capabilities = capabilities || '{\"createfeishutasks\":false}'::jsonb",
+    );
+    expect(normalized).toContain(
+      "where not (capabilities ? 'createfeishutasks')",
+    );
   });
 
   it("includes durable group memories with same-group idempotency and message evidence", async () => {

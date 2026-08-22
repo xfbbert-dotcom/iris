@@ -166,6 +166,14 @@ export class RuntimeController {
     return this.canProcessGroupMessage(input.sourceGroupId);
   }
 
+  canCreateFeishuTasks(input: { sourceGroupId?: string } = {}): boolean {
+    if (!this.config.globalEnabled || !this.config.capabilities.createFeishuTasks) {
+      return false;
+    }
+    if (input.sourceGroupId === undefined) return true;
+    return this.canProcessGroupMessage(input.sourceGroupId);
+  }
+
   canWriteKnowledgeBase(): boolean {
     return this.config.globalEnabled && this.config.capabilities.writeKnowledgeBase;
   }

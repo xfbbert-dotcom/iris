@@ -43,5 +43,7 @@ describe("governed Feishu task action migration", () => {
     expect(sql).toMatch(/CREATE UNIQUE INDEX feishu_task_creations_remote_guid_idx/iu);
     expect(sql).toMatch(/reminder_minutes IN \(0, 30, 60, 1440\)/iu);
     expect(sql).toMatch(/client_token_hash ~ '\^\[0-9a-f\]\{64\}\$'/iu);
+    expect(sql).toMatch(/formal_task_draft_confirmation/iu);
+    expect(sql).toMatch(/createFeishuTasks/iu);
   });
 });

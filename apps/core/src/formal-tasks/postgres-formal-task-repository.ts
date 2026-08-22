@@ -31,7 +31,8 @@ import {
   type UpsertFeishuTaskTargetPolicyInput,
 } from "./formal-task-repository.js";
 
-type FormalTaskTransactionClient = KnowledgeDraftEvidenceQueryable & { release(): void };
+export type FormalTaskTransactionQueryable = KnowledgeDraftEvidenceQueryable;
+type FormalTaskTransactionClient = FormalTaskTransactionQueryable & { release(): void };
 export type PostgresFormalTaskDataSource = KnowledgeDraftEvidenceQueryable & {
   connect(): Promise<FormalTaskTransactionClient>;
 };
@@ -507,90 +508,100 @@ async function transitionDraft(
   input: TransitionFormalTaskDraftInput | DisposeFormalTaskDraftInput,
   eventType: "group_confirmed" | "revision_requested" | "rejected" | "task_created",
 ): Promise<FormalTaskDraftMutationResult> {
+  return withTransaction(dataSource, (client) => applyFormalTaskTransitionInTransaction(
+    client,
+    input,
+    eventType,
+  ));
+}
+
+export async function applyFormalTaskTransitionInTransaction(
+  client: FormalTaskTransactionQueryable,
+  input: TransitionFormalTaskDraftInput | DisposeFormalTaskDraftInput,
+  eventType: "group_confirmed" | "revision_requested" | "rejected" | "task_created",
+): Promise<FormalTaskDraftMutationResult> {
   const normalized = normalizeTransitionInput(input, eventType);
   const fingerprint = operationFingerprint({
     operation: `transition_formal_task_draft:${eventType}`,
     ...normalized,
   });
-  return withTransaction(dataSource, async (client) => {
-    const replay = await lockAndFindReplay(client, normalized.operationKey, fingerprint);
-    if (replay !== undefined) {
-      return {
-        outcome: "already_applied",
-        draft: await requireDraft(client, replay.draft_id, normalized.at),
-      };
-    }
-    const draft = await lockDraft(client, normalized.id);
-    requireExpectedVersion(draft, normalized.expectedVersion);
-    if (
-      Number(draft.current_revision_number) !== normalized.expectedRevision ||
-      draft.current_task_spec_hash !== normalized.expectedTaskSpecHash ||
-      !transitionAllowed(draft.status, eventType)
-    ) throw new FormalTaskTransitionError();
-
-    if (eventType === "group_confirmed" || eventType === "task_created") {
-      const current = await requireDraft(client, normalized.id, normalized.at);
-      const currentRevision = current.currentRevision;
-      if (!("taskSpec" in currentRevision)) {
-        throw new FormalTaskEvidenceError(currentRevision.evidenceState.reason);
-      }
-      await validateTaskPolicy(client, currentRevision.taskSpec, normalized.at);
-    }
-
-    const nextStatus = eventType === "group_confirmed"
-      ? "pending_review"
-      : eventType === "revision_requested"
-        ? "needs_revision"
-        : eventType === "rejected"
-          ? "rejected"
-          : "created";
-    const nextVersion = normalized.expectedVersion + 1;
-    if (eventType === "rejected") {
-      await client.query(
-        `UPDATE formal_task_drafts
-         SET status = 'rejected', version = $2, updated_at = $3,
-             rejected_at = $3, rejected_by = $4, rejection_reason = $5
-         WHERE id = $1 AND version = $6`,
-        [
-          normalized.id,
-          nextVersion,
-          normalized.at,
-          normalized.actor,
-          normalized.reason,
-          normalized.expectedVersion,
-        ],
-      );
-    } else {
-      await client.query(
-        `UPDATE formal_task_drafts
-         SET status = $2, version = $3, updated_at = $4
-         WHERE id = $1 AND version = $5`,
-        [
-          normalized.id,
-          nextStatus,
-          nextVersion,
-          normalized.at,
-          normalized.expectedVersion,
-        ],
-      );
-    }
-    await insertDraftEvent(client, {
-      draftId: normalized.id,
-      eventType,
-      fromVersion: normalized.expectedVersion,
-      toVersion: nextVersion,
-      operationKey: normalized.operationKey,
-      operationFingerprint: fingerprint,
-      actor: normalized.actor,
-      reason: normalized.reason,
-      revisionNumber: normalized.expectedRevision,
-      at: normalized.at,
-    });
+  const replay = await lockAndFindReplay(client, normalized.operationKey, fingerprint);
+  if (replay !== undefined) {
     return {
-      outcome: "applied",
-      draft: await requireDraft(client, normalized.id, normalized.at),
+      outcome: "already_applied",
+      draft: await requireDraft(client, replay.draft_id, normalized.at),
     };
+  }
+  const draft = await lockDraft(client, normalized.id);
+  requireExpectedVersion(draft, normalized.expectedVersion);
+  if (
+    Number(draft.current_revision_number) !== normalized.expectedRevision ||
+    draft.current_task_spec_hash !== normalized.expectedTaskSpecHash ||
+    !transitionAllowed(draft.status, eventType)
+  ) throw new FormalTaskTransitionError();
+
+  if (eventType === "group_confirmed" || eventType === "task_created") {
+    const current = await requireDraft(client, normalized.id, normalized.at);
+    const currentRevision = current.currentRevision;
+    if (!("taskSpec" in currentRevision)) {
+      throw new FormalTaskEvidenceError(currentRevision.evidenceState.reason);
+    }
+    await validateTaskPolicy(client, currentRevision.taskSpec, normalized.at);
+  }
+
+  const nextStatus = eventType === "group_confirmed"
+    ? "pending_review"
+    : eventType === "revision_requested"
+      ? "needs_revision"
+      : eventType === "rejected"
+        ? "rejected"
+        : "created";
+  const nextVersion = normalized.expectedVersion + 1;
+  if (eventType === "rejected") {
+    await client.query(
+      `UPDATE formal_task_drafts
+       SET status = 'rejected', version = $2, updated_at = $3,
+           rejected_at = $3, rejected_by = $4, rejection_reason = $5
+       WHERE id = $1 AND version = $6`,
+      [
+        normalized.id,
+        nextVersion,
+        normalized.at,
+        normalized.actor,
+        normalized.reason,
+        normalized.expectedVersion,
+      ],
+    );
+  } else {
+    await client.query(
+      `UPDATE formal_task_drafts
+       SET status = $2, version = $3, updated_at = $4
+       WHERE id = $1 AND version = $5`,
+      [
+        normalized.id,
+        nextStatus,
+        nextVersion,
+        normalized.at,
+        normalized.expectedVersion,
+      ],
+    );
+  }
+  await insertDraftEvent(client, {
+    draftId: normalized.id,
+    eventType,
+    fromVersion: normalized.expectedVersion,
+    toVersion: nextVersion,
+    operationKey: normalized.operationKey,
+    operationFingerprint: fingerprint,
+    actor: normalized.actor,
+    reason: normalized.reason,
+    revisionNumber: normalized.expectedRevision,
+    at: normalized.at,
   });
+  return {
+    outcome: "applied",
+    draft: await requireDraft(client, normalized.id, normalized.at),
+  };
 }
 
 async function insertDraftEvent(

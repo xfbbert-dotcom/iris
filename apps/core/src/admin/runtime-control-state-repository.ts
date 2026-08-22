@@ -25,6 +25,7 @@ export const runtimeCapabilityNames = [
   "proactiveSpeech",
   "generateKnowledgeDrafts",
   "generateTaskDrafts",
+  "createFeishuTasks",
   "writeKnowledgeBase",
   "updateManagedKnowledge",
   "callExternalTools",

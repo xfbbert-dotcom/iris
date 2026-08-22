@@ -337,6 +337,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
   "proactiveSpeech",
   "generateKnowledgeDrafts",
   "generateTaskDrafts",
+  "createFeishuTasks",
   "writeKnowledgeBase",
   "updateManagedKnowledge",
   "callExternalTools",
@@ -481,6 +482,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       runtimeController,
       proactiveSignalRepository:
         dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
+      formalTaskRuntime,
     });
     knowledgeCardStatusReader = knowledgeCardRuntime === undefined
       ? (dependencies.createKnowledgeCardStatusReader ?? createDefaultKnowledgeCardStatusReader)()
@@ -540,7 +542,8 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         : undefined;
     const chatFormalTaskDraftCommand =
       answerDraftRuntime?.chatFormalTaskDraftGenerator !== undefined &&
-        formalTaskRuntime !== undefined
+        formalTaskRuntime !== undefined &&
+        knowledgeCardRuntime !== undefined
         ? createChatFormalTaskDraftCommand({
             generator: answerDraftRuntime.chatFormalTaskDraftGenerator,
             canReadGroupContext: runtimeController.canReadGroupContext.bind(runtimeController),

@@ -35,6 +35,20 @@ type ParsedKnowledgeActionPayload = {
   rejectionConfirmed?: true;
 };
 
+type ParsedFormalTaskActionPayload = {
+  kind: "formal_task_draft_confirmation";
+  presentationId: string;
+  draftId: string;
+  revisionNumber: number;
+  draftVersion: number;
+  taskSpecHash: string;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
+  action: KnowledgeCardAction;
+  reason?: string;
+  rejectionConfirmed?: true;
+};
+
 type ParsedActionProposalPayload = {
   kind: "action_proposal_approval";
   presentationId: string;
@@ -69,11 +83,13 @@ type ParsedKnowledgeConflictPayload = {
 
 type ParsedActionPayload =
   | ParsedKnowledgeActionPayload
+  | ParsedFormalTaskActionPayload
   | ParsedActionProposalPayload
   | ParsedProactiveSignalFeedbackPayload
   | ParsedKnowledgeConflictPayload;
 type ParsedCallbackValue =
   | Omit<ParsedKnowledgeActionPayload, "reason" | "rejectionConfirmed">
+  | Omit<ParsedFormalTaskActionPayload, "reason" | "rejectionConfirmed">
   | Omit<ParsedActionProposalPayload, "reason" | "rejectionConfirmed">
   | ParsedProactiveSignalFeedbackPayload
   | ParsedKnowledgeConflictPayload;
@@ -191,6 +207,9 @@ function parseCallbackValue(value: unknown): ParsedCallbackValue | undefined {
   if (value.kind === "knowledge_draft_confirmation") {
     return parseKnowledgeDraftCallbackValue(value);
   }
+  if (value.kind === "formal_task_draft_confirmation") {
+    return parseFormalTaskDraftCallbackValue(value);
+  }
   if (value.kind === "action_proposal_approval") {
     return parseActionProposalCallbackValue(value);
   }
@@ -224,6 +243,50 @@ function parseKnowledgeDraftCallbackValue(value: Record<string, unknown>): Parse
     draftId,
     revisionNumber,
     draftVersion,
+  };
+}
+
+function parseFormalTaskDraftCallbackValue(value: Record<string, unknown>): ParsedCallbackValue | undefined {
+  if (
+    !hasOnlyKeys(value, [
+      "kind",
+      "action",
+      "presentationId",
+      "draftId",
+      "revisionNumber",
+      "draftVersion",
+      "taskSpecHash",
+      "targetPolicyId",
+      "targetPolicyVersion",
+    ]) ||
+    !KNOWLEDGE_CARD_ACTIONS.includes(value.action as KnowledgeCardAction)
+  ) return undefined;
+  const presentationId = parseReference(value.presentationId);
+  const draftId = parseReference(value.draftId);
+  const revisionNumber = parsePositiveIntegerString(value.revisionNumber);
+  const draftVersion = parsePositiveIntegerString(value.draftVersion);
+  const taskSpecHash = parseSha256(value.taskSpecHash);
+  const targetPolicyId = parseReference(value.targetPolicyId);
+  const targetPolicyVersion = parsePositiveIntegerString(value.targetPolicyVersion);
+  if (
+    presentationId === undefined ||
+    draftId === undefined ||
+    revisionNumber === undefined ||
+    draftVersion === undefined ||
+    taskSpecHash === undefined ||
+    targetPolicyId === undefined ||
+    targetPolicyVersion === undefined
+  ) return undefined;
+  return {
+    kind: "formal_task_draft_confirmation",
+    action: value.action as KnowledgeCardAction,
+    presentationId,
+    draftId,
+    revisionNumber,
+    draftVersion,
+    taskSpecHash,
+    targetPolicyId,
+    targetPolicyVersion,
   };
 }
 
@@ -364,6 +427,10 @@ function parsePositiveIntegerString(value: unknown): number | undefined {
   if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function parseSha256(value: unknown): string | undefined {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value) ? value : undefined;
 }
 
 function areOptionalStrings(value: Record<string, unknown>, keys: string[]): boolean {

@@ -2,6 +2,18 @@ UPDATE runtime_control_state
 SET capabilities = capabilities || '{"generateTaskDrafts":false}'::jsonb
 WHERE NOT (capabilities ? 'generateTaskDrafts');
 
+UPDATE runtime_control_state
+SET capabilities = capabilities || '{"createFeishuTasks":false}'::jsonb
+WHERE NOT (capabilities ? 'createFeishuTasks');
+
+ALTER TABLE approval_interaction_intents
+  DROP CONSTRAINT approval_interaction_intents_interaction_kind_check;
+
+ALTER TABLE approval_interaction_intents
+  ADD CONSTRAINT approval_interaction_intents_interaction_kind_check CHECK (interaction_kind IN (
+    'knowledge_draft_confirmation', 'formal_task_draft_confirmation', 'action_proposal_approval'
+  ));
+
 CREATE TABLE feishu_task_target_policies (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   source_group_id TEXT NOT NULL CHECK (char_length(source_group_id) BETWEEN 1 AND 512),

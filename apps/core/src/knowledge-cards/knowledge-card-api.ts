@@ -223,6 +223,18 @@ function toDeadLetterResponse(deadLetter: ApprovalInteractionDeadLetter) {
       draftVersion: deadLetter.job.draftVersion,
     };
   }
+  if (deadLetter.job.kind === "formal_task_draft_confirmation") {
+    return {
+      ...common,
+      kind: deadLetter.job.kind,
+      draftId: deadLetter.job.draftId,
+      revisionNumber: deadLetter.job.revisionNumber,
+      draftVersion: deadLetter.job.draftVersion,
+      taskSpecHash: deadLetter.job.taskSpecHash,
+      targetPolicyId: deadLetter.job.targetPolicyId,
+      targetPolicyVersion: deadLetter.job.targetPolicyVersion,
+    };
+  }
   if (deadLetter.job.kind === "proactive_signal_feedback") {
     return { kind: deadLetter.job.kind };
   }

@@ -75,9 +75,15 @@ import {
 } from "../knowledge-cards/redis-approval-interaction-queue.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import { observeStartupPromise } from "./startup-promise.js";
+import type { FormalTaskRuntime } from "./formal-task-runtime.js";
+import { createFormalTaskCardDispatcher } from
+  "../formal-tasks/formal-task-card-dispatcher.js";
+import { createFormalTaskCardInteractionWorker } from
+  "../formal-tasks/formal-task-card-interaction-worker.js";
 
 const DISPATCHER_WORKER_ID = "knowledge-card-dispatcher";
 const INTERACTION_WORKER_ID = "approval-interaction-worker";
+const FORMAL_TASK_DISPATCHER_WORKER_ID = "formal-task-card-dispatcher";
 const EXTERNAL_LEASE_MS = 30_000;
 const SEND_RETRY_DELAY_MS = 1_000;
 export const KNOWLEDGE_CARD_TARGET_DISPLAY_NAME = "Unapproved suggested publication location";
@@ -133,6 +139,11 @@ export type KnowledgeCardRuntimeStatus = {
   };
   presentations: KnowledgeCardStatusCounts;
   outbox: KnowledgeCardOutboxStatusCounts;
+  formalTasks?: {
+    dispatcher: KnowledgeCardDispatcherLoopSnapshot;
+    presentations: Awaited<ReturnType<FormalTaskRuntime["cardRepository"]["getPresentationStatusCounts"]>>;
+    outbox: Awaited<ReturnType<FormalTaskRuntime["cardRepository"]["getOutboxStatusCounts"]>>;
+  };
 };
 
 export type KnowledgeCardStatusReaderStatus = {
@@ -202,6 +213,8 @@ export type KnowledgeCardRuntimeDependencies = {
   createFeishuGroupMembershipChecker?: typeof createFeishuGroupMembershipChecker;
   createDispatcherLoop?: typeof createKnowledgeCardDispatcherLoop;
   createInteractionLoop?: typeof createApprovalInteractionWorkerLoop;
+  createFormalTaskDispatcher?: typeof createFormalTaskCardDispatcher;
+  createFormalTaskInteractionWorker?: typeof createFormalTaskCardInteractionWorker;
   onCardCallbackDiagnostic?: (diagnostic: FeishuCardActionCallbackDiagnostic) => void;
   onCardAuthenticationDiagnostic?: (diagnostic: FeishuCallbackAuthenticationDiagnostic) => void;
   onStartupCleanup?: (cleanup: Promise<void>) => void;
@@ -464,11 +477,16 @@ export function createKnowledgeCardRuntime({
   env = process.env,
   runtimeController,
   proactiveSignalRepository,
+  formalTaskRuntime,
   dependencies = {},
 }: {
   env?: EnvLike;
   runtimeController?: KnowledgeCardRuntimeGate;
   proactiveSignalRepository?: ProactiveSignalRepository;
+  formalTaskRuntime?: Pick<
+    FormalTaskRuntime,
+    "cardRepository" | "canUseFormalTaskCards"
+  >;
   dependencies?: KnowledgeCardRuntimeDependencies;
 } = {}): KnowledgeCardRuntime | undefined {
   const config = readKnowledgeCardRuntimeConfig(env);
@@ -505,12 +523,17 @@ export function createKnowledgeCardRuntime({
     createKnowledgeCardDispatcherLoop;
   const createInteractionPollingLoop = dependencies.createInteractionLoop ??
     createApprovalInteractionWorkerLoop;
+  const createTaskDispatcher = dependencies.createFormalTaskDispatcher ??
+    createFormalTaskCardDispatcher;
+  const createTaskInteractionWorker = dependencies.createFormalTaskInteractionWorker ??
+    createFormalTaskCardInteractionWorker;
 
   let pool: KnowledgeCardPool | undefined;
   let redisClient: KnowledgeCardRedisClient | undefined;
   let redisConnection: Promise<KnowledgeCardRedisClient> | undefined;
   let dispatcherLoop: KnowledgeCardDispatcherLoop | undefined;
   let interactionLoop: ApprovalInteractionWorkerLoop | undefined;
+  let formalTaskDispatcherLoop: KnowledgeCardDispatcherLoop | undefined;
   try {
     pool = createPool({ databaseUrl: config.databaseUrl });
     redisClient = createRedis(config.redisUrl);
@@ -567,6 +590,15 @@ export function createKnowledgeCardRuntime({
       leaseMs: EXTERNAL_LEASE_MS,
       retryDelayMs: SEND_RETRY_DELAY_MS,
     });
+    const formalTaskInteractionWorker = formalTaskRuntime === undefined
+      ? undefined
+      : createTaskInteractionWorker({
+          repository: formalTaskRuntime.cardRepository,
+          membershipChecker,
+          cardClient,
+          canUseFormalTaskCards: (groupId) => formalTaskRuntime.canUseFormalTaskCards(groupId),
+          botOpenId: config.botOpenId,
+        });
     let boundActionApprovalWorker:
       | NonNullable<ApprovalInteractionWorkerDependencies["actionApprovalWorker"]>
       | undefined;
@@ -605,6 +637,7 @@ export function createKnowledgeCardRuntime({
       intentStore,
       callbackIdentityStore,
       actionApprovalWorker,
+      formalTaskCardInteractionWorker: formalTaskInteractionWorker,
       proactiveSignalFeedbackWorker,
       knowledgeConflictInteractionWorker,
     });
@@ -614,6 +647,22 @@ export function createKnowledgeCardRuntime({
       batchLimit: config.batchLimit,
       onError: () => undefined,
     });
+    if (formalTaskRuntime !== undefined) {
+      const formalTaskDispatcher = createTaskDispatcher({
+        repository: formalTaskRuntime.cardRepository,
+        cardClient,
+        canUseFormalTaskCards: (groupId) => formalTaskRuntime.canUseFormalTaskCards(groupId),
+        workerId: FORMAL_TASK_DISPATCHER_WORKER_ID,
+        leaseMs: EXTERNAL_LEASE_MS,
+        retryDelayMs: SEND_RETRY_DELAY_MS,
+      });
+      formalTaskDispatcherLoop = createDispatcherPollingLoop({
+        worker: formalTaskDispatcher,
+        intervalMs: config.intervalMs,
+        batchLimit: config.batchLimit,
+        onError: () => undefined,
+      });
+    }
     interactionLoop = createInteractionPollingLoop({
       worker: interactionWorker,
       intervalMs: config.intervalMs,
@@ -666,6 +715,9 @@ export function createKnowledgeCardRuntime({
       if (lifecycle !== "failed") lifecycle = "closed";
       closePromise ??= observeStartupPromise(closeRuntimeResources([
         () => dispatcherLoop!.stop(),
+        ...(formalTaskDispatcherLoop === undefined
+          ? []
+          : [() => formalTaskDispatcherLoop!.stop()]),
         () => interactionLoop!.stop(),
         () => closeRedisClient(redisClient!, redisConnection!),
         () => pool!.end(),
@@ -719,6 +771,7 @@ export function createKnowledgeCardRuntime({
         lifecycle = "starting";
         try {
           dispatcherLoop!.start();
+          formalTaskDispatcherLoop?.start();
           interactionLoop!.start();
           lifecycle = "started";
           resolveStartup();
@@ -734,20 +787,35 @@ export function createKnowledgeCardRuntime({
       async getStatus() {
         const dispatcher = dispatcherLoop!.getSnapshot();
         const worker = interactionLoop!.getSnapshot();
-        const [queueCounts, presentations, outbox] = await Promise.all([
+        const [queueCounts, presentations, outbox, formalTaskPresentations, formalTaskOutbox] = await Promise.all([
           queue.getCounts(),
           repository.getStatusCounts(),
           repository.getOutboxStatusCounts(),
+          formalTaskRuntime?.cardRepository.getPresentationStatusCounts(),
+          formalTaskRuntime?.cardRepository.getOutboxStatusCounts(),
         ]);
+        const formalTaskDispatcher = formalTaskDispatcherLoop?.getSnapshot();
         return {
           enabled: true,
-          running: dispatcher.running && worker.running,
+          running: dispatcher.running && worker.running &&
+            (formalTaskDispatcher?.running ?? true),
           enabledGroupCount: enabledGroups.size,
           dispatcher,
           worker,
           queue: queueCounts,
           presentations,
           outbox,
+          ...(formalTaskDispatcher === undefined ||
+            formalTaskPresentations === undefined ||
+            formalTaskOutbox === undefined
+            ? {}
+            : {
+                formalTasks: {
+                  dispatcher: formalTaskDispatcher,
+                  presentations: formalTaskPresentations,
+                  outbox: formalTaskOutbox,
+                },
+              }),
         };
       },
       close() {
@@ -757,6 +825,9 @@ export function createKnowledgeCardRuntime({
   } catch (error) {
     const cleanup = observeStartupPromise(closeRuntimeResources([
       ...(dispatcherLoop === undefined ? [] : [() => dispatcherLoop!.stop()]),
+      ...(formalTaskDispatcherLoop === undefined
+        ? []
+        : [() => formalTaskDispatcherLoop!.stop()]),
       ...(interactionLoop === undefined ? [] : [() => interactionLoop!.stop()]),
       ...(redisClient === undefined || redisConnection === undefined
         ? []

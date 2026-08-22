@@ -6,9 +6,14 @@ import type {
   FeishuTaskTargetPolicy,
   FormalTaskRepository,
 } from "./formal-task-repository.js";
+import type { FormalTaskDraftPresentation } from "./formal-task-card-repository.js";
 
 export type ChatFormalTaskDraftCommandResult =
-  | { status: "created" | "already_created"; draftId: string }
+  | {
+      status: "created" | "already_created";
+      draftId: string;
+      presentationId: string;
+    }
   | {
       status:
         | "assignee_clarification_required"
@@ -37,6 +42,16 @@ export type ChatFormalTaskDraftCommandDependencies = {
       "getDraft" | "getTargetPolicyForGroup" | "createDraft"
     >;
     canCreateDraft(input: { sourceGroupId: string }): boolean;
+    canUseFormalTaskCards(groupId: string): boolean;
+    presentDraft(input: {
+      draftId: string;
+      expectedVersion: number;
+      operationKey: string;
+      at: Date;
+    }): Promise<{
+      outcome: "applied" | "already_applied";
+      presentation: FormalTaskDraftPresentation;
+    }>;
   };
 };
 
@@ -84,7 +99,21 @@ async function executeOnce(
       "taskSpec" in existing.currentRevision &&
       existing.currentRevision.taskSpec.assigneeOpenId !== assigneeOpenId
     ) throw new ChatFormalTaskDraftCommandConflictError();
-    return { status: "already_created", draftId: existing.id };
+    if (!readGate(() => dependencies.runtime.canUseFormalTaskCards(input.chatId))) {
+      return { status: "runtime_disabled" };
+    }
+    const presentation = await dependencies.runtime.presentDraft({
+      draftId: existing.id,
+      expectedVersion: existing.version,
+      operationKey: identity.presentationOperationKey,
+      at: input.observedAt,
+    });
+    assertExactPresentation(presentation.presentation, existing.id, input.chatId, existing.version);
+    return {
+      status: "already_created",
+      draftId: existing.id,
+      presentationId: presentation.presentation.id,
+    };
   }
 
   const initialTarget = await readCreationTarget(dependencies, input.chatId, assigneeOpenId);
@@ -134,9 +163,22 @@ async function executeOnce(
     creation.draft.id !== identity.draftId ||
     creation.draft.sourceGroupId !== input.chatId
   ) throw new ChatFormalTaskDraftCommandConflictError();
+  const presentation = await dependencies.runtime.presentDraft({
+    draftId: creation.draft.id,
+    expectedVersion: creation.draft.version,
+    operationKey: identity.presentationOperationKey,
+    at: input.observedAt,
+  });
+  assertExactPresentation(
+    presentation.presentation,
+    creation.draft.id,
+    input.chatId,
+    creation.draft.version,
+  );
   return {
     status: creation.outcome === "applied" ? "created" : "already_created",
     draftId: creation.draft.id,
+    presentationId: presentation.presentation.id,
   };
 }
 
@@ -151,7 +193,8 @@ async function readCreationTarget(
 ): Promise<CreationTarget> {
   if (
     !readGate(() => dependencies.canReadGroupContext(sourceGroupId)) ||
-    !readGate(() => dependencies.runtime.canCreateDraft({ sourceGroupId }))
+    !readGate(() => dependencies.runtime.canCreateDraft({ sourceGroupId })) ||
+    !readGate(() => dependencies.runtime.canUseFormalTaskCards(sourceGroupId))
   ) return { status: "runtime_disabled" };
   const policy = await dependencies.runtime.repository.getTargetPolicyForGroup(sourceGroupId);
   if (
@@ -185,6 +228,7 @@ type CommandIdentity = {
   digest: string;
   draftId: string;
   creationOperationKey: string;
+  presentationOperationKey: string;
 };
 
 function normalizeInput(input: NormalizedInput): NormalizedInput {
@@ -209,7 +253,21 @@ function commandIdentity(messageId: string): CommandIdentity {
     digest,
     draftId: `chat-formal-task-draft-${digest.slice(0, 40)}`,
     creationOperationKey: `chat-formal-task-draft-create-${digest}`,
+    presentationOperationKey: `chat-formal-task-card-${digest}`,
   };
+}
+
+function assertExactPresentation(
+  presentation: FormalTaskDraftPresentation,
+  draftId: string,
+  groupId: string,
+  draftVersion: number,
+): void {
+  if (
+    presentation.draftId !== draftId ||
+    presentation.groupId !== groupId ||
+    presentation.draftVersion !== draftVersion
+  ) throw new ChatFormalTaskDraftCommandConflictError();
 }
 
 function readGate(read: () => boolean): boolean {

@@ -371,6 +371,28 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
   });
 
+  it("delegates a formal task callback and acknowledges only after its durable result", async () => {
+    const processInteraction = vi.fn(async () => ({
+      status: "applied" as const,
+      code: "formal_task_action_applied" as const,
+    }));
+    const formalJob = formalTaskJob();
+    const harness = createHarness({
+      job: formalJob,
+      formalTaskCardInteractionWorker: { processInteraction },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "applied",
+      idempotencyKey: formalJob.idempotencyKey,
+      code: "formal_task_action_applied",
+    }]);
+    expect(processInteraction).toHaveBeenCalledWith(formalJob, undefined);
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+    expect(harness.repository.getPresentation).not.toHaveBeenCalled();
+    expect(harness.repository.getPresentationContext).not.toHaveBeenCalled();
+  });
+
   it("does not retry a committed mutation when post-ack intent cleanup fails", async () => {
     const sensitiveJob = job({
       action: "reject",
@@ -834,6 +856,12 @@ type HarnessOverrides = {
   actionApprovalWorker?: {
     processActionApproval: (job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>) => Promise<any>;
   };
+  formalTaskCardInteractionWorker?: {
+    processInteraction: (
+      job: Extract<ApprovalInteractionJob, { kind: "formal_task_draft_confirmation" }>,
+      intent?: any,
+    ) => Promise<any>;
+  };
   proactiveSignalFeedbackWorker?: {
     processFeedback: (
       job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }>,
@@ -893,11 +921,37 @@ function createHarness(overrides: HarnessOverrides = {}) {
       leaseMs: 30_000,
       now: () => new Date(at),
       actionApprovalWorker: overrides.actionApprovalWorker,
+      formalTaskCardInteractionWorker: overrides.formalTaskCardInteractionWorker,
       proactiveSignalFeedbackWorker: overrides.proactiveSignalFeedbackWorker,
       knowledgeConflictInteractionWorker: overrides.knowledgeConflictInteractionWorker,
       intentStore,
       callbackIdentityStore,
     }),
+  };
+}
+
+function formalTaskJob(
+  overrides: Partial<Extract<ApprovalInteractionJob, { kind: "formal_task_draft_confirmation" }>> = {},
+): Extract<ApprovalInteractionJob, { kind: "formal_task_draft_confirmation" }> {
+  return {
+    kind: "formal_task_draft_confirmation",
+    idempotencyKey: "card-action:formal-task-event-1",
+    eventId: "formal-task-event-1",
+    appId: "cli_app",
+    actorOpenId: "ou_reviewer",
+    chatId: "oc_group",
+    messageId: "om_task",
+    presentationId: "task-presentation-1",
+    draftId: "task-draft-1",
+    revisionNumber: 1,
+    draftVersion: 1,
+    taskSpecHash: "a".repeat(64),
+    targetPolicyId: "task-policy-1",
+    targetPolicyVersion: 3,
+    action: "confirm",
+    receivedAt: at,
+    attempts: 0,
+    ...overrides,
   };
 }
 

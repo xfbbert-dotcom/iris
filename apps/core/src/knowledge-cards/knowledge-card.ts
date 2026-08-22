@@ -9,6 +9,7 @@ export const KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS = [
 ] as const;
 export const APPROVAL_INTERACTION_KINDS = [
   "knowledge_draft_confirmation",
+  "formal_task_draft_confirmation",
   "action_proposal_approval",
   "proactive_signal_feedback",
   "knowledge_conflict_confirmation",
@@ -54,6 +55,17 @@ export type KnowledgeDraftConfirmationInteractionJob = ApprovalInteractionJobCom
   action: KnowledgeCardAction;
 };
 
+export type FormalTaskDraftConfirmationInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "formal_task_draft_confirmation";
+  draftId: string;
+  revisionNumber: number;
+  draftVersion: number;
+  taskSpecHash: string;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
+  action: KnowledgeCardAction;
+};
+
 export type ActionProposalApprovalInteractionJob = ApprovalInteractionJobCommon & {
   kind: "action_proposal_approval";
   proposalId: string;
@@ -94,12 +106,14 @@ export type KnowledgeConflictConfirmationInteractionJob = Omit<
 
 export type ApprovalInteractionJob =
   | KnowledgeDraftConfirmationInteractionJob
+  | FormalTaskDraftConfirmationInteractionJob
   | ActionProposalApprovalInteractionJob
   | ProactiveSignalFeedbackInteractionJob
   | KnowledgeConflictConfirmationInteractionJob;
 
 export type ApprovalInteractionIntentIdentity =
   | Omit<KnowledgeDraftConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">
+  | Omit<FormalTaskDraftConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">
   | Omit<ActionProposalApprovalInteractionJob, "intentId" | "receivedAt" | "attempts">
   | Omit<ProactiveSignalFeedbackInteractionJob, "intentId" | "receivedAt" | "attempts">;
 
@@ -153,6 +167,16 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
   const intentCapableCommonFields = [...commonFields, "intentId"];
   assertKnownFields(input, kind === "knowledge_draft_confirmation"
     ? [...intentCapableCommonFields, "draftId", "revisionNumber", "draftVersion"]
+    : kind === "formal_task_draft_confirmation"
+      ? [
+        ...intentCapableCommonFields,
+        "draftId",
+        "revisionNumber",
+        "draftVersion",
+        "taskSpecHash",
+        "targetPolicyId",
+        "targetPolicyVersion",
+      ]
     : kind === "action_proposal_approval"
       ? [
         ...intentCapableCommonFields,
@@ -191,6 +215,19 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
       draftId: requireReference("draftId", input.draftId),
       revisionNumber: requirePositiveInteger("revisionNumber", input.revisionNumber),
       draftVersion: requirePositiveInteger("draftVersion", input.draftVersion),
+      action: action as KnowledgeCardAction,
+    };
+  }
+  if (kind === "formal_task_draft_confirmation") {
+    return {
+      ...common,
+      kind,
+      draftId: requireReference("draftId", input.draftId),
+      revisionNumber: requirePositiveInteger("revisionNumber", input.revisionNumber),
+      draftVersion: requirePositiveInteger("draftVersion", input.draftVersion),
+      taskSpecHash: requireSha256("taskSpecHash", input.taskSpecHash),
+      targetPolicyId: requireReference("targetPolicyId", input.targetPolicyId),
+      targetPolicyVersion: requirePositiveInteger("targetPolicyVersion", input.targetPolicyVersion),
       action: action as KnowledgeCardAction,
     };
   }
@@ -259,6 +296,19 @@ export function toApprovalInteractionIntentIdentity(
       action: job.action,
     };
   }
+  if (job.kind === "formal_task_draft_confirmation") {
+    return {
+      ...common,
+      kind: job.kind,
+      draftId: job.draftId,
+      revisionNumber: job.revisionNumber,
+      draftVersion: job.draftVersion,
+      taskSpecHash: job.taskSpecHash,
+      targetPolicyId: job.targetPolicyId,
+      targetPolicyVersion: job.targetPolicyVersion,
+      action: job.action,
+    };
+  }
   if (job.kind === "proactive_signal_feedback") {
     return {
       ...common,
@@ -300,7 +350,7 @@ function requireAction(
   kind: ApprovalInteractionKind,
 ): KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction |
   KnowledgeConflictConfirmationAction {
-  const actions = kind === "knowledge_draft_confirmation"
+  const actions = kind === "knowledge_draft_confirmation" || kind === "formal_task_draft_confirmation"
     ? KNOWLEDGE_CARD_ACTIONS
     : kind === "action_proposal_approval"
       ? ACTION_PROPOSAL_CARD_ACTIONS
@@ -363,6 +413,13 @@ function requireNonnegativeInteger(name: string, value: unknown): number {
     throw validationError(`${name} must be a safe nonnegative integer`);
   }
   return Number(value);
+}
+
+function requireSha256(name: string, value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw validationError(`${name} must be a lowercase SHA-256 hash`);
+  }
+  return value;
 }
 
 function requireDate(name: string, value: unknown): Date {

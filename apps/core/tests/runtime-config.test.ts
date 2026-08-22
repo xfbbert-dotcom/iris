@@ -14,6 +14,7 @@ describe("createDefaultRuntimeConfig", () => {
     const capabilities = createDefaultRuntimeConfig({}).capabilities;
 
     expect(capabilities.generateTaskDrafts).toBe(false);
+    expect(capabilities.createFeishuTasks).toBe(false);
     expect(capabilities.generateKnowledgeDrafts).toBe(true);
   });
 

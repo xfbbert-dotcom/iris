@@ -30,6 +30,7 @@ describe("FeishuMentionAnswerResponder", () => {
       execute: vi.fn<ChatFormalTaskDraftCommand["execute"]>(async () => ({
         status: "created",
         draftId: "formal-task-draft-1",
+        presentationId: "formal-task-presentation-1",
       })),
     };
     const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-task" })) };

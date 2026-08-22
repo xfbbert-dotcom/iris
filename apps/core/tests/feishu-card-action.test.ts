@@ -48,6 +48,49 @@ describe("parseFeishuCardAction", () => {
     });
   });
 
+  it("parses an exact formal task draft confirmation binding", () => {
+    expect(parseFeishuCardAction(cardAction({
+      event: {
+        action: {
+          name: "confirm",
+          value: formalTaskActionValue(),
+          form_value: { reason: "" },
+        },
+      },
+    }))).toEqual({
+      kind: "formal_task_draft_confirmation",
+      eventId: "event-1",
+      appId: "cli_approval",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_approval",
+      messageId: "om_approval",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: 2,
+      draftVersion: 3,
+      taskSpecHash: "a".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 4,
+      action: "confirm",
+    });
+  });
+
+  it.each([
+    ["invalid task hash", { taskSpecHash: "invalid" }],
+    ["numeric policy version", { targetPolicyVersion: 4 }],
+    ["mixed proposal field", { proposalId: "proposal-1" }],
+  ])("rejects formal task callback %s", (_label, mutation) => {
+    expect(parseFeishuCardAction(cardAction({
+      event: {
+        action: {
+          name: "confirm",
+          value: formalTaskActionValue(mutation),
+          form_value: { reason: "" },
+        },
+      },
+    }))).toBeUndefined();
+  });
+
   it("parses a proactive feedback action with an empty or absent form value", () => {
     const withEmptyForm = parseFeishuCardAction(cardAction({
       event: {
@@ -240,6 +283,21 @@ function proposalActionValue(overrides: Record<string, unknown> = {}): Record<st
     subjectRevision: "2",
     subjectVersion: "7",
     targetPolicyVersion: "3",
+    ...overrides,
+  };
+}
+
+function formalTaskActionValue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: "formal_task_draft_confirmation",
+    action: "confirm",
+    presentationId: "task-presentation-1",
+    draftId: "task-draft-1",
+    revisionNumber: "2",
+    draftVersion: "3",
+    taskSpecHash: "a".repeat(64),
+    targetPolicyId: "task-policy-1",
+    targetPolicyVersion: "4",
     ...overrides,
   };
 }

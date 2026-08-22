@@ -722,6 +722,31 @@ describe("Redis approval interaction queue", () => {
     expect(JSON.stringify(job)).not.toMatch(/draft body|knowledge content|evidence text/iu);
   });
 
+  it("round-trips a content-free formal task confirmation job", () => {
+    const job = normalizeApprovalInteractionJob({
+      kind: "formal_task_draft_confirmation",
+      idempotencyKey: "feishu-card:cli_task:event-task",
+      eventId: "event-task",
+      appId: "cli_task",
+      actorOpenId: "ou_member",
+      chatId: "oc_group",
+      messageId: "om_task",
+      presentationId: "task-presentation-1",
+      draftId: "task-draft-1",
+      revisionNumber: 1,
+      draftVersion: 1,
+      taskSpecHash: "d".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 3,
+      action: "confirm",
+      receivedAt: new Date("2026-08-22T00:00:00.000Z"),
+      attempts: 0,
+    });
+
+    expect(parseApprovalInteractionJob(serializeApprovalInteractionJob(job))).toEqual(job);
+    expect(JSON.stringify(job)).not.toMatch(/task title|task description|evidence text/iu);
+  });
+
   it("round-trips a content-free proactive feedback job", () => {
     const job = normalizeApprovalInteractionJob({
       kind: "proactive_signal_feedback",
