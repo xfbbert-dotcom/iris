@@ -90,17 +90,32 @@ function Assert-GlobalDisabled([object]$s,[string]$label) { Assert-RuntimeCohere
 function Assert-PilotGroupShape([object]$s,[string]$label) { $null=@(Prop $s disabledGroupIds $label) }
 function Assert-PilotGroupDisabled([object]$s,[string]$label) { Assert-GlobalDisabled $s $label; Assert-PilotGroupShape $s $label; if (-not (@(Prop $s disabledGroupIds $label) -contains $PilotGroupId)) { throw "$label pilot group is not disabled" } }
 function Assert-CapabilityShape([object]$s,[string]$label) { $caps=Prop $s capabilities $label; foreach ($name in @('writeKnowledgeBase','updateManagedKnowledge')) { if ((Prop $caps $name "$label.capabilities") -isnot [bool]) { throw "$label capability state is invalid" } } }
-function Assert-ManagedDatabaseDrain {
+function Get-PrivateReadOnlyPsql {
   $hasPrivatePg=(-not [string]::IsNullOrWhiteSpace([string]$env:PGSERVICE)) -or ((-not [string]::IsNullOrWhiteSpace([string]$env:PGHOST)) -and (-not [string]::IsNullOrWhiteSpace([string]$env:PGDATABASE)))
   if (-not $hasPrivatePg) { throw 'Missing private read-only libpq PG* environment for managed drain' }
   try { $psqlCommand=Get-Command -Name 'psql' -CommandType Application -ErrorAction Stop | Select-Object -First 1 } catch { throw 'PostgreSQL client is unavailable for managed drain' }
   if ($null -eq $psqlCommand) { throw 'PostgreSQL client is unavailable for managed drain' }
+  return [string]$psqlCommand.Source
+}
+function Assert-ManagedDatabaseDrain {
+  $psqlCommand=Get-PrivateReadOnlyPsql
   $sql="BEGIN READ ONLY; SELECT state, count(*)::bigint FROM knowledge_publication_update_executions WHERE state IN ('claimed','remote_request_dispatched','outcome_unknown','remote_applied','resync_required','reconciliation_required') GROUP BY state ORDER BY state; COMMIT;"
   $global:LASTEXITCODE=$null
   $rows=@(& $psqlCommand -X -v ON_ERROR_STOP=1 -At -F ',' -q -c $sql 2>$null)
   $invocationSucceeded=$?; $psqlExitCode=$global:LASTEXITCODE
   if (-not $invocationSucceeded -or $psqlExitCode -isnot [int] -or $psqlExitCode -ne 0) { throw 'Managed durable-state drain query failed' }
   foreach ($row in $rows) { $parts=([string]$row).Split(',',2); if ($parts.Count -ne 2 -or $parts[0] -notin @('claimed','remote_request_dispatched','outcome_unknown','remote_applied','resync_required','reconciliation_required') -or $parts[1] -notmatch '^[0-9]+$' -or [long]$parts[1] -ne 0) { throw 'Managed durable-state drain is not zero' } }
+}
+function Assert-ManagedExecutionState([object]$proposalId,[ValidateSet('resync_required','succeeded')][string]$expectedState) {
+  $id=Require-Id $proposalId 'proposal ID'; $psqlCommand=Get-PrivateReadOnlyPsql
+  $sql="BEGIN READ ONLY; SELECT state, count(*)::bigint FROM knowledge_publication_update_executions WHERE proposal_id = :'proposal_id' GROUP BY state ORDER BY state; COMMIT;"
+  $global:LASTEXITCODE=$null
+  $rows=@(& $psqlCommand -X -v ON_ERROR_STOP=1 -v "proposal_id=$id" -At -F ',' -q -c $sql 2>$null)
+  $invocationSucceeded=$?; $psqlExitCode=$global:LASTEXITCODE
+  if (-not $invocationSucceeded -or $psqlExitCode -isnot [int] -or $psqlExitCode -ne 0) { throw 'Managed execution-state query failed' }
+  if ($rows.Count -ne 1) { throw 'Expected exactly one managed execution state row' }
+  $parts=([string]$rows[0]).Split(',',2)
+  if ($parts.Count -ne 2 -or $parts[0] -cne $expectedState -or $parts[1] -cne '1') { throw 'Managed execution is not in the exact expected state' }
 }
 ```
 
@@ -150,12 +165,15 @@ COMMIT;
 
 ## Exact status and drain checks
 
-Run before enablement, immediately before mutation, after each durable transition, and during
-rollback. Real shape is `status.components.managedKnowledgeUpdates`; approval-interaction queue is
-top-level `status.knowledgeCards.queue`, not a managed-update property.
+Run the full zero-drain check before enablement, after each runtime-control transition, immediately
+before the human OAuth approval that can release the mutation, after the execution reaches
+`succeeded`, and at rollback closeout. While the one expected execution is deliberately in flight,
+run the status-only check plus the proposal-scoped exact-state assertion instead; never relabel that
+as a zero drain. Real shape is `status.components.managedKnowledgeUpdates`; approval-interaction
+queue is top-level `status.knowledgeCards.queue`, not a managed-update property.
 
 ```powershell
-function Assert-ContentFreeDrain([bool]$requireManagedDisabled=$false) {
+function Assert-ContentFreeStatus([bool]$requireManagedDisabled=$false) {
 $readiness = Get-Internal '/internal/readiness'; $status = Get-Internal '/internal/status'
 if ($readiness.ok -ne $true -or $status.ok -ne $true -or $status.status -ne 'healthy') { throw 'Readiness/internal status is not healthy' }
 $gate=@($readiness.checks | Where-Object { $_.id -eq 'managedKnowledgeUpdates' }); if ($gate.Count -ne 1 -or $gate[0].status -ne 'pass') { throw 'Managed-update readiness is not pass' }
@@ -170,19 +188,25 @@ if ($managed.enabled -eq $true) {
   foreach ($n in @('outcomeUnknown','reconciliationRequired')) { Zero (Prop $recon $n 'managedUpdates.reconciliation') "managedUpdates.$n" }
 } elseif ($managed.ok -ne $true -or $managed.enabled -ne $false -or $managed.running -ne $false) { throw 'Managed-update feature is neither safely disabled nor healthy' }
 if ($requireManagedDisabled -and $managed.enabled -ne $false) { throw 'Managed-update deployment is not disabled for closeout' }
-if ($managed.enabled -eq $false) { Assert-ManagedDatabaseDrain }
+}
+function Assert-ContentFreeDrain([bool]$requireManagedDisabled=$false) {
+  Assert-ContentFreeStatus $requireManagedDisabled
+  Assert-ManagedDatabaseDrain
 }
 Assert-ContentFreeDrain
 ```
 
 Expected: every supported count is present and zero. Before deployment enablement, managed updates
-must be safely `ok/enabled=false/running=false`; its reconciliation object is intentionally absent,
-so `Assert-ManagedDatabaseDrain` executes and parses the durable-state SQL below to supply the
-unresolved check. Post-enable additionally requires
+must be safely `ok/enabled=false/running=false`; its reconciliation object is intentionally absent.
+`Assert-ContentFreeDrain` always executes and parses the durable-state SQL below, regardless of the
+deployment flag, so enabled windows cannot hide `claimed`, dispatched, applied, resync, or
+reconciliation-required executions. Post-enable additionally requires
 managed `ok/enabled/running/migration0055Applied/worker.running=true` and both reconciliation counters
-at zero. Stop on a missing field, degraded worker, nonzero count, or failed readiness. There is no unified status counter for every durable
-managed state; the helper uses this audited count-only projection (same read-only private `psql`
-environment) and stops if it parses any nonzero row. Do not inspect raw Redis payloads.
+at zero. Stop on a missing field, degraded worker, nonzero count, or failed readiness. There is no
+unified status counter for every durable managed state; the full-drain helper uses this audited
+count-only projection (same read-only private `psql` environment) and stops if it parses any nonzero
+row. `Assert-ContentFreeStatus` is permitted only beside an exact proposal-scoped state assertion
+during the expected in-flight interval. Do not inspect raw Redis payloads.
 
 ```sql
 BEGIN READ ONLY;
@@ -205,10 +229,13 @@ COMMIT;
 
    ```powershell
    $r=Invoke-InternalWrite Patch '/internal/runtime-control/capabilities' @{writeKnowledgeBase=$true;updateManagedKnowledge=$true} 'enable managed-update capabilities' { param($s) Assert-RuntimeState $s $false $true $false $false 'Post-confirm capability precondition' }; Durable $r $false 'Capability enable'
+   Assert-ContentFreeDrain
    $r=Invoke-InternalWrite Post ('/internal/runtime-control/groups/'+[uri]::EscapeDataString($PilotGroupId)) @{enabled=$true} 'enable one pilot group' { param($s) Assert-RuntimeState $s $false $true $true $true 'Post-confirm group precondition' }; Durable $r $false 'Group enable'
+   Assert-ContentFreeDrain
    $r=Invoke-InternalWrite Post '/internal/runtime-control/global' @{enabled=$true} 'enable global runtime' { param($s) Assert-RuntimeState $s $false $false $true $true 'Post-confirm global precondition' }; Durable $r $true 'Global enable'
    $after=Get-Internal '/internal/runtime-control/status'
    Assert-RuntimeState $after $true $false $true $true 'Post-enable readback'
+   Assert-ContentFreeDrain
    ```
 
    Expected order for every capability/group/global write is human ticket entry, immediate status GET,
@@ -262,9 +289,13 @@ COMMIT;
    $proposalMetadata=Get-Internal ('/internal/action-proposals/'+[uri]::EscapeDataString($ProposalId))
    ```
 
+   Run `Assert-ContentFreeDrain` after this readback and before opening the approval surface. At this
+   point no execution is allowed to exist.
+
 4. Human gate: the eligible owner/admin confirms the ticket, proposal version, target fingerprint,
    and full-text review scope, then manually opens the existing OAuth review and approves that exact
-   Feishu card. Never use proposal GET/reconcile to forge it. Expected durable proof is current
+   Feishu card. Run `Assert-ContentFreeDrain` immediately before the human approval click. Never use
+   proposal GET/reconcile to forge it. Expected durable proof is current
    attestation/approval; inspect IDs/versions/role/hash only. `action_target_fingerprint` is the
    managed-update schema field added by the Task 5 migration:
 
@@ -283,11 +314,13 @@ COMMIT;
 
    Stop on missing/stale/extra approval or role mismatch; enter rollback without any manual retry.
 
-5. Before mutation, prove barrier/non-retrievability and exactly one execution request fingerprint.
-   After the approved system mutation, run this read-only, parameterized projection. Expected durable
-   readback: strictly advanced revision, expected after hash, exactly one request, unchanged neighbor
-   count/type/hash fingerprint. Private Feishu UI comparison supplies neighbor evidence; no raw block
-   token/ID is exported:
+5. The immediately preceding full drain is the last zero-drain gate before mutation. After the human
+   approval releases the expected system mutation, run `Assert-ContentFreeStatus`, then
+   `Assert-ManagedExecutionState $ProposalId 'resync_required'`, then this read-only, parameterized
+   projection. Expected durable readback: exactly one execution in `resync_required`, strictly
+   advanced revision, expected after hash, exactly one request, unchanged neighbor count/type/hash
+   fingerprint. Private Feishu UI comparison supplies neighbor evidence; no raw block token/ID is
+   exported:
 
    ```sql
 BEGIN READ ONLY;
@@ -312,10 +345,13 @@ COMMIT;
 
 6. Keep the barrier until normal sync observes the exact source/snapshot/revision/hash tuple and the
    page becomes `active`; only then perform permitted retrieval and record IDs/hash/version, not text.
-   Stop for early retrieval, mismatched reactivation, or nonzero managed reconciliation count.
+   Run `Assert-ManagedExecutionState $ProposalId 'succeeded'` followed by
+   `Assert-ContentFreeDrain`. Stop for early retrieval, mismatched reactivation, an execution outside
+   the exact `succeeded` state, or any nonzero managed reconciliation/durable-state count.
 
 7. Recheck both controls against their baselines, then run status and durable-state projections.
-   Expected: controls unchanged and every pending/processing/delayed/DLQ/unresolved count zero.
+   Finish with `Assert-ContentFreeDrain`. Expected: controls unchanged and every
+   pending/processing/delayed/DLQ/unresolved/durable-active count zero.
 
 ## Rollback and closeout
 
