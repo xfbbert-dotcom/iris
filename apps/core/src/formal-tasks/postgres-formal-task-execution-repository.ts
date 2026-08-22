@@ -6,11 +6,15 @@ import type {
   FeishuTaskCreation,
   FeishuTaskCreationExecution,
   FeishuTaskCreationRuntimeGate,
+  FormalTaskExecutionMetadata,
+  FormalTaskExecutionStatusCounts,
   FeishuTaskResultPresentation,
   FeishuTaskResultPresentationContext,
   FeishuTaskResultSendClaim,
   FormalTaskExecutionRepository,
   RecordFeishuTaskCreationFailureInput,
+  RequestFormalTaskReconciliationInput,
+  RequestFormalTaskReconciliationResult,
 } from "./formal-task-execution-repository.js";
 import type { PostgresFormalTaskDataSource } from "./postgres-formal-task-repository.js";
 
@@ -96,6 +100,14 @@ type ResultOutboxRow = {
   error_code: string | null;
 };
 
+type ExecutionMetadataRow = Pick<ExecutionRow,
+  "id" | "proposal_id" | "draft_id" | "draft_revision" | "draft_version" |
+  "target_policy_id" | "target_policy_version" | "attempt_number" | "state" |
+  "request_fingerprint" | "client_token_hash" | "response_classification" |
+  "version" | "lease_until" | "retry_at" | "dispatched_at" | "created_at" |
+  "updated_at"
+>;
+
 export class FormalTaskExecutionPersistenceConflictError extends Error {
   constructor() {
     super("formal task execution state or binding is stale");
@@ -116,6 +128,9 @@ export function createPostgresFormalTaskExecutionRepository({
   dataSource: PostgresFormalTaskDataSource;
 }): FormalTaskExecutionRepository {
   return {
+    getStatusCounts: () => getStatusCounts(dataSource),
+    listExecutionMetadata: (input) => listExecutionMetadata(dataSource, input),
+    requestReconciliation: (input) => requestReconciliation(dataSource, input),
     claimNextCreation: (input) => claimNextCreation(dataSource, input),
     claimReconciliationAttempt: (input) => claimReconciliationAttempt(dataSource, input),
     markExternalAttempt: (input) => markExternalAttempt(dataSource, input),
@@ -128,6 +143,156 @@ export function createPostgresFormalTaskExecutionRepository({
     completeResultPresentationSend: (input) => completeResultPresentationSend(dataSource, input),
     failResultPresentationSend: (input) => failResultPresentationSend(dataSource, input),
   };
+}
+
+async function getStatusCounts(
+  dataSource: PostgresFormalTaskDataSource,
+): Promise<FormalTaskExecutionStatusCounts> {
+  const [migration, executions, results, outbox] = await Promise.all([
+    dataSource.query<{ applied: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM schema_migrations
+         WHERE name = '0057_governed_feishu_task_actions.sql'
+       ) AS applied`,
+    ),
+    dataSource.query<{ state: FeishuTaskCreationExecution["state"]; count: string | number }>(
+      "SELECT state, count(*) AS count FROM feishu_task_creation_executions GROUP BY state",
+    ),
+    dataSource.query<{ state: FeishuTaskResultPresentation["state"]; count: string | number }>(
+      "SELECT state, count(*) AS count FROM feishu_task_result_presentations GROUP BY state",
+    ),
+    dataSource.query<{
+      state: keyof FormalTaskExecutionStatusCounts["outbox"];
+      count: string | number;
+    }>(
+      "SELECT state, count(*) AS count FROM feishu_task_result_presentation_outbox GROUP BY state",
+    ),
+  ]);
+  return {
+    migration0057Applied: migration.rows[0]?.applied === true,
+    executions: mapCounts(
+      ["claimed", "external_attempting", "succeeded", "failed", "outcome_unknown", "reconciliation_required"],
+      executions.rows,
+    ),
+    results: mapCounts(
+      ["pending_send", "sent", "failed", "outcome_unknown"],
+      results.rows,
+    ),
+    outbox: mapCounts(
+      ["pending", "processing", "external_attempting", "sent", "failed", "outcome_unknown"],
+      outbox.rows,
+    ),
+  };
+}
+
+async function listExecutionMetadata(
+  dataSource: PostgresFormalTaskDataSource,
+  input: Parameters<FormalTaskExecutionRepository["listExecutionMetadata"]>[0],
+): Promise<FormalTaskExecutionMetadata[]> {
+  const states = input.states === undefined
+    ? undefined
+    : normalizeExecutionStates(input.states);
+  const proposalId = input.proposalId === undefined
+    ? undefined
+    : requireReference("proposalId", input.proposalId);
+  const limit = requireIntegerBetween("limit", input.limit, 1, 100);
+  const result = await dataSource.query<ExecutionMetadataRow>(
+    `SELECT id, proposal_id, draft_id, draft_revision, draft_version,
+            target_policy_id, target_policy_version, attempt_number, state,
+            request_fingerprint, client_token_hash, response_classification,
+            version, lease_until, retry_at, dispatched_at, created_at, updated_at
+     FROM feishu_task_creation_executions
+     WHERE ($1::text[] IS NULL OR state = ANY($1::text[]))
+       AND ($2::text IS NULL OR proposal_id = $2)
+     ORDER BY updated_at DESC, id ASC
+     LIMIT $3`,
+    [states ?? null, proposalId ?? null, limit],
+  );
+  return result.rows.map(mapExecutionMetadata);
+}
+
+async function requestReconciliation(
+  dataSource: PostgresFormalTaskDataSource,
+  input: RequestFormalTaskReconciliationInput,
+): Promise<RequestFormalTaskReconciliationResult> {
+  const normalized = {
+    executionId: requireReference("executionId", input.executionId),
+    expectedExecutionVersion: requirePositiveInteger(
+      "expectedExecutionVersion",
+      input.expectedExecutionVersion,
+    ),
+    operationKey: requireReference("operationKey", input.operationKey),
+    operator: requireReference("operator", input.operator),
+    at: requireDate(input.at),
+  };
+  const responseClassification = `operator_reconciliation_requested:${hash(JSON.stringify({
+    executionId: normalized.executionId,
+    expectedExecutionVersion: normalized.expectedExecutionVersion,
+    operator: normalized.operator,
+  }))}`;
+  return withTransaction(dataSource, async (client) => {
+    const execution = await lockExecution(client, normalized.executionId);
+    const replay = await client.query<{
+      execution_id: string;
+      event_type: string;
+      from_version: string | number | null;
+      to_version: string | number;
+      response_classification: string | null;
+      created_at: Date;
+    }>(
+      `SELECT execution_id, event_type, from_version, to_version,
+              response_classification, created_at
+       FROM feishu_task_creation_execution_events
+       WHERE operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      const event = replay.rows[0];
+      if (
+        event.execution_id !== normalized.executionId ||
+        event.event_type !== "outcome_unknown" ||
+        Number(event.from_version) !== normalized.expectedExecutionVersion ||
+        event.response_classification !== responseClassification
+      ) throw new FormalTaskExecutionOperationConflictError();
+      return {
+        outcome: "already_applied",
+        executionId: normalized.executionId,
+        state: "outcome_unknown",
+        version: Number(event.to_version),
+        retryAt: requireDate(event.created_at),
+      };
+    }
+    if (
+      execution.state !== "outcome_unknown" ||
+      Number(execution.version) !== normalized.expectedExecutionVersion
+    ) throw new FormalTaskExecutionPersistenceConflictError();
+    const nextVersion = normalized.expectedExecutionVersion + 1;
+    const updated = await client.query<{ id: string }>(
+      `UPDATE feishu_task_creation_executions
+       SET retry_at = $2, worker_id = NULL, lease_until = NULL,
+           version = $3, updated_at = $2
+       WHERE id = $1 AND state = 'outcome_unknown' AND version = $4
+       RETURNING id`,
+      [normalized.executionId, normalized.at, nextVersion, normalized.expectedExecutionVersion],
+    );
+    if (updated.rows.length !== 1) throw new FormalTaskExecutionPersistenceConflictError();
+    await insertExecutionEvent(client, {
+      executionId: normalized.executionId,
+      eventType: "outcome_unknown",
+      operationKey: normalized.operationKey,
+      fromVersion: normalized.expectedExecutionVersion,
+      toVersion: nextVersion,
+      responseClassification,
+      at: normalized.at,
+    });
+    return {
+      outcome: "applied",
+      executionId: normalized.executionId,
+      state: "outcome_unknown",
+      version: nextVersion,
+      retryAt: normalized.at,
+    };
+  });
 }
 
 async function claimReconciliationAttempt(
@@ -1575,6 +1740,61 @@ function mapExecution(row: ExecutionRow): FeishuTaskCreationExecution {
   };
 }
 
+function mapExecutionMetadata(row: ExecutionMetadataRow): FormalTaskExecutionMetadata {
+  return {
+    id: row.id,
+    proposalId: row.proposal_id,
+    draftId: row.draft_id,
+    draftRevision: Number(row.draft_revision),
+    draftVersion: Number(row.draft_version),
+    targetPolicyId: row.target_policy_id,
+    targetPolicyVersion: Number(row.target_policy_version),
+    attemptNumber: Number(row.attempt_number),
+    state: row.state,
+    requestFingerprint: row.request_fingerprint,
+    clientTokenHash: row.client_token_hash,
+    ...(row.response_classification === null
+      ? {}
+      : { responseClassification: row.response_classification }),
+    version: Number(row.version),
+    ...(row.lease_until === null ? {} : { leaseUntil: requireDate(row.lease_until) }),
+    ...(row.retry_at === null ? {} : { retryAt: requireDate(row.retry_at) }),
+    ...(row.dispatched_at === null ? {} : { dispatchedAt: requireDate(row.dispatched_at) }),
+    createdAt: requireDate(row.created_at),
+    updatedAt: requireDate(row.updated_at),
+  };
+}
+
+function mapCounts<State extends string>(
+  states: readonly State[],
+  rows: readonly { state: State; count: string | number }[],
+): Record<State, number> {
+  const counts = Object.fromEntries(states.map((state) => [state, 0])) as Record<State, number>;
+  for (const row of rows) {
+    if (!states.includes(row.state)) throw new FormalTaskExecutionPersistenceConflictError();
+    const count = typeof row.count === "number" ? row.count : Number(row.count);
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new FormalTaskExecutionPersistenceConflictError();
+    }
+    counts[row.state] = count;
+  }
+  return counts;
+}
+
+function normalizeExecutionStates(
+  value: FeishuTaskCreationExecution["state"][],
+): FeishuTaskCreationExecution["state"][] {
+  const allowed: FeishuTaskCreationExecution["state"][] = [
+    "claimed", "external_attempting", "succeeded", "failed", "outcome_unknown",
+    "reconciliation_required",
+  ];
+  if (
+    !Array.isArray(value) || value.length < 1 || value.length > allowed.length ||
+    value.some((state) => !allowed.includes(state)) || new Set(value).size !== value.length
+  ) throw new Error("states is invalid");
+  return [...value];
+}
+
 function normalizeClaim(input: Parameters<FormalTaskExecutionRepository["claimNextCreation"]>[0]) {
   const at = requireDate(input.at);
   const leaseUntil = requireDate(input.leaseUntil);
@@ -1593,12 +1813,14 @@ function normalizeRuntimeGate(value: FeishuTaskCreationRuntimeGate): FeishuTaskC
     typeof value !== "object" || value === null ||
     typeof value.deploymentEnabled !== "boolean" ||
     typeof value.globalEnabled !== "boolean" ||
-    typeof value.createFeishuTasks !== "boolean"
+    typeof value.createFeishuTasks !== "boolean" ||
+    typeof value.callExternalTools !== "boolean"
   ) throw new Error("runtimeGate is invalid");
   return {
     deploymentEnabled: value.deploymentEnabled,
     globalEnabled: value.globalEnabled,
     createFeishuTasks: value.createFeishuTasks,
+    callExternalTools: value.callExternalTools,
     disabledGroupIds: requireReferenceList("disabledGroupIds", value.disabledGroupIds),
     allowedGroupIds: requireReferenceList("allowedGroupIds", value.allowedGroupIds),
   };
@@ -1606,7 +1828,7 @@ function normalizeRuntimeGate(value: FeishuTaskCreationRuntimeGate): FeishuTaskC
 
 function canClaim(value: FeishuTaskCreationRuntimeGate): boolean {
   return value.deploymentEnabled && value.globalEnabled && value.createFeishuTasks &&
-    value.allowedGroupIds.length > 0;
+    value.callExternalTools && value.allowedGroupIds.length > 0;
 }
 
 function normalizeFailure(input: RecordFeishuTaskCreationFailureInput) {
@@ -1785,6 +2007,18 @@ function requireHash(name: string, value: unknown): string {
 
 function requirePositiveInteger(name: string, value: unknown): number {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error(`${name} is invalid`);
+  return Number(value);
+}
+
+function requireIntegerBetween(
+  name: string,
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): number {
+  if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum) {
+    throw new Error(`${name} is invalid`);
+  }
   return Number(value);
 }
 

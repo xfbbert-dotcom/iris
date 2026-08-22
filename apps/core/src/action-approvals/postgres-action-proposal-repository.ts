@@ -1019,7 +1019,7 @@ function isApprovalOutboxClaimable(outbox: ApprovalOutboxRow, at: Date): boolean
 async function preflightApprovalAction(
   dataSource: PostgresKnowledgeDraftDataSource,
   input: PreflightActionApprovalInput,
-): Promise<{ sourceGroupId?: string }> {
+): Promise<{ sourceGroupId?: string; actionType: ActionProposalActionType }> {
   const normalized = {
     proposalId: requireReference("proposalId", input.proposalId),
     requirementId: requireReference("requirementId", input.requirementId),
@@ -1072,7 +1072,10 @@ async function preflightApprovalAction(
     await validateDraftEvidence(client, draft);
     await requireApprovalAuthorization(client, requirement, normalized.actorOpenId);
     await requireCurrentReviewAttestation(client, normalized);
-    return draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id };
+    return {
+      actionType: proposal.action_type,
+      ...(draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id }),
+    };
   });
 }
 
@@ -1388,7 +1391,7 @@ async function preflightFormalTaskApprovalAction(
     action: "approve" | "request_revision" | "reject";
     requireReviewAttestation: boolean;
   },
-): Promise<{ sourceGroupId: string }> {
+): Promise<{ sourceGroupId: string; actionType: "create_feishu_task" }> {
   if (
     proposal.status !== "pending_approval" ||
     Number(proposal.version) !== input.expectedProposalVersion ||
@@ -1423,7 +1426,7 @@ async function preflightFormalTaskApprovalAction(
     action: input.action,
     requireReviewAttestation: input.requireReviewAttestation,
   });
-  return { sourceGroupId: draft.source_group_id };
+  return { sourceGroupId: draft.source_group_id, actionType: "create_feishu_task" };
 }
 
 async function hasAuthorizedPendingReviewRequirement(
@@ -3107,6 +3110,7 @@ async function inspectNormalizedApprovalActionReplay(
           draftVersion: Number(replay.rows[0].to_version),
         },
         sourceGroupId: draft.sourceGroupId,
+        actionType: proposal.actionType,
       };
     }
     const callbackReplay = await queryable.query<{ operation_key: string }>(
@@ -3149,6 +3153,7 @@ async function inspectNormalizedApprovalActionReplay(
         draftVersion: Number(replay.rows[0].to_version),
       },
       ...(draft.sourceGroupId === undefined ? {} : { sourceGroupId: draft.sourceGroupId }),
+      actionType: proposal.actionType,
     };
   }
   const callbackReplay = await queryable.query<{ operation_key: string }>(
@@ -3177,6 +3182,7 @@ async function buildApprovalReplayInspection(
         draftVersion: draft.version,
       },
       sourceGroupId: draft.sourceGroupId,
+      actionType: proposal.actionType,
     };
   }
   const draft = await requireDraftState(queryable, proposal.subjectId);
@@ -3189,6 +3195,7 @@ async function buildApprovalReplayInspection(
       draftVersion: draft.version,
     },
     ...(draft.sourceGroupId === undefined ? {} : { sourceGroupId: draft.sourceGroupId }),
+    actionType: proposal.actionType,
   };
 }
 

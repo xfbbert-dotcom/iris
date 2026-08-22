@@ -395,6 +395,32 @@ test("renders managed knowledge updates default-off with an empty allowlist", ()
   }
 });
 
+test("renders governed Feishu task creation default-off with bounded worker settings", () => {
+  const expectedValues = {
+    IRIS_FEISHU_TASK_CREATION_ENABLED: "false",
+    IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST: "",
+    IRIS_FEISHU_TASK_CREATION_INTERVAL_MS: "1000",
+    IRIS_FEISHU_TASK_CREATION_BATCH_LIMIT: "10",
+    IRIS_FEISHU_TASK_CREATION_LEASE_MS: "30000",
+    IRIS_FEISHU_TASK_CREATION_RETRY_DELAY_MS: "1000",
+    IRIS_FEISHU_TASK_CREATION_RECONCILIATION_DELAY_MS: "5000",
+    IRIS_FEISHU_TASK_CREATION_MAX_ATTEMPTS: "5",
+  };
+  for (const [name, expected] of Object.entries(expectedValues)) {
+    assert.equal(readEnvAssignment(pilotCiEnv, name), expected, `${name} must match in CI env`);
+    assert.equal(
+      readEnvAssignment(pilotEnvExample, name),
+      expected,
+      `${name} must match in pilot example`,
+    );
+    assert.equal(
+      compose.services.core.environment[name],
+      expected,
+      `${name} must survive Compose interpolation`,
+    );
+  }
+});
+
 test("keeps wiki space sync default-off with deterministic Compose wiring", () => {
   const expectedValues = {
     IRIS_WIKI_SPACE_SYNC_ENABLED: "false",

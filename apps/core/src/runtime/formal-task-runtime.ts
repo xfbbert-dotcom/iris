@@ -1,4 +1,5 @@
 import type { RuntimeController } from "../admin/runtime-controller.js";
+import { readFeishuTaskCreationDeploymentConfig } from "../config/env.js";
 import {
   readDatabaseConfig,
   type DatabaseConfig,
@@ -17,6 +18,10 @@ import type { FormalTaskCardRepository } from
   "../formal-tasks/formal-task-card-repository.js";
 import { createPostgresFormalTaskCardRepository } from
   "../formal-tasks/postgres-formal-task-card-repository.js";
+import type { FormalTaskExecutionRepository } from
+  "../formal-tasks/formal-task-execution-repository.js";
+import { createPostgresFormalTaskExecutionRepository } from
+  "../formal-tasks/postgres-formal-task-execution-repository.js";
 import { presentFormalTaskDraft } from
   "../formal-tasks/formal-task-draft-presentation-service.js";
 
@@ -25,6 +30,7 @@ type FormalTaskPool = PostgresFormalTaskDataSource & { end(): Promise<void> };
 export type FormalTaskRuntime = {
   repository: FormalTaskRepository;
   cardRepository: FormalTaskCardRepository;
+  executionRepository: FormalTaskExecutionRepository;
   canCreateDraft(input: { sourceGroupId: string }): boolean;
   canUseFormalTaskCards(groupId: string): boolean;
   presentDraft(input: Omit<Parameters<typeof presentFormalTaskDraft>[0], "runtime">):
@@ -45,6 +51,9 @@ export type FormalTaskRuntimeDependencies = {
   createCardRepository?: (input: {
     dataSource: PostgresFormalTaskDataSource;
   }) => FormalTaskCardRepository;
+  createExecutionRepository?: (input: {
+    dataSource: PostgresFormalTaskDataSource;
+  }) => FormalTaskExecutionRepository;
 };
 
 export function createFormalTaskRuntime({
@@ -53,7 +62,10 @@ export function createFormalTaskRuntime({
   dependencies = {},
 }: {
   env?: DatabaseEnv;
-  runtimeController?: Pick<RuntimeController, "canGenerateTaskDrafts" | "canCreateFeishuTasks">;
+  runtimeController?: Pick<
+    RuntimeController,
+    "canGenerateTaskDrafts" | "canCreateFeishuTasks" | "getSnapshot"
+  >;
   dependencies?: FormalTaskRuntimeDependencies;
 } = {}): FormalTaskRuntime | undefined {
   if (!env.DATABASE_URL?.trim()) return undefined;
@@ -70,15 +82,35 @@ export function createFormalTaskRuntime({
   const cardRepository = (dependencies.createCardRepository ?? createPostgresFormalTaskCardRepository)({
     dataSource: pool,
   });
+  const executionRepository = (
+    dependencies.createExecutionRepository ?? createPostgresFormalTaskExecutionRepository
+  )({ dataSource: pool });
+  const taskCreationDeployment = readFeishuTaskCreationDeploymentConfig(env);
+  const canUseFormalTaskCards = (groupId: string): boolean => {
+    const normalized = groupId.trim();
+    if (
+      normalized !== groupId || normalized.length < 1 ||
+      !taskCreationDeployment.enabled ||
+      !taskCreationDeployment.groupAllowlist.includes(normalized)
+    ) return false;
+    try {
+      const snapshot = runtimeController.getSnapshot();
+      return runtimeController.canCreateFeishuTasks({ sourceGroupId: normalized }) &&
+        snapshot.capabilities.callExternalTools;
+    } catch {
+      return false;
+    }
+  };
   let closePromise: Promise<void> | undefined;
   return {
     repository,
     cardRepository,
+    executionRepository,
     canCreateDraft(input) {
       return runtimeController.canGenerateTaskDrafts(input);
     },
     canUseFormalTaskCards(groupId) {
-      return runtimeController.canCreateFeishuTasks({ sourceGroupId: groupId });
+      return canUseFormalTaskCards(groupId);
     },
     presentDraft(input) {
       return presentFormalTaskDraft({
@@ -86,8 +118,7 @@ export function createFormalTaskRuntime({
         runtime: {
           repository,
           cardRepository,
-          canUseFormalTaskCards: (groupId) =>
-            runtimeController.canCreateFeishuTasks({ sourceGroupId: groupId }),
+          canUseFormalTaskCards,
         },
       });
     },

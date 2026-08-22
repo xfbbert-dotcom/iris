@@ -63,6 +63,7 @@ import type {
 } from "../action-approvals/managed-knowledge-page-repository.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import type { KnowledgeCardRuntime } from "./knowledge-card-runtime.js";
+import type { FormalTaskActionRuntime } from "./formal-task-action-runtime.js";
 import { observeStartupPromise } from "./startup-promise.js";
 
 const DISPATCHER_WORKER_ID = "action-approval-dispatcher";
@@ -72,7 +73,8 @@ const SEND_RETRY_DELAY_MS = 1_000;
 type ActionApprovalPool = PostgresKnowledgeDraftDataSource & { end(): Promise<void> };
 type ActionApprovalRuntimeGate = Pick<
   RuntimeController,
-  "canGenerateKnowledgeDrafts" | "getSnapshot"
+  "canGenerateKnowledgeDrafts" | "canGenerateTaskDrafts" | "canCreateFeishuTasks" |
+    "getSnapshot"
 >;
 
 export type ActionApprovalRuntimeStatus = {
@@ -116,6 +118,7 @@ export type ActionApprovalRuntime = {
     }>;
   };
   canUseActionApprovalsForSourceGroup(groupId?: string): boolean;
+  canUseFormalTaskActionsForSourceGroup?(groupId?: string): boolean;
   start(): Promise<void>;
   getStatus(): Promise<ActionApprovalRuntimeStatus>;
   close(): Promise<void>;
@@ -152,6 +155,7 @@ export function createActionApprovalRuntime({
   dependencies = {},
   agentExecutionObserver,
   managedKnowledgeUpdates,
+  formalTaskActions,
 }: {
   env?: EnvLike;
   runtimeController?: ActionApprovalRuntimeGate;
@@ -159,6 +163,10 @@ export function createActionApprovalRuntime({
   dependencies?: ActionApprovalRuntimeDependencies;
   agentExecutionObserver?: AgentExecutionObserver;
   managedKnowledgeUpdates?: ManagedKnowledgeUpdateRuntimeConfiguration;
+  formalTaskActions?: Pick<
+    FormalTaskActionRuntime,
+    "canUseFormalTaskActionsForSourceGroup"
+  >;
 } = {}): ActionApprovalRuntime | undefined {
   const config = readActionApprovalRuntimeConfig(env);
   if (!config.enabled) return undefined;
@@ -209,7 +217,7 @@ export function createActionApprovalRuntime({
   let managedKnowledgeAdmin: ActionApprovalRuntime["managedKnowledgeAdmin"];
   let lifecycle: "idle" | "started" | "closed" = "idle";
 
-  const canUseGroup = (groupId?: string): boolean => {
+  const canUseKnowledgeGroup = (groupId?: string): boolean => {
     if (lifecycle !== "started" || groupId === undefined) return false;
     const normalized = groupId.trim();
     if (normalized.length === 0 || !enabledGroups.has(normalized)) return false;
@@ -219,6 +227,27 @@ export function createActionApprovalRuntime({
       return false;
     }
   };
+  const canUseFormalTaskGroup = (groupId?: string): boolean => {
+    if (lifecycle !== "started" || groupId === undefined || formalTaskActions === undefined) {
+      return false;
+    }
+    const normalized = groupId.trim();
+    if (normalized.length === 0 || !enabledGroups.has(normalized)) return false;
+    try {
+      return formalTaskActions.canUseFormalTaskActionsForSourceGroup(normalized);
+    } catch {
+      return false;
+    }
+  };
+  const canUseGroup = (groupId?: string): boolean =>
+    canUseKnowledgeGroup(groupId) || canUseFormalTaskGroup(groupId);
+  const canUseAction = (
+    groupId: string | undefined,
+    actionType: "publish_knowledge_draft" | "update_knowledge_publication" |
+      "create_feishu_task",
+  ): boolean => actionType === "create_feishu_task"
+    ? canUseFormalTaskGroup(groupId)
+    : canUseKnowledgeGroup(groupId);
   const anyGroupEnabled = (): boolean => config.enabledGroupIds.some((groupId) => canUseGroup(groupId));
 
   try {
@@ -233,13 +262,15 @@ export function createActionApprovalRuntime({
     });
     const planner = createPlanner({
       repository,
-      getAllowedGroupIds: () => config.enabledGroupIds.filter((groupId) => canUseGroup(groupId)),
+      getAllowedGroupIds: () => config.enabledGroupIds.filter((groupId) => canUseKnowledgeGroup(groupId)),
+      getAllowedFormalTaskGroupIds: () =>
+        config.enabledGroupIds.filter((groupId) => canUseFormalTaskGroup(groupId)),
       ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
     });
     const dispatcher = createDispatcher({
       repository,
       cardClient: knowledgeCardRuntime.approvalInteractions.cardClient,
-      canDeliverApprovalCards: canUseGroup,
+      canDeliverApprovalCards: canUseAction,
       ...(config.reviewPublicOrigin === undefined
         ? {}
         : { reviewPublicOrigin: config.reviewPublicOrigin }),
@@ -252,7 +283,7 @@ export function createActionApprovalRuntime({
       membershipChecker: knowledgeCardRuntime.approvalInteractions.membershipChecker,
       cardClient: knowledgeCardRuntime.approvalInteractions.cardClient,
       isActionApprovalRuntimeEnabled: anyGroupEnabled,
-      canUseActionApprovalsForSourceGroup: canUseGroup,
+      canUseActionApprovalsForSourceGroup: canUseAction,
       requireReviewAttestation,
       botOpenId: knowledgeCardRuntime.approvalInteractions.botOpenId,
       ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
@@ -390,6 +421,7 @@ export function createActionApprovalRuntime({
       repository,
       ...(managedKnowledgeAdmin === undefined ? {} : { managedKnowledgeAdmin }),
       canUseActionApprovalsForSourceGroup: canUseGroup,
+      canUseFormalTaskActionsForSourceGroup: canUseFormalTaskGroup,
       async start() {
         if (lifecycle === "closed") throw new Error("action approval runtime is closed");
         if (lifecycle === "started") return;

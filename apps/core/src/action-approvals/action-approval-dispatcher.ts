@@ -46,7 +46,10 @@ export type ActionApprovalDispatcherDependencies = {
   >;
   cardClient: Pick<FeishuInteractiveCardClient, "sendCardToUser">;
   renderer?: (input: ActionApprovalCardRenderInput) => ActionApprovalCardRenderResult;
-  canDeliverApprovalCards(sourceGroupId?: string): boolean;
+  canDeliverApprovalCards(
+    sourceGroupId: string | undefined,
+    actionType: ActionApprovalDeliveryContext["context"]["proposal"]["actionType"],
+  ): boolean;
   reviewPublicOrigin?: string;
   workerId: string;
   leaseMs: number;
@@ -100,7 +103,10 @@ async function dispatchClaim(input: {
   repository: ActionApprovalDispatcherDependencies["repository"];
   cardClient: ActionApprovalDispatcherDependencies["cardClient"];
   renderer: NonNullable<ActionApprovalDispatcherDependencies["renderer"]>;
-  canDeliverApprovalCards(sourceGroupId?: string): boolean;
+  canDeliverApprovalCards(
+    sourceGroupId: string | undefined,
+    actionType: ActionApprovalDeliveryContext["context"]["proposal"]["actionType"],
+  ): boolean;
   reviewPublicOrigin?: string;
   retryDelayMs: number;
   now: () => Date;
@@ -127,7 +133,7 @@ async function dispatchClaim(input: {
     }
     throw error;
   }
-  if (!readRuntimeGate(input, context.sourceGroupId)) {
+  if (!readRuntimeGate(input, context.sourceGroupId, context.context.proposal.actionType)) {
     return failPreparation(input, "runtime_disabled");
   }
   await input.repository.beginApprovalExternalAttempt({
@@ -135,7 +141,7 @@ async function dispatchClaim(input: {
     workerId: input.claim.workerId,
     at: requireDate(input.now()),
   });
-  if (!readRuntimeGate(input, context.sourceGroupId)) {
+  if (!readRuntimeGate(input, context.sourceGroupId, context.context.proposal.actionType)) {
     return failExternalAttempt(input, "permanent", "runtime_disabled");
   }
 
@@ -245,9 +251,10 @@ function isExactClaimContext(
 function readRuntimeGate(
   input: Parameters<typeof dispatchClaim>[0],
   sourceGroupId?: string,
+  actionType?: ActionApprovalDeliveryContext["context"]["proposal"]["actionType"],
 ): boolean {
   try {
-    return input.canDeliverApprovalCards(sourceGroupId);
+    return actionType !== undefined && input.canDeliverApprovalCards(sourceGroupId, actionType);
   } catch {
     return false;
   }

@@ -27,8 +27,8 @@
 | IRIS-CORE-010 | Iris 读取所在群中出现过的可读文档正文 | 已实现 | 群文档链接发现、正文抓取、来源证据、同步、索引、群可见检索和真实飞书验收 | 后续扩展更多文件类型和解析质量 |
 | IRIS-CORE-011 | Iris 读取用户手动提供的文档 | 内部 MVP 已实现 | 手动文档注册、同步、来源策略和回答检索；Admin Console 与飞书群内显式提交命令均可登记 `user_submitted_document` 并入队同步；真实飞书验收验证全新文档提交、双 evidence 幂等、同步/索引、实时权限校验、后续普通问题命中目标文档且未误入提交命令路径 | 更细的用户级文档治理和更多文件类型进入 backlog；日常 pilot 观察员工提示语与引用质量 |
 | IRIS-CORE-012 | 文档/知识库权限撤销后不得继续泄露内容 | 已实现核心边界 | 答前实时 Feishu Permission Guard；拒绝审计；fail closed；权限回收真实验收 | 后续增加权限变更主动失效和批量回收，但答前安全边界已成立 |
-| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 首个通用审批闭环、完整正文审阅和首个执行器已通过真实 pilot | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实，并已通过真实 Feishu OAuth review pilot；5B-3 已把首个批准后的 `publish_knowledge_draft` proposal 幂等发布到授权 Feishu wiki root；内部 API 不能伪造人工批准 | 后续建任务、跨群通知复用同一契约而非复制审批逻辑；批量审批、复杂协作编辑和更细 reviewer 映射进入 backlog |
-| IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 最小 Admin Console 已实现 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收；`/admin` 浏览器控制台可读取系统状态、readiness、runtime control，并可操作全局、群和 capability 开关；同一控制台可查看文档源摘要、同步健康、权限状态，并可按源切换回答/知识草稿策略与触发手动同步；知识草稿队列可查看状态计数和摘要并执行请求修改/拒绝；发布队列可查看 pending/approved/executing/failed/reconciliation action proposals 并执行安全请求修改/拒绝；主动候选治理可扫描单个显式群、查看候选并执行 dismiss / approve delivery；审计摘要视图可按事件类型/文档过滤查看 retained/dropped/inspected/matching 与聚合事件窗口；Caddy 仅放行精确静态 console 路由，`/internal/*` 仍保持 404 | 仍需增加持久化审计仓库和正式管理员身份模型；当前版本先满足 20-30 人内部运行控制 |
+| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 首个通用审批闭环、完整正文审阅和首个执行器已通过真实 pilot；建任务候选已本地实现 | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实，并已通过真实 Feishu OAuth review pilot；5B-3 已把首个批准后的 `publish_knowledge_draft` proposal 幂等发布到授权 Feishu wiki root；`create_feishu_task` 复用同一 proposal/review/approval 契约，并增加精确 assignee、task-spec hash、Task v2 client token、执行/回查/结果事实；内部 API 不能伪造人工批准 | 建任务仍须完成单群真实 Feishu 验收后才可称为已交付；跨群通知、批量审批、复杂协作编辑和更细 reviewer 映射进入 backlog |
+| IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 最小 Admin Console 已实现 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收；`/admin` 浏览器控制台可读取系统状态、readiness、runtime control，并可操作全局、群和 capability 开关；同一控制台可查看文档源摘要、同步健康、权限状态，并可按源切换回答/知识草稿策略与触发手动同步；知识草稿和正式任务草稿/执行仅暴露内容无关摘要，并提供安全请求修改/拒绝/回查入口；action proposal 队列可查看 pending/approved/executing/failed/reconciliation work 并执行安全请求修改/拒绝；主动候选治理可扫描单个显式群、查看候选并执行 dismiss / approve delivery；审计摘要视图可按事件类型/文档过滤查看 retained/dropped/inspected/matching 与聚合事件窗口；Caddy 仅放行精确静态 console 路由，`/internal/*` 仍保持 404 | 仍需增加持久化审计仓库和正式管理员身份模型；当前版本先满足 20-30 人内部运行控制 |
 | IRIS-CORE-015 | 多人安装和多公司使用 | 按白皮书延期 | 白皮书演进阶段 4 明确 multi-company / multi-tenant productization | 内部 MVP 稳定后增加 tenant ID、安装流程、租户密钥/数据隔离、租户管理员和计费 |
 
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
@@ -45,6 +45,21 @@
 - The existing real publication-pilot facts for IRIS-CORE-008 remain true. Local verification of
   `update_knowledge_publication` does not upgrade existing-page update acceptance to delivered or
   deployed status.
+
+## Status Amendment - 2026-08-23 Governed Feishu Task Creation
+
+- The `create_feishu_task` code candidate implements explicit-request drafting, exact group
+  confirmation, exact-assignee OAuth review and approval, deterministic Task v2 creation,
+  bounded reconciliation, a source-group result card, lifecycle composition, readiness, and
+  content-free operator recovery.
+- Deployment remains fail closed through `IRIS_FEISHU_TASK_CREATION_ENABLED=false`, an empty
+  one-group allowlist, and durable `generateTaskDrafts`, `createFeishuTasks`, and
+  `callExternalTools` capabilities. No model output or internal operator endpoint can manufacture
+  a confirmation, review attestation, approval, or new remote task.
+- This amendment records local implementation only. IRIS-CORE-013 is not upgraded for task
+  creation until the production-safe runbook records immutable SHA/image identity, one real
+  requester, real group confirmation, the real assignee's OAuth review/approval, one fresh task
+  with exact readback, one result card, zero unknown/recovery counts, and final safe-off rollback.
 
 ## 3. 当前真实结论
 

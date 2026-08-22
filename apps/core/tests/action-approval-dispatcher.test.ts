@@ -136,8 +136,8 @@ describe("ActionApprovalDispatcher", () => {
       presentationId: "proposal-presentation-1",
       code: "send_succeeded",
     }]);
-    expect(canDeliver).toHaveBeenNthCalledWith(1, "oc_group");
-    expect(canDeliver).toHaveBeenNthCalledWith(2, "oc_group");
+    expect(canDeliver).toHaveBeenNthCalledWith(1, "oc_group", "publish_knowledge_draft");
+    expect(canDeliver).toHaveBeenNthCalledWith(2, "oc_group", "publish_knowledge_draft");
   });
 
   it("bounds batch size and claims sequentially", async () => {

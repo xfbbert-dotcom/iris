@@ -13,6 +13,13 @@ describe("FeishuTaskExecutor", () => {
     expect(fixture.repository.claimNextCreation).not.toHaveBeenCalled();
   });
 
+  it("does not claim while external tool calls are disabled", async () => {
+    const fixture = createFixture({ callExternalTools: false });
+
+    await expect(fixture.executor.processBatch({ limit: 10 })).resolves.toEqual([]);
+    expect(fixture.repository.claimNextCreation).not.toHaveBeenCalled();
+  });
+
   it("checks current assignee membership, commits dispatch, and records one exact success", async () => {
     const fixture = createFixture();
 
@@ -224,6 +231,7 @@ const claim = {
 
 function createFixture(overrides: {
   createFeishuTasks?: boolean;
+  callExternalTools?: boolean;
   isMember?: boolean;
   membershipError?: boolean;
   claim?: typeof claim;
@@ -266,7 +274,10 @@ function createFixture(overrides: {
       globalEnabled: true,
       groupAllowlist: ["oc_pilot"],
       disabledGroupIds: [],
-      capabilities: { createFeishuTasks: overrides.createFeishuTasks ?? true },
+      capabilities: {
+        createFeishuTasks: overrides.createFeishuTasks ?? true,
+        callExternalTools: overrides.callExternalTools ?? true,
+      },
     }),
     workerId: "task-worker-1",
     leaseMs: 30_000,

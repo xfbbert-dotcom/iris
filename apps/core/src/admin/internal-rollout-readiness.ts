@@ -7,6 +7,7 @@ import {
   readEventWorkerRuntimeConfig,
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
+  readFeishuTaskCreationDeploymentConfig,
   readKnowledgeCardRuntimeConfig,
   readKnowledgeConflictRuntimeConfig,
   readManagedKnowledgeUpdateDeploymentConfig,
@@ -147,6 +148,43 @@ type FormalTaskDraftReadinessStatus = {
     created: number;
   };
 };
+type FormalTaskActionReadinessStatus = {
+  ok: boolean;
+  enabled: boolean;
+  deploymentEnabled: boolean;
+  runtimeCreationEnabled: boolean;
+  running: boolean;
+  worker?: {
+    running: boolean;
+    latestBatch?: {
+      status: "succeeded" | "partial_failed" | "failed";
+      failed: boolean;
+      executorFailed: boolean;
+      reconcilerFailed: boolean;
+      resultDispatcherFailed: boolean;
+    };
+  };
+  counts?: {
+    migration0057Applied: boolean;
+    executions: {
+      claimed: number;
+      external_attempting: number;
+      succeeded: number;
+      failed: number;
+      outcome_unknown: number;
+      reconciliation_required: number;
+    };
+    results: { pending_send: number; sent: number; failed: number; outcome_unknown: number };
+    outbox: {
+      pending: number;
+      processing: number;
+      external_attempting: number;
+      sent: number;
+      failed: number;
+      outcome_unknown: number;
+    };
+  };
+};
 export type InternalRolloutReadinessContext = {
   documentSyncStatus?: {
     ok: boolean;
@@ -185,6 +223,7 @@ export type InternalRolloutReadinessContext = {
     migration0053Applied: boolean;
   };
   formalTaskDraftStatus?: FormalTaskDraftReadinessStatus;
+  formalTaskActionStatus?: FormalTaskActionReadinessStatus;
 };
 type CheckDefinition = Pick<InternalRolloutReadinessCheck, "id" | "title" | "envVars"> & {
   evaluate(env: EnvLike, context: InternalRolloutReadinessContext): CheckResult;
@@ -225,6 +264,67 @@ const checkDefinitions: CheckDefinition[] = [
       }
       if (!status.enabled) return fail("Formal task draft runtime is not enabled.");
       return pass("Formal task draft generation is enabled with readable durable counts.");
+    },
+  },
+  {
+    id: "formalTaskActions",
+    title: "Governed Feishu task creation",
+    envVars: [
+      "IRIS_FEISHU_TASK_CREATION_ENABLED",
+      "IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST",
+      "IRIS_APPROVAL_ACTIONS_ENABLED",
+      "IRIS_ACTION_REVIEW_ENABLED",
+      "IRIS_KNOWLEDGE_CARD_ENABLED",
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+    ],
+    evaluate(env, context) {
+      const config = readFeishuTaskCreationDeploymentConfig(env);
+      const status = context.formalTaskActionStatus;
+      if (status !== undefined && !status.ok) {
+        return fail("Formal task action runtime requires operator attention.");
+      }
+      if (!config.enabled) return pass("Feishu task creation is safely disabled.");
+      if (!readKnowledgeCardRuntimeConfig(env).enabled) {
+        return fail("IRIS_KNOWLEDGE_CARD_ENABLED=true is required for Feishu task creation.");
+      }
+      if (!readActionApprovalRuntimeConfig(env).enabled) {
+        return fail("IRIS_APPROVAL_ACTIONS_ENABLED=true is required for Feishu task creation.");
+      }
+      if (!readActionReviewRuntimeConfig(env).enabled) {
+        return fail("IRIS_ACTION_REVIEW_ENABLED=true is required for Feishu task creation.");
+      }
+      readFeishuOpenApiConfig(env);
+      if (status === undefined) return fail("Formal task action runtime status is unavailable.");
+      if (status.counts?.migration0057Applied !== true) {
+        return fail("Formal task migration 0057 is not applied.");
+      }
+      const latest = status.worker?.latestBatch;
+      if (
+        latest?.failed === true || latest?.status === "partial_failed" ||
+        latest?.status === "failed" || latest?.executorFailed === true ||
+        latest?.reconcilerFailed === true || latest?.resultDispatcherFailed === true
+      ) return fail("Formal task action worker latest batch failed.");
+      if (
+        !status.enabled || !status.deploymentEnabled || !status.runtimeCreationEnabled ||
+        !status.running || status.worker?.running !== true
+      ) return fail("Formal task action worker or durable runtime gates are not enabled.");
+      if (!isValidFormalTaskActionCounts(status.counts)) {
+        return fail("Formal task action counts are unavailable.");
+      }
+      if (status.counts.executions.reconciliation_required > 0) {
+        return fail("Formal tasks have reconciliation-required executions.");
+      }
+      if (status.counts.executions.outcome_unknown > 0) {
+        return fail("Formal tasks have unresolved outcome-unknown executions.");
+      }
+      if (status.counts.results.outcome_unknown > 0 || status.counts.outbox.outcome_unknown > 0) {
+        return fail("Formal task result delivery has unresolved unknown outcomes.");
+      }
+      if (status.counts.results.failed > 0 || status.counts.outbox.failed > 0) {
+        return fail("Formal task result delivery has failed rows.");
+      }
+      return pass("Formal task action worker is running with migration 0057 applied.");
     },
   },
   {
@@ -919,6 +1019,16 @@ function isValidManagedKnowledgeUpdateReconciliationStatus(
 ): value is NonNullable<ManagedKnowledgeUpdateReadinessStatus["reconciliation"]> {
   return value !== undefined &&
     [value.outcomeUnknown, value.reconciliationRequired].every(isSafeCount);
+}
+
+function isValidFormalTaskActionCounts(
+  value: FormalTaskActionReadinessStatus["counts"],
+): value is NonNullable<FormalTaskActionReadinessStatus["counts"]> {
+  return value !== undefined && value.migration0057Applied === true && [
+    ...Object.values(value.executions),
+    ...Object.values(value.results),
+    ...Object.values(value.outbox),
+  ].every(isSafeCount);
 }
 
 function isSafeCount(value: number): boolean {

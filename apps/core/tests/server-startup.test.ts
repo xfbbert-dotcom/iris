@@ -113,8 +113,9 @@ describe("Core server startup", () => {
     };
     const knowledgeCardRuntime = fakeKnowledgeCardRuntime();
     const formalTaskRuntime: FormalTaskRuntime = {
-      repository: {} as FormalTaskRuntime["repository"],
-      cardRepository: {} as FormalTaskRuntime["cardRepository"],
+          repository: {} as FormalTaskRuntime["repository"],
+          cardRepository: {} as FormalTaskRuntime["cardRepository"],
+          executionRepository: {} as FormalTaskRuntime["executionRepository"],
       canUseFormalTaskCards: () => false,
       presentDraft: vi.fn(),
       canCreateDraft: vi.fn(() => true),
@@ -161,8 +162,9 @@ describe("Core server startup", () => {
 
   it("projects content-free formal task draft status and readiness while creation is disabled", async () => {
     const formalTaskRuntime: FormalTaskRuntime = {
-      repository: {} as FormalTaskRuntime["repository"],
-      cardRepository: {} as FormalTaskRuntime["cardRepository"],
+          repository: {} as FormalTaskRuntime["repository"],
+          cardRepository: {} as FormalTaskRuntime["cardRepository"],
+          executionRepository: {} as FormalTaskRuntime["executionRepository"],
       canUseFormalTaskCards: () => false,
       presentDraft: vi.fn(),
       canCreateDraft: vi.fn(() => false),

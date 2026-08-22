@@ -320,14 +320,15 @@ describe("memory extraction internal API", () => {
       "knowledgeConflicts",
       "actionApprovals",
       "formalTaskDrafts",
+      "formalTaskActions",
       "managedKnowledgeUpdates",
       "proactiveSignals",
     ]);
     expect(consolidated.json().summary).toMatchObject({
-      componentCount: 14,
+      componentCount: 15,
       healthyComponentCount: 3,
       enabledComponentCount: 3,
-      disabledComponentCount: 11,
+      disabledComponentCount: 12,
       disabledComponents: [
         "answerDraft",
         "agentExecutionLedger",
@@ -338,12 +339,13 @@ describe("memory extraction internal API", () => {
         "knowledgeConflicts",
         "actionApprovals",
         "formalTaskDrafts",
+        "formalTaskActions",
         "managedKnowledgeUpdates",
         "proactiveSignals",
       ],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 11,
+        disabled: 12,
         degraded: 0,
         stopped: 0,
       },

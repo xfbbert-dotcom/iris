@@ -55,6 +55,15 @@ acceptance is pending; it is not delivered or deployed until the content-free ev
 immutable image/tag/SHA, timestamps, and operators. This does not alter the already accepted
 publication pilot facts above.
 
+Governed Feishu task creation is also implemented as a default-off candidate. One explicit chat
+request can produce a versioned formal-task draft, but Task v2 is called only after the same exact
+task-spec hash passes group confirmation, assignee OAuth review, designated-owner approval, final
+membership and runtime checks. The first rollout is restricted to one allowlisted group through
+`IRIS_FEISHU_TASK_CREATION_ENABLED=false` and an empty allowlist by default. No real task-creation
+acceptance is claimed until `docs/runbooks/iris-governed-feishu-task-acceptance.md` records one fresh
+task, exact readback, one result card, drained recovery counts, and the safe-off rollback for an
+immutable image/tag/SHA.
+
 High-impact capabilities remain bounded: proactive deliveries require human review, knowledge-base
 writes open only for an intentional governed session, and every known non-pilot group remains
 disabled.

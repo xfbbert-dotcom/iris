@@ -52,6 +52,7 @@ export type FeishuTaskCreationRuntimeGate = {
   deploymentEnabled: boolean;
   globalEnabled: boolean;
   createFeishuTasks: boolean;
+  callExternalTools: boolean;
   disabledGroupIds: string[];
   allowedGroupIds: string[];
 };
@@ -129,7 +130,64 @@ export type FeishuTaskResultSendClaim = {
   attempts: number;
 };
 
+export type FormalTaskExecutionMetadata = {
+  id: string;
+  proposalId: string;
+  draftId: string;
+  draftRevision: number;
+  draftVersion: number;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
+  attemptNumber: number;
+  state: FeishuTaskCreationExecutionState;
+  requestFingerprint: string;
+  clientTokenHash: string;
+  responseClassification?: string;
+  version: number;
+  leaseUntil?: Date;
+  retryAt?: Date;
+  dispatchedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type FormalTaskExecutionStatusCounts = {
+  migration0057Applied: boolean;
+  executions: Record<FeishuTaskCreationExecutionState, number>;
+  results: Record<FeishuTaskResultPresentation["state"], number>;
+  outbox: Record<
+    "pending" | "processing" | "external_attempting" | "sent" | "failed" |
+      "outcome_unknown",
+    number
+  >;
+};
+
+export type RequestFormalTaskReconciliationInput = {
+  executionId: string;
+  expectedExecutionVersion: number;
+  operationKey: string;
+  operator: string;
+  at: Date;
+};
+
+export type RequestFormalTaskReconciliationResult = {
+  outcome: "applied" | "already_applied";
+  executionId: string;
+  state: "outcome_unknown";
+  version: number;
+  retryAt: Date;
+};
+
 export interface FormalTaskExecutionRepository {
+  getStatusCounts(): Promise<FormalTaskExecutionStatusCounts>;
+  listExecutionMetadata(input: {
+    states?: FeishuTaskCreationExecutionState[];
+    proposalId?: string;
+    limit: number;
+  }): Promise<FormalTaskExecutionMetadata[]>;
+  requestReconciliation(
+    input: RequestFormalTaskReconciliationInput,
+  ): Promise<RequestFormalTaskReconciliationResult>;
   claimNextCreation(input: {
     runtimeGate: FeishuTaskCreationRuntimeGate;
     workerId: string;

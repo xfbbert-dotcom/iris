@@ -8,6 +8,7 @@ import {
   readEventWorkerRuntimeConfig,
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
+  readFeishuTaskCreationDeploymentConfig,
   readOptionalFeishuBotOpenId,
   readOptionalFeishuOpenApiConfig,
   readDocumentSyncWorkerRuntimeConfig,
@@ -19,6 +20,60 @@ import {
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
+
+describe("readFeishuTaskCreationDeploymentConfig", () => {
+  it("is disabled by default and preserves an empty allowlist", () => {
+    expect(readFeishuTaskCreationDeploymentConfig({})).toEqual({
+      enabled: false,
+      groupAllowlist: [],
+      intervalMs: 1000,
+      batchLimit: 10,
+      leaseMs: 30_000,
+      retryDelayMs: 1_000,
+      reconciliationDelayMs: 5_000,
+      maxAttempts: 5,
+    });
+  });
+
+  it("requires exactly one pilot group and reads bounded worker settings when enabled", () => {
+    expect(readFeishuTaskCreationDeploymentConfig({
+      IRIS_FEISHU_TASK_CREATION_ENABLED: "true",
+      IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST: " oc_pilot ",
+      IRIS_FEISHU_TASK_CREATION_INTERVAL_MS: "2500",
+      IRIS_FEISHU_TASK_CREATION_BATCH_LIMIT: "7",
+      IRIS_FEISHU_TASK_CREATION_LEASE_MS: "45000",
+      IRIS_FEISHU_TASK_CREATION_RETRY_DELAY_MS: "3000",
+      IRIS_FEISHU_TASK_CREATION_RECONCILIATION_DELAY_MS: "9000",
+      IRIS_FEISHU_TASK_CREATION_MAX_ATTEMPTS: "4",
+    })).toEqual({
+      enabled: true,
+      groupAllowlist: ["oc_pilot"],
+      intervalMs: 2500,
+      batchLimit: 7,
+      leaseMs: 45_000,
+      retryDelayMs: 3_000,
+      reconciliationDelayMs: 9_000,
+      maxAttempts: 4,
+    });
+    for (const groupAllowlist of [undefined, "", "oc_one,oc_two"]) {
+      expect(() => readFeishuTaskCreationDeploymentConfig({
+        IRIS_FEISHU_TASK_CREATION_ENABLED: "true",
+        IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST: groupAllowlist,
+      })).toThrow(
+        "IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST must contain exactly one group",
+      );
+    }
+  });
+
+  it("rejects non-canonical deployment booleans and invalid worker bounds", () => {
+    expect(() => readFeishuTaskCreationDeploymentConfig({
+      IRIS_FEISHU_TASK_CREATION_ENABLED: "TRUE",
+    })).toThrow("IRIS_FEISHU_TASK_CREATION_ENABLED must be true or false");
+    expect(() => readFeishuTaskCreationDeploymentConfig({
+      IRIS_FEISHU_TASK_CREATION_BATCH_LIMIT: "101",
+    })).toThrow("IRIS_FEISHU_TASK_CREATION_BATCH_LIMIT");
+  });
+});
 
 describe("readProactiveFeedbackConfig", () => {
   it("uses the 30-day default and accepts a bounded override", () => {

@@ -30,7 +30,10 @@ describe("ActionApprovalWorker", () => {
     const harness = createHarness({
       runtimeEnabled: () => { order.push("runtime"); return true; },
       getContext: async () => { order.push("context"); return context(); },
-      preflight: async () => { order.push("preflight"); return { sourceGroupId: "oc_source" }; },
+      preflight: async () => {
+        order.push("preflight");
+        return { sourceGroupId: "oc_source", actionType: "publish_knowledge_draft" };
+      },
       membership: async () => { order.push("membership"); return true; },
       groupEnabled: () => { order.push("group"); return true; },
       apply: async () => { order.push("apply"); return mutation("applied"); },
@@ -80,7 +83,10 @@ describe("ActionApprovalWorker", () => {
   it("requires current source-group membership before applying an exact-assignee task approval", async () => {
     const harness = createHarness({
       getContext: async () => taskContext(),
-      preflight: async () => ({ sourceGroupId: "oc_source" }),
+      preflight: async () => ({
+        sourceGroupId: "oc_source",
+        actionType: "publish_knowledge_draft",
+      }),
     });
 
     await expect(harness.worker.processActionApproval(job())).resolves.toEqual({
@@ -135,7 +141,9 @@ describe("ActionApprovalWorker", () => {
   });
 
   it("skips group membership only for a company-level proposal", async () => {
-    const harness = createHarness({ preflight: async () => ({}) });
+    const harness = createHarness({
+      preflight: async () => ({ actionType: "publish_knowledge_draft" }),
+    });
     await expect(harness.worker.processActionApproval(job())).resolves.toMatchObject({ status: "applied" });
     expect(harness.membershipChecker.isCurrentMember).not.toHaveBeenCalled();
   });
@@ -224,7 +232,11 @@ describe("ActionApprovalWorker", () => {
           presentation: { ...value.presentation, state: "closed", closedAt: at },
         };
       },
-      inspectReplay: async () => ({ result: replay, sourceGroupId: "oc_source" }),
+      inspectReplay: async () => ({
+        result: replay,
+        sourceGroupId: "oc_source",
+        actionType: "publish_knowledge_draft",
+      }),
     });
 
     await expect(harness.worker.processActionApproval(job())).resolves.toEqual({
@@ -255,6 +267,7 @@ describe("ActionApprovalWorker", () => {
     const inspectReplay = vi.fn(async () => ({
       result: mutation("already_applied"),
       sourceGroupId: "oc_source",
+      actionType: "publish_knowledge_draft" as const,
     }));
     const harness = createHarness({ inspectReplay });
 
@@ -299,12 +312,19 @@ type Overrides = {
   actorOpenId?: string;
   runtimeEnabled?: () => boolean;
   requireReviewAttestation?: boolean;
-  groupEnabled?: () => boolean;
+  groupEnabled?: (
+    groupId?: string,
+    actionType?: ActionApprovalDeliveryContext["context"]["proposal"]["actionType"],
+  ) => boolean;
   getContext?: () => Promise<ActionApprovalDeliveryContext | undefined>;
-  preflight?: () => Promise<{ sourceGroupId?: string }>;
+  preflight?: () => Promise<{
+    sourceGroupId?: string;
+    actionType: ActionApprovalDeliveryContext["context"]["proposal"]["actionType"];
+  }>;
   inspectReplay?: () => Promise<{
     result: ReturnType<typeof mutation>;
     sourceGroupId?: string;
+    actionType: ActionApprovalDeliveryContext["context"]["proposal"]["actionType"];
   } | undefined>;
   membership?: () => Promise<boolean>;
   apply?: () => Promise<ReturnType<typeof mutation>>;
@@ -318,7 +338,10 @@ type Overrides = {
 function createHarness(overrides: Overrides = {}) {
   const repository = {
     getApprovalDeliveryContext: vi.fn(overrides.getContext ?? (async () => context())),
-    preflightApprovalAction: vi.fn(overrides.preflight ?? (async () => ({ sourceGroupId: "oc_source" }))),
+    preflightApprovalAction: vi.fn(overrides.preflight ?? (async () => ({
+      sourceGroupId: "oc_source",
+      actionType: "publish_knowledge_draft" as const,
+    }))),
     inspectApprovalActionReplay: vi.fn(overrides.inspectReplay ?? (async () => undefined)),
     applyApprovalAction: vi.fn(overrides.apply ?? (async () => mutation("applied"))),
     listApprovalPresentations: vi.fn(overrides.listPresentations ?? (async () => [context().presentation])),

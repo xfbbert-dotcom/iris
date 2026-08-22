@@ -70,15 +70,15 @@ describe("ActionApprovalRuntime", () => {
     });
     expect(knowledgeCards.bindActionApprovalWorker).toHaveBeenCalledWith(dependencies.actionWorker);
     const dispatcherGate = dependencies.createDispatcher.mock.calls[0]?.[0].canDeliverApprovalCards;
-    expect(dispatcherGate?.("oc_pilot")).toBe(false);
+    expect(dispatcherGate?.("oc_pilot", "publish_knowledge_draft")).toBe(false);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_pilot")).toBe(false);
 
     await runtime.start();
     expect(order).toEqual(["planner-start", "dispatcher-start", "publication-start"]);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_pilot")).toBe(true);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_other")).toBe(false);
-    expect(dispatcherGate?.("oc_pilot")).toBe(true);
-    expect(dispatcherGate?.("oc_other")).toBe(false);
+    expect(dispatcherGate?.("oc_pilot", "publish_knowledge_draft")).toBe(true);
+    expect(dispatcherGate?.("oc_other", "publish_knowledge_draft")).toBe(false);
     await expect(runtime.getStatus()).resolves.toEqual({
       enabled: true,
       running: true,
@@ -131,6 +131,33 @@ describe("ActionApprovalRuntime", () => {
     expect(dependencies.createActionWorker).toHaveBeenCalledWith(expect.objectContaining({
       requireReviewAttestation: true,
     }));
+  });
+
+  it("keeps formal task planning and approval delivery on the dedicated task gate", async () => {
+    const dependencies = runtimeDependencies();
+    const runtimeController = enabledController();
+    runtimeController.setCapability("generateKnowledgeDrafts", false);
+    const formalTaskActions = {
+      canUseFormalTaskActionsForSourceGroup: vi.fn((groupId: string) => groupId === "oc_pilot"),
+    };
+    const runtime = createActionApprovalRuntime({
+      env: enabledEnv(),
+      runtimeController,
+      knowledgeCardRuntime: knowledgeCardRuntime(),
+      formalTaskActions,
+      dependencies,
+    })!;
+    const plannerInput = dependencies.createPlanner.mock.calls[0]![0];
+    const dispatcherGate = dependencies.createDispatcher.mock.calls[0]![0]
+      .canDeliverApprovalCards;
+
+    await runtime.start();
+    expect(plannerInput.getAllowedGroupIds()).toEqual([]);
+    expect(plannerInput.getAllowedFormalTaskGroupIds?.()).toEqual(["oc_pilot"]);
+    expect(dispatcherGate("oc_pilot", "create_feishu_task")).toBe(true);
+    expect(dispatcherGate("oc_pilot", "publish_knowledge_draft")).toBe(false);
+    expect(runtime.canUseFormalTaskActionsForSourceGroup?.("oc_pilot")).toBe(true);
+    await runtime.close();
   });
 
   it("creates and owns update execution only from an explicit injectable feature snapshot and sync queue", async () => {
@@ -348,7 +375,7 @@ function knowledgeCardRuntime(): KnowledgeCardRuntime {
     },
     canUseKnowledgeCards: vi.fn(() => true),
     approvalInteractions: {
-      cardClient: { updateCard: vi.fn(), sendCardToUser: vi.fn() },
+      cardClient: { updateCard: vi.fn(), sendCard: vi.fn(), sendCardToUser: vi.fn() },
       membershipChecker: { isCurrentMember: vi.fn(async () => true) },
       botOpenId: "ou_irisbot",
     },
@@ -438,7 +465,9 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
   const dependencies = {
     createPostgresPool: vi.fn(() => pool),
     createRepository: vi.fn(() => repository),
-    createPlanner: vi.fn(() => ({ planBatch: vi.fn() })),
+    createPlanner: vi.fn((
+      _input: Parameters<NonNullable<ActionApprovalRuntimeDependencies["createPlanner"]>>[0],
+    ) => ({ planBatch: vi.fn() })),
     createDispatcher: vi.fn((
       _input: Parameters<NonNullable<ActionApprovalRuntimeDependencies["createDispatcher"]>>[0],
     ) => ({ processBatch: vi.fn() })),

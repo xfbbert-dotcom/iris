@@ -125,6 +125,10 @@ import {
   type FormalTaskRuntime,
 } from "./runtime/formal-task-runtime.js";
 import {
+  createFormalTaskActionRuntime as createDefaultFormalTaskActionRuntime,
+  type FormalTaskActionRuntime,
+} from "./runtime/formal-task-action-runtime.js";
+import {
   createKnowledgeCardRuntime as createDefaultKnowledgeCardRuntime,
   createKnowledgeCardStatusReader as createDefaultKnowledgeCardStatusReader,
   type KnowledgeCardRuntime,
@@ -152,6 +156,7 @@ import {
 } from "./runtime/proactive-signal-planner-runtime.js";
 import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
 import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
+import { registerFormalTaskApi } from "./formal-tasks/formal-task-api.js";
 import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
 import { registerAgentExecutionLedgerApi } from "./agent-runtime/agent-execution-ledger-api.js";
 import { registerAnswerReplyApi } from "./answer-replies/answer-reply-api.js";
@@ -226,6 +231,9 @@ export type BuildAppDependencies = {
   createFormalTaskRuntime?: (
     input?: Parameters<typeof createDefaultFormalTaskRuntime>[0],
   ) => FormalTaskRuntime | undefined;
+  createFormalTaskActionRuntime?: (
+    input?: Parameters<typeof createDefaultFormalTaskActionRuntime>[0],
+  ) => FormalTaskActionRuntime | undefined;
   createKnowledgeCardRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
   ) => KnowledgeCardRuntime | undefined;
@@ -407,6 +415,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   let proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let formalTaskRuntime: FormalTaskRuntime | undefined;
+  let formalTaskActionRuntime: FormalTaskActionRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   let knowledgeCardStatusReader: KnowledgeCardStatusReader | undefined;
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
@@ -415,6 +424,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   let proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
   let knowledgeCardStartup: Promise<void> | undefined;
   let actionApprovalStartup: Promise<void> | undefined;
+  let formalTaskActionStartup: Promise<void> | undefined;
   let knowledgeConflictStartup: Promise<void> | undefined;
   let proactiveSignalPlannerStartup: Promise<void> | undefined;
   let proactiveSignalDeliveryStartup: Promise<void> | undefined;
@@ -487,6 +497,13 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     knowledgeCardStatusReader = knowledgeCardRuntime === undefined
       ? (dependencies.createKnowledgeCardStatusReader ?? createDefaultKnowledgeCardStatusReader)()
       : undefined;
+    formalTaskActionRuntime = (
+      dependencies.createFormalTaskActionRuntime ?? createDefaultFormalTaskActionRuntime
+    )({
+      runtimeController,
+      executionRepository: formalTaskRuntime?.executionRepository,
+      knowledgeCardRuntime,
+    });
     if (composedKnowledgeConflictRuntime !== undefined) {
       if (knowledgeCardRuntime === undefined) {
         throw new Error("knowledge conflict runtime requires the knowledge-card runtime");
@@ -506,6 +523,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     )({
       runtimeController,
       knowledgeCardRuntime,
+      formalTaskActions: formalTaskActionRuntime,
       ...(documentSyncRuntime?.managedKnowledgeUpdateQueue !== undefined &&
         documentSyncRuntime.activeEmbeddingProfileId !== undefined
         ? {
@@ -579,10 +597,16 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       : observeStartupPromise(
           (knowledgeCardStartup ?? Promise.resolve()).then(() => actionApprovalRuntime!.start()),
         );
-    knowledgeConflictStartup = composedKnowledgeConflictRuntime === undefined
+    formalTaskActionStartup = formalTaskActionRuntime === undefined
       ? undefined
       : observeStartupPromise(
           (actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
+            .then(() => formalTaskActionRuntime!.start()),
+        );
+    knowledgeConflictStartup = composedKnowledgeConflictRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (formalTaskActionStartup ?? actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
             .then(() => composedKnowledgeConflictRuntime!.start()),
         );
     proactiveSignalPlannerStartup = proactiveSignalPlannerRuntime === undefined
@@ -624,6 +648,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       proactiveSignalDeliveryStartup ??
       proactiveSignalPlannerStartup ??
       knowledgeConflictStartup ??
+      formalTaskActionStartup ??
       actionApprovalStartup ??
       knowledgeCardStartup;
     if (eventWorkerPrerequisite === undefined) {
@@ -746,6 +771,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     authenticationConfigured: internalApiToken !== undefined,
     now,
   });
+  registerFormalTaskApi(app, formalTaskRuntime, formalTaskActionRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    now,
+  });
   registerActionReviewApi(app, actionReviewRuntime, { now });
   registerAgentExecutionLedgerApi(app, agentExecutionLedgerRuntime);
   registerKnowledgeConflictApi(
@@ -838,6 +867,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     const knowledgeConflicts = await getKnowledgeConflictStatus(composedKnowledgeConflictRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
     const formalTaskDrafts = await getFormalTaskDraftStatus(formalTaskRuntime);
+    const formalTaskActions = await getFormalTaskActionStatus(formalTaskActionRuntime);
     const managedKnowledgeUpdates = getManagedKnowledgeUpdateStatus({
       deployment: managedKnowledgeUpdateDeployment,
       actionApprovalStatus: actionApprovals,
@@ -892,6 +922,14 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         enabled: false,
         companyCreationEnabled: false,
       },
+      formalTaskActions: formalTaskActions ?? {
+        ok: true,
+        enabled: false,
+        running: false,
+        deploymentEnabled: false,
+        enabledGroupCount: 0,
+        runtimeCreationEnabled: false,
+      },
       managedKnowledgeUpdates,
       proactiveSignals,
     };
@@ -912,6 +950,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     );
     const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
     const formalTaskDraftStatus = await getFormalTaskDraftStatus(formalTaskRuntime);
+    const formalTaskActionStatus = await getFormalTaskActionStatus(formalTaskActionRuntime);
     const managedKnowledgeUpdateStatus = getManagedKnowledgeUpdateStatus({
       deployment: managedKnowledgeUpdateDeployment,
       actionApprovalStatus,
@@ -925,6 +964,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         knowledgeConflictStatus,
         actionApprovalStatus,
         ...(formalTaskDraftStatus === undefined ? {} : { formalTaskDraftStatus }),
+        ...(formalTaskActionStatus === undefined ? {} : { formalTaskActionStatus }),
         managedKnowledgeUpdateStatus,
         actionReviewStatus,
       },
@@ -2109,6 +2149,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       () => actionReviewRuntime?.close(),
       () => proactiveSignalDeliveryRuntime?.close(),
       () => proactiveSignalPlannerRuntime?.close(),
+      () => formalTaskActionRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
       () => knowledgeCardStatusReader?.close(),
       () => composedKnowledgeConflictRuntime?.close(),
@@ -2140,6 +2181,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       knowledgeCardRuntime,
       knowledgeCardStatusReader,
       actionApprovalRuntime,
+      formalTaskActionRuntime,
       actionReviewRuntime,
       proactiveSignalDeliveryRuntime,
       knowledgeDraftRuntime,
@@ -2263,6 +2305,45 @@ async function getFormalTaskDraftStatus(runtime: FormalTaskRuntime | undefined) 
       enabled: true,
       companyCreationEnabled: true,
       degradedReason: "formal_task_draft_status_unavailable" as const,
+    };
+  }
+}
+
+async function getFormalTaskActionStatus(runtime: FormalTaskActionRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    const status = await runtime.getStatus();
+    const reason = !status.counts.migration0057Applied
+      ? "formal_task_migration_unavailable"
+      : status.deploymentEnabled && !status.running
+        ? "formal_task_worker_stopped"
+        : status.worker?.latestBatch?.failed === true
+          ? "formal_task_worker_failed"
+          : status.counts.executions.reconciliation_required > 0
+            ? "formal_task_reconciliation_required"
+            : status.counts.executions.outcome_unknown > 0
+              ? "formal_task_outcome_unknown"
+              : status.counts.results.outcome_unknown > 0 ||
+                  status.counts.outbox.outcome_unknown > 0
+                ? "formal_task_result_outcome_unknown"
+                : status.counts.results.failed > 0 || status.counts.outbox.failed > 0
+                  ? "formal_task_result_failed"
+                  : undefined;
+    return {
+      ok: reason === undefined,
+      ...status,
+      enabled: status.deploymentEnabled,
+      ...(reason === undefined ? {} : { degradedReason: reason }),
+    };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      deploymentEnabled: true,
+      enabledGroupCount: 0,
+      runtimeCreationEnabled: false,
+      degradedReason: "formal_task_action_status_unavailable" as const,
     };
   }
 }
@@ -2544,6 +2625,7 @@ function scheduleRuntimeStartupCleanup({
   knowledgeCardRuntime,
   knowledgeCardStatusReader,
   actionApprovalRuntime,
+  formalTaskActionRuntime,
   actionReviewRuntime,
   proactiveSignalDeliveryRuntime,
   knowledgeDraftRuntime,
@@ -2564,6 +2646,7 @@ function scheduleRuntimeStartupCleanup({
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   knowledgeCardStatusReader: KnowledgeCardStatusReader | undefined;
   actionApprovalRuntime: ActionApprovalRuntime | undefined;
+  formalTaskActionRuntime: FormalTaskActionRuntime | undefined;
   actionReviewRuntime: ActionReviewRuntime | undefined;
   proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
   knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
@@ -2580,6 +2663,7 @@ function scheduleRuntimeStartupCleanup({
     () => actionReviewRuntime?.close(),
     () => proactiveSignalDeliveryRuntime?.close(),
     () => proactiveSignalPlannerRuntime?.close(),
+    () => formalTaskActionRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
     () => knowledgeCardStatusReader?.close(),
     () => composedKnowledgeConflictRuntime?.close(),

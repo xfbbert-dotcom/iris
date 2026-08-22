@@ -12,6 +12,12 @@ describe("FeishuTaskReconciler", () => {
     expect(fixture.repository.claimReconciliationAttempt).not.toHaveBeenCalled();
   });
 
+  it("does not claim unknown outcomes while external tool calls are disabled", async () => {
+    const fixture = createFixture({ callExternalTools: false });
+    await expect(fixture.reconciler.processBatch({ limit: 10 })).resolves.toEqual([]);
+    expect(fixture.repository.claimReconciliationAttempt).not.toHaveBeenCalled();
+  });
+
   it("repeats the exact request with the same token and completes an identical task", async () => {
     const fixture = createFixture();
 
@@ -159,6 +165,7 @@ const claim = {
 
 function createFixture(overrides: {
   createFeishuTasks?: boolean;
+  callExternalTools?: boolean;
   isMember?: boolean;
   claim?: typeof claim;
   createOutcome?: unknown;
@@ -186,7 +193,10 @@ function createFixture(overrides: {
       globalEnabled: true,
       groupAllowlist: ["oc_pilot"],
       disabledGroupIds: [],
-      capabilities: { createFeishuTasks: overrides.createFeishuTasks ?? true },
+      capabilities: {
+        createFeishuTasks: overrides.createFeishuTasks ?? true,
+        callExternalTools: overrides.callExternalTools ?? true,
+      },
     }),
     workerId: "task-reconciler-1",
     leaseMs: 30_000,

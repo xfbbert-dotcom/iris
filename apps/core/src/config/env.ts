@@ -145,6 +145,17 @@ export type ManagedKnowledgeUpdateDeploymentConfig = {
   groupAllowlist: string[];
 };
 
+export type FeishuTaskCreationDeploymentConfig = {
+  enabled: boolean;
+  groupAllowlist: string[];
+  intervalMs: number;
+  batchLimit: number;
+  leaseMs: number;
+  retryDelayMs: number;
+  reconciliationDelayMs: number;
+  maxAttempts: number;
+};
+
 export type ProactiveSignalDeliveryRuntimeConfig =
   | { enabled: false }
   | {
@@ -749,6 +760,61 @@ export function readManagedKnowledgeUpdateDeploymentConfig(
     );
   }
   return { enabled, groupAllowlist };
+}
+
+export function readFeishuTaskCreationDeploymentConfig(
+  env: EnvLike = process.env,
+): FeishuTaskCreationDeploymentConfig {
+  const enabled = readStrictBooleanEnv(
+    "IRIS_FEISHU_TASK_CREATION_ENABLED",
+    env.IRIS_FEISHU_TASK_CREATION_ENABLED,
+    false,
+  );
+  const groupAllowlist = readOptionalUniqueGroupIdListEnv(
+    "IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST",
+    env.IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST,
+  );
+  if (enabled && groupAllowlist.length !== 1) {
+    throw new Error(
+      "IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST must contain exactly one group",
+    );
+  }
+  return {
+    enabled,
+    groupAllowlist,
+    intervalMs: readTimerDelayEnv(
+      "IRIS_FEISHU_TASK_CREATION_INTERVAL_MS",
+      env.IRIS_FEISHU_TASK_CREATION_INTERVAL_MS,
+      1_000,
+    ),
+    batchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_FEISHU_TASK_CREATION_BATCH_LIMIT",
+      env.IRIS_FEISHU_TASK_CREATION_BATCH_LIMIT,
+      10,
+      100,
+    ),
+    leaseMs: readTimerDelayEnv(
+      "IRIS_FEISHU_TASK_CREATION_LEASE_MS",
+      env.IRIS_FEISHU_TASK_CREATION_LEASE_MS,
+      30_000,
+    ),
+    retryDelayMs: readTimerDelayEnv(
+      "IRIS_FEISHU_TASK_CREATION_RETRY_DELAY_MS",
+      env.IRIS_FEISHU_TASK_CREATION_RETRY_DELAY_MS,
+      1_000,
+    ),
+    reconciliationDelayMs: readTimerDelayEnv(
+      "IRIS_FEISHU_TASK_CREATION_RECONCILIATION_DELAY_MS",
+      env.IRIS_FEISHU_TASK_CREATION_RECONCILIATION_DELAY_MS,
+      5_000,
+    ),
+    maxAttempts: readBoundedPositiveIntegerEnv(
+      "IRIS_FEISHU_TASK_CREATION_MAX_ATTEMPTS",
+      env.IRIS_FEISHU_TASK_CREATION_MAX_ATTEMPTS,
+      5,
+      20,
+    ),
+  };
 }
 
 export function readProactiveSignalDeliveryRuntimeConfig(

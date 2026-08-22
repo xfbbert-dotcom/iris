@@ -22,26 +22,34 @@ describe("createFormalTaskRuntime", () => {
       })),
     };
     const cardRepository = {};
+    const executionRepository = {};
     const controller = new RuntimeController(createDefaultRuntimeConfig());
     const runtime = createFormalTaskRuntime({
-      env: { DATABASE_URL: "postgresql://example/iris" },
+      env: {
+        DATABASE_URL: "postgresql://example/iris",
+        IRIS_FEISHU_TASK_CREATION_ENABLED: "true",
+        IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST: "group-active",
+      },
       runtimeController: controller,
       dependencies: {
         createPostgresPool: vi.fn(() => pool as never),
         createRepository: vi.fn(() => repository as never),
         createCardRepository: vi.fn(() => cardRepository as never),
+        createExecutionRepository: vi.fn(() => executionRepository as never),
       },
     });
 
     expect(runtime?.repository).toBe(repository);
     expect(runtime?.cardRepository).toBe(cardRepository);
+    expect(runtime?.executionRepository).toBe(executionRepository);
     expect(runtime?.canCreateDraft({ sourceGroupId: "group-active" })).toBe(false);
     controller.setCapability("generateTaskDrafts", true);
     expect(runtime?.canCreateDraft({ sourceGroupId: "group-active" })).toBe(true);
     expect(controller.canCreateFeishuTasks({ sourceGroupId: "group-active" })).toBe(false);
     controller.setCapability("createFeishuTasks", true);
-    expect(controller.canCreateFeishuTasks({ sourceGroupId: "group-active" })).toBe(true);
+    controller.setCapability("callExternalTools", true);
     expect(runtime?.canUseFormalTaskCards("group-active")).toBe(true);
+    expect(runtime?.canUseFormalTaskCards("group-other")).toBe(false);
     controller.disableGroup("group-active");
     expect(runtime?.canCreateDraft({ sourceGroupId: "group-active" })).toBe(false);
     expect(runtime?.canUseFormalTaskCards("group-active")).toBe(false);

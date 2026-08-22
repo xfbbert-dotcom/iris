@@ -328,6 +328,87 @@ runIfDatabase("PostgresFormalTaskExecutionRepository with Postgres", () => {
     expect(reconciliation?.execution.clientTokenHash).toBe(first?.execution.clientTokenHash);
   });
 
+  it("reports metadata-only execution health and safely reschedules an exact unknown outcome", async () => {
+    const seeded = await seedApprovedTask(pool, "operator-reconcile");
+    const repository = createPostgresFormalTaskExecutionRepository({ dataSource: pool });
+    const first = await repository.claimNextCreation({
+      runtimeGate: runtimeGate(seeded.groupId),
+      workerId: "task-executor-operator",
+      leaseUntil: plusSeconds(30),
+      operationKey: `task-execution-claim:operator:${seeded.suffix}`,
+      at,
+    });
+    const dispatched = await repository.markExternalAttempt({
+      executionId: first!.execution.id,
+      expectedExecutionVersion: first!.execution.version,
+      workerId: "task-executor-operator",
+      operationKey: `task-execution-dispatch:operator:${seeded.suffix}`,
+      at: plusSeconds(1),
+    });
+    await repository.recordCreationFailure({
+      proposalId: seeded.proposalId,
+      executionId: dispatched.execution.id,
+      expectedProposalVersion: dispatched.proposal.version,
+      expectedExecutionVersion: dispatched.execution.version,
+      classification: "outcome_unknown",
+      responseClassification: "timeout",
+      retryAt: plusSeconds(600),
+      operationKey: `task-execution-unknown:operator:${seeded.suffix}`,
+      at: plusSeconds(2),
+    });
+
+    const [metadata] = await repository.listExecutionMetadata({
+      states: ["outcome_unknown"],
+      proposalId: seeded.proposalId,
+      limit: 10,
+    });
+    expect(metadata).toEqual(expect.objectContaining({
+      id: first!.execution.id,
+      proposalId: seeded.proposalId,
+      draftId: seeded.draftId,
+      state: "outcome_unknown",
+      version: 3,
+      responseClassification: "timeout",
+      requestFingerprint: first!.execution.requestFingerprint,
+      clientTokenHash: first!.execution.clientTokenHash,
+      retryAt: plusSeconds(600),
+    }));
+    expect(JSON.stringify(metadata)).not.toMatch(
+      /assignee|description|remoteTask|taskGuid|taskUrl|clientToken[^H]/iu,
+    );
+
+    const operationKey = `task-operator-reconcile:${seeded.suffix}`;
+    const request = {
+      executionId: first!.execution.id,
+      expectedExecutionVersion: 3,
+      operationKey,
+      operator: "pilot-operator@example.com",
+      at: plusSeconds(10),
+    };
+    await expect(repository.requestReconciliation(request)).resolves.toEqual({
+      outcome: "applied",
+      executionId: first!.execution.id,
+      state: "outcome_unknown",
+      version: 4,
+      retryAt: plusSeconds(10),
+    });
+    await expect(repository.requestReconciliation({
+      ...request,
+      at: plusSeconds(11),
+    })).resolves.toEqual({
+      outcome: "already_applied",
+      executionId: first!.execution.id,
+      state: "outcome_unknown",
+      version: 4,
+      retryAt: plusSeconds(10),
+    });
+    const status = await repository.getStatusCounts();
+    expect(status.migration0057Applied).toBe(true);
+    expect(status.executions.outcome_unknown).toBeGreaterThan(0);
+    expect(status.results.pending_send).toBeGreaterThanOrEqual(0);
+    expect(status.outbox.pending).toBeGreaterThanOrEqual(0);
+  });
+
   it("reclaims a stale pre-dispatch lease without creating another execution attempt", async () => {
     const seeded = await seedApprovedTask(pool, "stale-claim");
     const repository = createPostgresFormalTaskExecutionRepository({ dataSource: pool });
@@ -650,6 +731,7 @@ function runtimeGate(groupId: string) {
     deploymentEnabled: true,
     globalEnabled: true,
     createFeishuTasks: true,
+    callExternalTools: true,
     disabledGroupIds: [],
     allowedGroupIds: [groupId],
   };
@@ -661,7 +743,7 @@ function plusSeconds(seconds: number): Date {
 
 async function cleanupOwnedOutboxes(pool: pg.Pool): Promise<void> {
   const ownedDraftPattern =
-    "^task-draft-(success|retry|reconciliation|stale-claim|stale-dispatch|disabled|operation-conflict)-";
+    "^task-draft-(success|retry|reconciliation|operator-reconcile|stale-claim|stale-dispatch|disabled|operation-conflict)-";
   await pool.query(
     `UPDATE formal_task_draft_presentation_outbox outbox
      SET state = 'failed', error_code = 'test_isolation', updated_at = NOW()

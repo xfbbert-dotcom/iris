@@ -175,7 +175,7 @@ export type KnowledgeCardRuntime = {
   };
   canUseKnowledgeCards(groupId: string): boolean;
   approvalInteractions: {
-    cardClient: Pick<FeishuInteractiveCardClient, "sendCardToUser" | "updateCard">;
+    cardClient: Pick<FeishuInteractiveCardClient, "sendCard" | "sendCardToUser" | "updateCard">;
     membershipChecker: FeishuGroupMembershipChecker;
     botOpenId: string;
   };

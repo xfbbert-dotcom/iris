@@ -38,18 +38,29 @@ type PlannerRepository = Pick<
 export function createActionProposalPlanner(input: {
   repository: PlannerRepository;
   getAllowedGroupIds: () => string[];
+  getAllowedFormalTaskGroupIds?: () => string[];
   agentExecutionObserver?: AgentExecutionObserver;
 }): ActionProposalPlanner {
   return {
     async planBatch(request) {
       const limit = requireLimit(request.limit);
       const at = requireDate(request.at);
-      const groupIds = normalizeGroupIds(input.getAllowedGroupIds());
-      if (groupIds.length === 0) return emptyResult();
+      const knowledgeGroupIds = normalizeGroupIds(input.getAllowedGroupIds());
+      const formalTaskGroupIds = normalizeGroupIds(
+        input.getAllowedFormalTaskGroupIds?.() ?? knowledgeGroupIds,
+      );
+      if (knowledgeGroupIds.length === 0 && formalTaskGroupIds.length === 0) return emptyResult();
       const [knowledgeCandidates, policies, formalTaskCandidates, taskPolicies] = await Promise.all([
-        input.repository.listEligibleDrafts({ groupIds, limit }),
+        knowledgeGroupIds.length === 0
+          ? Promise.resolve([])
+          : input.repository.listEligibleDrafts({ groupIds: knowledgeGroupIds, limit }),
         input.repository.listTargetPolicies({ enabled: true, limit: POLICY_LIMIT }),
-        input.repository.listEligibleFormalTaskDrafts?.({ groupIds, limit }) ?? Promise.resolve([]),
+        formalTaskGroupIds.length === 0
+          ? Promise.resolve([])
+          : input.repository.listEligibleFormalTaskDrafts?.({
+              groupIds: formalTaskGroupIds,
+              limit,
+            }) ?? Promise.resolve([]),
         input.repository.listFeishuTaskTargetPolicies?.({ enabled: true, limit: POLICY_LIMIT }) ??
           Promise.resolve([]),
       ]);

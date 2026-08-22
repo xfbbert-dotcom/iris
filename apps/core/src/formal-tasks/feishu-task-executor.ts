@@ -33,7 +33,7 @@ export type FeishuTaskExecutorDependencies = {
     globalEnabled: boolean;
     groupAllowlist: string[];
     disabledGroupIds: string[];
-    capabilities: { createFeishuTasks: boolean };
+    capabilities: { createFeishuTasks: boolean; callExternalTools: boolean };
   };
   workerId: string;
   leaseMs: number;
@@ -86,6 +86,7 @@ export function createFeishuTaskExecutor({
               deploymentEnabled: gate.deploymentEnabled,
               globalEnabled: gate.globalEnabled,
               createFeishuTasks: gate.capabilities.createFeishuTasks,
+              callExternalTools: gate.capabilities.callExternalTools,
               disabledGroupIds: gate.disabledGroupIds,
               allowedGroupIds: gate.groupAllowlist,
             },
@@ -285,7 +286,8 @@ function normalizeRuntime(value: ReturnType<FeishuTaskExecutorDependencies["runt
     typeof value.globalEnabled !== "boolean" ||
     typeof value.capabilities !== "object" ||
     value.capabilities === null ||
-    typeof value.capabilities.createFeishuTasks !== "boolean"
+    typeof value.capabilities.createFeishuTasks !== "boolean" ||
+    typeof value.capabilities.callExternalTools !== "boolean"
   ) throw new Error("formal task runtime snapshot is invalid");
   const groupAllowlist = requireIdentifierList("groupAllowlist", value.groupAllowlist);
   const disabledGroupIds = requireIdentifierList("disabledGroupIds", value.disabledGroupIds);
@@ -294,13 +296,17 @@ function normalizeRuntime(value: ReturnType<FeishuTaskExecutorDependencies["runt
     globalEnabled: value.globalEnabled,
     groupAllowlist,
     disabledGroupIds,
-    capabilities: { createFeishuTasks: value.capabilities.createFeishuTasks },
+    capabilities: {
+      createFeishuTasks: value.capabilities.createFeishuTasks,
+      callExternalTools: value.capabilities.callExternalTools,
+    },
   };
 }
 
 function canCreate(value: ReturnType<typeof normalizeRuntime>): boolean {
   return value.deploymentEnabled && value.globalEnabled &&
-    value.capabilities.createFeishuTasks && value.groupAllowlist.length > 0;
+    value.capabilities.createFeishuTasks && value.capabilities.callExternalTools &&
+    value.groupAllowlist.length > 0;
 }
 
 function canCreateForGroup(value: ReturnType<typeof normalizeRuntime>, groupId: string): boolean {

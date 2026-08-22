@@ -532,6 +532,7 @@ export type FailPublicationExecutionResult = {
 export type ActionApprovalReplayInspection = {
   result: ApplyActionProposalActionResult;
   sourceGroupId?: string;
+  actionType: ActionProposalActionType;
 };
 
 export type PreflightActionApprovalInput = {
@@ -578,7 +579,7 @@ export interface ActionProposalRepository {
   ): Promise<ActionApprovalReplayInspection | undefined>;
   preflightApprovalAction(
     input: PreflightActionApprovalInput,
-  ): Promise<{ sourceGroupId?: string }>;
+  ): Promise<{ sourceGroupId?: string; actionType: ActionProposalActionType }>;
   getAuthorizedReviewContext(input: {
     proposalId: string;
     actorOpenId: string;

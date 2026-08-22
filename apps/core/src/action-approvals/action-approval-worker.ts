@@ -41,6 +41,8 @@ export type ActionApprovalWorkerResult = {
   code: ActionApprovalWorkerCode;
 };
 
+type GovernedActionType = ActionApprovalDeliveryContext["context"]["proposal"]["actionType"];
+
 export function createActionApprovalWorker({
   repository,
   membershipChecker,
@@ -62,7 +64,10 @@ export function createActionApprovalWorker({
   membershipChecker: FeishuGroupMembershipChecker;
   cardClient: Pick<FeishuInteractiveCardClient, "updateCard">;
   isActionApprovalRuntimeEnabled(): boolean;
-  canUseActionApprovalsForSourceGroup(groupId?: string): boolean;
+  canUseActionApprovalsForSourceGroup(
+    groupId: string | undefined,
+    actionType: GovernedActionType,
+  ): boolean;
   requireReviewAttestation: boolean;
   botOpenId: string;
   now?: () => Date;
@@ -75,6 +80,7 @@ export function createActionApprovalWorker({
       intent?: ApprovalInteractionIntent,
     ): Promise<ActionApprovalWorkerResult> {
       let observationGroupId: string | undefined;
+      let observationActionType: GovernedActionType | undefined;
       const process = async (): Promise<ActionApprovalWorkerResult> => {
         if (!readGate(isActionApprovalRuntimeEnabled)) return denied("runtime_disabled");
         if (job.actorOpenId === safeBotOpenId) return denied("bot_actor");
@@ -89,7 +95,12 @@ export function createActionApprovalWorker({
         }
         if (replay !== undefined) {
           observationGroupId = replay.sourceGroupId;
-          if (!readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)) {
+          observationActionType = replay.actionType;
+          if (!readGroupGate(
+            canUseActionApprovalsForSourceGroup,
+            replay.sourceGroupId,
+            replay.actionType,
+          )) {
             return denied("runtime_disabled");
           }
           if (replay.sourceGroupId !== undefined) {
@@ -104,7 +115,11 @@ export function createActionApprovalWorker({
           }
           if (
             !readGate(isActionApprovalRuntimeEnabled) ||
-            !readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)
+            !readGroupGate(
+              canUseActionApprovalsForSourceGroup,
+              replay.sourceGroupId,
+              replay.actionType,
+            )
           ) return denied("runtime_disabled");
           await updateProposalCards(repository, cardClient, replay.result);
           return { status: "already_applied", code: "duplicate_callback" };
@@ -117,16 +132,22 @@ export function createActionApprovalWorker({
           return retryable("repository_unavailable");
         }
         if (!isExactContext(job, context)) return denied("stale_presentation");
+        observationActionType = context.context.proposal.actionType;
 
         try {
           const preflight = await repository.preflightApprovalAction(
             toPreflightInput(job, requireReviewAttestation),
           );
           observationGroupId = preflight.sourceGroupId;
+          observationActionType = preflight.actionType;
         } catch (error) {
           return classifyStableOrRetryable(error);
         }
-        if (!readGroupGate(canUseActionApprovalsForSourceGroup, observationGroupId)) {
+        if (!readGroupGate(
+          canUseActionApprovalsForSourceGroup,
+          observationGroupId,
+          observationActionType,
+        )) {
           return denied("runtime_disabled");
         }
         if (observationGroupId !== undefined) {
@@ -141,7 +162,11 @@ export function createActionApprovalWorker({
         }
         if (
           !readGate(isActionApprovalRuntimeEnabled) ||
-          !readGroupGate(canUseActionApprovalsForSourceGroup, observationGroupId)
+          !readGroupGate(
+            canUseActionApprovalsForSourceGroup,
+            observationGroupId,
+            observationActionType,
+          )
         ) return denied("runtime_disabled");
 
         let mutation: ApplyActionProposalActionResult;
@@ -389,8 +414,12 @@ function readGate(gate: () => boolean): boolean {
   try { return gate(); } catch { return false; }
 }
 
-function readGroupGate(gate: (groupId?: string) => boolean, groupId?: string): boolean {
-  try { return gate(groupId); } catch { return false; }
+function readGroupGate(
+  gate: (groupId: string | undefined, actionType: GovernedActionType) => boolean,
+  groupId: string | undefined,
+  actionType: GovernedActionType | undefined,
+): boolean {
+  try { return actionType !== undefined && gate(groupId, actionType); } catch { return false; }
 }
 
 function requireIdentifier(name: string, value: string): string {

@@ -253,11 +253,73 @@ export function renderAdminConsoleHtml(): string {
       <div id="knowledge-draft-empty" class="empty-state">Connect to load knowledge drafts.</div>
     </section>
 
+    <section class="formal-task-panel" aria-labelledby="formal-tasks-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="formal-tasks-heading">Formal Feishu Tasks</h2>
+          <p>Inspect content-free draft and execution metadata. Human confirmation, OAuth review, and approval remain outside the console.</p>
+        </div>
+        <button id="formal-task-refresh" type="button" class="secondary">Refresh Tasks</button>
+      </div>
+      <div class="source-filters">
+        <label>
+          Draft status
+          <select id="formal-task-status-filter">
+            <option value="pending_confirmation,pending_review,needs_revision">Open statuses</option>
+            <option value="pending_confirmation">Pending confirmation</option>
+            <option value="pending_review">Pending review</option>
+            <option value="needs_revision">Needs revision</option>
+            <option value="rejected">Rejected</option>
+            <option value="created">Created</option>
+          </select>
+        </label>
+        <label>
+          Group id
+          <input id="formal-task-group-filter" placeholder="oc_xxx">
+        </label>
+      </div>
+      <div class="table-wrap">
+        <table id="formal-task-draft-table">
+          <thead>
+            <tr>
+              <th>Draft</th>
+              <th>Group</th>
+              <th>Status</th>
+              <th>Risk</th>
+              <th>Binding</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="formal-task-draft-rows"></tbody>
+        </table>
+      </div>
+      <div id="formal-task-draft-empty" class="empty-state">Connect to load formal task drafts.</div>
+      <h3>Task creation executions</h3>
+      <div class="table-wrap">
+        <table id="formal-task-execution-table">
+          <thead>
+            <tr>
+              <th>Execution</th>
+              <th>Proposal / draft</th>
+              <th>State</th>
+              <th>Attempt</th>
+              <th>Classification</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="formal-task-execution-rows"></tbody>
+        </table>
+      </div>
+      <div id="formal-task-execution-empty" class="empty-state">Connect to load task executions.</div>
+    </section>
+
     <section class="publication-queue-panel" aria-labelledby="publication-queue-heading">
       <div class="panel-heading">
         <div>
-          <h2 id="publication-queue-heading">Publication Queue</h2>
-          <p>Inspect approval and publication execution state without exposing draft body content.</p>
+          <h2 id="publication-queue-heading">Action Proposal Queue</h2>
+          <p>Inspect governed publication and formal-task proposals without exposing draft body content.</p>
         </div>
         <button id="publication-queue-refresh" type="button" class="secondary">Refresh Queue</button>
       </div>
@@ -265,14 +327,14 @@ export function renderAdminConsoleHtml(): string {
         <label>
           Proposal status
           <select id="publication-queue-status">
-            <option value="pending_approval,approved,executing,failed,reconciliation_required">Open publication work</option>
+            <option value="pending_approval,approved,executing,failed,reconciliation_required">Open governed work</option>
             <option value="pending_approval">Pending approval</option>
             <option value="approved">Approved</option>
             <option value="executing">Executing</option>
             <option value="failed">Failed</option>
             <option value="reconciliation_required">Needs reconciliation</option>
             <option value="succeeded">Succeeded</option>
-            <option value="cancelled,expired">Closed without publication</option>
+            <option value="cancelled,expired">Closed without execution</option>
           </select>
         </label>
         <label>
@@ -301,7 +363,7 @@ export function renderAdminConsoleHtml(): string {
           <tbody id="publication-queue-rows"></tbody>
         </table>
       </div>
-      <div id="publication-queue-empty" class="empty-state">Connect to load publication proposals.</div>
+      <div id="publication-queue-empty" class="empty-state">Connect to load action proposals.</div>
       <aside id="managed-update-detail" class="empty-state" aria-live="polite">Select an existing-page update to inspect metadata.</aside>
     </section>
 
@@ -1123,6 +1185,13 @@ const knowledgeDraftStatusFilter = document.getElementById("knowledge-draft-stat
 const knowledgeDraftGroupFilter = document.getElementById("knowledge-draft-group-filter");
 const knowledgeDraftRows = document.getElementById("knowledge-draft-rows");
 const knowledgeDraftEmpty = document.getElementById("knowledge-draft-empty");
+const formalTaskRefresh = document.getElementById("formal-task-refresh");
+const formalTaskStatusFilter = document.getElementById("formal-task-status-filter");
+const formalTaskGroupFilter = document.getElementById("formal-task-group-filter");
+const formalTaskDraftRows = document.getElementById("formal-task-draft-rows");
+const formalTaskDraftEmpty = document.getElementById("formal-task-draft-empty");
+const formalTaskExecutionRows = document.getElementById("formal-task-execution-rows");
+const formalTaskExecutionEmpty = document.getElementById("formal-task-execution-empty");
 const publicationQueueRefresh = document.getElementById("publication-queue-refresh");
 const publicationQueueStatus = document.getElementById("publication-queue-status");
 const publicationQueueSubject = document.getElementById("publication-queue-subject");
@@ -1162,6 +1231,8 @@ const capabilityLabels = {
   retrieveKnowledgeBase: "Retrieve knowledge base",
   proactiveSpeech: "Proactive speech",
   generateKnowledgeDrafts: "Generate knowledge drafts",
+  generateTaskDrafts: "Generate task drafts",
+  createFeishuTasks: "Create Feishu tasks",
   writeKnowledgeBase: "Write knowledge base",
   updateManagedKnowledge: "Update managed knowledge",
   callExternalTools: "Call external tools",
@@ -1185,6 +1256,8 @@ const wikiSpaceBasePath = "/internal/document-sync/wiki-spaces";
 const knowledgeDraftListBasePath = "/internal/knowledge-drafts?limit=20";
 const knowledgeDraftRequestRevisionPath = "/request-revision";
 const knowledgeDraftRejectPath = "/reject";
+const formalTaskDraftListBasePath = "/internal/formal-task-drafts?limit=20";
+const formalTaskExecutionListPath = "/internal/formal-task-executions?state=claimed,external_attempting,failed,outcome_unknown,reconciliation_required&limit=20";
 const publicationQueueBasePath = "/internal/action-proposals?status=pending_approval,approved,executing,failed,reconciliation_required&limit=20";
 const proactiveSignalGroupBasePath = "/internal/proactive-signals/groups/";
 const proactiveCandidateListSuffix = "/candidates?limit=20";
@@ -1840,6 +1913,186 @@ async function transitionKnowledgeDraft(draft, action) {
       reason: reason.trim(),
     }),
   });
+}
+
+function formalTaskDraftListPath() {
+  const [path, query] = formalTaskDraftListBasePath.split("?");
+  const params = new URLSearchParams(query);
+  const status = formalTaskStatusFilter.value;
+  if (status.length > 0) params.set("status", status);
+  const groupId = formalTaskGroupFilter.value.trim();
+  if (groupId.length > 0) params.set("groupId", groupId);
+  return path + "?" + params.toString();
+}
+
+function canRequestFormalTaskRevision(draft) {
+  return draft.status === "pending_confirmation" || draft.status === "pending_review";
+}
+
+function canRejectFormalTaskDraft(draft) {
+  return canRequestFormalTaskRevision(draft) || draft.status === "needs_revision";
+}
+
+function renderFormalTaskDrafts(drafts) {
+  formalTaskDraftRows.replaceChildren();
+  for (const draft of drafts || []) {
+    const row = document.createElement("tr");
+    const idCell = document.createElement("td");
+    idCell.className = "source-title";
+    const id = document.createElement("strong");
+    id.textContent = text(draft.id);
+    const hash = document.createElement("div");
+    hash.className = "source-uri";
+    hash.textContent = "spec " + text(draft.currentTaskSpecHash);
+    idCell.append(id, hash);
+    const groupCell = document.createElement("td");
+    groupCell.textContent = text(draft.sourceGroupId);
+    const statusCell = document.createElement("td");
+    statusCell.textContent = text(draft.status);
+    const riskCell = document.createElement("td");
+    riskCell.textContent = text(draft.riskLevel);
+    const bindingCell = document.createElement("td");
+    bindingCell.textContent = "v" + text(draft.version, "?") + " / r" +
+      text(draft.currentRevisionNumber, "?") + " / " + text(draft.evidenceStatus);
+    const updatedCell = document.createElement("td");
+    updatedCell.textContent = text(draft.updatedAt);
+    const actionsCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "source-actions";
+    for (const [action, label, danger, allowed] of [
+      [knowledgeDraftRequestRevisionPath, "Request revision", false, canRequestFormalTaskRevision(draft)],
+      [knowledgeDraftRejectPath, "Reject", true, canRejectFormalTaskDraft(draft)],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = danger ? "danger" : "secondary";
+      button.textContent = label;
+      button.disabled = !allowed;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await transitionFormalTaskDraft(draft, action);
+          addEvent(label + " recorded for formal task " + draft.id);
+          await refreshFormalTasks();
+        } catch (error) {
+          addEvent(label + " failed: " + error.message);
+          setConnection("Request failed", "warn");
+        } finally {
+          button.disabled = !allowed;
+        }
+      });
+      actions.append(button);
+    }
+    actionsCell.append(actions);
+    row.append(idCell, groupCell, statusCell, riskCell, bindingCell, updatedCell, actionsCell);
+    formalTaskDraftRows.append(row);
+  }
+  formalTaskDraftEmpty.textContent = (drafts || []).length === 0
+    ? "No formal task drafts match the current filters."
+    : "";
+}
+
+async function transitionFormalTaskDraft(draft, action) {
+  const operator = readOperator().trim();
+  if (!operator) throw new Error("operator_required");
+  const reason = window.prompt(
+    "Reason for " + action.slice(1).replace("-", " ") + ":",
+    "Needs operator follow-up",
+  );
+  if (reason === null || reason.trim().length === 0) throw new Error("reason_required");
+  return requestJson(
+    "/internal/formal-task-drafts/" + encodeURIComponent(draft.id) + action,
+    {
+      method: "POST",
+      headers: { "x-iris-operator": operator },
+      body: JSON.stringify({
+        expectedVersion: draft.version,
+        expectedRevision: draft.currentRevisionNumber,
+        expectedTaskSpecHash: draft.currentTaskSpecHash,
+        reason: reason.trim(),
+        operationKey: createOpaqueOperationKey(),
+      }),
+    },
+  );
+}
+
+function renderFormalTaskExecutions(executions) {
+  formalTaskExecutionRows.replaceChildren();
+  for (const execution of executions || []) {
+    const row = document.createElement("tr");
+    const idCell = document.createElement("td");
+    idCell.className = "source-title";
+    const id = document.createElement("strong");
+    id.textContent = text(execution.id);
+    const fingerprint = document.createElement("div");
+    fingerprint.className = "source-uri";
+    fingerprint.textContent = "request " + text(execution.requestFingerprint);
+    idCell.append(id, fingerprint);
+    const bindingCell = document.createElement("td");
+    bindingCell.textContent = text(execution.proposalId) + " / " + text(execution.draftId) +
+      " r" + text(execution.draftRevision, "?");
+    const stateCell = document.createElement("td");
+    stateCell.textContent = text(execution.state);
+    const attemptCell = document.createElement("td");
+    attemptCell.textContent = text(execution.attemptNumber, "?") + " / v" + text(execution.version, "?");
+    const classificationCell = document.createElement("td");
+    classificationCell.textContent = text(execution.responseClassification, "none");
+    const updatedCell = document.createElement("td");
+    updatedCell.textContent = text(execution.updatedAt);
+    const actionsCell = document.createElement("td");
+    if (execution.state === "outcome_unknown") {
+      const reconcile = document.createElement("button");
+      reconcile.type = "button";
+      reconcile.className = "secondary";
+      reconcile.textContent = "Reschedule reconciliation";
+      reconcile.addEventListener("click", async () => {
+        reconcile.disabled = true;
+        try {
+          await requestFormalTaskReconciliation(execution);
+          addEvent("Formal task reconciliation rescheduled: " + execution.id);
+          await refreshFormalTasks();
+        } catch (error) {
+          addEvent("Formal task reconciliation request failed: " + error.message);
+          setConnection("Request failed", "warn");
+        } finally {
+          reconcile.disabled = false;
+        }
+      });
+      actionsCell.append(reconcile);
+    }
+    row.append(
+      idCell, bindingCell, stateCell, attemptCell, classificationCell, updatedCell, actionsCell,
+    );
+    formalTaskExecutionRows.append(row);
+  }
+  formalTaskExecutionEmpty.textContent = (executions || []).length === 0
+    ? "No formal task executions match the open-state filter."
+    : "";
+}
+
+async function requestFormalTaskReconciliation(execution) {
+  const operator = readOperator().trim();
+  if (!operator) throw new Error("operator_required");
+  return requestJson(
+    "/internal/formal-task-executions/" + encodeURIComponent(execution.id) + "/reconcile",
+    {
+      method: "POST",
+      headers: { "x-iris-operator": operator },
+      body: JSON.stringify({
+        expectedExecutionVersion: execution.version,
+        operationKey: createOpaqueOperationKey(),
+      }),
+    },
+  );
+}
+
+async function refreshFormalTasks() {
+  const [drafts, executions] = await Promise.all([
+    requestJson(formalTaskDraftListPath()),
+    requestJson(formalTaskExecutionListPath),
+  ]);
+  renderFormalTaskDrafts(drafts.drafts || []);
+  renderFormalTaskExecutions(executions.executions || []);
 }
 
 function publicationQueuePath() {
@@ -2847,6 +3100,7 @@ async function refresh() {
   await refreshDocumentSources();
   await refreshWikiSpaces();
   await refreshKnowledgeDrafts();
+  await refreshFormalTasks();
   await refreshPublicationQueue();
   await refreshAuditSummaries();
   setConnection(status.ok === true ? "Connected" : "Attention needed", status.ok === true ? "ok" : "warn");
@@ -3045,6 +3299,37 @@ knowledgeDraftGroupFilter.addEventListener("input", async () => {
     await refreshKnowledgeDrafts();
   } catch (error) {
     addEvent("Knowledge draft filter failed: " + error.message);
+  }
+});
+
+formalTaskRefresh.addEventListener("click", async () => {
+  formalTaskRefresh.disabled = true;
+  try {
+    await refreshFormalTasks();
+    addEvent("Formal task records refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Formal task refresh failed: " + error.message);
+  } finally {
+    formalTaskRefresh.disabled = false;
+  }
+});
+
+formalTaskStatusFilter.addEventListener("change", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshFormalTasks();
+  } catch (error) {
+    addEvent("Formal task filter failed: " + error.message);
+  }
+});
+
+formalTaskGroupFilter.addEventListener("input", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshFormalTasks();
+  } catch (error) {
+    addEvent("Formal task filter failed: " + error.message);
   }
 });
 

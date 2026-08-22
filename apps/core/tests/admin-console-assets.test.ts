@@ -1027,11 +1027,11 @@ describe("admin console assets", () => {
     expect(script).not.toContain("rawText");
   });
 
-  it("renders publication queue governance without direct approval or content disclosure", () => {
+  it("renders action proposal queue governance without direct approval or content disclosure", () => {
     const html = renderAdminConsoleHtml();
     const script = renderAdminConsoleScript();
 
-    expect(html).toContain("Publication Queue");
+    expect(html).toContain("Action Proposal Queue");
     expect(html).toContain("publication-queue-table");
     expect(script).toContain("/internal/action-proposals?status=pending_approval,approved,executing,failed,reconciliation_required&limit=20");
     expect(script).toContain("/internal/action-proposals/");
@@ -1041,6 +1041,26 @@ describe("admin console assets", () => {
     expect(script).not.toContain("Approve publication");
     expect(script).not.toContain("draft.content");
     expect(script).not.toContain("currentRevision.content");
+  });
+
+  it("renders content-free formal task governance without an approval shortcut", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Formal Feishu Tasks");
+    expect(html).toContain("Human confirmation, OAuth review, and approval remain outside the console");
+    expect(html).toContain("formal-task-draft-table");
+    expect(html).toContain("formal-task-execution-table");
+    expect(script).toContain("/internal/formal-task-drafts?limit=20");
+    expect(script).toContain("/internal/formal-task-executions?state=claimed,external_attempting,failed,outcome_unknown,reconciliation_required&limit=20");
+    expect(script).toContain("/request-revision");
+    expect(script).toContain("/reject");
+    expect(script).toContain('execution.state === "outcome_unknown"');
+    expect(script).toContain('execution.id) + "/reconcile"');
+    expect(script).not.toContain("/internal/formal-task-drafts/approve");
+    expect(script).not.toContain("draft.title");
+    expect(script).not.toContain("draft.description");
+    expect(script).not.toContain("remoteTaskUrl");
   });
 
   it("inspects managed-update metadata and keeps a failed reconciliation content-free", async () => {

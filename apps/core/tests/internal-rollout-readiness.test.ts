@@ -159,6 +159,70 @@ describe("buildInternalRolloutReadinessReport", () => {
       });
   });
 
+  it("keeps governed Feishu task creation safe-off but surfaces unresolved runtime state", () => {
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv())).formalTaskActions)
+      .toMatchObject({
+        status: "pass",
+        detail: "Feishu task creation is safely disabled.",
+      });
+
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      formalTaskActionStatus: { ...formalTaskActionStatus(), ok: false },
+    })).formalTaskActions).toMatchObject({
+      status: "fail",
+      detail: "Formal task action runtime requires operator attention.",
+    });
+  });
+
+  it("passes governed Feishu task creation only with all human-gate runtimes and safe counts", () => {
+    const report = buildInternalRolloutReadinessReport(
+      formalTaskActionEnabledEnv(),
+      { formalTaskActionStatus: formalTaskActionStatus() },
+    );
+
+    expect(checksById(report).formalTaskActions).toMatchObject({
+      status: "pass",
+      detail: "Formal task action worker is running with migration 0057 applied.",
+    });
+  });
+
+  it.each([
+    [
+      { ...formalTaskActionStatus(), counts: { ...formalTaskActionStatus().counts, migration0057Applied: false } },
+      "Formal task migration 0057 is not applied.",
+    ],
+    [
+      { ...formalTaskActionStatus(), worker: { running: true, latestBatch: { status: "partial_failed" as const, failed: true, executorFailed: true, reconcilerFailed: false, resultDispatcherFailed: false } } },
+      "Formal task action worker latest batch failed.",
+    ],
+    [
+      { ...formalTaskActionStatus(), runtimeCreationEnabled: false },
+      "Formal task action worker or durable runtime gates are not enabled.",
+    ],
+    [
+      { ...formalTaskActionStatus(), counts: { ...formalTaskActionStatus().counts, executions: { ...formalTaskActionStatus().counts.executions, reconciliation_required: 1 } } },
+      "Formal tasks have reconciliation-required executions.",
+    ],
+    [
+      { ...formalTaskActionStatus(), counts: { ...formalTaskActionStatus().counts, executions: { ...formalTaskActionStatus().counts.executions, outcome_unknown: 1 } } },
+      "Formal tasks have unresolved outcome-unknown executions.",
+    ],
+    [
+      { ...formalTaskActionStatus(), counts: { ...formalTaskActionStatus().counts, results: { ...formalTaskActionStatus().counts.results, outcome_unknown: 1 } } },
+      "Formal task result delivery has unresolved unknown outcomes.",
+    ],
+    [
+      { ...formalTaskActionStatus(), counts: { ...formalTaskActionStatus().counts, outbox: { ...formalTaskActionStatus().counts.outbox, failed: 1 } } },
+      "Formal task result delivery has failed rows.",
+    ],
+  ])("fails governed Feishu task readiness for unsafe state %#", (status, detail) => {
+    const report = buildInternalRolloutReadinessReport(
+      formalTaskActionEnabledEnv(),
+      { formalTaskActionStatus: status },
+    );
+    expect(checksById(report).formalTaskActions).toMatchObject({ status: "fail", detail });
+  });
+
   it("blocks managed updates when more than one pilot group is configured", () => {
     const report = buildInternalRolloutReadinessReport(readyRolloutEnv({
       IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
@@ -827,6 +891,52 @@ function actionReviewStatus(overrides: Record<string, unknown> = {}) {
     running: true,
     migration0053Applied: true,
     ...overrides,
+  };
+}
+
+function formalTaskActionEnabledEnv(): EnvLike {
+  return readyRolloutEnv({
+    IRIS_FEISHU_TASK_CREATION_ENABLED: "true",
+    IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST: "oc_pilot",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+    IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    IRIS_ACTION_REVIEW_ENABLED: "true",
+    IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+    IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+    FEISHU_ENCRYPT_KEY: "formal-task-encrypt-key",
+  });
+}
+
+function formalTaskActionStatus() {
+  return {
+    ok: true,
+    enabled: true,
+    deploymentEnabled: true,
+    runtimeCreationEnabled: true,
+    running: true,
+    worker: { running: true },
+    counts: {
+      migration0057Applied: true,
+      executions: {
+        claimed: 0,
+        external_attempting: 0,
+        succeeded: 1,
+        failed: 0,
+        outcome_unknown: 0,
+        reconciliation_required: 0,
+      },
+      results: { pending_send: 0, sent: 1, failed: 0, outcome_unknown: 0 },
+      outbox: {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 1,
+        failed: 0,
+        outcome_unknown: 0,
+      },
+    },
   };
 }
 
