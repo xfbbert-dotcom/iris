@@ -124,6 +124,27 @@ describe("runMigrations", () => {
     expect(normalized).not.toMatch(/delete from/iu);
   });
 
+  it("reserves ordered 0057 facts for governed Feishu task creation", async () => {
+    const migrationNames = (await readdir(defaultMigrationsDir())).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const migrationName = "0057_governed_feishu_task_actions.sql";
+    expect(migrationNames.filter((name) => name.startsWith("0057_"))).toEqual([migrationName]);
+    expect(migrationNames.indexOf(migrationName))
+      .toBeGreaterThan(migrationNames.indexOf("0056_managed_resync_index_completion.sql"));
+
+    const normalized = (await readFile(join(defaultMigrationsDir(), migrationName), "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("create table formal_task_drafts");
+    expect(normalized).toContain("create table feishu_task_creation_executions");
+    expect(normalized).toContain("create table feishu_task_creations");
+    expect(normalized).toContain("feishu_task_creation_one_unresolved_proposal_idx");
+    expect(normalized).toContain("formal_task_draft_events_append_only");
+    expect(normalized).not.toMatch(/delete from/iu);
+  });
+
   it("reserves exactly one ordered 0046 knowledge-conflict migration", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
     expect(migrationNames.filter((name) => name.startsWith("0046_"))).toEqual([
@@ -1356,6 +1377,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           "0026_projection_rollout_contracts.sql",
           "0030_knowledge_draft_facts.sql",
           "0031_knowledge_draft_presentations.sql",
+          "0057_governed_feishu_task_actions.sql",
         ]),
       });
       await expect(client.query<{ definition: string }>(`
@@ -1378,6 +1400,23 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           'system', 'conversation-state-projector', repeat('a', 64)
         )
       `)).resolves.toMatchObject({ rows: [] });
+      await expect(client.query<{ name: string }>(`
+        SELECT table_name AS name
+        FROM information_schema.tables
+        WHERE table_schema = current_schema()
+          AND table_name IN (
+            'formal_task_drafts',
+            'feishu_task_creation_executions',
+            'feishu_task_creations'
+          )
+        ORDER BY table_name
+      `)).resolves.toMatchObject({
+        rows: [
+          { name: "feishu_task_creation_executions" },
+          { name: "feishu_task_creations" },
+          { name: "formal_task_drafts" },
+        ],
+      });
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
