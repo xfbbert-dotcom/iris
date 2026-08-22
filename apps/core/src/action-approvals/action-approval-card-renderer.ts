@@ -8,16 +8,18 @@ import {
 import type {
   ActionApprovalPresentation,
   ActionApprovalRequirement,
+  FormalTaskActionProposalContext,
   ActionProposalContext,
   PublicationTargetPolicy,
 } from "./action-proposal-repository.js";
+import type { FeishuTaskTargetPolicy } from "../formal-tasks/formal-task-repository.js";
 
 const FEISHU_INPUT_MAX_LENGTH = 1_000;
 
 export type ActionApprovalCardRenderInput = {
   context: ActionProposalContext;
   requirement: ActionApprovalRequirement;
-  policy: PublicationTargetPolicy;
+  policy: PublicationTargetPolicy | FeishuTaskTargetPolicy;
   presentation: ActionApprovalPresentation;
   reviewPublicOrigin?: string;
 };
@@ -97,7 +99,10 @@ export function renderActionApprovalCard(
       form_action_type: "submit",
       behaviors: [{ type: "callback", value: callbackValue("reject") }],
       confirm: {
-        title: { tag: "plain_text", content: "Reject publication" },
+        title: {
+          tag: "plain_text",
+          content: proposal.actionType === "create_feishu_task" ? "Reject task" : "Reject publication",
+        },
         text: {
           tag: "plain_text",
           content: "Confirm this rejection. The submitted reason will be recorded.",
@@ -106,10 +111,13 @@ export function renderActionApprovalCard(
     }),
   ];
   const metadata = [
-    "Iris / publication_approval",
+    proposal.actionType === "create_feishu_task"
+      ? "Iris / feishu_task_approval"
+      : "Iris / publication_approval",
     `Action: ${actionDescription(proposal.actionType)}`,
     `Risk: ${proposal.riskLevel}`,
     `Target: ${requireDisplayName(input.policy.displayName)}`,
+    ...formalTaskMetadata(input.context),
     ...(input.context.managedTarget === undefined ? [] : [
       `Managed page ID: ${requireDisplayName(input.context.managedTarget.managedPageId)}`,
       `[Target Wiki page](${requireSafeTargetUrl(input.context.managedTarget.targetSourceUri)})`,
@@ -128,7 +136,7 @@ export function renderActionApprovalCard(
   if (reviewUrl !== undefined) {
     bodyElements.push(component({
       tag: "markdown",
-      content: `[View full draft](${reviewUrl})`,
+      content: `[${proposal.actionType === "create_feishu_task" ? "View full task" : "View full draft"}](${reviewUrl})`,
     }));
   }
   bodyElements.push(component({
@@ -143,7 +151,12 @@ export function renderActionApprovalCard(
     schema: "2.0",
     header: {
       template: proposal.riskLevel === "high" ? "red" : "orange",
-      title: { tag: "plain_text", content: "Approve knowledge publication" },
+      title: {
+        tag: "plain_text",
+        content: proposal.actionType === "create_feishu_task"
+          ? "Approve Feishu task"
+          : "Approve knowledge publication",
+      },
     },
     body: { elements: bodyElements },
   };
@@ -173,6 +186,7 @@ function assertExactBinding(input: ActionApprovalCardRenderInput): void {
     input.policy.id !== proposal.targetPolicyId ||
     input.policy.version !== proposal.targetPolicyVersion ||
     !input.policy.enabled ||
+    !policyMatchesProposal(input) ||
     (proposal.actionType === "publish_knowledge_draft" && input.context.managedTarget !== undefined) ||
     (proposal.actionType === "update_knowledge_publication" && input.context.managedTarget === undefined)
   ) {
@@ -180,10 +194,40 @@ function assertExactBinding(input: ActionApprovalCardRenderInput): void {
   }
 }
 
+function policyMatchesProposal(input: ActionApprovalCardRenderInput): boolean {
+  if (isFormalTaskActionProposalContext(input.context)) {
+    return "sourceGroupId" in input.policy &&
+      input.policy.sourceGroupId === input.context.formalTask.sourceGroupId &&
+      input.policy.allowedAssigneeOpenIds.includes(input.context.formalTask.assigneeOpenId) &&
+      input.context.formalTask.assigneeOpenId === input.presentation.recipientOpenId;
+  }
+  return "spaceId" in input.policy;
+}
+
+function formalTaskMetadata(context: ActionProposalContext): string[] {
+  if (!isFormalTaskActionProposalContext(context)) return [];
+  return [
+    `Task title: ${requireDisplayName(context.formalTask.title)}`,
+    `Assignee: ${requireDisplayName(context.formalTask.assigneeOpenId)}`,
+    `Due: ${context.formalTask.dueAt?.toISOString() ?? "None"}`,
+    `Reminder: ${context.formalTask.reminderMinutes === undefined
+      ? "None"
+      : `${context.formalTask.reminderMinutes} minutes`}`,
+  ];
+}
+
+function isFormalTaskActionProposalContext(
+  context: ActionProposalContext,
+): context is FormalTaskActionProposalContext {
+  return context.proposal.subjectType === "formal_task_draft";
+}
+
 function actionDescription(actionType: ActionProposalContext["proposal"]["actionType"]): string {
   return actionType === "publish_knowledge_draft"
     ? "Publish new Wiki page"
-    : "Replace the single managed body block on existing Wiki page";
+    : actionType === "update_knowledge_publication"
+      ? "Replace the single managed body block on existing Wiki page"
+      : "Create one Feishu task";
 }
 
 function requireSafeTargetUrl(value: string): string {

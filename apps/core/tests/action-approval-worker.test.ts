@@ -5,7 +5,11 @@ import {
 } from "../src/action-approvals/action-approval-worker.js";
 import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import type {
+  ApplyActionProposalActionResult,
   ActionApprovalDeliveryContext,
+  FormalTaskActionProposalContext,
+  KnowledgeActionProposalContext,
+  PublicationTargetPolicy,
 } from "../src/action-approvals/action-proposal-repository.js";
 import {
   ActionProposalAuthorizationError,
@@ -71,6 +75,23 @@ describe("ActionApprovalWorker", () => {
         action: "approve",
       }),
     }));
+  });
+
+  it("requires current source-group membership before applying an exact-assignee task approval", async () => {
+    const harness = createHarness({
+      getContext: async () => taskContext(),
+      preflight: async () => ({ sourceGroupId: "oc_source" }),
+    });
+
+    await expect(harness.worker.processActionApproval(job())).resolves.toEqual({
+      status: "applied",
+      code: "action_approval_applied",
+    });
+    expect(harness.membershipChecker.isCurrentMember).toHaveBeenCalledWith({
+      chatId: "oc_source",
+      openId: "ou_owner",
+    });
+    expect(harness.repository.applyApprovalAction).toHaveBeenCalledOnce();
   });
 
   it("maps a missing required review to a stable denial without mutation", async () => {
@@ -351,7 +372,17 @@ function job(overrides: Partial<ActionProposalApprovalInteractionJob> = {}): Act
   };
 }
 
-function context(overrides: { proposalVersion?: number } = {}): ActionApprovalDeliveryContext {
+type KnowledgeApprovalDeliveryContext = ActionApprovalDeliveryContext & {
+  context: KnowledgeActionProposalContext;
+  policy: PublicationTargetPolicy;
+};
+
+type TaskApprovalDeliveryContext = ActionApprovalDeliveryContext & {
+  context: FormalTaskActionProposalContext;
+  policy: ActionApprovalDeliveryContext["policy"] & { sourceGroupId: string };
+};
+
+function context(overrides: { proposalVersion?: number } = {}): KnowledgeApprovalDeliveryContext {
   const createdAt = new Date("2026-07-20T00:00:00.000Z");
   const requirement = {
     id: "requirement-1",
@@ -415,7 +446,48 @@ function context(overrides: { proposalVersion?: number } = {}): ActionApprovalDe
   };
 }
 
-function mutation(outcome: "applied" | "already_applied", action: "approve" | "request_revision" | "reject" = "approve") {
+function taskContext(): TaskApprovalDeliveryContext {
+  const value = context();
+  return {
+    ...value,
+    context: {
+      proposal: {
+        ...value.context.proposal,
+        actionType: "create_feishu_task",
+        subjectType: "formal_task_draft",
+      },
+      requirements: value.context.requirements,
+      approvals: [],
+      formalTask: {
+        sourceGroupId: "oc_source",
+        title: "Complete governed pilot",
+        description: "Archive exact acceptance evidence.",
+        assigneeOpenId: "ou_owner",
+        dueAt: new Date("2026-07-22T14:00:00.000Z"),
+        reminderMinutes: 30,
+        taskSpecHash: "a".repeat(64),
+        groupConfirmationPresentationId: "task-confirmation-1",
+      },
+    },
+    policy: {
+      id: "policy-1",
+      sourceGroupId: "oc_source",
+      displayName: "Formal task pilot",
+      allowedAssigneeOpenIds: ["ou_owner"],
+      maxDueHorizonDays: 30,
+      enabled: true,
+      version: 3,
+      createdAt: value.policy.createdAt,
+      updatedAt: value.policy.updatedAt,
+    },
+    sourceGroupId: "oc_source",
+  };
+}
+
+function mutation(
+  outcome: "applied" | "already_applied",
+  action: "approve" | "request_revision" | "reject" = "approve",
+): ApplyActionProposalActionResult {
   return {
     outcome,
     action,

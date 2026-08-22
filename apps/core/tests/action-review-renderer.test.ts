@@ -83,6 +83,42 @@ describe("action review renderer", () => {
     expect(html).toContain('href="https://example.test/wiki/managed-1"');
   });
 
+  it("renders the full exact formal-task specification for assignee review", () => {
+    const context = {
+      proposalId: "task-proposal-1",
+      proposalVersion: 1,
+      actionType: "create_feishu_task",
+      actionTargetFingerprint: "c".repeat(64),
+      draftId: "formal-task-1",
+      subjectRevision: 2,
+      subjectVersion: 4,
+      title: "Ship <pilot>",
+      description: "Archive & verify the exact acceptance evidence.",
+      taskSpecHash: "d".repeat(64),
+      assigneeOpenId: "ou_assignee",
+      dueAt: new Date("2026-08-24T06:00:00.000Z"),
+      reminderMinutes: 30,
+      sourceGroupId: "oc_pilot",
+      riskLevel: "high",
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 3,
+      targetDisplayName: "Pilot tasks",
+      requirements: [{ kind: "designated_owner", state: "pending" }],
+    } as unknown as ActionReviewContext;
+
+    const html = renderActionReviewPage({ context, csrfToken: "csrf-task" });
+
+    expect(html).toContain("Create one Feishu task");
+    expect(html).toContain("Ship &lt;pilot&gt;");
+    expect(html).toContain("Archive &amp; verify the exact acceptance evidence.");
+    expect(html).toContain("ou_assignee");
+    expect(html).toContain("2026-08-24T06:00:00.000Z");
+    expect(html).toContain("30 minutes");
+    expect(html).toContain("task-policy-1 / 3");
+    expect(html).toContain("d".repeat(64));
+    expect(html).toContain("c".repeat(64));
+  });
+
   it("uses semantic, local-only markup that keeps long values readable on narrow screens", () => {
     const html = renderActionReviewPage({ context: reviewContext(), csrfToken: "csrf-1" });
 
@@ -119,7 +155,7 @@ describe("action review renderer", () => {
   });
 });
 
-function reviewContext(): ActionReviewContext {
+function reviewContext(): ActionReviewContext & { actionType: "publish_knowledge_draft" } {
   return {
     proposalId: "proposal-1",
     proposalVersion: 7,

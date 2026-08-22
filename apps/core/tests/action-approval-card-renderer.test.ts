@@ -10,6 +10,7 @@ import type {
   ActionProposalContext,
   PublicationTargetPolicy,
 } from "../src/action-approvals/action-proposal-repository.js";
+import type { FeishuTaskTargetPolicy } from "../src/formal-tasks/formal-task-repository.js";
 
 describe("renderActionApprovalCard", () => {
   it("renders a bounded, version-bound approval card without draft content", () => {
@@ -83,6 +84,22 @@ describe("renderActionApprovalCard", () => {
     expect(withOrigin.json).toContain(
       "https://iris.quello.cn/review/action-proposals/proposal-1",
     );
+  });
+
+  it("renders a bounded exact-assignee Feishu-task approval card", () => {
+    const rendered = renderActionApprovalCard(taskInput() as never);
+
+    expect(rendered.card).toMatchObject({
+      header: { title: { content: "Approve Feishu task" } },
+    });
+    expect(rendered.json).toContain("Create one Feishu task");
+    expect(rendered.json).toContain("Task title: Complete governed pilot");
+    expect(rendered.json).toContain("Assignee: ou_assignee");
+    expect(rendered.json).toContain("Due: 2026-08-24T06:00:00.000Z");
+    expect(rendered.json).toContain("Reminder: 30 minutes");
+    expect(rendered.json).toContain("Target: Pilot tasks");
+    expect(rendered.json).toContain("View full task");
+    expect(rendered.json).not.toContain("full task description must stay on OAuth review");
   });
 
   it.each([
@@ -193,6 +210,80 @@ function input(overrides: InputOverrides = {}) {
     ...(overrides.reviewPublicOrigin === undefined
       ? {}
       : { reviewPublicOrigin: overrides.reviewPublicOrigin }),
+  };
+}
+
+function taskInput() {
+  const at = new Date("2026-08-22T00:00:00.000Z");
+  const requirement: ActionApprovalRequirement = {
+    id: "task-requirement-1",
+    proposalId: "task-proposal-1",
+    kind: "designated_owner",
+    roleRefType: "feishu_user",
+    roleRef: "ou_assignee",
+    targetPolicyId: "task-policy-1",
+    targetPolicyVersion: 3,
+    state: "pending",
+    version: 1,
+    createdAt: at,
+    updatedAt: at,
+  };
+  const policy: FeishuTaskTargetPolicy = {
+    id: "task-policy-1",
+    sourceGroupId: "oc_pilot",
+    displayName: "Pilot tasks",
+    allowedAssigneeOpenIds: ["ou_assignee"],
+    maxDueHorizonDays: 30,
+    enabled: true,
+    version: 3,
+    createdAt: at,
+    updatedAt: at,
+  };
+  return {
+    context: {
+      proposal: {
+        id: "task-proposal-1",
+        actionType: "create_feishu_task",
+        subjectType: "formal_task_draft",
+        subjectId: "formal-task-1",
+        subjectRevision: 2,
+        subjectVersion: 4,
+        targetPolicyId: policy.id,
+        targetPolicyVersion: policy.version,
+        riskLevel: "high",
+        status: "pending_approval",
+        operationKey: "create-feishu-task:formal-task-1:2:3",
+        version: 1,
+        createdAt: at,
+        updatedAt: at,
+      },
+      requirements: [requirement],
+      approvals: [],
+      formalTask: {
+        sourceGroupId: "oc_pilot",
+        title: "Complete governed pilot",
+        description: "full task description must stay on OAuth review",
+        assigneeOpenId: "ou_assignee",
+        dueAt: new Date("2026-08-24T06:00:00.000Z"),
+        reminderMinutes: 30,
+        taskSpecHash: "a".repeat(64),
+        groupConfirmationPresentationId: "task-confirmation-1",
+      },
+    },
+    requirement,
+    policy,
+    presentation: {
+      id: "task-approval-presentation-1",
+      proposalId: "task-proposal-1",
+      requirementId: requirement.id,
+      proposalVersion: 1,
+      recipientOpenId: "ou_assignee",
+      state: "pending_send",
+      operationKey: "task-approval-presentation",
+      version: 1,
+      createdAt: at,
+    },
+    reviewPublicOrigin: "https://iris.quello.cn/",
   };
 }
 

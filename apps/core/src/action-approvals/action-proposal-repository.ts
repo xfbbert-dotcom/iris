@@ -9,6 +9,7 @@ import type {
   FeishuTaskTargetPolicy,
   FormalTaskRiskLevel,
 } from "../formal-tasks/formal-task-repository.js";
+import type { FormalTaskDraftStatus } from "../formal-tasks/formal-task-draft.js";
 
 import type {
   ActionApprovalRequirementKind,
@@ -135,41 +136,55 @@ export type FormalTaskActionProposalContext = Extract<
   { proposal: { subjectType: "formal_task_draft" } }
 >;
 
-export type ActionReviewContext = {
+type ActionReviewContextBase = {
   proposalId: string;
   proposalVersion: number;
-  actionType: ActionProposalActionType;
   actionTargetFingerprint: string;
   draftId: string;
   subjectRevision: number;
   subjectVersion: number;
   title: string;
-  content: string;
   contentHash: string;
   riskLevel: KnowledgeDraftRiskLevel;
   targetPolicyId: string;
   targetPolicyVersion: number;
   targetDisplayName: string;
-  managedTarget?: {
-    managedPageId: string;
-    managedPageVersion: number;
-    documentSourceId: string;
-    targetSourceUri: string;
-    targetSnapshotId: string;
-    targetSnapshotHash: string;
-    conflictCandidateId: string;
-    conflictCandidateVersion: number;
-    remoteDocumentToken: string;
-    managedBodyBlockId: string;
-    expectedRemoteRevisionId: string;
-    currentBodyContentHash: string;
-    authorizationGroupId: string;
-  };
   requirements: Array<{
     kind: ActionApprovalRequirementKind;
     state: "pending" | "satisfied" | "invalidated";
   }>;
 };
+
+export type ActionReviewContext =
+  | (ActionReviewContextBase & {
+      actionType: "publish_knowledge_draft" | "update_knowledge_publication";
+      content: string;
+      managedTarget?: {
+        managedPageId: string;
+        managedPageVersion: number;
+        documentSourceId: string;
+        targetSourceUri: string;
+        targetSnapshotId: string;
+        targetSnapshotHash: string;
+        conflictCandidateId: string;
+        conflictCandidateVersion: number;
+        remoteDocumentToken: string;
+        managedBodyBlockId: string;
+        expectedRemoteRevisionId: string;
+        currentBodyContentHash: string;
+        authorizationGroupId: string;
+      };
+    })
+  | (ActionReviewContextBase & {
+      actionType: "create_feishu_task";
+      description: string;
+      taskSpecHash: string;
+      assigneeOpenId: string;
+      dueAt?: Date;
+      reminderMinutes?: 0 | 30 | 60 | 1440;
+      sourceGroupId: string;
+      managedTarget?: never;
+    });
 
 export type RecordActionReviewAttestationInput = {
   proposalId: string;
@@ -225,9 +240,9 @@ export type ActionApprovalSendClaim = {
 };
 
 export type ActionApprovalDeliveryContext = {
-  context: KnowledgeActionProposalContext;
+  context: ActionProposalContext;
   requirement: ActionApprovalRequirement;
-  policy: PublicationTargetPolicy;
+  policy: PublicationTargetPolicy | FeishuTaskTargetPolicy;
   presentation: ActionApprovalPresentation;
   sourceGroupId?: string;
 };
@@ -426,7 +441,7 @@ export type ApplyActionProposalActionResult = {
   outcome: "applied" | "already_applied";
   action: ApplyActionProposalActionInput["action"];
   proposal: ActionProposal;
-  draftStatus: KnowledgeDraftStatus;
+  draftStatus: KnowledgeDraftStatus | FormalTaskDraftStatus;
   draftVersion: number;
 };
 
@@ -446,7 +461,7 @@ export type ApplyActionProposalGovernanceDispositionResult = {
   outcome: "applied" | "already_applied";
   action: ApplyActionProposalGovernanceDispositionInput["action"];
   proposal: ActionProposal;
-  draftStatus: KnowledgeDraftStatus;
+  draftStatus: KnowledgeDraftStatus | FormalTaskDraftStatus;
   draftVersion: number;
 };
 

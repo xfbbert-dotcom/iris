@@ -972,6 +972,133 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       task_group_confirmation_presentation_id: confirmationPresentationId,
     }] });
 
+    await expect(repository.getAuthorizedReviewContext({
+      proposalId: proposalInput.proposalId,
+      actorOpenId: `ou_not_assignee_${suffix}`,
+    })).resolves.toBeUndefined();
+    const reviewContext = await repository.getAuthorizedReviewContext({
+      proposalId: proposalInput.proposalId,
+      actorOpenId: assigneeOpenId,
+    });
+    expect(reviewContext).toMatchObject({
+      proposalId: proposalInput.proposalId,
+      proposalVersion: 1,
+      actionType: "create_feishu_task",
+      draftId: draft.id,
+      subjectRevision: confirmed.currentRevisionNumber,
+      subjectVersion: confirmed.version,
+      title: "Complete governed pilot",
+      description: "Archive exact acceptance evidence.",
+      contentHash: draft.currentTaskSpecHash,
+      taskSpecHash: draft.currentTaskSpecHash,
+      assigneeOpenId,
+      dueAt: new Date("2026-07-22T14:00:00.000Z"),
+      reminderMinutes: 30,
+      sourceGroupId: taskGroupId,
+      targetPolicyId: policy.id,
+      targetPolicyVersion: policy.version,
+      targetDisplayName: policy.displayName,
+      requirements: [{ kind: "designated_owner", state: "pending" }],
+    });
+    expect(reviewContext?.actionTargetFingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    await expect(repository.recordReviewAttestation({
+      proposalId: proposalInput.proposalId,
+      actorOpenId: assigneeOpenId,
+      expectedProposalVersion: 1,
+      expectedSubjectRevision: confirmed.currentRevisionNumber,
+      expectedSubjectVersion: confirmed.version,
+      expectedContentHash: draft.currentTaskSpecHash,
+      expectedActionTargetFingerprint: reviewContext!.actionTargetFingerprint,
+      sessionIdHash: "7".repeat(64),
+      operationKey: `task-review-attestation:${label}:${suffix}`,
+      at,
+    })).resolves.toEqual({ outcome: "applied" });
+
+    const [approvalPresentation] = await repository.listApprovalPresentations({
+      proposalId: proposalInput.proposalId,
+      limit: 10,
+    });
+    expect(approvalPresentation).toMatchObject({
+      proposalVersion: 1,
+      recipientOpenId: assigneeOpenId,
+      state: "pending_send",
+    });
+    await pool.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'failed', error_code = 'test_isolation', updated_at = $2
+       WHERE presentation_id <> $1 AND state = 'pending'`,
+      [approvalPresentation!.id, at],
+    );
+    const taskApprovalWorkerId = `task-approval-worker-${suffix}`;
+    const taskApprovalClaim = await repository.claimApprovalPresentationSend({
+      workerId: taskApprovalWorkerId,
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+    expect(taskApprovalClaim?.presentation.id).toBe(approvalPresentation!.id);
+    await repository.beginApprovalExternalAttempt({
+      presentationId: approvalPresentation!.id,
+      workerId: taskApprovalWorkerId,
+      at,
+    });
+    await repository.completeApprovalPresentationSend({
+      presentationId: approvalPresentation!.id,
+      workerId: taskApprovalWorkerId,
+      messageId: `om-task-approval-${suffix}`,
+      at,
+    });
+    await expect(repository.getApprovalDeliveryContext(approvalPresentation!.id)).resolves.toMatchObject({
+      context: {
+        proposal: { actionType: "create_feishu_task", subjectType: "formal_task_draft" },
+        formalTask: { assigneeOpenId, taskSpecHash: draft.currentTaskSpecHash },
+      },
+      requirement: { kind: "designated_owner", roleRef: assigneeOpenId },
+      policy: { id: policy.id, sourceGroupId: taskGroupId, enabled: true },
+      sourceGroupId: taskGroupId,
+    });
+    const approvalInput = {
+      proposalId: proposalInput.proposalId,
+      requirementId: approvalPresentation!.requirementId,
+      expectedProposalVersion: 1,
+      expectedSubjectRevision: confirmed.currentRevisionNumber,
+      expectedSubjectVersion: confirmed.version,
+      expectedTargetPolicyVersion: policy.version,
+      sourcePresentationId: approvalPresentation!.id,
+      callbackEventId: `task-approval-callback-${suffix}`,
+      actorOpenId: assigneeOpenId,
+      action: "approve" as const,
+      requireReviewAttestation: true,
+      operationKey: `task-approval:${label}:${suffix}`,
+      at,
+    };
+    await expect(repository.preflightApprovalAction(approvalInput)).resolves.toEqual({
+      sourceGroupId: taskGroupId,
+    });
+    await expect(repository.applyApprovalAction(approvalInput)).resolves.toMatchObject({
+      outcome: "applied",
+      action: "approve",
+      proposal: { status: "approved", version: 3 },
+      draftStatus: "pending_review",
+      draftVersion: confirmed.version,
+    });
+    await expect(repository.applyApprovalAction(approvalInput)).resolves.toMatchObject({
+      outcome: "already_applied",
+      proposal: { status: "approved", version: 3 },
+      draftStatus: "pending_review",
+      draftVersion: confirmed.version,
+    });
+    await expect(repository.getProposal(proposalInput.proposalId)).resolves.toMatchObject({
+      proposal: { status: "approved", version: 3, subjectVersion: confirmed.version },
+      requirements: [{ state: "satisfied", satisfiedActorOpenId: assigneeOpenId }],
+      approvals: [{ actorOpenId: assigneeOpenId }],
+    });
+    await pool.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'failed', error_code = 'test_isolation', updated_at = $2
+       WHERE presentation_id = $1`,
+      [approvalPresentation!.id, at],
+    );
+
     const resultUpdateWorker = `task-confirmation-result-worker-${suffix}`;
     const resultUpdateClaim = await cardRepository.claimPresentationSend({
       workerId: resultUpdateWorker,
@@ -1077,13 +1204,52 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       draftVersion: reconfirmed.version,
     });
     await expect(repository.getProposal(proposalInput.proposalId)).resolves.toMatchObject({
-      proposal: { status: "cancelled", version: 2 },
+      proposal: { status: "cancelled", version: 4 },
       requirements: [{ state: "invalidated" }],
     });
     await expect(pool.query(
       `SELECT state FROM action_approval_presentations WHERE proposal_id = $1`,
       [proposalInput.proposalId],
-    )).resolves.toMatchObject({ rows: [{ state: "superseded" }] });
+    )).resolves.toMatchObject({ rows: [{ state: "closed" }] });
+
+    const rejectedProposal = (await repository.createProposal({
+      proposalId: `proposal-${label}-reject-${suffix}`,
+      actionType: "create_feishu_task",
+      draftId: reconfirmed.id,
+      expectedRevision: reconfirmed.currentRevisionNumber,
+      expectedDraftVersion: reconfirmed.version,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${label}:reject:${suffix}`,
+      at: plusSeconds(4),
+    })).proposal;
+    const governanceRejection = {
+      proposalId: rejectedProposal.id,
+      expectedProposalVersion: rejectedProposal.version,
+      expectedSubjectRevision: reconfirmed.currentRevisionNumber,
+      expectedSubjectVersion: reconfirmed.version,
+      action: "reject" as const,
+      reason: "Pilot acceptance evidence is incomplete.",
+      operationKey: `task-governance-reject:${label}:${suffix}`,
+      operator: "iris-admin",
+      at: plusSeconds(5),
+    };
+    await expect(repository.applyGovernanceDisposition(governanceRejection)).resolves.toMatchObject({
+      outcome: "applied",
+      action: "reject",
+      proposal: { status: "cancelled", version: 2 },
+      draftStatus: "rejected",
+      draftVersion: reconfirmed.version + 1,
+    });
+    await expect(repository.applyGovernanceDisposition(governanceRejection)).resolves.toMatchObject({
+      outcome: "already_applied",
+      draftStatus: "rejected",
+      draftVersion: reconfirmed.version + 1,
+    });
+    await expect(pool.query(
+      `SELECT count(*)::int AS count FROM action_approvals WHERE proposal_id = $1`,
+      [rejectedProposal.id],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] });
   });
 
   it("keeps high risk pending for an explicitly bound authorized owner", async () => {

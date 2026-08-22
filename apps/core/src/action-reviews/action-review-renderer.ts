@@ -27,24 +27,32 @@ export function renderActionReviewPage(input: {
     .join("");
   const actionDescription = context.actionType === "publish_knowledge_draft"
     ? "Publish new Wiki page"
-    : "Replace the single managed body block on existing Wiki page";
+    : context.actionType === "update_knowledge_publication"
+      ? "Replace the single managed body block on existing Wiki page"
+      : "Create one Feishu task";
   const managedTargetDetails = context.managedTarget === undefined
     ? ""
     : renderManagedTargetDetails(context.managedTarget);
+  const reviewedBody = context.actionType === "create_feishu_task"
+    ? context.description
+    : context.content;
+  const taskDetails = context.actionType === "create_feishu_task"
+    ? renderFormalTaskDetails(context)
+    : "";
 
   return renderDocument({
     pageTitle: "完整正文审阅",
     body: `
       <header>
         <div class="page-width">
-          <p class="eyebrow">待审批知识草稿</p>
+          <p class="eyebrow">${context.actionType === "create_feishu_task" ? "待审批正式任务" : "待审批知识草稿"}</p>
           <h1>${escapeHtml(context.title)}</h1>
         </div>
       </header>
       <main class="page-width review-layout">
         <article aria-labelledby="draft-body-heading">
-          <h2 id="draft-body-heading">完整正文</h2>
-          <pre class="draft-content">${escapeHtml(context.content)}</pre>
+          <h2 id="draft-body-heading">${context.actionType === "create_feishu_task" ? "完整任务描述" : "完整正文"}</h2>
+          <pre class="draft-content">${escapeHtml(reviewedBody)}</pre>
         </article>
         <aside aria-label="审阅摘要">
           <h2>审阅摘要</h2>
@@ -70,6 +78,7 @@ export function renderActionReviewPage(input: {
             <dd class="value-wrap">${escapeHtml(context.targetDisplayName)}</dd>
             <dt>目标策略</dt>
             <dd class="value-wrap">${escapeHtml(context.targetPolicyId)} / ${escapeHtml(context.targetPolicyVersion)}</dd>
+            ${taskDetails}
             ${managedTargetDetails}
             <dt>审批要求</dt>
             <dd>
@@ -83,6 +92,20 @@ export function renderActionReviewPage(input: {
         </aside>
       </main>`,
   });
+}
+
+function renderFormalTaskDetails(
+  context: Extract<ActionReviewContext, { actionType: "create_feishu_task" }>,
+): string {
+  return `
+            <dt>受派人</dt>
+            <dd class="value-wrap">${escapeHtml(context.assigneeOpenId)}</dd>
+            <dt>截止时间</dt>
+            <dd>${escapeHtml(context.dueAt?.toISOString() ?? "None")}</dd>
+            <dt>提醒</dt>
+            <dd>${escapeHtml(context.reminderMinutes === undefined ? "None" : `${context.reminderMinutes} minutes`)}</dd>
+            <dt>任务规范哈希</dt>
+            <dd class="value-wrap">${escapeHtml(context.taskSpecHash)}</dd>`;
 }
 
 export function renderActionReviewRecordedPage(): string {
