@@ -15,10 +15,97 @@ import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
 import type { ChatKnowledgeDraftCommand } from "../src/knowledge-governance/chat-knowledge-draft-command.js";
 import { ChatKnowledgeDraftModelUnavailableError } from "../src/knowledge-governance/chat-knowledge-draft-generator.js";
+import type { ChatFormalTaskDraftCommand } from
+  "../src/formal-tasks/chat-formal-task-draft-command.js";
 
 type ReplyTextInput = Parameters<FeishuMessageReplier["replyText"]>[0];
 
 describe("FeishuMentionAnswerResponder", () => {
+  it.each([
+    "请给 @_user_2 创建一个飞书任务草稿",
+    "请给 @_user_2 创建一个飞书任务",
+  ])("routes an explicit governed task request with one exact mentioned assignee before answering: %s", async (taskRequestText) => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const formalTaskDraftCommand = {
+      execute: vi.fn<ChatFormalTaskDraftCommand["execute"]>(async () => ({
+        status: "created",
+        draftId: "formal-task-draft-1",
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-task" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      formalTaskDraftCommand,
+      replier,
+    });
+    const observedAt = new Date("2026-08-22T06:00:00.000Z");
+
+    await expect(responder.maybeRespond({
+      messageId: "om_create_task",
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      senderOpenId: "ou_requester",
+      text: `@_user_1 ${taskRequestText}`,
+      mentions: [
+        { key: "@_user_1", openId: "ou_iris", name: "Iris" },
+        { key: "@_user_2", openId: "ou_assignee", name: "同事" },
+      ],
+      observedAt,
+    })).resolves.toEqual({ status: "replied", replyMessageId: "reply-task" });
+
+    expect(formalTaskDraftCommand.execute).toHaveBeenCalledWith({
+      messageId: "om_create_task",
+      chatId: "oc_pilot",
+      requesterOpenId: "ou_requester",
+      requestText: taskRequestText,
+      assigneeOpenIds: ["ou_assignee"],
+      observedAt,
+    });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "任务草稿已生成，尚未创建或分配飞书任务。请在群确认卡片中核对。",
+    }));
+  });
+
+  it.each([
+    "@_user_1 飞书任务是什么？",
+    "@_user_1 不要创建任务草稿",
+    "@_user_1 how do I create a Feishu task?",
+  ])("keeps task questions and negated task commands on the answer path: %s", async (text) => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "A normal answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const formalTaskDraftCommand = {
+      execute: vi.fn<ChatFormalTaskDraftCommand["execute"]>(),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      formalTaskDraftCommand,
+      replier: { replyText: vi.fn(async () => ({ replyMessageId: "reply-normal" })) },
+    });
+
+    await responder.maybeRespond({
+      messageId: `om_task_question_${text.length}`,
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      senderOpenId: "ou_requester",
+      text,
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(formalTaskDraftCommand.execute).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledOnce();
+  });
+
   it("handles an explicit knowledge-draft command before ordinary answer drafting", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const answerReplyDeliveryService = { respond: vi.fn() };

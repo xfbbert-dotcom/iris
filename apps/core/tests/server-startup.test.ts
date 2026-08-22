@@ -27,6 +27,7 @@ import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
 import type { KnowledgeDraftRuntime } from "../src/runtime/knowledge-draft-runtime.js";
+import type { FormalTaskRuntime } from "../src/runtime/formal-task-runtime.js";
 import type { AnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
 import type { KnowledgeConflictRuntime } from "../src/runtime/knowledge-conflict-runtime.js";
 import type { AnswerSourcePermissionVerifier } from "../src/answer-replies/answer-source-permission-verifier.js";
@@ -99,6 +100,9 @@ describe("Core server startup", () => {
       chatKnowledgeDraftGenerator: {
         generate: vi.fn(async () => ({ status: "no_context" as const })),
       },
+      chatFormalTaskDraftGenerator: {
+        generate: vi.fn(async () => ({ status: "no_context" as const })),
+      },
       close: vi.fn(async () => undefined),
     };
     const knowledgeDraftRuntime: KnowledgeDraftRuntime = {
@@ -108,6 +112,12 @@ describe("Core server startup", () => {
       close: vi.fn(async () => undefined),
     };
     const knowledgeCardRuntime = fakeKnowledgeCardRuntime();
+    const formalTaskRuntime: FormalTaskRuntime = {
+      repository: {} as FormalTaskRuntime["repository"],
+      canCreateDraft: vi.fn(() => true),
+      getStatus: vi.fn(),
+      close: vi.fn(async () => undefined),
+    };
     const actionApprovalRuntime = fakeActionApprovalRuntime();
     let capturedAnswerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
     const createEventWorkerRuntime = vi.fn<NonNullable<
@@ -124,6 +134,7 @@ describe("Core server startup", () => {
       createConversationStateInspectionRuntime: () => undefined,
       createProactiveSignalRuntime: () => undefined,
       createKnowledgeDraftRuntime: () => knowledgeDraftRuntime,
+      createFormalTaskRuntime: () => formalTaskRuntime,
       createKnowledgeCardRuntime: () => knowledgeCardRuntime,
       createActionApprovalRuntime: () => actionApprovalRuntime,
       createActionReviewRuntime: () => undefined,
@@ -137,10 +148,65 @@ describe("Core server startup", () => {
       answerDraftOrchestrator: answerDraftRuntime.answerDraftOrchestrator,
       answerSourcePermissionVerifier: answerDraftRuntime.answerSourcePermissionVerifier,
       knowledgeDraftCommand: expect.objectContaining({ execute: expect.any(Function) }),
+      formalTaskDraftCommand: expect.objectContaining({ execute: expect.any(Function) }),
     }));
     expect(capturedAnswerSourcePermissionVerifier).toBe(
       answerDraftRuntime.answerSourcePermissionVerifier,
     );
+    await app.close();
+  });
+
+  it("projects content-free formal task draft status and readiness while creation is disabled", async () => {
+    const formalTaskRuntime: FormalTaskRuntime = {
+      repository: {} as FormalTaskRuntime["repository"],
+      canCreateDraft: vi.fn(() => false),
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        companyCreationEnabled: false,
+        counts: {
+          pending_confirmation: 2,
+          pending_review: 1,
+          needs_revision: 3,
+          rejected: 4,
+          created: 5,
+        },
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const app = await buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createFormalTaskRuntime: () => formalTaskRuntime,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createKnowledgeCardRuntime: () => undefined,
+      createActionApprovalRuntime: () => undefined,
+      createActionReviewRuntime: () => undefined,
+      createProactiveSignalPlannerRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime: () => undefined,
+    });
+
+    const status = (await app.inject({ method: "GET", url: "/internal/status" })).json();
+    expect(status.components.formalTaskDrafts).toEqual({
+      status: "disabled",
+      ok: true,
+      enabled: false,
+      companyCreationEnabled: false,
+      counts: {
+        pending_confirmation: 2,
+        pending_review: 1,
+        needs_revision: 3,
+        rejected: 4,
+        created: 5,
+      },
+    });
+
+    const readiness = (await app.inject({ method: "GET", url: "/internal/readiness" })).json();
+    expect(readiness.checks).toContainEqual(expect.objectContaining({
+      id: "formalTaskDrafts",
+      status: "pass",
+      detail: "Formal task draft generation is safely disabled.",
+    }));
     await app.close();
   });
 

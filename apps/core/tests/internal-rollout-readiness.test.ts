@@ -4,6 +4,31 @@ import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollo
 import type { EnvLike } from "../src/config/env.js";
 
 describe("buildInternalRolloutReadinessReport", () => {
+  it("reports formal task draft generation as safely disabled or readable without content", () => {
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      formalTaskDraftStatus: {
+        ok: true,
+        enabled: false,
+        companyCreationEnabled: false,
+        counts: {
+          pending_confirmation: 0,
+          pending_review: 0,
+          needs_revision: 0,
+          rejected: 0,
+          created: 0,
+        },
+      },
+    })).formalTaskDrafts).toMatchObject({ status: "pass" });
+
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      formalTaskDraftStatus: {
+        ok: false,
+        enabled: true,
+        companyCreationEnabled: true,
+      },
+    })).formalTaskDrafts).toMatchObject({ status: "fail" });
+  });
+
   it("requires readable cross-group grant facts when live document status is supplied", () => {
     const healthy = buildInternalRolloutReadinessReport(readyRolloutEnv(), {
       documentSyncStatus: {

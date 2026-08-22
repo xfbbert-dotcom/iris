@@ -114,6 +114,10 @@ import {
   type ChatKnowledgeDraftGenerator,
 } from "../knowledge-governance/chat-knowledge-draft-generator.js";
 import {
+  createChatFormalTaskDraftGenerator,
+  type ChatFormalTaskDraftGenerator,
+} from "../formal-tasks/chat-formal-task-draft-generator.js";
+import {
   createKnowledgeConflictAnswerProvider,
   type KnowledgeConflictAnswerProvider,
 } from "../knowledge-conflicts/knowledge-conflict-answer-provider.js";
@@ -132,6 +136,7 @@ export type AnswerDraftRuntime = {
     >>;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   chatKnowledgeDraftGenerator?: ChatKnowledgeDraftGenerator;
+  chatFormalTaskDraftGenerator?: ChatFormalTaskDraftGenerator;
   groupMemoryService?: GroupMemoryService;
   close(): Promise<void>;
 };
@@ -472,6 +477,13 @@ export function createAnswerDraftRuntime({
     answerDraftOrchestrator,
     answerSourcePermissionVerifier,
     chatKnowledgeDraftGenerator: createChatKnowledgeDraftGenerator({
+      repository: conversationMessages,
+      model,
+      canReadGroupContext: (groupId) => (
+        runtimeController?.canReadGroupContext?.(groupId) === true
+      ),
+    }),
+    chatFormalTaskDraftGenerator: createChatFormalTaskDraftGenerator({
       repository: conversationMessages,
       model,
       canReadGroupContext: (groupId) => (

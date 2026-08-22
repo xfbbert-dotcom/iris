@@ -873,6 +873,25 @@ describe("defaultMigrationsDir", () => {
     );
   });
 
+  it("backfills formal task draft generation off without overwriting an existing value", async () => {
+    const migrationName = "0057_governed_feishu_task_actions.sql";
+    const migrationPath = join(defaultMigrationsDir(), migrationName);
+    expect(existsSync(migrationPath)).toBe(true);
+    if (!existsSync(migrationPath)) return;
+
+    const normalized = (await readFile(migrationPath, "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("update runtime_control_state");
+    expect(normalized).toContain(
+      "capabilities = capabilities || '{\"generatetaskdrafts\":false}'::jsonb",
+    );
+    expect(normalized).toContain(
+      "where not (capabilities ? 'generatetaskdrafts')",
+    );
+  });
+
   it("includes durable group memories with same-group idempotency and message evidence", async () => {
     const migration = await readFile(
       join(defaultMigrationsDir(), "0017_group_memories.sql"),

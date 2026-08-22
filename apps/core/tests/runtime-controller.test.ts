@@ -75,6 +75,7 @@ describe("RuntimeController", () => {
     expect(controller.canReadDocuments()).toBe(false);
     expect(controller.canRetrieveKnowledgeBase()).toBe(false);
     expect(controller.canGenerateKnowledgeDrafts()).toBe(false);
+    expect(controller.canGenerateTaskDrafts()).toBe(false);
     expect(controller.canWriteKnowledgeBase()).toBe(false);
     expect(controller.canCallExternalTools()).toBe(false);
   });
@@ -244,5 +245,20 @@ describe("RuntimeController", () => {
     controller.setCapability("generateKnowledgeDrafts", false);
     expect(controller.canGenerateKnowledgeDrafts({ sourceGroupId: "chat-b" })).toBe(false);
     expect(controller.canGenerateKnowledgeDrafts({})).toBe(false);
+  });
+
+  it("gates formal task draft creation by its default-off capability and source group", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+
+    expect(controller.canGenerateTaskDrafts({ sourceGroupId: "chat-a" })).toBe(false);
+    controller.setCapability("generateTaskDrafts", true);
+    expect(controller.canGenerateTaskDrafts({ sourceGroupId: "chat-a" })).toBe(true);
+
+    controller.disableGroup("chat-a");
+    expect(controller.canGenerateTaskDrafts({ sourceGroupId: "chat-a" })).toBe(false);
+    expect(controller.canGenerateTaskDrafts({ sourceGroupId: "chat-b" })).toBe(true);
+
+    controller.disableGlobal();
+    expect(controller.canGenerateTaskDrafts({ sourceGroupId: "chat-b" })).toBe(false);
   });
 });

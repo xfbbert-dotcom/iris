@@ -135,6 +135,18 @@ type ManagedKnowledgeUpdateReadinessStatus = {
     reconciliationRequired: number;
   };
 };
+type FormalTaskDraftReadinessStatus = {
+  ok: boolean;
+  enabled: boolean;
+  companyCreationEnabled: boolean;
+  counts?: {
+    pending_confirmation: number;
+    pending_review: number;
+    needs_revision: number;
+    rejected: number;
+    created: number;
+  };
+};
 export type InternalRolloutReadinessContext = {
   documentSyncStatus?: {
     ok: boolean;
@@ -172,6 +184,7 @@ export type InternalRolloutReadinessContext = {
     running: boolean;
     migration0053Applied: boolean;
   };
+  formalTaskDraftStatus?: FormalTaskDraftReadinessStatus;
 };
 type CheckDefinition = Pick<InternalRolloutReadinessCheck, "id" | "title" | "envVars"> & {
   evaluate(env: EnvLike, context: InternalRolloutReadinessContext): CheckResult;
@@ -185,6 +198,33 @@ const checkDefinitions: CheckDefinition[] = [
     evaluate(env) {
       readDatabaseConfig(env);
       return pass("DATABASE_URL is a valid Postgres URL.");
+    },
+  },
+  {
+    id: "formalTaskDrafts",
+    title: "Governed formal task drafts",
+    envVars: ["DATABASE_URL"],
+    evaluate(_env, context) {
+      const status = context.formalTaskDraftStatus;
+      if (status === undefined) {
+        return pass("Formal task draft generation is safely unavailable.");
+      }
+      if (!status.ok) return fail("Formal task draft status is unreadable.");
+      if (
+        status.counts === undefined ||
+        ![
+          status.counts.pending_confirmation,
+          status.counts.pending_review,
+          status.counts.needs_revision,
+          status.counts.rejected,
+          status.counts.created,
+        ].every(isSafeCount)
+      ) return fail("Formal task draft counts are unavailable.");
+      if (!status.companyCreationEnabled) {
+        return pass("Formal task draft generation is safely disabled.");
+      }
+      if (!status.enabled) return fail("Formal task draft runtime is not enabled.");
+      return pass("Formal task draft generation is enabled with readable durable counts.");
     },
   },
   {

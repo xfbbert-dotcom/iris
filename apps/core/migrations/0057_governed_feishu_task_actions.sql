@@ -1,3 +1,7 @@
+UPDATE runtime_control_state
+SET capabilities = capabilities || '{"generateTaskDrafts":false}'::jsonb
+WHERE NOT (capabilities ? 'generateTaskDrafts');
+
 CREATE TABLE feishu_task_target_policies (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   source_group_id TEXT NOT NULL CHECK (char_length(source_group_id) BETWEEN 1 AND 512),

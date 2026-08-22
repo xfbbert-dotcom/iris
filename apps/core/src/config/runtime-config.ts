@@ -5,6 +5,7 @@ export type IrisCapability = {
   retrieveKnowledgeBase: boolean;
   proactiveSpeech: boolean;
   generateKnowledgeDrafts: boolean;
+  generateTaskDrafts: boolean;
   writeKnowledgeBase: boolean;
   updateManagedKnowledge: boolean;
   callExternalTools: boolean;
@@ -33,6 +34,7 @@ export function createDefaultRuntimeConfig(env: RuntimeConfigEnv = process.env):
       retrieveKnowledgeBase: true,
       proactiveSpeech: true,
       generateKnowledgeDrafts: true,
+      generateTaskDrafts: false,
       writeKnowledgeBase: false,
       updateManagedKnowledge: false,
       callExternalTools: false

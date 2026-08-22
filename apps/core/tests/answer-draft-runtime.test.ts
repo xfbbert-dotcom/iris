@@ -121,6 +121,7 @@ describe("createAnswerDraftRuntime", () => {
     expect(dependencies.createEvidencePlanner).toHaveBeenCalledOnce();
     expect(dependencies.createGroundedAnswerRenderer).toHaveBeenCalledOnce();
     expect(runtime?.chatKnowledgeDraftGenerator).toBeDefined();
+    expect(runtime?.chatFormalTaskDraftGenerator).toBeDefined();
 
     await runtime?.close();
     expect(pool.end).toHaveBeenCalled();

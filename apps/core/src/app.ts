@@ -117,6 +117,14 @@ import {
   type KnowledgeDraftRuntime,
 } from "./runtime/knowledge-draft-runtime.js";
 import {
+  createChatFormalTaskDraftCommand,
+  type ChatFormalTaskDraftCommand,
+} from "./formal-tasks/chat-formal-task-draft-command.js";
+import {
+  createFormalTaskRuntime as createDefaultFormalTaskRuntime,
+  type FormalTaskRuntime,
+} from "./runtime/formal-task-runtime.js";
+import {
   createKnowledgeCardRuntime as createDefaultKnowledgeCardRuntime,
   createKnowledgeCardStatusReader as createDefaultKnowledgeCardStatusReader,
   type KnowledgeCardRuntime,
@@ -163,6 +171,7 @@ type EventWorkerRuntimeFactoryInput = {
   answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   memoryExtractionPlanner?: MemoryExtractionRuntime["planner"];
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
+  formalTaskDraftCommand?: Pick<ChatFormalTaskDraftCommand, "execute">;
 };
 
 type MemoryExtractionRuntimeFactoryInput = {
@@ -214,6 +223,9 @@ export type BuildAppDependencies = {
   createKnowledgeDraftRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeDraftRuntime>[0],
   ) => KnowledgeDraftRuntime | undefined;
+  createFormalTaskRuntime?: (
+    input?: Parameters<typeof createDefaultFormalTaskRuntime>[0],
+  ) => FormalTaskRuntime | undefined;
   createKnowledgeCardRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
   ) => KnowledgeCardRuntime | undefined;
@@ -324,6 +336,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
   "retrieveKnowledgeBase",
   "proactiveSpeech",
   "generateKnowledgeDrafts",
+  "generateTaskDrafts",
   "writeKnowledgeBase",
   "updateManagedKnowledge",
   "callExternalTools",
@@ -392,6 +405,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   let proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
+  let formalTaskRuntime: FormalTaskRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   let knowledgeCardStatusReader: KnowledgeCardStatusReader | undefined;
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
@@ -458,6 +472,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     knowledgeDraftRuntime = (
       dependencies.createKnowledgeDraftRuntime ?? createDefaultKnowledgeDraftRuntime
     )({ runtimeController });
+    formalTaskRuntime = (
+      dependencies.createFormalTaskRuntime ?? createDefaultFormalTaskRuntime
+    )({ runtimeController });
     knowledgeCardRuntime = (
       dependencies.createKnowledgeCardRuntime ?? createDefaultKnowledgeCardRuntime
     )({
@@ -519,6 +536,15 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
             draftRuntime: knowledgeDraftRuntime,
             cardRuntime: knowledgeCardRuntime,
             actionApprovalRuntime,
+          })
+        : undefined;
+    const chatFormalTaskDraftCommand =
+      answerDraftRuntime?.chatFormalTaskDraftGenerator !== undefined &&
+        formalTaskRuntime !== undefined
+        ? createChatFormalTaskDraftCommand({
+            generator: answerDraftRuntime.chatFormalTaskDraftGenerator,
+            canReadGroupContext: runtimeController.canReadGroupContext.bind(runtimeController),
+            runtime: formalTaskRuntime,
           })
         : undefined;
     actionReviewRuntime = (
@@ -587,6 +613,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       ...(chatKnowledgeDraftCommand === undefined
         ? {}
         : { knowledgeDraftCommand: chatKnowledgeDraftCommand }),
+      ...(chatFormalTaskDraftCommand === undefined
+        ? {}
+        : { formalTaskDraftCommand: chatFormalTaskDraftCommand }),
     });
     const eventWorkerPrerequisite =
       proactiveSignalDeliveryStartup ??
@@ -805,6 +834,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     );
     const knowledgeConflicts = await getKnowledgeConflictStatus(composedKnowledgeConflictRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
+    const formalTaskDrafts = await getFormalTaskDraftStatus(formalTaskRuntime);
     const managedKnowledgeUpdates = getManagedKnowledgeUpdateStatus({
       deployment: managedKnowledgeUpdateDeployment,
       actionApprovalStatus: actionApprovals,
@@ -854,6 +884,11 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       reindex: await getReindexStatus(reindexWorkerRuntime),
       knowledgeConflicts,
       actionApprovals: actionApprovals ?? { ok: true, enabled: false, running: false },
+      formalTaskDrafts: formalTaskDrafts ?? {
+        ok: true,
+        enabled: false,
+        companyCreationEnabled: false,
+      },
       managedKnowledgeUpdates,
       proactiveSignals,
     };
@@ -873,6 +908,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       composedKnowledgeConflictRuntime,
     );
     const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
+    const formalTaskDraftStatus = await getFormalTaskDraftStatus(formalTaskRuntime);
     const managedKnowledgeUpdateStatus = getManagedKnowledgeUpdateStatus({
       deployment: managedKnowledgeUpdateDeployment,
       actionApprovalStatus,
@@ -885,6 +921,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         knowledgeCardStatus,
         knowledgeConflictStatus,
         actionApprovalStatus,
+        ...(formalTaskDraftStatus === undefined ? {} : { formalTaskDraftStatus }),
         managedKnowledgeUpdateStatus,
         actionReviewStatus,
       },
@@ -2075,6 +2112,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       () => actionApprovalRuntime?.close(),
       () => proactiveSignalRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
+      () => formalTaskRuntime?.close(),
       () => agentExecutionLedgerRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
     ]);
@@ -2102,6 +2140,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       actionReviewRuntime,
       proactiveSignalDeliveryRuntime,
       knowledgeDraftRuntime,
+      formalTaskRuntime,
     });
     dependencies.onRuntimeStartupCleanup?.(cleanup);
     throw error;
@@ -2201,6 +2240,26 @@ async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefine
       enabled: true,
       running: false,
       degradedReason: "action_approval_status_unavailable" as const,
+    };
+  }
+}
+
+async function getFormalTaskDraftStatus(runtime: FormalTaskRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    const status = await runtime.getStatus();
+    return {
+      ok: true,
+      enabled: status.enabled && status.companyCreationEnabled,
+      companyCreationEnabled: status.companyCreationEnabled,
+      counts: status.counts,
+    };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      companyCreationEnabled: true,
+      degradedReason: "formal_task_draft_status_unavailable" as const,
     };
   }
 }
@@ -2485,6 +2544,7 @@ function scheduleRuntimeStartupCleanup({
   actionReviewRuntime,
   proactiveSignalDeliveryRuntime,
   knowledgeDraftRuntime,
+  formalTaskRuntime,
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
@@ -2504,6 +2564,7 @@ function scheduleRuntimeStartupCleanup({
   actionReviewRuntime: ActionReviewRuntime | undefined;
   proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
   knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
+  formalTaskRuntime: FormalTaskRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
     () => gateway?.close(),
@@ -2522,6 +2583,7 @@ function scheduleRuntimeStartupCleanup({
     () => actionApprovalRuntime?.close(),
     () => proactiveSignalRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),
+    () => formalTaskRuntime?.close(),
     () => agentExecutionLedgerRuntime?.close(),
     () => app?.close(),
   ]);

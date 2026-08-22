@@ -67,6 +67,8 @@ import {
 } from "../events/raw-event-worker-loop.js";
 import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
 import type { ChatKnowledgeDraftCommand } from "../knowledge-governance/chat-knowledge-draft-command.js";
+import type { ChatFormalTaskDraftCommand } from
+  "../formal-tasks/chat-formal-task-draft-command.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import { observeStartupPromise } from "./startup-promise.js";
 
@@ -158,6 +160,7 @@ export async function createEventWorkerRuntime({
   answerSourcePermissionVerifier,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
+  formalTaskDraftCommand,
   now = () => new Date(),
 }: {
   env?: EnvLike;
@@ -167,6 +170,7 @@ export async function createEventWorkerRuntime({
   answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
+  formalTaskDraftCommand?: Pick<ChatFormalTaskDraftCommand, "execute">;
   now?: () => Date;
 } = {}): Promise<EventWorkerRuntime | undefined> {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
@@ -183,6 +187,7 @@ export async function createEventWorkerRuntime({
     answerSourcePermissionVerifier,
     memoryExtractionPlanner,
     knowledgeDraftCommand,
+    formalTaskDraftCommand,
     now,
   });
 }
@@ -196,6 +201,7 @@ async function createEnabledEventWorkerRuntime({
   answerSourcePermissionVerifier,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
+  formalTaskDraftCommand,
   now,
 }: {
   env: EnvLike;
@@ -206,6 +212,7 @@ async function createEnabledEventWorkerRuntime({
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
   memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
+  formalTaskDraftCommand: Pick<ChatFormalTaskDraftCommand, "execute"> | undefined;
   now: () => Date;
 }): Promise<EventWorkerRuntime> {
   preflightMentionAnswerConfiguration(env);
@@ -282,6 +289,7 @@ async function createEnabledEventWorkerRuntime({
       answerSourcePermissionVerifier:
         answerSourcePermissionVerifier ?? createUnavailableAnswerSourcePermissionVerifier(),
       knowledgeDraftCommand,
+      formalTaskDraftCommand,
       runtimeController,
       documentLinkExtractor,
       userSubmittedDocumentRegistrar,
@@ -401,6 +409,7 @@ function createOptionalMentionAnswerResponder({
   answerDraftOrchestrator,
   answerSourcePermissionVerifier,
   knowledgeDraftCommand,
+  formalTaskDraftCommand,
   runtimeController,
   documentLinkExtractor,
   userSubmittedDocumentRegistrar,
@@ -415,6 +424,7 @@ function createOptionalMentionAnswerResponder({
   answerDraftOrchestrator: MentionAnswerDraftOrchestrator | undefined;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
+  formalTaskDraftCommand: Pick<ChatFormalTaskDraftCommand, "execute"> | undefined;
   runtimeController: RuntimeGate | undefined;
   documentLinkExtractor: ReturnType<typeof createFeishuDocumentLinkExtractor>;
   userSubmittedDocumentRegistrar: Pick<AsyncDocumentSourceRegistry, "registerUserSubmittedDocument">;
@@ -465,6 +475,7 @@ function createOptionalMentionAnswerResponder({
       answerDraftOrchestrator,
       answerReplyDeliveryService,
       ...(knowledgeDraftCommand === undefined ? {} : { knowledgeDraftCommand }),
+      ...(formalTaskDraftCommand === undefined ? {} : { formalTaskDraftCommand }),
       replier,
       now,
       documentLinkExtractor,

@@ -12,6 +12,10 @@ import type { FeishuDocumentLinkExtractor } from "../documents/feishu-document-l
 import type { FeishuMessageReplier } from "../feishu/feishu-message-replier.js";
 import type { ChatKnowledgeDraftCommand } from "../knowledge-governance/chat-knowledge-draft-command.js";
 import { ChatKnowledgeDraftModelUnavailableError } from "../knowledge-governance/chat-knowledge-draft-generator.js";
+import type { ChatFormalTaskDraftCommand } from
+  "../formal-tasks/chat-formal-task-draft-command.js";
+import { ChatFormalTaskDraftModelUnavailableError } from
+  "../formal-tasks/chat-formal-task-draft-generator.js";
 import {
   ModelProviderHttpError,
   isModelProviderCapacityError,
@@ -57,6 +61,7 @@ export type FeishuMentionAnswerResponderDependencies = {
   canReplyWhenMentioned?: (chatId: string) => boolean;
   canRegisterUserSubmittedDocuments?: (chatId: string) => boolean;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
+  formalTaskDraftCommand?: Pick<ChatFormalTaskDraftCommand, "execute">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
   userSubmittedDocumentRegistrar?: Pick<
     UserSubmittedDocumentRegistrar,
@@ -113,6 +118,41 @@ const KNOWLEDGE_DRAFT_MODEL_UNAVAILABLE =
   "\u6a21\u578b\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002\u8bf7\u7a0d\u540e\u518d @\u6211\u4e00\u6b21\u3002";
 const KNOWLEDGE_DRAFT_MODEL_INVALID_ERROR_MESSAGE =
   "knowledge draft model response is invalid";
+const FORMAL_TASK_DRAFT_CREATED =
+  "任务草稿已生成，尚未创建或分配飞书任务。请在群确认卡片中核对。";
+const FORMAL_TASK_DRAFT_RUNTIME_DISABLED =
+  "当前任务草稿功能未开放，未创建或分配任何飞书任务。";
+const FORMAL_TASK_DRAFT_ASSIGNEE_REQUIRED =
+  "请在同一条消息中只 @一位任务负责人；未创建或分配任何飞书任务。";
+const FORMAL_TASK_DRAFT_NO_CONTEXT =
+  "最近没有包含当前请求的可用群聊上下文，未创建任务草稿。";
+const FORMAL_TASK_DRAFT_TARGET_UNAVAILABLE =
+  "当前群没有可用的任务策略，或该负责人不在允许范围内；未创建任务草稿。";
+const FORMAL_TASK_DRAFT_SENDER_REQUIRED =
+  "暂时无法确认请求人，未创建任务草稿或飞书任务。";
+const FORMAL_TASK_DRAFT_MODEL_CAPACITY =
+  "模型服务暂时达到使用上限，未创建任务草稿。恢复后请再 @我一次。";
+const FORMAL_TASK_DRAFT_MODEL_INVALID =
+  "未生成可靠的任务草稿，没有创建或分配任何飞书任务。";
+const FORMAL_TASK_DRAFT_MODEL_UNAVAILABLE =
+  "模型服务暂时不可用，未创建任务草稿。请稍后再 @我一次。";
+const FORMAL_TASK_DRAFT_MODEL_INVALID_ERROR_MESSAGE =
+  "formal task draft model response is invalid";
+const formalTaskDraftIntentPatterns = [
+  /(?:创建|新建|生成|起草|准备|整理).{0,20}(?:一个|一份|一项)?(?:飞书)?任务(?:草稿)?/u,
+  /(?:把|将).{0,48}(?:整理|转换|变成|转成).{0,8}(?:飞书)?任务草稿/u,
+  /\b(?:create|make|prepare|generate|draft)\b.{0,40}\b(?:feishu\s+)?task(?:\s+draft)?\b/iu,
+] as const;
+const negatedFormalTaskDraftIntentPatterns = [
+  /(?:不要|别|无需|不用|禁止|取消).{0,24}(?:创建|生成|起草|准备|整理).{0,20}任务/u,
+  /\b(?:do\s+not|don't|dont|never)\b.{0,40}\b(?:create|make|prepare|generate|draft)\b.{0,32}\btask\b/iu,
+] as const;
+const formalTaskDraftQuestionPatterns = [
+  /^(?:如何|怎么|怎样|为什么|何时|哪里|在哪).{0,64}(?:飞书)?任务/u,
+  /(?:创建|生成|起草|准备).{0,20}(?:飞书)?任务.{0,24}(?:需要什么|怎么|如何|什么流程|哪些步骤|有什么要求)[？?]?$/u,
+  /^(?:飞书)?任务(?:草稿)?(?:是什么|有什么用|如何工作)[？?]?$/u,
+  /^(?:how|what|why|when|where)\b.{0,80}\b(?:feishu\s+)?task\b/iu,
+] as const;
 const knowledgeDraftIntentPatterns = [
   /(?:\u521b\u5efa|\u751f\u6210|\u4ea7\u51fa|\u5236\u4f5c|\u51c6\u5907|\u6574\u7406|\u603b\u7ed3).{0,16}(?:\u4e00\u4efd|\u4e00\u4e2a)?(?:\u53ef\u5ba1\u9605\u7684)?\u77e5\u8bc6\u8349\u7a3f/u,
   /(?:\u628a|\u5c06).{0,48}(?:\u6574\u7406|\u603b\u7ed3|\u6c89\u6dc0)(?:\u6210|\u4e3a).{0,4}\u77e5\u8bc6\u8349\u7a3f/u,
@@ -146,6 +186,7 @@ export function createFeishuMentionAnswerResponder({
   canReplyWhenMentioned = () => true,
   canRegisterUserSubmittedDocuments = () => true,
   knowledgeDraftCommand,
+  formalTaskDraftCommand,
   documentLinkExtractor,
   userSubmittedDocumentRegistrar,
 }: FeishuMentionAnswerResponderDependencies): FeishuMentionAnswerResponder {
@@ -188,6 +229,47 @@ export function createFeishuMentionAnswerResponder({
         const fullQuestion = stripMentionKeys(input.text, botMentionKeys);
         const normalizedSenderId = normalizeOptionalText(input.senderId);
         const normalizedSenderOpenId = normalizeOptionalText(input.senderOpenId);
+        if (detectFormalTaskDraftCommand(fullQuestion)) {
+          let replyText: string;
+          if (formalTaskDraftCommand === undefined) {
+            replyText = FORMAL_TASK_DRAFT_RUNTIME_DISABLED;
+          } else if (normalizedSenderOpenId === undefined) {
+            replyText = FORMAL_TASK_DRAFT_SENDER_REQUIRED;
+          } else {
+            try {
+              const commandResult = await formalTaskDraftCommand.execute({
+                messageId: input.messageId,
+                chatId: input.chatId,
+                requesterOpenId: normalizedSenderOpenId,
+                requestText: fullQuestion,
+                assigneeOpenIds: collectTaskAssigneeOpenIds(
+                  input.mentions,
+                  normalizedBotOpenId,
+                ),
+                observedAt: input.observedAt ?? new Date(),
+              });
+              replyText = formalTaskDraftReplyText(commandResult.status);
+            } catch (error) {
+              if (isFormalTaskDraftModelCapacityError(error)) {
+                replyText = FORMAL_TASK_DRAFT_MODEL_CAPACITY;
+              } else if (isInvalidFormalTaskDraftModelResponse(error)) {
+                replyText = FORMAL_TASK_DRAFT_MODEL_INVALID;
+              } else if (isFormalTaskDraftModelUnavailableError(error)) {
+                replyText = FORMAL_TASK_DRAFT_MODEL_UNAVAILABLE;
+              } else {
+                throw error;
+              }
+            }
+          }
+          const result = toRepliedResult(await replier.replyText({
+            messageId: input.messageId,
+            text: replyText,
+            replyInThread: true,
+            uuid: replyUuid,
+          }));
+          replyDeduper.markHandled(input.messageId);
+          return result;
+        }
         if (detectKnowledgeDraftCommand(fullQuestion)) {
           let replyText: string;
           if (knowledgeDraftCommand === undefined) {
@@ -533,6 +615,50 @@ function detectKnowledgeDraftCommand(text: string): boolean {
   return knowledgeDraftIntentPatterns.some((pattern) => pattern.test(text));
 }
 
+function detectFormalTaskDraftCommand(text: string): boolean {
+  if (
+    negatedFormalTaskDraftIntentPatterns.some((pattern) => pattern.test(text)) ||
+    formalTaskDraftQuestionPatterns.some((pattern) => pattern.test(text))
+  ) return false;
+  return formalTaskDraftIntentPatterns.some((pattern) => pattern.test(text));
+}
+
+function collectTaskAssigneeOpenIds(
+  mentions: FeishuMessageMention[],
+  botOpenId: string,
+): string[] {
+  const assignees = new Set<string>();
+  for (const mention of mentions) {
+    const openId = normalizeOptionalText(mention.openId);
+    if (openId !== undefined && openId !== botOpenId) assignees.add(openId);
+  }
+  return [...assignees].sort();
+}
+
+function formalTaskDraftReplyText(
+  status:
+    | "created"
+    | "already_created"
+    | "assignee_clarification_required"
+    | "runtime_disabled"
+    | "no_context"
+    | "target_unavailable",
+): string {
+  switch (status) {
+    case "created":
+    case "already_created":
+      return FORMAL_TASK_DRAFT_CREATED;
+    case "assignee_clarification_required":
+      return FORMAL_TASK_DRAFT_ASSIGNEE_REQUIRED;
+    case "runtime_disabled":
+      return FORMAL_TASK_DRAFT_RUNTIME_DISABLED;
+    case "no_context":
+      return FORMAL_TASK_DRAFT_NO_CONTEXT;
+    case "target_unavailable":
+      return FORMAL_TASK_DRAFT_TARGET_UNAVAILABLE;
+  }
+}
+
 function knowledgeDraftReplyText(
   status: "created" | "already_created" | "runtime_disabled" | "no_context" | "target_unavailable",
 ): string {
@@ -571,6 +697,23 @@ function isBlankModelAnswerError(error: unknown): boolean {
 
 function isInvalidKnowledgeDraftModelResponse(error: unknown): boolean {
   return error instanceof Error && error.message === KNOWLEDGE_DRAFT_MODEL_INVALID_ERROR_MESSAGE;
+}
+
+function isInvalidFormalTaskDraftModelResponse(error: unknown): boolean {
+  return error instanceof Error && error.message === FORMAL_TASK_DRAFT_MODEL_INVALID_ERROR_MESSAGE;
+}
+
+function isFormalTaskDraftModelCapacityError(error: unknown): boolean {
+  return isModelProviderCapacityError(error) || (
+    error instanceof ChatFormalTaskDraftModelUnavailableError &&
+    isModelProviderCapacityError(error.providerCause)
+  );
+}
+
+function isFormalTaskDraftModelUnavailableError(error: unknown): boolean {
+  if (error instanceof ChatFormalTaskDraftModelUnavailableError) return true;
+  if (error instanceof ModelProviderHttpError) return true;
+  return error instanceof Error && error.message.startsWith("model provider ");
 }
 
 function isKnowledgeDraftModelCapacityError(error: unknown): boolean {

@@ -10,6 +10,13 @@ import {
 } from "../src/config/env.js";
 
 describe("createDefaultRuntimeConfig", () => {
+  it("defaults formal task draft generation off independently of knowledge drafts", () => {
+    const capabilities = createDefaultRuntimeConfig({}).capabilities;
+
+    expect(capabilities.generateTaskDrafts).toBe(false);
+    expect(capabilities.generateKnowledgeDrafts).toBe(true);
+  });
+
   it("defaults managed knowledge updates off independently of knowledge-base writes", () => {
     const capabilities = createDefaultRuntimeConfig({}).capabilities;
 
