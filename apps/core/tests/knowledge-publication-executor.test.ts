@@ -514,7 +514,7 @@ describe("KnowledgePublicationExecutor", () => {
   });
 });
 
-function actionProposal(): ActionProposal {
+function actionProposal(): Extract<ActionProposal, { subjectType: "knowledge_draft" }> {
   return {
     id: "proposal-1",
     actionType: "publish_knowledge_draft",

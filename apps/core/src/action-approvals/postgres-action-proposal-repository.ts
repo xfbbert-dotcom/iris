@@ -17,6 +17,10 @@ import type {
   KnowledgeDraftTransactionClient,
   PostgresKnowledgeDraftDataSource,
 } from "../knowledge-governance/postgres-knowledge-draft-repository.js";
+import type {
+  FeishuTaskTargetPolicy,
+  FormalTaskRiskLevel,
+} from "../formal-tasks/formal-task-repository.js";
 
 import {
   ACTION_PROPOSAL_STATUSES,
@@ -43,6 +47,7 @@ import type {
   ActionReviewContext,
   ActionProposalContext,
   ActionProposalDraftCandidate,
+  FormalTaskActionProposalDraftCandidate,
   ActionProposalEvent,
   ActionProposalMutationResult,
   ActionProposalRepository,
@@ -63,6 +68,7 @@ import type {
   FailPublicationExecutionInput,
   FailPublicationExecutionResult,
   KnowledgePublication,
+  KnowledgeActionProposalContext,
   PolicyMutationResult,
   PreflightActionApprovalInput,
   PublicationExecution,
@@ -100,12 +106,22 @@ type GrantRow = {
 type ProposalRow = {
   id: string;
   action_type: ActionProposalActionType;
-  subject_type: "knowledge_draft";
+  subject_type: "knowledge_draft" | "formal_task_draft";
   subject_id: string;
   subject_revision: string | number;
   subject_version: string | number;
   target_policy_id: string;
   target_policy_version: string | number;
+  task_draft_id: string | null;
+  task_draft_revision: string | number | null;
+  task_draft_version: string | number | null;
+  task_target_policy_id: string | null;
+  task_target_policy_version: string | number | null;
+  task_assignee_open_id: string | null;
+  task_due_at: Date | null;
+  task_reminder_minutes: string | number | null;
+  task_spec_hash: string | null;
+  task_group_confirmation_presentation_id: string | null;
   risk_level: KnowledgeDraftRiskLevel;
   status: ActionProposalStatus;
   operation_key: string;
@@ -123,6 +139,8 @@ type RequirementRow = {
   role_ref: string | null;
   target_policy_id: string;
   target_policy_version: string | number;
+  task_target_policy_id: string | null;
+  task_target_policy_version: string | number | null;
   state: "pending" | "satisfied" | "invalidated";
   satisfied_actor_open_id: string | null;
   satisfied_source_type: "group_confirmation" | "action_approval" | null;
@@ -196,6 +214,57 @@ type DraftCandidateRow = DraftRevisionRow & {
   update_target_id: string | null;
   eligible_update_target_id: string | null;
   updated_at: Date;
+};
+
+type FormalTaskCandidateRow = {
+  id: string;
+  source_group_id: string;
+  current_revision_number: string | number;
+  version: string | number;
+  risk_level: FormalTaskRiskLevel;
+  assignee_open_id: string;
+  due_at: Date | null;
+  reminder_minutes: string | number | null;
+  task_spec_hash: string;
+  target_policy_id: string;
+  target_policy_version: string | number;
+  confirmation_presentation_id: string;
+  updated_at: Date;
+};
+
+type FormalTaskProposalDraftRow = FormalTaskCandidateRow & {
+  status: string;
+  title: string;
+  description: string;
+  current_task_spec_hash: string;
+};
+
+type FeishuTaskPolicyRow = {
+  id: string;
+  source_group_id: string;
+  display_name: string;
+  allowed_assignee_open_ids: string[];
+  max_due_horizon_days: string | number;
+  enabled: boolean;
+  version: string | number;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type FormalTaskEvidenceRow = {
+  conversation_message_id: string | null;
+  action_item_id: string | null;
+  action_item_version: string | number | null;
+};
+
+type FormalTaskProposalContextRow = {
+  source_group_id: string;
+  title: string;
+  description: string;
+  assignee_open_id: string;
+  due_at: Date | null;
+  reminder_minutes: string | number | null;
+  task_spec_hash: string;
 };
 
 type ManagedUpdateTargetRoutingRow = {
@@ -377,6 +446,9 @@ export function createPostgresActionProposalRepository({
     },
     cancelStaleProposals(input) {
       return cancelStaleProposals(dataSource, input);
+    },
+    cancelStaleFormalTaskProposals(input) {
+      return cancelStaleFormalTaskProposals(dataSource, input);
     },
     applyApprovalAction(input) {
       return applyApprovalAction(dataSource, input);
@@ -627,6 +699,17 @@ export function createPostgresActionProposalRepository({
       }
       return candidates;
     },
+    listEligibleFormalTaskDrafts(input) {
+      return listEligibleFormalTaskDrafts(dataSource, input);
+    },
+    async listFeishuTaskTargetPolicies(input) {
+      const result = await dataSource.query<FeishuTaskPolicyRow>(
+        `${feishuTaskPolicySelect()} WHERE ($1::BOOLEAN IS NULL OR enabled = $1)
+         ORDER BY updated_at DESC, id ASC LIMIT $2`,
+        [input.enabled ?? null, requireLimit(input.limit)],
+      );
+      return result.rows.map(mapFeishuTaskPolicy);
+    },
     async listEvents(id) {
       const result = await dataSource.query<ActionEventRow>(
         `${actionEventSelect()} WHERE proposal_id = $1 ORDER BY created_at ASC, to_version ASC, id ASC`,
@@ -754,6 +837,118 @@ export function createPostgresActionProposalRepository({
       return result.rows.map(mapGrant);
     },
   };
+}
+
+async function listEligibleFormalTaskDrafts(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { groupIds: string[]; limit: number },
+): Promise<FormalTaskActionProposalDraftCandidate[]> {
+  const groupIds = normalizeReferenceList("groupIds", input.groupIds, false);
+  const result = await dataSource.query<FormalTaskCandidateRow>(
+    `SELECT draft.id, draft.source_group_id, draft.current_revision_number,
+            draft.version, revision.risk_level, revision.assignee_open_id,
+            revision.due_at, revision.reminder_minutes, revision.task_spec_hash,
+            revision.target_policy_id, revision.target_policy_version,
+            confirmation.id AS confirmation_presentation_id, draft.updated_at
+     FROM formal_task_drafts draft
+     JOIN formal_task_draft_revisions revision
+       ON revision.draft_id = draft.id
+      AND revision.revision_number = draft.current_revision_number
+      AND revision.task_spec_hash = draft.current_task_spec_hash
+     JOIN feishu_task_target_policies policy
+       ON policy.id = revision.target_policy_id
+      AND policy.version = revision.target_policy_version
+      AND policy.source_group_id = draft.source_group_id
+      AND revision.assignee_open_id = ANY(policy.allowed_assignee_open_ids)
+      AND policy.enabled = TRUE
+     JOIN LATERAL (
+       SELECT presentation.id
+       FROM formal_task_draft_presentations presentation
+       JOIN formal_task_draft_presentation_events event
+         ON event.presentation_id = presentation.id
+        AND event.event_type = 'confirmed'
+       WHERE presentation.draft_id = draft.id
+         AND presentation.draft_revision = draft.current_revision_number
+         AND presentation.draft_version + 1 = draft.version
+         AND presentation.task_spec_hash = revision.task_spec_hash
+         AND presentation.group_id = draft.source_group_id
+         AND presentation.state = 'closed'
+       ORDER BY event.created_at DESC, presentation.id DESC
+       LIMIT 1
+     ) confirmation ON TRUE
+     WHERE draft.status = 'pending_review'
+       AND draft.source_group_id = ANY($1::TEXT[])
+       AND EXISTS (
+         SELECT 1 FROM formal_task_draft_events draft_event
+         WHERE draft_event.draft_id = draft.id
+           AND draft_event.revision_number = draft.current_revision_number
+           AND draft_event.event_type = 'group_confirmed'
+           AND draft_event.to_version = draft.version
+       )
+     ORDER BY draft.updated_at ASC, draft.id ASC
+     LIMIT $2`,
+    [groupIds, requireLimit(input.limit)],
+  );
+  const candidates: FormalTaskActionProposalDraftCandidate[] = [];
+  for (const row of result.rows) {
+    const evidence = await loadFormalTaskEvidence(
+      dataSource,
+      row.id,
+      Number(row.current_revision_number),
+      row.source_group_id,
+    );
+    const invalidReason = await findInvalidKnowledgeDraftEvidence({
+      queryable: dataSource,
+      sourceGroupId: row.source_group_id,
+      evidence,
+    });
+    candidates.push({
+      id: row.id,
+      actionType: "create_feishu_task",
+      sourceGroupId: row.source_group_id,
+      currentRevision: Number(row.current_revision_number),
+      version: Number(row.version),
+      riskLevel: row.risk_level,
+      assigneeOpenId: row.assignee_open_id,
+      ...(row.due_at === null ? {} : { dueAt: requireDate(row.due_at) }),
+      ...(row.reminder_minutes === null
+        ? {}
+        : { reminderMinutes: Number(row.reminder_minutes) as 0 | 30 | 60 | 1440 }),
+      taskSpecHash: row.task_spec_hash,
+      targetPolicyId: row.target_policy_id,
+      targetPolicyVersion: Number(row.target_policy_version),
+      groupConfirmationPresentationId: row.confirmation_presentation_id,
+      evidenceState: invalidReason === undefined
+        ? { status: "current" }
+        : { status: "invalidated", reason: invalidReason },
+      hasCurrentGroupConfirmation: true,
+      updatedAt: requireDate(row.updated_at),
+    });
+  }
+  return candidates;
+}
+
+async function loadFormalTaskEvidence(
+  queryable: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  draftId: string,
+  revision: number,
+  sourceGroupId: string,
+): Promise<KnowledgeDraftEvidenceReference[]> {
+  const result = await queryable.query<FormalTaskEvidenceRow>(
+    `SELECT conversation_message_id, action_item_id, action_item_version
+     FROM formal_task_draft_evidence
+     WHERE draft_id = $1 AND revision_number = $2
+     ORDER BY conversation_message_id ASC NULLS LAST, action_item_id ASC NULLS LAST`,
+    [draftId, revision],
+  );
+  return result.rows.map((row) => row.conversation_message_id !== null
+    ? { type: "conversation_message", id: row.conversation_message_id, groupId: sourceGroupId }
+    : {
+        type: "action_item",
+        id: requireDatabaseValue(row.action_item_id),
+        groupId: sourceGroupId,
+        entityVersion: Number(requireDatabaseValue(row.action_item_version)),
+      });
 }
 
 function approvalStatusCount(value: string | number): number {
@@ -1147,7 +1342,7 @@ async function getApprovalDeliveryContext(
   const presentationRow = presentationResult.rows[0];
   if (presentationRow === undefined) return undefined;
   const context = await loadProposalContext(dataSource, presentationRow.proposal_id);
-  if (context === undefined) return undefined;
+  if (context === undefined || !isKnowledgeActionProposalContext(context)) return undefined;
   const draftResult = await dataSource.query<{ source_group_id: string | null }>(
     "SELECT source_group_id FROM knowledge_drafts WHERE id = $1",
     [context.proposal.subjectId],
@@ -1168,6 +1363,12 @@ async function getApprovalDeliveryContext(
     presentation: mapApprovalPresentation(presentationRow),
     ...(draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id }),
   };
+}
+
+function isKnowledgeActionProposalContext(
+  context: ActionProposalContext,
+): context is KnowledgeActionProposalContext {
+  return context.proposal.subjectType === "knowledge_draft";
 }
 
 async function beginApprovalExternalAttempt(
@@ -1563,6 +1764,114 @@ async function cancelStaleProposals(
       outcome: "applied",
       cancelledProposalIds: stale.rows.map((proposal) => proposal.id),
       draftVersion: nextDraftVersion,
+    };
+  });
+}
+
+async function cancelStaleFormalTaskProposals(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: CancelStaleActionProposalsInput,
+): Promise<CancelStaleActionProposalsResult> {
+  const normalized = normalizeCancelStaleInput(input);
+  const reasonCode = `stale-formal-task:${operationFingerprint(normalized)}`;
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const draftResult = await client.query<{
+      current_revision_number: string | number;
+      version: string | number;
+    }>(
+      `SELECT current_revision_number, version
+       FROM formal_task_drafts WHERE id = $1 FOR UPDATE`,
+      [normalized.draftId],
+    );
+    const draft = draftResult.rows[0];
+    if (
+      draft === undefined ||
+      Number(draft.current_revision_number) !== normalized.currentRevision ||
+      Number(draft.version) !== normalized.currentDraftVersion
+    ) throw new ActionProposalVersionConflictError();
+
+    const stale = await client.query<ProposalRow>(
+      `${proposalSelect()} WHERE action_type = 'create_feishu_task'
+        AND task_draft_id = $1
+        AND status IN ('pending_approval', 'approved', 'executing', 'reconciliation_required')
+        AND (task_draft_revision <> $2 OR task_draft_version <> $3)
+       ORDER BY id ASC FOR UPDATE`,
+      [normalized.draftId, normalized.currentRevision, normalized.currentDraftVersion],
+    );
+    for (const proposal of stale.rows) {
+      const fromVersion = Number(proposal.version);
+      await client.query(
+        `UPDATE action_proposals SET status = 'cancelled', version = version + 1, updated_at = $2
+         WHERE id = $1 AND version = $3`,
+        [proposal.id, normalized.at, fromVersion],
+      );
+      await client.query(
+        `UPDATE action_approval_requirements
+         SET state = 'invalidated', satisfied_actor_open_id = NULL,
+             satisfied_source_type = NULL, satisfied_source_id = NULL,
+             version = version + 1, updated_at = $2
+         WHERE proposal_id = $1 AND state <> 'invalidated'`,
+        [proposal.id, normalized.at],
+      );
+      const superseded = await client.query<{ id: string; version: string | number }>(
+        `UPDATE action_approval_presentations
+         SET state = 'superseded', version = version + 1
+         WHERE proposal_id = $1 AND state IN ('pending_send', 'active', 'send_failed')
+         RETURNING id, version`,
+        [proposal.id],
+      );
+      for (const presentation of superseded.rows) {
+        const toVersion = Number(presentation.version);
+        await client.query(
+          `INSERT INTO action_approval_presentation_events (
+            id, presentation_id, event_type, operation_key, from_version, to_version, created_at
+          ) VALUES ($1, $2, 'superseded', $3, $4, $5, $6)`,
+          [
+            randomUUID(),
+            presentation.id,
+            derivedOperationKey("formal-task-approval-presentation-superseded", {
+              operationKey: normalized.operationKey,
+              presentationId: presentation.id,
+            }),
+            toVersion - 1,
+            toVersion,
+            normalized.at,
+          ],
+        );
+      }
+      await client.query(
+        `UPDATE action_approval_presentation_outbox
+         SET state = 'failed', worker_id = NULL, lease_until = NULL, retry_at = NULL,
+             error_code = 'presentation_superseded', updated_at = $2
+         WHERE presentation_id IN (
+           SELECT id FROM action_approval_presentations WHERE proposal_id = $1
+         ) AND state IN ('pending', 'processing')`,
+        [proposal.id, normalized.at],
+      );
+      await client.query(
+        `INSERT INTO action_events (
+          id, proposal_id, event_type, operation_key, from_version, to_version,
+          reason_code, created_at
+        ) VALUES ($1, $2, 'approval_invalidated', $3, $4, $5, $6, $7)`,
+        [
+          randomUUID(),
+          proposal.id,
+          derivedOperationKey("formal-task-proposal-invalidated", {
+            operationKey: normalized.operationKey,
+            proposalId: proposal.id,
+          }),
+          fromVersion,
+          fromVersion + 1,
+          reasonCode,
+          normalized.at,
+        ],
+      );
+    }
+    return {
+      outcome: "applied",
+      cancelledProposalIds: stale.rows.map((proposal) => proposal.id),
+      draftVersion: normalized.currentDraftVersion,
     };
   });
 }
@@ -2983,6 +3292,9 @@ async function createProposal(
 ): Promise<ActionProposalMutationResult> {
   const normalized = normalizeCreateProposalInput(input);
   const fingerprint = operationFingerprint({ operation: "create_proposal", ...normalized });
+  if (normalized.actionType === "create_feishu_task") {
+    return createFormalTaskProposal(dataSource, normalized, fingerprint);
+  }
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
     const replay = await client.query<ProposalRow>(
@@ -3153,6 +3465,249 @@ async function createProposal(
           proposalOperationKey: normalized.operationKey,
         })}`,
         status === "approved" ? "requirements_satisfied_at_creation" : null,
+        normalized.at,
+      ],
+    );
+    return {
+      outcome: "applied",
+      proposal: await requireProposal(client, normalized.proposalId),
+    };
+  });
+}
+
+async function createFormalTaskProposal(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  normalized: ReturnType<typeof normalizeCreateProposalInput>,
+  fingerprint: string,
+): Promise<ActionProposalMutationResult> {
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const replay = await client.query<ProposalRow>(
+      `${proposalSelect()} WHERE operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      if (
+        replay.rows[0].action_type !== "create_feishu_task" ||
+        replay.rows[0].operation_fingerprint !== fingerprint
+      ) throw new ActionProposalOperationConflictError();
+      return { outcome: "already_applied", proposal: mapProposal(replay.rows[0]) };
+    }
+
+    const draftResult = await client.query<FormalTaskProposalDraftRow>(
+      `SELECT draft.id, draft.source_group_id, draft.status,
+              draft.current_revision_number, draft.version,
+              draft.current_task_spec_hash, draft.updated_at,
+              revision.title, revision.description, revision.risk_level,
+              revision.assignee_open_id, revision.due_at, revision.reminder_minutes,
+              revision.task_spec_hash, revision.target_policy_id,
+              revision.target_policy_version,
+              ''::TEXT AS confirmation_presentation_id
+       FROM formal_task_drafts draft
+       JOIN formal_task_draft_revisions revision
+         ON revision.draft_id = draft.id
+        AND revision.revision_number = draft.current_revision_number
+       WHERE draft.id = $1 FOR UPDATE OF draft`,
+      [normalized.draftId],
+    );
+    const draft = draftResult.rows[0];
+    if (
+      draft === undefined ||
+      draft.status !== "pending_review" ||
+      Number(draft.current_revision_number) !== normalized.expectedRevision ||
+      Number(draft.version) !== normalized.expectedDraftVersion ||
+      draft.current_task_spec_hash !== draft.task_spec_hash
+    ) throw new ActionProposalIneligibleError();
+
+    const evidence = await loadFormalTaskEvidence(
+      client,
+      draft.id,
+      normalized.expectedRevision,
+      draft.source_group_id,
+    );
+    await validateCurrentKnowledgeDraftEvidence({
+      queryable: client,
+      sourceGroupId: draft.source_group_id,
+      evidence,
+    });
+
+    const policyResult = await client.query<FeishuTaskPolicyRow>(
+      `${feishuTaskPolicySelect()} WHERE id = $1 FOR UPDATE`,
+      [normalized.targetPolicyId],
+    );
+    const policy = policyResult.rows[0];
+    const dueAt = draft.due_at === null ? undefined : requireDate(draft.due_at);
+    if (
+      policy === undefined ||
+      !policy.enabled ||
+      policy.id !== draft.target_policy_id ||
+      Number(policy.version) !== normalized.expectedTargetPolicyVersion ||
+      Number(draft.target_policy_version) !== normalized.expectedTargetPolicyVersion ||
+      policy.source_group_id !== draft.source_group_id ||
+      !policy.allowed_assignee_open_ids.includes(draft.assignee_open_id) ||
+      (dueAt !== undefined && (
+        dueAt.getTime() < normalized.at.getTime() ||
+        dueAt.getTime() > normalized.at.getTime() +
+          Number(policy.max_due_horizon_days) * 24 * 60 * 60 * 1_000
+      ))
+    ) throw new ActionProposalIneligibleError();
+
+    const confirmationResult = await client.query<{
+      id: string;
+      actor_open_id: string;
+    }>(
+      `SELECT presentation.id, event.actor_open_id
+       FROM formal_task_draft_presentations presentation
+       JOIN formal_task_draft_presentation_events event
+         ON event.presentation_id = presentation.id
+        AND event.event_type = 'confirmed'
+       JOIN formal_task_draft_events draft_event
+         ON draft_event.draft_id = presentation.draft_id
+        AND draft_event.revision_number = presentation.draft_revision
+        AND draft_event.event_type = 'group_confirmed'
+        AND draft_event.to_version = $3
+       WHERE presentation.draft_id = $1
+         AND presentation.draft_revision = $2
+         AND presentation.draft_version + 1 = $3
+         AND presentation.task_spec_hash = $4
+         AND presentation.group_id = $5
+         AND presentation.state = 'closed'
+         AND event.actor_open_id IS NOT NULL
+       ORDER BY event.created_at DESC, presentation.id DESC
+       LIMIT 2`,
+      [
+        draft.id,
+        normalized.expectedRevision,
+        normalized.expectedDraftVersion,
+        draft.task_spec_hash,
+        draft.source_group_id,
+      ],
+    );
+    if (confirmationResult.rows.length !== 1) throw new ActionProposalIneligibleError();
+    const confirmation = confirmationResult.rows[0]!;
+    const requirements = buildApprovalRequirementSnapshot({
+      actionType: "create_feishu_task",
+      sourceGroupId: draft.source_group_id,
+      riskLevel: draft.risk_level,
+      assigneeOpenId: draft.assignee_open_id,
+      groupConfirmation: {
+        actorOpenId: confirmation.actor_open_id,
+        presentationId: confirmation.id,
+      },
+      targetPolicy: { id: policy.id, version: Number(policy.version) },
+    });
+    if (requirements.length !== 1 || requirements[0]?.kind !== "designated_owner") {
+      throw new ActionProposalPersistenceConflictError();
+    }
+
+    await client.query(
+      `INSERT INTO action_proposals (
+        id, action_type, subject_type, risk_level, status,
+        task_draft_id, task_draft_revision, task_draft_version,
+        task_target_policy_id, task_target_policy_version, task_assignee_open_id,
+        task_due_at, task_reminder_minutes, task_spec_hash,
+        task_group_confirmation_presentation_id,
+        operation_key, operation_fingerprint, version, created_at, updated_at
+      ) VALUES ($1, 'create_feishu_task', 'formal_task_draft', $2, 'pending_approval',
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $15)`,
+      [
+        normalized.proposalId,
+        draft.risk_level,
+        draft.id,
+        normalized.expectedRevision,
+        normalized.expectedDraftVersion,
+        policy.id,
+        Number(policy.version),
+        draft.assignee_open_id,
+        dueAt ?? null,
+        draft.reminder_minutes === null ? null : Number(draft.reminder_minutes),
+        draft.task_spec_hash,
+        confirmation.id,
+        normalized.operationKey,
+        fingerprint,
+        normalized.at,
+      ],
+    );
+
+    const requirement = requirements[0];
+    const requirementId = randomUUID();
+    await client.query(
+      `INSERT INTO action_approval_requirements (
+        id, proposal_id, requirement_kind, role_ref_type, role_ref,
+        task_target_policy_id, task_target_policy_version, state,
+        version, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 1, $8, $8)`,
+      [
+        requirementId,
+        normalized.proposalId,
+        requirement.kind,
+        requirement.roleRefType,
+        requirement.roleRef ?? null,
+        requirement.targetPolicyId,
+        requirement.targetPolicyVersion,
+        normalized.at,
+      ],
+    );
+    const recipientOpenId = requirement.roleRef;
+    if (requirement.roleRefType !== "feishu_user" || recipientOpenId === undefined) {
+      throw new ActionProposalPersistenceConflictError();
+    }
+    const presentationId = randomUUID();
+    const presentationOperationKey = derivedOperationKey("action-approval-presentation", {
+      proposalId: normalized.proposalId,
+      requirementId,
+      recipientOpenId,
+      proposalVersion: 1,
+    });
+    await client.query(
+      `INSERT INTO action_approval_presentations (
+        id, proposal_id, requirement_id, proposal_version, recipient_open_id,
+        state, operation_key, operation_fingerprint, version, created_at
+      ) VALUES ($1, $2, $3, 1, $4, 'pending_send', $5, $6, 1, $7)`,
+      [
+        presentationId,
+        normalized.proposalId,
+        requirementId,
+        recipientOpenId,
+        presentationOperationKey,
+        operationFingerprint({
+          proposalId: normalized.proposalId,
+          requirementId,
+          recipientOpenId,
+          proposalVersion: 1,
+        }),
+        normalized.at,
+      ],
+    );
+    await client.query(
+      `INSERT INTO action_approval_presentation_events (
+        id, presentation_id, event_type, operation_key, from_version, to_version, created_at
+      ) VALUES ($1, $2, 'created', $3, NULL, 1, $4)`,
+      [
+        randomUUID(),
+        presentationId,
+        derivedOperationKey("action-approval-presentation-created", presentationOperationKey),
+        normalized.at,
+      ],
+    );
+    await client.query(
+      `INSERT INTO action_approval_presentation_outbox (
+        id, presentation_id, idempotency_key, state, attempts, created_at, updated_at
+      ) VALUES ($1, $2, $3, 'pending', 0, $4, $4)`,
+      [randomUUID(), presentationId, `action-approval-send:${presentationId}`, normalized.at],
+    );
+    await client.query(
+      `INSERT INTO action_events (
+        id, proposal_id, event_type, operation_key, from_version, to_version,
+        reason_code, created_at
+      ) VALUES ($1, $2, 'created', $3, NULL, 1, NULL, $4)`,
+      [
+        randomUUID(),
+        normalized.proposalId,
+        `action-proposal-created:${operationFingerprint({
+          operation: "action_proposal_created",
+          proposalOperationKey: normalized.operationKey,
+        })}`,
         normalized.at,
       ],
     );
@@ -3457,8 +4012,29 @@ async function loadProposalContext(
   id: string,
 ): Promise<ActionProposalContext | undefined> {
   const proposalResult = await dataSource.query<ProposalRow>(`${proposalSelect()} WHERE id = $1`, [id]);
-  if (proposalResult.rows[0] === undefined) return undefined;
-  const proposal = mapProposal(proposalResult.rows[0]);
+  const proposalRow = proposalResult.rows[0];
+  if (proposalRow === undefined) return undefined;
+  const proposal = mapProposal(proposalRow);
+  if (proposal.subjectType === "formal_task_draft") {
+    const [requirements, approvals, formalTask] = await Promise.all([
+      dataSource.query<RequirementRow>(
+        `${requirementSelect()} WHERE proposal_id = $1 ORDER BY created_at ASC, id ASC`,
+        [id],
+      ),
+      dataSource.query<ApprovalRow>(
+        `${approvalSelect()} WHERE proposal_id = $1 ORDER BY created_at ASC, id ASC`,
+        [id],
+      ),
+      loadFormalTaskProposalContext(dataSource, proposalRow),
+    ]);
+    if (formalTask === undefined) throw new ActionProposalPersistenceConflictError();
+    return {
+      proposal,
+      requirements: requirements.rows.map(mapRequirement),
+      approvals: approvals.rows.map(mapApproval),
+      formalTask,
+    };
+  }
   const [requirements, approvals, managedTarget] = await Promise.all([
     dataSource.query<RequirementRow>(
       `${requirementSelect()} WHERE proposal_id = $1
@@ -3674,15 +4250,26 @@ function grantSelect(): string {
 function proposalSelect(): string {
   return `SELECT id, action_type, subject_type, subject_id, subject_revision, subject_version,
                  target_policy_id, target_policy_version, risk_level, status, operation_key,
-                 operation_fingerprint, version, created_at, updated_at
+                 operation_fingerprint, version, created_at, updated_at,
+                 task_draft_id, task_draft_revision, task_draft_version,
+                 task_target_policy_id, task_target_policy_version, task_assignee_open_id,
+                 task_due_at, task_reminder_minutes, task_spec_hash,
+                 task_group_confirmation_presentation_id
           FROM action_proposals`;
 }
 
 function requirementSelect(): string {
   return `SELECT id, proposal_id, requirement_kind, role_ref_type, role_ref,
                  target_policy_id, target_policy_version, state, satisfied_actor_open_id,
-                 satisfied_source_type, satisfied_source_id, version, created_at, updated_at
+                 satisfied_source_type, satisfied_source_id, version, created_at, updated_at,
+                 task_target_policy_id, task_target_policy_version
           FROM action_approval_requirements`;
+}
+
+function feishuTaskPolicySelect(): string {
+  return `SELECT id, source_group_id, display_name, allowed_assignee_open_ids,
+                 max_due_horizon_days, enabled, version, created_at, updated_at
+          FROM feishu_task_target_policies`;
 }
 
 function approvalSelect(): string {
@@ -3831,10 +4418,28 @@ function mapGrant(row: GrantRow): ActionRoleGrant {
 }
 
 function mapProposal(row: ProposalRow): ActionProposal {
+  if (row.action_type === "create_feishu_task") {
+    return {
+      id: row.id,
+      actionType: row.action_type,
+      subjectType: "formal_task_draft",
+      subjectId: requireDatabaseValue(row.task_draft_id),
+      subjectRevision: Number(requireDatabaseValue(row.task_draft_revision)),
+      subjectVersion: Number(requireDatabaseValue(row.task_draft_version)),
+      targetPolicyId: requireDatabaseValue(row.task_target_policy_id),
+      targetPolicyVersion: Number(requireDatabaseValue(row.task_target_policy_version)),
+      riskLevel: row.risk_level,
+      status: row.status,
+      operationKey: row.operation_key,
+      version: Number(row.version),
+      createdAt: requireDate(row.created_at),
+      updatedAt: requireDate(row.updated_at),
+    };
+  }
   return {
     id: row.id,
     actionType: row.action_type,
-    subjectType: row.subject_type,
+    subjectType: "knowledge_draft",
     subjectId: row.subject_id,
     subjectRevision: Number(row.subject_revision),
     subjectVersion: Number(row.subject_version),
@@ -3850,14 +4455,17 @@ function mapProposal(row: ProposalRow): ActionProposal {
 }
 
 function mapRequirement(row: RequirementRow): ActionApprovalRequirement {
+  const taskPolicy = row.task_target_policy_id ?? undefined;
   return {
     id: row.id,
     proposalId: row.proposal_id,
     kind: row.requirement_kind,
     roleRefType: row.role_ref_type,
     ...(row.role_ref === null ? {} : { roleRef: row.role_ref }),
-    targetPolicyId: row.target_policy_id,
-    targetPolicyVersion: Number(row.target_policy_version),
+    targetPolicyId: taskPolicy ?? row.target_policy_id,
+    targetPolicyVersion: Number(taskPolicy === undefined
+      ? row.target_policy_version
+      : requireDatabaseValue(row.task_target_policy_version)),
     state: row.state,
     ...(row.satisfied_actor_open_id === null
       ? {}
@@ -3866,6 +4474,62 @@ function mapRequirement(row: RequirementRow): ActionApprovalRequirement {
       ? {}
       : { satisfiedSourceType: row.satisfied_source_type }),
     ...(row.satisfied_source_id === null ? {} : { satisfiedSourceId: row.satisfied_source_id }),
+    version: Number(row.version),
+    createdAt: requireDate(row.created_at),
+    updatedAt: requireDate(row.updated_at),
+  };
+}
+
+async function loadFormalTaskProposalContext(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  proposal: ProposalRow,
+): Promise<Extract<ActionProposalContext, {
+  proposal: { subjectType: "formal_task_draft" };
+}>["formalTask"] | undefined> {
+  const result = await dataSource.query<FormalTaskProposalContextRow>(
+    `SELECT draft.source_group_id, revision.title, revision.description,
+            revision.assignee_open_id, revision.due_at, revision.reminder_minutes,
+            revision.task_spec_hash
+     FROM formal_task_draft_revisions revision
+     JOIN formal_task_drafts draft ON draft.id = revision.draft_id
+     WHERE revision.draft_id = $1 AND revision.revision_number = $2
+       AND revision.target_policy_id = $3 AND revision.target_policy_version = $4
+       AND revision.assignee_open_id = $5 AND revision.task_spec_hash = $6`,
+    [
+      requireDatabaseValue(proposal.task_draft_id),
+      Number(requireDatabaseValue(proposal.task_draft_revision)),
+      requireDatabaseValue(proposal.task_target_policy_id),
+      Number(requireDatabaseValue(proposal.task_target_policy_version)),
+      requireDatabaseValue(proposal.task_assignee_open_id),
+      requireDatabaseValue(proposal.task_spec_hash),
+    ],
+  );
+  const row = result.rows.length === 1 ? result.rows[0] : undefined;
+  if (row === undefined) return undefined;
+  return {
+    sourceGroupId: row.source_group_id,
+    title: row.title,
+    description: row.description,
+    assigneeOpenId: row.assignee_open_id,
+    ...(row.due_at === null ? {} : { dueAt: requireDate(row.due_at) }),
+    ...(row.reminder_minutes === null
+      ? {}
+      : { reminderMinutes: Number(row.reminder_minutes) as 0 | 30 | 60 | 1440 }),
+    taskSpecHash: row.task_spec_hash,
+    groupConfirmationPresentationId: requireDatabaseValue(
+      proposal.task_group_confirmation_presentation_id,
+    ),
+  };
+}
+
+function mapFeishuTaskPolicy(row: FeishuTaskPolicyRow): FeishuTaskTargetPolicy {
+  return {
+    id: row.id,
+    sourceGroupId: row.source_group_id,
+    displayName: row.display_name,
+    allowedAssigneeOpenIds: [...row.allowed_assignee_open_ids].sort(),
+    maxDueHorizonDays: Number(row.max_due_horizon_days),
+    enabled: row.enabled,
     version: Number(row.version),
     createdAt: requireDate(row.created_at),
     updatedAt: requireDate(row.updated_at),

@@ -16,6 +16,7 @@ describe("action proposal contracts", () => {
     expect(ACTION_PROPOSAL_ACTION_TYPES).toEqual([
       "publish_knowledge_draft",
       "update_knowledge_publication",
+      "create_feishu_task",
     ]);
     expect(ACTION_PROPOSAL_STATUSES).toEqual([
       "pending_approval",
@@ -36,6 +37,26 @@ describe("action proposal contracts", () => {
       "iris_admin",
       "authorized_high_risk_owner",
     ]);
+  });
+
+  it("requires exactly the formal-task assignee and never invents an admin fallback", () => {
+    expect(buildApprovalRequirementSnapshot({
+      actionType: "create_feishu_task",
+      sourceGroupId: "oc_group",
+      riskLevel: "high",
+      assigneeOpenId: " ou_assignee ",
+      groupConfirmation: {
+        actorOpenId: "ou_member",
+        presentationId: "formal-task-presentation-1",
+      },
+      targetPolicy: { id: "task-policy-1", version: 4 },
+    })).toEqual([{
+      kind: "designated_owner",
+      roleRefType: "feishu_user",
+      roleRef: "ou_assignee",
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 4,
+    }]);
   });
 
   it("auto-satisfies the only requirement for a low-risk group draft", () => {

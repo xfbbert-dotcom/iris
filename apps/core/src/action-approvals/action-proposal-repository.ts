@@ -5,6 +5,10 @@ import type {
   KnowledgeDraftRiskLevel,
   KnowledgeDraftStatus,
 } from "../knowledge-governance/knowledge-draft.js";
+import type {
+  FeishuTaskTargetPolicy,
+  FormalTaskRiskLevel,
+} from "../formal-tasks/formal-task-repository.js";
 
 import type {
   ActionApprovalRequirementKind,
@@ -91,16 +95,45 @@ export type ActionProposalEvent = {
   createdAt: Date;
 };
 
-export type ActionProposalContext = {
-  proposal: ActionProposal;
+type ActionProposalContextBase = {
   requirements: ActionApprovalRequirement[];
   approvals: ActionApproval[];
-  managedTarget?: {
-    managedPageId: string;
-    documentSourceId: string;
-    targetSourceUri: string;
-  };
 };
+
+export type ActionProposalContext =
+  | (ActionProposalContextBase & {
+      proposal: Extract<ActionProposal, { subjectType: "knowledge_draft" }>;
+      formalTask?: never;
+      managedTarget?: {
+        managedPageId: string;
+        documentSourceId: string;
+        targetSourceUri: string;
+      };
+    })
+  | (ActionProposalContextBase & {
+      proposal: Extract<ActionProposal, { subjectType: "formal_task_draft" }>;
+      managedTarget?: never;
+      formalTask: {
+        sourceGroupId: string;
+        title: string;
+        description: string;
+        assigneeOpenId: string;
+        dueAt?: Date;
+        reminderMinutes?: 0 | 30 | 60 | 1440;
+        taskSpecHash: string;
+        groupConfirmationPresentationId: string;
+      };
+    });
+
+export type KnowledgeActionProposalContext = Extract<
+  ActionProposalContext,
+  { proposal: { subjectType: "knowledge_draft" } }
+>;
+
+export type FormalTaskActionProposalContext = Extract<
+  ActionProposalContext,
+  { proposal: { subjectType: "formal_task_draft" } }
+>;
 
 export type ActionReviewContext = {
   proposalId: string;
@@ -192,7 +225,7 @@ export type ActionApprovalSendClaim = {
 };
 
 export type ActionApprovalDeliveryContext = {
-  context: ActionProposalContext;
+  context: KnowledgeActionProposalContext;
   requirement: ActionApprovalRequirement;
   policy: PublicationTargetPolicy;
   presentation: ActionApprovalPresentation;
@@ -267,7 +300,7 @@ export type KnowledgePublication = {
 
 export type ActionProposalDraftCandidate = {
   id: string;
-  actionType: ActionProposalActionType;
+  actionType: "publish_knowledge_draft" | "update_knowledge_publication";
   sourceGroupId?: string;
   currentRevision: number;
   version: number;
@@ -280,6 +313,31 @@ export type ActionProposalDraftCandidate = {
   hasCurrentGroupConfirmation: boolean;
   updatedAt: Date;
 };
+
+export type FormalTaskActionProposalDraftCandidate = {
+  id: string;
+  actionType: "create_feishu_task";
+  sourceGroupId: string;
+  currentRevision: number;
+  version: number;
+  riskLevel: FormalTaskRiskLevel;
+  assigneeOpenId: string;
+  dueAt?: Date;
+  reminderMinutes?: 0 | 30 | 60 | 1440;
+  taskSpecHash: string;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
+  groupConfirmationPresentationId: string;
+  evidenceState:
+    | { status: "current" }
+    | { status: "invalidated"; reason: KnowledgeDraftEvidenceInvalidReason };
+  hasCurrentGroupConfirmation: boolean;
+  updatedAt: Date;
+};
+
+export type ActionProposalPlanningCandidate =
+  | ActionProposalDraftCandidate
+  | FormalTaskActionProposalDraftCandidate;
 
 export type UpsertPublicationTargetPolicyInput = {
   id: string;
@@ -557,6 +615,17 @@ export interface ActionProposalRepository {
     groupIds?: string[];
     limit: number;
   }): Promise<ActionProposalDraftCandidate[]>;
+  listEligibleFormalTaskDrafts?(input: {
+    groupIds: string[];
+    limit: number;
+  }): Promise<FormalTaskActionProposalDraftCandidate[]>;
+  listFeishuTaskTargetPolicies?(input: {
+    enabled?: boolean;
+    limit: number;
+  }): Promise<FeishuTaskTargetPolicy[]>;
+  cancelStaleFormalTaskProposals?(
+    input: CancelStaleActionProposalsInput,
+  ): Promise<CancelStaleActionProposalsResult>;
   listEvents(id: string): Promise<ActionProposalEvent[]>;
   listProposals(input: {
     statuses?: ActionProposalStatus[];

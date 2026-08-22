@@ -7,6 +7,7 @@ import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/kno
 export const ACTION_PROPOSAL_ACTION_TYPES = [
   "publish_knowledge_draft",
   "update_knowledge_publication",
+  "create_feishu_task",
 ] as const;
 export const ACTION_PROPOSAL_ACTION_TYPE = ACTION_PROPOSAL_ACTION_TYPES[0];
 export const ACTION_PROPOSAL_STATUSES = [
@@ -36,10 +37,8 @@ export type ActionApprovalRequirementKind =
 export type ActionRoleGrantType = (typeof ACTION_ROLE_GRANT_TYPES)[number];
 export type ActionApprovalRoleRefType = "source_group" | "feishu_user" | "unassigned";
 
-export type ActionProposal = {
+type ActionProposalCommon = {
   id: string;
-  actionType: ActionProposalActionType;
-  subjectType: "knowledge_draft";
   subjectId: string;
   subjectRevision: number;
   subjectVersion: number;
@@ -52,6 +51,17 @@ export type ActionProposal = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+export type ActionProposal = ActionProposalCommon & (
+  | {
+      actionType: "publish_knowledge_draft" | "update_knowledge_publication";
+      subjectType: "knowledge_draft";
+    }
+  | {
+      actionType: "create_feishu_task";
+      subjectType: "formal_task_draft";
+    }
+);
 
 export type ActionApprovalRequirementSnapshot = {
   kind: ActionApprovalRequirementKind;
@@ -71,6 +81,7 @@ export type BuildApprovalRequirementSnapshotInput = {
   sourceGroupId?: string;
   riskLevel: KnowledgeDraftRiskLevel;
   reviewer?: KnowledgeDraftReviewer;
+  assigneeOpenId?: string;
   groupConfirmation?: {
     actorOpenId: string;
     presentationId: string;
@@ -97,6 +108,7 @@ export function buildApprovalRequirementSnapshot(
     "sourceGroupId",
     "riskLevel",
     "reviewer",
+    "assigneeOpenId",
     "groupConfirmation",
     "targetPolicy",
   ]);
@@ -110,6 +122,7 @@ export function buildApprovalRequirementSnapshot(
 
   const sourceGroupId = normalizeOptionalReference("sourceGroupId", input.sourceGroupId);
   const reviewer = normalizeReviewer(input.reviewer);
+  const assigneeOpenId = normalizeOptionalReference("assigneeOpenId", input.assigneeOpenId);
   const targetPolicy = normalizeTargetPolicy(input.targetPolicy);
   const groupConfirmation = normalizeGroupConfirmation(input.groupConfirmation);
   if ((sourceGroupId === undefined) !== (groupConfirmation === undefined)) {
@@ -120,6 +133,20 @@ export function buildApprovalRequirementSnapshot(
     targetPolicyId: targetPolicy.id,
     targetPolicyVersion: targetPolicy.version,
   };
+  if (actionType === "create_feishu_task") {
+    if (
+      sourceGroupId === undefined ||
+      groupConfirmation === undefined ||
+      assigneeOpenId === undefined ||
+      reviewer !== undefined
+    ) throw validationError("formal task approval binding is invalid");
+    return [{
+      kind: "designated_owner",
+      roleRefType: "feishu_user",
+      roleRef: assigneeOpenId,
+      ...common,
+    }];
+  }
   const requirements: ActionApprovalRequirementSnapshot[] = [];
   if (sourceGroupId !== undefined && groupConfirmation !== undefined) {
     requirements.push({

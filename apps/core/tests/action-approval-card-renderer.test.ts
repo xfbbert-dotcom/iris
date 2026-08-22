@@ -98,7 +98,7 @@ describe("renderActionApprovalCard", () => {
 });
 
 type InputOverrides = {
-  actionType?: ActionProposalContext["proposal"]["actionType"];
+  actionType?: "publish_knowledge_draft" | "update_knowledge_publication";
   managedTarget?: ActionProposalContext["managedTarget"];
   presentation?: Partial<ActionApprovalPresentation>;
   requirement?: Partial<ActionApprovalRequirement>;

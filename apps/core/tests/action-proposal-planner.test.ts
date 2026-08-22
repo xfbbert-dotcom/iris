@@ -6,9 +6,11 @@ import {
 } from "../src/action-approvals/action-proposal-planner.js";
 import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import type {
+  FormalTaskActionProposalDraftCandidate,
   ActionProposalRepository,
   PublicationTargetPolicy,
 } from "../src/action-approvals/action-proposal-repository.js";
+import type { FeishuTaskTargetPolicy } from "../src/formal-tasks/formal-task-repository.js";
 
 const at = new Date("2026-07-20T14:00:00.000Z");
 
@@ -230,6 +232,77 @@ describe("ActionProposalPlanner", () => {
       expectedDraftVersion: 5,
     }));
   });
+
+  it("plans only an exact current group-confirmed formal task for its designated assignee", async () => {
+    const taskCandidate: FormalTaskActionProposalDraftCandidate = {
+      id: "formal-task-1",
+      actionType: "create_feishu_task",
+      sourceGroupId: "oc_pilot",
+      currentRevision: 2,
+      version: 4,
+      riskLevel: "high",
+      assigneeOpenId: "ou_assignee",
+      dueAt: new Date("2026-07-22T14:00:00.000Z"),
+      reminderMinutes: 30,
+      taskSpecHash: "a".repeat(64),
+      targetPolicyId: "task-policy-1",
+      targetPolicyVersion: 3,
+      groupConfirmationPresentationId: "formal-task-presentation-1",
+      evidenceState: { status: "current" },
+      hasCurrentGroupConfirmation: true,
+      updatedAt: new Date("2026-07-20T12:00:00.000Z"),
+    };
+    const taskPolicy: FeishuTaskTargetPolicy = {
+      id: "task-policy-1",
+      sourceGroupId: "oc_pilot",
+      displayName: "Pilot tasks",
+      allowedAssigneeOpenIds: ["ou_assignee"],
+      maxDueHorizonDays: 30,
+      enabled: true,
+      version: 3,
+      createdAt: at,
+      updatedAt: at,
+    };
+    const repository = repositoryHarness({ candidates: [], policies: [policy()] });
+    repository.listEligibleFormalTaskDrafts = vi.fn(async () => [taskCandidate]);
+    repository.listFeishuTaskTargetPolicies = vi.fn(async () => [taskPolicy]);
+    repository.cancelStaleFormalTaskProposals = vi.fn(async () => ({
+      outcome: "applied" as const,
+      cancelledProposalIds: [],
+      draftVersion: 4,
+    }));
+    repository.createProposal.mockResolvedValue({
+      outcome: "applied",
+      proposal: {
+        ...proposal("formal-task-1"),
+        actionType: "create_feishu_task",
+        subjectType: "formal_task_draft",
+        operationKey: "create-feishu-task:formal-task-1:2:3",
+      },
+    });
+    const planner = createActionProposalPlanner({
+      repository,
+      getAllowedGroupIds: () => ["oc_pilot"],
+    });
+
+    await expect(planner.planBatch({ limit: 1, at })).resolves.toMatchObject({
+      candidateCount: 1,
+      plannedCount: 1,
+      ineligibleCount: 0,
+      failedCount: 0,
+    });
+    expect(repository.createProposal).toHaveBeenCalledWith({
+      proposalId: expect.stringMatching(/^action-proposal-/u),
+      actionType: "create_feishu_task",
+      draftId: "formal-task-1",
+      expectedRevision: 2,
+      expectedDraftVersion: 4,
+      targetPolicyId: "task-policy-1",
+      expectedTargetPolicyVersion: 3,
+      operationKey: "create-feishu-task:formal-task-1:2:3",
+      at,
+    });
+  });
 });
 
 function candidate(
@@ -313,5 +386,8 @@ function repositoryHarness(input: {
     listTargetPolicies: ReturnType<typeof vi.fn>;
     cancelStaleProposals: ReturnType<typeof vi.fn>;
     createProposal: ReturnType<typeof vi.fn>;
+    listEligibleFormalTaskDrafts?: ReturnType<typeof vi.fn>;
+    listFeishuTaskTargetPolicies?: ReturnType<typeof vi.fn>;
+    cancelStaleFormalTaskProposals?: ReturnType<typeof vi.fn>;
   };
 }

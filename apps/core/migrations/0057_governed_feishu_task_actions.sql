@@ -200,6 +200,89 @@ CREATE TABLE formal_task_draft_presentation_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE action_proposals
+  DROP CONSTRAINT action_proposals_action_type_check,
+  DROP CONSTRAINT action_proposals_subject_type_check,
+  ALTER COLUMN subject_id DROP NOT NULL,
+  ALTER COLUMN subject_revision DROP NOT NULL,
+  ALTER COLUMN subject_version DROP NOT NULL,
+  ALTER COLUMN target_policy_id DROP NOT NULL,
+  ALTER COLUMN target_policy_version DROP NOT NULL,
+  ADD COLUMN task_draft_id TEXT,
+  ADD COLUMN task_draft_revision INTEGER,
+  ADD COLUMN task_draft_version BIGINT,
+  ADD COLUMN task_target_policy_id TEXT
+    REFERENCES feishu_task_target_policies(id) ON DELETE RESTRICT,
+  ADD COLUMN task_target_policy_version BIGINT,
+  ADD COLUMN task_assignee_open_id TEXT,
+  ADD COLUMN task_due_at TIMESTAMPTZ,
+  ADD COLUMN task_reminder_minutes INTEGER,
+  ADD COLUMN task_spec_hash TEXT,
+  ADD COLUMN task_group_confirmation_presentation_id TEXT
+    REFERENCES formal_task_draft_presentations(id) ON DELETE RESTRICT,
+  ADD CONSTRAINT action_proposals_action_type_check CHECK (action_type IN (
+    'publish_knowledge_draft', 'update_knowledge_publication', 'create_feishu_task'
+  )),
+  ADD CONSTRAINT action_proposals_subject_type_check CHECK (subject_type IN (
+    'knowledge_draft', 'formal_task_draft'
+  )),
+  ADD CONSTRAINT action_proposals_task_draft_fkey
+    FOREIGN KEY (task_draft_id, task_draft_revision)
+    REFERENCES formal_task_draft_revisions(draft_id, revision_number) ON DELETE RESTRICT,
+  ADD CONSTRAINT action_proposals_action_binding_check CHECK (
+    (
+      action_type IN ('publish_knowledge_draft', 'update_knowledge_publication')
+      AND subject_type = 'knowledge_draft'
+      AND subject_id IS NOT NULL AND subject_revision IS NOT NULL
+      AND subject_version IS NOT NULL
+      AND target_policy_id IS NOT NULL AND target_policy_version IS NOT NULL
+      AND task_draft_id IS NULL AND task_draft_revision IS NULL
+      AND task_draft_version IS NULL
+      AND task_target_policy_id IS NULL AND task_target_policy_version IS NULL
+      AND task_assignee_open_id IS NULL AND task_due_at IS NULL
+      AND task_reminder_minutes IS NULL AND task_spec_hash IS NULL
+      AND task_group_confirmation_presentation_id IS NULL
+    ) OR (
+      action_type = 'create_feishu_task'
+      AND subject_type = 'formal_task_draft'
+      AND subject_id IS NULL AND subject_revision IS NULL AND subject_version IS NULL
+      AND target_policy_id IS NULL AND target_policy_version IS NULL
+      AND task_draft_id IS NOT NULL AND task_draft_revision IS NOT NULL
+      AND task_draft_version IS NOT NULL AND task_draft_version >= 1
+      AND task_target_policy_id IS NOT NULL
+      AND task_target_policy_version IS NOT NULL AND task_target_policy_version >= 1
+      AND task_assignee_open_id IS NOT NULL
+      AND char_length(task_assignee_open_id) BETWEEN 1 AND 512
+      AND (task_reminder_minutes IS NULL OR task_reminder_minutes IN (0, 30, 60, 1440))
+      AND (task_reminder_minutes IS NULL OR task_due_at IS NOT NULL)
+      AND task_spec_hash ~ '^[0-9a-f]{64}$'
+      AND task_group_confirmation_presentation_id IS NOT NULL
+    )
+  );
+
+CREATE UNIQUE INDEX action_proposals_one_live_formal_task_idx
+  ON action_proposals (task_draft_id, task_draft_revision)
+  WHERE action_type = 'create_feishu_task'
+    AND status IN ('pending_approval', 'approved', 'executing', 'reconciliation_required');
+
+ALTER TABLE action_approval_requirements
+  ALTER COLUMN target_policy_id DROP NOT NULL,
+  ALTER COLUMN target_policy_version DROP NOT NULL,
+  ADD COLUMN task_target_policy_id TEXT
+    REFERENCES feishu_task_target_policies(id) ON DELETE RESTRICT,
+  ADD COLUMN task_target_policy_version BIGINT,
+  ADD CONSTRAINT action_approval_requirements_policy_binding_check CHECK (
+    (
+      target_policy_id IS NOT NULL AND target_policy_version IS NOT NULL
+      AND target_policy_version >= 1
+      AND task_target_policy_id IS NULL AND task_target_policy_version IS NULL
+    ) OR (
+      target_policy_id IS NULL AND target_policy_version IS NULL
+      AND task_target_policy_id IS NOT NULL
+      AND task_target_policy_version IS NOT NULL AND task_target_policy_version >= 1
+    )
+  );
+
 CREATE TABLE formal_task_draft_presentation_outbox (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   presentation_id TEXT NOT NULL UNIQUE

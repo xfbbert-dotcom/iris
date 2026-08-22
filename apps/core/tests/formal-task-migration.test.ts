@@ -46,4 +46,22 @@ describe("governed Feishu task action migration", () => {
     expect(sql).toMatch(/formal_task_draft_confirmation/iu);
     expect(sql).toMatch(/createFeishuTasks/iu);
   });
+
+  it("extends shared proposals with typed task bindings while preserving publication foreign keys", async () => {
+    const [sql, baseSql] = await Promise.all([
+      readFile(new URL("../migrations/0057_governed_feishu_task_actions.sql", import.meta.url), "utf8"),
+      readFile(new URL("../migrations/0032_action_approval_facts.sql", import.meta.url), "utf8"),
+    ]);
+
+    expect(sql).toMatch(/action_type IN \([^)]+create_feishu_task/isu);
+    expect(sql).toMatch(/subject_type IN \([^)]+formal_task_draft/isu);
+    expect(sql).toMatch(/task_draft_id TEXT/iu);
+    expect(sql).toMatch(/task_target_policy_id TEXT[\s\S]+REFERENCES feishu_task_target_policies/iu);
+    expect(sql).toMatch(/task_group_confirmation_presentation_id TEXT[\s\S]+REFERENCES formal_task_draft_presentations/iu);
+    expect(baseSql).toMatch(/FOREIGN KEY \(subject_id, subject_revision\)[\s\S]+REFERENCES knowledge_draft_revisions/iu);
+    expect(sql).not.toMatch(/DROP CONSTRAINT action_proposals_subject_id_subject_revision_fkey/iu);
+    expect(sql).toMatch(/FOREIGN KEY \(task_draft_id, task_draft_revision\)[\s\S]+REFERENCES formal_task_draft_revisions/iu);
+    expect(sql).toMatch(/action_proposals_action_binding_check/iu);
+    expect(sql).toMatch(/action_approval_requirements_policy_binding_check/iu);
+  });
 });

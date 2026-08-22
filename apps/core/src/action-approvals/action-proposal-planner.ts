@@ -3,9 +3,12 @@ import { createHash } from "node:crypto";
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import type {
   ActionProposalDraftCandidate,
+  ActionProposalPlanningCandidate,
   ActionProposalRepository,
+  FormalTaskActionProposalDraftCandidate,
   PublicationTargetPolicy,
 } from "./action-proposal-repository.js";
+import type { FeishuTaskTargetPolicy } from "../formal-tasks/formal-task-repository.js";
 
 export type { ActionProposalDraftCandidate } from "./action-proposal-repository.js";
 
@@ -28,7 +31,9 @@ export type ActionProposalPlanner = {
 type PlannerRepository = Pick<
   ActionProposalRepository,
   "listEligibleDrafts" | "listTargetPolicies" | "cancelStaleProposals" | "createProposal"
->;
+> & Pick<ActionProposalRepository,
+  "listEligibleFormalTaskDrafts" | "listFeishuTaskTargetPolicies" |
+  "cancelStaleFormalTaskProposals">;
 
 export function createActionProposalPlanner(input: {
   repository: PlannerRepository;
@@ -41,11 +46,17 @@ export function createActionProposalPlanner(input: {
       const at = requireDate(request.at);
       const groupIds = normalizeGroupIds(input.getAllowedGroupIds());
       if (groupIds.length === 0) return emptyResult();
-      const [candidates, policies] = await Promise.all([
+      const [knowledgeCandidates, policies, formalTaskCandidates, taskPolicies] = await Promise.all([
         input.repository.listEligibleDrafts({ groupIds, limit }),
         input.repository.listTargetPolicies({ enabled: true, limit: POLICY_LIMIT }),
+        input.repository.listEligibleFormalTaskDrafts?.({ groupIds, limit }) ?? Promise.resolve([]),
+        input.repository.listFeishuTaskTargetPolicies?.({ enabled: true, limit: POLICY_LIMIT }) ??
+          Promise.resolve([]),
       ]);
-      const boundedCandidates = [...candidates]
+      const boundedCandidates: ActionProposalPlanningCandidate[] = [
+        ...knowledgeCandidates,
+        ...formalTaskCandidates,
+      ]
         .sort((left, right) => left.updatedAt.getTime() - right.updatedAt.getTime() ||
           left.id.localeCompare(right.id))
         .slice(0, limit);
@@ -55,7 +66,11 @@ export function createActionProposalPlanner(input: {
       for (const candidate of boundedCandidates) {
         let currentVersion = candidate.version;
         try {
-          const cancelled = await input.repository.cancelStaleProposals({
+          const cancel = candidate.actionType === "create_feishu_task"
+            ? input.repository.cancelStaleFormalTaskProposals
+            : input.repository.cancelStaleProposals;
+          if (cancel === undefined) throw new Error("formal task proposal cancellation unavailable");
+          const cancelled = await cancel({
             draftId: candidate.id,
             currentRevision: candidate.currentRevision,
             currentDraftVersion: candidate.version,
@@ -69,14 +84,18 @@ export function createActionProposalPlanner(input: {
           continue;
         }
 
-        const policy = matchPolicy(candidate, policies);
+        const policy = candidate.actionType === "create_feishu_task"
+          ? matchFormalTaskPolicy(candidate, taskPolicies, at)
+          : matchPolicy(candidate, policies);
         if (policy === undefined) {
           result.ineligibleCount += 1;
           continue;
         }
         const operationKey = candidate.actionType === "publish_knowledge_draft"
           ? `publish-knowledge:${candidate.id}:${candidate.currentRevision}:${policy.version}`
-          : `update-knowledge-publication:${candidate.id}:${candidate.currentRevision}:${policy.version}`;
+          : candidate.actionType === "update_knowledge_publication"
+            ? `update-knowledge-publication:${candidate.id}:${candidate.currentRevision}:${policy.version}`
+            : `create-feishu-task:${candidate.id}:${candidate.currentRevision}:${policy.version}`;
         try {
           const mutation = await input.repository.createProposal({
             proposalId: proposalId(operationKey),
@@ -123,6 +142,31 @@ export function createActionProposalPlanner(input: {
       return result;
     },
   };
+}
+
+function matchFormalTaskPolicy(
+  candidate: FormalTaskActionProposalDraftCandidate,
+  policies: FeishuTaskTargetPolicy[],
+  at: Date,
+): FeishuTaskTargetPolicy | undefined {
+  if (
+    candidate.evidenceState.status !== "current" ||
+    !candidate.hasCurrentGroupConfirmation
+  ) return undefined;
+  const matches = policies.filter((policy) => {
+    if (
+      !policy.enabled ||
+      policy.id !== candidate.targetPolicyId ||
+      policy.version !== candidate.targetPolicyVersion ||
+      policy.sourceGroupId !== candidate.sourceGroupId ||
+      !policy.allowedAssigneeOpenIds.includes(candidate.assigneeOpenId)
+    ) return false;
+    if (candidate.dueAt === undefined) return true;
+    const dueAt = candidate.dueAt.getTime();
+    return dueAt >= at.getTime() &&
+      dueAt <= at.getTime() + policy.maxDueHorizonDays * 24 * 60 * 60 * 1_000;
+  });
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 async function safelyObserve(

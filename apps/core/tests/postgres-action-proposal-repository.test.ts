@@ -20,6 +20,10 @@ import {
   type PostgresKnowledgeDraftDataSource,
 } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 import { createPostgresKnowledgeCardRepository } from "../src/knowledge-cards/postgres-knowledge-card-repository.js";
+import { createPostgresFormalTaskRepository } from
+  "../src/formal-tasks/postgres-formal-task-repository.js";
+import { createPostgresFormalTaskCardRepository } from
+  "../src/formal-tasks/postgres-formal-task-card-repository.js";
 import {
   ApprovalInteractionIntentConflictError,
   createPostgresApprovalInteractionIntentStore,
@@ -792,6 +796,294 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         outbox_state: "pending",
       }],
     });
+  });
+
+  it("creates one typed formal-task proposal for the exact confirmed assignee", async () => {
+    const label = "formal-task-proposal";
+    const taskGroupId = `oc_${label}_${suffix}`;
+    const assigneeOpenId = `ou_${label}_${suffix}`;
+    const providerMessageId = `om_${label}_${suffix}`;
+    const evidenceMessageId = `feishu:${providerMessageId}`;
+    await pool.query(
+      `INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, sender_id, message_type,
+        text, sent_at, raw_event_idempotency_key, created_at
+      ) VALUES ($1, 'feishu', $2, $3, 'ou_requester', 'text', 'task evidence', $4, $5, $4)`,
+      [evidenceMessageId, providerMessageId, taskGroupId, at, `event-${label}-${suffix}`],
+    );
+    const taskRepository = createPostgresFormalTaskRepository({ dataSource: pool });
+    const policy = (await taskRepository.upsertTargetPolicy({
+      id: `task-policy-${label}-${suffix}`,
+      sourceGroupId: taskGroupId,
+      displayName: "Formal task pilot",
+      allowedAssigneeOpenIds: [assigneeOpenId],
+      maxDueHorizonDays: 30,
+      enabled: true,
+      expectedVersion: 0,
+      operationKey: `task-policy:${label}:${suffix}`,
+      operator: "acceptance",
+      at,
+    })).policy;
+    const draft = (await taskRepository.createDraft({
+      id: `task-draft-${label}-${suffix}`,
+      operationKey: `task-draft:${label}:${suffix}`,
+      createdBy: "ou_requester",
+      revision: {
+        taskSpec: {
+          title: "Complete governed pilot",
+          description: "Archive exact acceptance evidence.",
+          assigneeOpenId,
+          dueAtUtc: "2026-07-22T14:00:00.000Z",
+          reminderMinutes: 30,
+          sourceGroupId: taskGroupId,
+          targetPolicyId: policy.id,
+          targetPolicyVersion: policy.version,
+        },
+        riskLevel: "high",
+        author: "iris",
+        evidence: [{ type: "conversation_message", id: evidenceMessageId }],
+      },
+      at,
+    })).draft;
+    const cardRepository = createPostgresFormalTaskCardRepository({ dataSource: pool });
+    const confirmationPresentationId = `task-confirmation-${label}-${suffix}`;
+    await cardRepository.createPresentation({
+      id: confirmationPresentationId,
+      draftId: draft.id,
+      expectedDraftVersion: draft.version,
+      expectedDraftRevision: draft.currentRevisionNumber,
+      taskSpecHash: draft.currentTaskSpecHash,
+      groupId: taskGroupId,
+      operationKey: `task-confirmation:${label}:${suffix}`,
+      at,
+    });
+    const workerId = `task-confirmation-worker-${suffix}`;
+    await cardRepository.claimPresentationSend({
+      workerId,
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+    await cardRepository.beginExternalAttempt({
+      presentationId: confirmationPresentationId,
+      workerId,
+      at,
+    });
+    await cardRepository.completePresentationSend({
+      presentationId: confirmationPresentationId,
+      workerId,
+      messageId: `om-task-confirmation-${suffix}`,
+      at,
+    });
+    const confirmed = (await cardRepository.applyInteraction({
+      presentationId: confirmationPresentationId,
+      draftId: draft.id,
+      draftRevision: draft.currentRevisionNumber,
+      draftVersion: draft.version,
+      taskSpecHash: draft.currentTaskSpecHash,
+      targetPolicyId: policy.id,
+      targetPolicyVersion: policy.version,
+      groupId: taskGroupId,
+      eventId: `task-confirmation-callback-${suffix}`,
+      actorOpenId: `ou_member_${suffix}`,
+      membershipCheckedAt: at,
+      at,
+      action: "confirm",
+    })).draft;
+
+    const repository = actionRepository();
+    await expect(repository.listEligibleFormalTaskDrafts!({
+      groupIds: [taskGroupId],
+      limit: 10,
+    })).resolves.toEqual([expect.objectContaining({
+      id: draft.id,
+      actionType: "create_feishu_task",
+      version: confirmed.version,
+      assigneeOpenId,
+      targetPolicyId: policy.id,
+      targetPolicyVersion: policy.version,
+      groupConfirmationPresentationId: confirmationPresentationId,
+      evidenceState: { status: "current" },
+      hasCurrentGroupConfirmation: true,
+    })]);
+    await expect(repository.listFeishuTaskTargetPolicies!({ enabled: true, limit: 10 }))
+      .resolves.toContainEqual(expect.objectContaining({ id: policy.id, enabled: true }));
+
+    const proposalInput = {
+      proposalId: `proposal-${label}-${suffix}`,
+      actionType: "create_feishu_task" as const,
+      draftId: draft.id,
+      expectedRevision: confirmed.currentRevisionNumber,
+      expectedDraftVersion: confirmed.version,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${label}:${suffix}`,
+      at,
+    };
+    await expect(repository.createProposal(proposalInput)).resolves.toMatchObject({
+      outcome: "applied",
+      proposal: {
+        actionType: "create_feishu_task",
+        subjectType: "formal_task_draft",
+        subjectId: draft.id,
+        subjectRevision: confirmed.currentRevisionNumber,
+        subjectVersion: confirmed.version,
+        targetPolicyId: policy.id,
+        targetPolicyVersion: policy.version,
+        status: "pending_approval",
+      },
+    });
+    await expect(repository.createProposal(proposalInput)).resolves.toMatchObject({
+      outcome: "already_applied",
+    });
+    await expect(repository.getProposal(proposalInput.proposalId)).resolves.toMatchObject({
+      formalTask: {
+        sourceGroupId: taskGroupId,
+        title: "Complete governed pilot",
+        description: "Archive exact acceptance evidence.",
+        assigneeOpenId,
+        dueAt: new Date("2026-07-22T14:00:00.000Z"),
+        reminderMinutes: 30,
+        taskSpecHash: draft.currentTaskSpecHash,
+        groupConfirmationPresentationId: confirmationPresentationId,
+      },
+      requirements: [{
+        kind: "designated_owner",
+        roleRefType: "feishu_user",
+        roleRef: assigneeOpenId,
+        targetPolicyId: policy.id,
+        targetPolicyVersion: policy.version,
+        state: "pending",
+      }],
+      approvals: [],
+    });
+    await expect(pool.query(
+      `SELECT subject_id, target_policy_id, task_draft_id, task_target_policy_id,
+              task_assignee_open_id, task_spec_hash,
+              task_group_confirmation_presentation_id
+       FROM action_proposals WHERE id = $1`,
+      [proposalInput.proposalId],
+    )).resolves.toMatchObject({ rows: [{
+      subject_id: null,
+      target_policy_id: null,
+      task_draft_id: draft.id,
+      task_target_policy_id: policy.id,
+      task_assignee_open_id: assigneeOpenId,
+      task_spec_hash: draft.currentTaskSpecHash,
+      task_group_confirmation_presentation_id: confirmationPresentationId,
+    }] });
+
+    const resultUpdateWorker = `task-confirmation-result-worker-${suffix}`;
+    const resultUpdateClaim = await cardRepository.claimPresentationSend({
+      workerId: resultUpdateWorker,
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+    expect(resultUpdateClaim?.presentation.id).toBe(confirmationPresentationId);
+    await cardRepository.beginExternalAttempt({
+      presentationId: confirmationPresentationId,
+      workerId: resultUpdateWorker,
+      at,
+    });
+    await cardRepository.completePresentationSend({
+      presentationId: confirmationPresentationId,
+      workerId: resultUpdateWorker,
+      messageId: resultUpdateClaim!.presentation.messageId!,
+      at,
+    });
+    const needsRevision = (await taskRepository.requestRevision({
+      id: draft.id,
+      expectedVersion: confirmed.version,
+      expectedRevision: confirmed.currentRevisionNumber,
+      expectedTaskSpecHash: confirmed.currentTaskSpecHash,
+      operationKey: `task-request-revision:${label}:${suffix}`,
+      actor: assigneeOpenId,
+      reason: "Clarify the acceptance evidence.",
+      at: plusSeconds(1),
+    })).draft;
+    const revised = (await taskRepository.reviseDraft({
+      id: draft.id,
+      expectedVersion: needsRevision.version,
+      operationKey: `task-revise:${label}:${suffix}`,
+      actor: "ou_requester",
+      revision: {
+        taskSpec: {
+          title: "Complete governed pilot with archive",
+          description: "Archive exact acceptance evidence.",
+          assigneeOpenId,
+          dueAtUtc: "2026-07-22T14:00:00.000Z",
+          reminderMinutes: 30,
+          sourceGroupId: taskGroupId,
+          targetPolicyId: policy.id,
+          targetPolicyVersion: policy.version,
+        },
+        riskLevel: "high",
+        author: "iris",
+        evidence: [{ type: "conversation_message", id: evidenceMessageId }],
+      },
+      at: plusSeconds(2),
+    })).draft;
+    const revisedPresentationId = `task-confirmation-revised-${label}-${suffix}`;
+    await cardRepository.createPresentation({
+      id: revisedPresentationId,
+      draftId: revised.id,
+      expectedDraftVersion: revised.version,
+      expectedDraftRevision: revised.currentRevisionNumber,
+      taskSpecHash: revised.currentTaskSpecHash,
+      groupId: taskGroupId,
+      operationKey: `task-confirmation-revised:${label}:${suffix}`,
+      at: plusSeconds(2),
+    });
+    const revisedWorkerId = `task-confirmation-revised-worker-${suffix}`;
+    await cardRepository.claimPresentationSend({
+      workerId: revisedWorkerId,
+      leaseUntil: plusSeconds(32),
+      at: plusSeconds(2),
+    });
+    await cardRepository.beginExternalAttempt({
+      presentationId: revisedPresentationId,
+      workerId: revisedWorkerId,
+      at: plusSeconds(2),
+    });
+    await cardRepository.completePresentationSend({
+      presentationId: revisedPresentationId,
+      workerId: revisedWorkerId,
+      messageId: `om-task-confirmation-revised-${suffix}`,
+      at: plusSeconds(2),
+    });
+    const reconfirmed = (await cardRepository.applyInteraction({
+      presentationId: revisedPresentationId,
+      draftId: revised.id,
+      draftRevision: revised.currentRevisionNumber,
+      draftVersion: revised.version,
+      taskSpecHash: revised.currentTaskSpecHash,
+      targetPolicyId: policy.id,
+      targetPolicyVersion: policy.version,
+      groupId: taskGroupId,
+      eventId: `task-confirmation-revised-callback-${suffix}`,
+      actorOpenId: `ou_member_${suffix}`,
+      membershipCheckedAt: plusSeconds(2),
+      at: plusSeconds(2),
+      action: "confirm",
+    })).draft;
+    await expect(repository.cancelStaleFormalTaskProposals!({
+      draftId: reconfirmed.id,
+      currentRevision: reconfirmed.currentRevisionNumber,
+      currentDraftVersion: reconfirmed.version,
+      operationKey: `cancel-stale-task-proposals:${label}:${suffix}`,
+      at: plusSeconds(3),
+    })).resolves.toEqual({
+      outcome: "applied",
+      cancelledProposalIds: [proposalInput.proposalId],
+      draftVersion: reconfirmed.version,
+    });
+    await expect(repository.getProposal(proposalInput.proposalId)).resolves.toMatchObject({
+      proposal: { status: "cancelled", version: 2 },
+      requirements: [{ state: "invalidated" }],
+    });
+    await expect(pool.query(
+      `SELECT state FROM action_approval_presentations WHERE proposal_id = $1`,
+      [proposalInput.proposalId],
+    )).resolves.toMatchObject({ rows: [{ state: "superseded" }] });
   });
 
   it("keeps high risk pending for an explicitly bound authorized owner", async () => {
