@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { FormalTaskCreationDueExpiredError } from "./formal-task-execution-repository.js";
+
 import type {
   ClaimedFeishuTaskCreation,
   CompleteFeishuTaskCreationInput,
@@ -366,6 +368,7 @@ async function claimNextCreation(
   const normalized = normalizeClaim(input);
   if (!canClaim(normalized.runtimeGate)) return undefined;
   return withTransaction(dataSource, async (client) => {
+    await terminalizeExpiredRetry(client, normalized.runtimeGate, normalized.at);
     const reclaimed = await reclaimStaleUndispatchedExecution(client, normalized);
     if (reclaimed !== undefined) return reclaimed;
     const retry = await lockRetryCandidate(client, normalized.runtimeGate, normalized.at);
@@ -577,9 +580,14 @@ async function markExternalAttempt(
     operationKey: requireReference("operationKey", input.operationKey),
     at: requireDate(input.at),
   };
-  return withTransaction(dataSource, async (client) => {
-    const replay = await client.query<{ execution_id: string }>(
-      `SELECT execution_id FROM feishu_task_creation_execution_events
+  const result = await withTransaction(dataSource, async (client) => {
+    const replay = await client.query<{
+      execution_id: string;
+      event_type: string;
+      response_classification: string | null;
+    }>(
+      `SELECT execution_id, event_type, response_classification
+       FROM feishu_task_creation_execution_events
        WHERE operation_key = $1`,
       [normalized.operationKey],
     );
@@ -587,16 +595,41 @@ async function markExternalAttempt(
       if (replay.rows[0].execution_id !== normalized.executionId) {
         throw new FormalTaskExecutionOperationConflictError();
       }
+      if (
+        replay.rows[0].event_type === "failed" &&
+        replay.rows[0].response_classification === "due_expired"
+      ) return "due_expired" as const;
+      if (replay.rows[0].event_type !== "request_dispatched") {
+        throw new FormalTaskExecutionOperationConflictError();
+      }
       return requireClaim(await loadClaim(client, normalized.executionId));
     }
+    const identity = await client.query<{ proposal_id: string }>(
+      "SELECT proposal_id FROM feishu_task_creation_executions WHERE id = $1",
+      [normalized.executionId],
+    );
+    if (identity.rows[0] === undefined) throw new FormalTaskExecutionPersistenceConflictError();
+    const proposal = await lockProposal(client, identity.rows[0].proposal_id);
     const execution = await lockExecution(client, normalized.executionId);
     if (
+      proposal.status !== "executing" ||
+      execution.proposal_id !== proposal.id ||
       execution.state !== "claimed" ||
       Number(execution.version) !== normalized.expectedExecutionVersion ||
       execution.worker_id !== normalized.workerId ||
       execution.lease_until === null ||
       execution.lease_until.getTime() < normalized.at.getTime()
     ) throw new FormalTaskExecutionPersistenceConflictError();
+    const due = await loadCurrentDispatchDue(client, execution.id);
+    if (isDueOutsidePolicy(due, normalized.at)) {
+      await terminalizeDueExpired(client, {
+        proposal,
+        execution,
+        operationKey: normalized.operationKey,
+        at: normalized.at,
+      });
+      return "due_expired" as const;
+    }
     const fromVersion = Number(execution.version);
     const updated = await client.query<{ id: string }>(
       `UPDATE feishu_task_creation_executions
@@ -617,6 +650,109 @@ async function markExternalAttempt(
     });
     return requireClaim(await loadClaim(client, normalized.executionId));
   });
+  if (result === "due_expired") throw new FormalTaskCreationDueExpiredError();
+  return result;
+}
+
+async function loadCurrentDispatchDue(
+  client: TransactionClient,
+  executionId: string,
+): Promise<{ dueAt: Date | null; maxDueHorizonDays: number }> {
+  const result = await client.query<{
+    due_at: Date | null;
+    max_due_horizon_days: string | number;
+  }>(
+    `SELECT revision.due_at, policy.max_due_horizon_days
+     FROM feishu_task_creation_executions execution
+     JOIN action_proposals proposal ON proposal.id = execution.proposal_id
+     JOIN formal_task_drafts draft ON draft.id = execution.draft_id
+     JOIN formal_task_draft_revisions revision
+       ON revision.draft_id = execution.draft_id
+      AND revision.revision_number = execution.draft_revision
+     JOIN feishu_task_target_policies policy ON policy.id = execution.target_policy_id
+     WHERE execution.id = $1 AND proposal.status = 'executing'
+       AND ${currentBindingPredicate()}`,
+    [executionId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new FormalTaskExecutionPersistenceConflictError();
+  return {
+    dueAt: row.due_at === null ? null : requireDate(row.due_at),
+    maxDueHorizonDays: Number(row.max_due_horizon_days),
+  };
+}
+
+function isDueOutsidePolicy(
+  due: { dueAt: Date | null; maxDueHorizonDays: number },
+  at: Date,
+): boolean {
+  return due.dueAt !== null && (
+    due.dueAt.getTime() < at.getTime() ||
+    due.dueAt.getTime() > at.getTime() + due.maxDueHorizonDays * 86_400_000
+  );
+}
+
+async function terminalizeDueExpired(
+  client: TransactionClient,
+  input: {
+    proposal: { id: string; status: string; version: string | number };
+    execution: ExecutionRow;
+    operationKey: string;
+    at: Date;
+  },
+): Promise<void> {
+  if (
+    input.proposal.status !== "executing" ||
+    input.execution.proposal_id !== input.proposal.id ||
+    !(input.execution.state === "claimed" || input.execution.state === "failed")
+  ) throw new FormalTaskExecutionPersistenceConflictError();
+  const executionVersion = Number(input.execution.version);
+  const updatedExecution = await client.query<{ id: string }>(
+    `UPDATE feishu_task_creation_executions
+     SET state = 'failed', response_classification = 'due_expired',
+         worker_id = NULL, lease_until = NULL, retry_at = NULL,
+         version = version + 1, updated_at = $2
+     WHERE id = $1 AND version = $3 AND state IN ('claimed', 'failed')
+     RETURNING id`,
+    [input.execution.id, input.at, executionVersion],
+  );
+  if (updatedExecution.rows.length !== 1) {
+    throw new FormalTaskExecutionPersistenceConflictError();
+  }
+  await insertExecutionEvent(client, {
+    executionId: input.execution.id,
+    eventType: "failed",
+    operationKey: input.operationKey,
+    fromVersion: executionVersion,
+    toVersion: executionVersion + 1,
+    responseClassification: "due_expired",
+    at: input.at,
+  });
+  const proposalVersion = Number(input.proposal.version);
+  const updatedProposal = await client.query<{ id: string }>(
+    `UPDATE action_proposals
+     SET status = 'failed', version = version + 1, updated_at = $2
+     WHERE id = $1 AND status = 'executing' AND version = $3
+     RETURNING id`,
+    [input.proposal.id, input.at, proposalVersion],
+  );
+  if (updatedProposal.rows.length !== 1) {
+    throw new FormalTaskExecutionPersistenceConflictError();
+  }
+  await client.query(
+    `INSERT INTO action_events (
+       id, proposal_id, event_type, operation_key, from_version, to_version,
+       reason_code, created_at
+     ) VALUES ($1, $2, 'execution_failed', $3, $4, $5, 'due_expired', $6)`,
+    [
+      randomUUID(),
+      input.proposal.id,
+      derivedOperationKey("formal-task-proposal-due-expired", [input.operationKey]),
+      proposalVersion,
+      proposalVersion + 1,
+      input.at,
+    ],
+  );
 }
 
 async function recordCreationFailure(
@@ -1353,6 +1489,60 @@ async function insertResultPresentationEvent(
       input.at,
     ],
   );
+}
+
+async function terminalizeExpiredRetry(
+  client: TransactionClient,
+  gate: FeishuTaskCreationRuntimeGate,
+  at: Date,
+): Promise<void> {
+  const result = await client.query<ExecutionRow & {
+    proposal_version: string | number;
+    due_at: Date;
+    max_due_horizon_days: string | number;
+  }>(
+    `${executionSelect("execution", `, proposal.version AS proposal_version,
+       revision.due_at, policy.max_due_horizon_days`)}
+     JOIN action_proposals proposal ON proposal.id = execution.proposal_id
+     JOIN formal_task_drafts draft ON draft.id = execution.draft_id
+     JOIN formal_task_draft_revisions revision
+       ON revision.draft_id = execution.draft_id
+      AND revision.revision_number = execution.draft_revision
+     JOIN feishu_task_target_policies policy ON policy.id = execution.target_policy_id
+     WHERE execution.state = 'failed' AND execution.retry_at IS NOT NULL
+       AND proposal.status = 'executing'
+       AND NOT EXISTS (
+         SELECT 1 FROM feishu_task_creation_executions newer
+         WHERE newer.proposal_id = execution.proposal_id
+           AND newer.attempt_number > execution.attempt_number
+       )
+       AND ${currentBindingPredicate()}
+       AND draft.source_group_id = ANY($2::text[])
+       AND NOT (draft.source_group_id = ANY($3::text[]))
+       AND revision.due_at IS NOT NULL
+       AND (
+         revision.due_at < $1
+         OR revision.due_at > $1 + policy.max_due_horizon_days * INTERVAL '1 day'
+       )
+     ORDER BY execution.retry_at ASC, execution.created_at ASC, execution.id ASC
+     FOR UPDATE OF execution, proposal SKIP LOCKED LIMIT 1`,
+    [at, gate.allowedGroupIds, gate.disabledGroupIds],
+  );
+  const execution = result.rows[0];
+  if (execution === undefined) return;
+  await terminalizeDueExpired(client, {
+    proposal: {
+      id: execution.proposal_id,
+      status: "executing",
+      version: execution.proposal_version,
+    },
+    execution,
+    operationKey: derivedOperationKey("formal-task-expired-retry", [
+      execution.id,
+      Number(execution.version),
+    ]),
+    at,
+  });
 }
 
 async function lockRetryCandidate(

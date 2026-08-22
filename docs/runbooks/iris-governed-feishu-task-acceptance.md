@@ -145,3 +145,6 @@ rollback_safe_off=true
 - 将共享审批 worker 的终态卡片标题和 execution observation reason 按 action type 区分；
   `create_feishu_task` 不再沿用 knowledge publication 的展示措辞。该项仅影响运维可读性，
   不改变批准、权限、执行或幂等事实，因此不延长本阶段退出门禁。
+- 将成员查询故障和运行时暂停改为复用同一个未发送 execution，或单独记录有界管理重试；
+  避免长期暂停时增长 execution 链，并让 `attemptNumber` 只表达真实外部请求尝试。当前实现会在
+  due 过期时以 `due_expired` 可见终态停止，不会越过发送边界或无限期保留 executing proposal。

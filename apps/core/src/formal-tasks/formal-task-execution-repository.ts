@@ -1,5 +1,12 @@
 import type { FeishuTaskSnapshot } from "./feishu-task-creator.js";
 
+export class FormalTaskCreationDueExpiredError extends Error {
+  constructor() {
+    super("formal task due time expired before dispatch");
+    this.name = "FormalTaskCreationDueExpiredError";
+  }
+}
+
 export type FeishuTaskCreationExecutionState =
   | "claimed"
   | "external_attempting"

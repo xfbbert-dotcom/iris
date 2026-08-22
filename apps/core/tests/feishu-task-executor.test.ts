@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createFeishuTaskExecutor } from
   "../src/formal-tasks/feishu-task-executor.js";
+import { FormalTaskCreationDueExpiredError } from
+  "../src/formal-tasks/formal-task-execution-repository.js";
 
 const at = new Date("2026-08-22T12:00:00.000Z");
 
@@ -115,6 +117,21 @@ describe("FeishuTaskExecutor", () => {
       responseClassification: "runtime_disabled",
       expectedExecutionVersion: 1,
     }));
+  });
+
+  it("stops before remote creation when due time expires during membership validation", async () => {
+    const fixture = createFixture({
+      dispatchError: new FormalTaskCreationDueExpiredError(),
+    });
+
+    await expect(fixture.executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "failed",
+      proposalId: "proposal-1",
+      executionId: "execution-1",
+      code: "due_expired",
+    }]);
+    expect(fixture.creator.createTask).not.toHaveBeenCalled();
+    expect(fixture.repository.recordCreationFailure).not.toHaveBeenCalled();
   });
 
   it("schedules bounded retryable failures with the same durable request binding", async () => {
@@ -264,20 +281,23 @@ function createFixture(overrides: {
   claim?: typeof claim;
   createOutcome?: unknown;
   completeError?: boolean;
+  dispatchError?: Error;
 } = {}) {
   const selectedClaim = overrides.claim ?? claim;
   const repository = {
     claimNextCreation: vi.fn()
       .mockResolvedValueOnce(selectedClaim)
       .mockResolvedValue(undefined),
-    markExternalAttempt: vi.fn(async () => ({
-      ...selectedClaim,
-      execution: {
-        ...selectedClaim.execution,
-        state: "external_attempting" as const,
-        version: 2,
-      },
-    })),
+    markExternalAttempt: overrides.dispatchError === undefined
+      ? vi.fn(async () => ({
+          ...selectedClaim,
+          execution: {
+            ...selectedClaim.execution,
+            state: "external_attempting" as const,
+            version: 2,
+          },
+        }))
+      : vi.fn(async () => { throw overrides.dispatchError; }),
     completeCreation: overrides.completeError
       ? vi.fn(async () => { throw new Error("database unavailable"); })
       : vi.fn(async () => undefined),

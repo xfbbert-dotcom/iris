@@ -5,6 +5,7 @@ import type { FeishuGroupMembershipChecker } from
 
 import type { FeishuTaskCreator, FeishuTaskCreateOutcome } from "./feishu-task-creator.js";
 import {
+  FormalTaskCreationDueExpiredError,
   matchesApprovedTaskProjection,
   type ClaimedFeishuTaskCreation,
   type FormalTaskExecutionRepository,
@@ -162,7 +163,10 @@ async function executeClaim(input: {
       operationKey: operationKey("formal-task-dispatch", [input.claim.execution.id]),
       at: requireDate(input.now()),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof FormalTaskCreationDueExpiredError) {
+      return { ...base, status: "failed", code: "due_expired" };
+    }
     return { ...base, status: "reconciliation_required", code: "dispatch_commit_failed" };
   }
 

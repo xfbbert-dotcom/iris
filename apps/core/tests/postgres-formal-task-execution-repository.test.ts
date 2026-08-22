@@ -18,6 +18,8 @@ import {
 } from "../src/formal-tasks/postgres-formal-task-execution-repository.js";
 import { createPostgresFormalTaskRepository } from
   "../src/formal-tasks/postgres-formal-task-repository.js";
+import { FormalTaskCreationDueExpiredError } from
+  "../src/formal-tasks/formal-task-execution-repository.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
@@ -347,10 +349,67 @@ runIfDatabase("PostgresFormalTaskExecutionRepository with Postgres", () => {
     await expect(repository.claimNextCreation({
       runtimeGate: runtimeGate(seeded.groupId),
       workerId: "task-executor-expired-retry-2",
-      leaseUntil: plusSeconds(91),
+      leaseUntil: plusSeconds(61),
       operationKey: `task-execution-claim:expired-retry-2:${seeded.suffix}`,
-      at: plusSeconds(61),
+      at: plusSeconds(31),
     })).resolves.toBeUndefined();
+    await expect(pool.query(
+      `SELECT proposal.status AS proposal_status, execution.state AS execution_state,
+              execution.response_classification, execution.retry_at
+       FROM action_proposals proposal
+       JOIN feishu_task_creation_executions execution ON execution.proposal_id = proposal.id
+       WHERE proposal.id = $1`,
+      [seeded.proposalId],
+    )).resolves.toMatchObject({ rows: [{
+      proposal_status: "failed",
+      execution_state: "failed",
+      response_classification: "due_expired",
+      retry_at: null,
+    }] });
+  });
+
+  it("terminalizes a stale undispatched claim when due expires before dispatch", async () => {
+    const seeded = await seedApprovedTask(pool, "expired-stale-claim", {
+      dueAtUtc: plusSeconds(30).toISOString(),
+    });
+    const repository = createPostgresFormalTaskExecutionRepository({ dataSource: pool });
+    const first = await repository.claimNextCreation({
+      runtimeGate: runtimeGate(seeded.groupId),
+      workerId: "task-executor-expired-stale-1",
+      leaseUntil: plusSeconds(10),
+      operationKey: `task-execution-claim:expired-stale-1:${seeded.suffix}`,
+      at,
+    });
+    const reclaimed = await repository.claimNextCreation({
+      runtimeGate: runtimeGate(seeded.groupId),
+      workerId: "task-executor-expired-stale-2",
+      leaseUntil: plusSeconds(61),
+      operationKey: `task-execution-claim:expired-stale-2:${seeded.suffix}`,
+      at: plusSeconds(31),
+    });
+    expect(reclaimed).toMatchObject({
+      execution: { id: first!.execution.id, state: "claimed", version: 2 },
+    });
+
+    await expect(repository.markExternalAttempt({
+      executionId: reclaimed!.execution.id,
+      expectedExecutionVersion: reclaimed!.execution.version,
+      workerId: "task-executor-expired-stale-2",
+      operationKey: `task-execution-dispatch:expired-stale:${seeded.suffix}`,
+      at: plusSeconds(31),
+    })).rejects.toBeInstanceOf(FormalTaskCreationDueExpiredError);
+    await expect(pool.query(
+      `SELECT proposal.status AS proposal_status, execution.state AS execution_state,
+              execution.response_classification
+       FROM action_proposals proposal
+       JOIN feishu_task_creation_executions execution ON execution.proposal_id = proposal.id
+       WHERE proposal.id = $1`,
+      [seeded.proposalId],
+    )).resolves.toMatchObject({ rows: [{
+      proposal_status: "failed",
+      execution_state: "failed",
+      response_classification: "due_expired",
+    }] });
   });
 
   it("claims an outcome-unknown reconciliation attempt without changing its token or payload", async () => {
@@ -824,7 +883,7 @@ function plusSeconds(seconds: number): Date {
 
 async function cleanupOwnedOutboxes(pool: pg.Pool): Promise<void> {
   const ownedDraftPattern =
-    "^task-draft-(success|retry|expired-retry|reconciliation|operator-reconcile|stale-claim|stale-dispatch|disabled|operation-conflict)-";
+    "^task-draft-(success|retry|expired-retry|expired-stale-claim|reconciliation|operator-reconcile|stale-claim|stale-dispatch|disabled|operation-conflict)-";
   await pool.query(
     `UPDATE formal_task_draft_presentation_outbox outbox
      SET state = 'failed', error_code = 'test_isolation', updated_at = NOW()
