@@ -10,7 +10,11 @@ export type ManagedKnowledgePageFixtureState =
 
 type FixtureQueryable = {
   query(sql: string, values?: unknown[]): Promise<unknown>;
+  connect?: unknown;
+  release?: unknown;
 };
+
+type FixtureClient = FixtureQueryable & { release(): void };
 
 export async function insertManagedKnowledgePageFixture(input: {
   queryable: FixtureQueryable;
@@ -20,6 +24,21 @@ export async function insertManagedKnowledgePageFixture(input: {
   suffix?: string;
   at?: Date;
 }): Promise<{ pageId: string; pageVersion: number }> {
+  if (isFixturePool(input.queryable)) {
+    const client = await input.queryable.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await insertManagedKnowledgePageFixture({ ...input, queryable: client });
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   const suffix = input.suffix ?? randomUUID().replaceAll("-", "");
   const at = input.at ?? new Date("2026-08-20T00:00:00.000Z");
   const policyId = `managed-fixture-policy-${suffix}`;
@@ -95,4 +114,10 @@ export async function insertManagedKnowledgePageFixture(input: {
   );
 
   return { pageId, pageVersion: 1 };
+}
+
+function isFixturePool(
+  queryable: FixtureQueryable,
+): queryable is FixtureQueryable & { connect(): Promise<FixtureClient> } {
+  return typeof queryable.connect === "function" && typeof queryable.release !== "function";
 }
