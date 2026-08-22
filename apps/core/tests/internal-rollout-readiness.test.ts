@@ -134,6 +134,18 @@ describe("buildInternalRolloutReadinessReport", () => {
       });
   });
 
+  it("blocks managed updates when more than one pilot group is configured", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv({
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot,oc_second",
+    }));
+
+    expect(checksById(report).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain exactly one group",
+    });
+  });
+
   it("fails enabled managed knowledge updates without the 0055 identity migration or a healthy worker", () => {
     const env = readyRolloutEnv({
       IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",

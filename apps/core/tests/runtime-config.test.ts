@@ -44,17 +44,17 @@ describe("createDefaultRuntimeConfig", () => {
 });
 
 describe("managed knowledge update deployment configuration", () => {
-  it("defaults off and accepts only an explicit unique pilot allowlist", () => {
+  it("defaults off and accepts only one explicit pilot group", () => {
     expect(readManagedKnowledgeUpdateDeploymentConfig({})).toEqual({
       enabled: false,
       groupAllowlist: [],
     });
     expect(readManagedKnowledgeUpdateDeploymentConfig({
       IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
-      IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: " group-a,group-b ",
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: " group-a ",
     })).toEqual({
       enabled: true,
-      groupAllowlist: ["group-a", "group-b"],
+      groupAllowlist: ["group-a"],
     });
   });
 
@@ -65,7 +65,14 @@ describe("managed knowledge update deployment configuration", () => {
     ],
     [
       { IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true" },
-      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain at least one group",
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain exactly one group",
+    ],
+    [
+      {
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "group-a,group-b",
+      },
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain exactly one group",
     ],
     [
       {

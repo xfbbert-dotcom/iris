@@ -743,9 +743,9 @@ export function readManagedKnowledgeUpdateDeploymentConfig(
     "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST",
     env.IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST,
   );
-  if (enabled && groupAllowlist.length === 0) {
+  if (enabled && groupAllowlist.length !== 1) {
     throw new Error(
-      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain at least one group",
+      "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain exactly one group",
     );
   }
   return { enabled, groupAllowlist };
