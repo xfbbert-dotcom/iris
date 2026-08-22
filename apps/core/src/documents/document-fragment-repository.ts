@@ -476,7 +476,9 @@ async function withTransactionIfSupported<T>(
 }
 
 function supportsTransactions(queryable: Queryable): queryable is TransactionalQueryable {
-  return "connect" in queryable && typeof queryable.connect === "function";
+  return "connect" in queryable
+    && typeof queryable.connect === "function"
+    && !("release" in queryable && typeof queryable.release === "function");
 }
 
 function validateReplacementEmbeddings(

@@ -135,6 +135,55 @@ describe("DocumentFragmentRepository", () => {
     ]);
   });
 
+  it("uses an already acquired query client without reconnecting it", async () => {
+    const createdAt = new Date("2026-07-02T01:00:00.000Z");
+    const query = vi.fn(async (sql: string) => {
+      if (normalizeSql(sql).startsWith("insert into document_fragments")) {
+        return {
+          rows: [{
+            id: "fragment-client",
+            document_source_id: "source-client",
+            document_snapshot_id: "snapshot-client",
+            source_uri: "https://example.com/client",
+            chunk_index: 0,
+            text: "Client",
+            content_hash: "hash-client",
+            embedding_profile_id: "static-dev-6d",
+            created_at: createdAt,
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+    const connect = vi.fn(async () => {
+      throw new Error("already acquired clients must not reconnect");
+    });
+    const acquiredClient = {
+      query: query as Queryable["query"],
+      connect,
+      release: vi.fn(),
+    } as Queryable;
+    const repository = createDocumentFragmentRepository({
+      queryable: acquiredClient,
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+      createId: () => "fragment-client",
+      now: () => createdAt,
+    });
+
+    await expect(repository.replaceFragmentsForSnapshot({
+      documentSourceId: "source-client",
+      documentSnapshotId: "snapshot-client",
+      sourceUri: "https://example.com/client",
+      embeddingProfileId: "static-dev-6d",
+      chunks: [{ chunkIndex: 0, text: "Client" }],
+      embeddings: [[1, 0, 0, 0, 0, 0]],
+    })).resolves.toHaveLength(1);
+
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it("serializes vectors for pgvector", () => {
     expect(serializeVector([1, 0.5, -2])).toBe("[1,0.5,-2]");
   });
