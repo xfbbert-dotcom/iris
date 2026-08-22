@@ -15,6 +15,7 @@ import type {
 import {
   ActionProposalAuthorizationError,
   ActionProposalIneligibleError,
+  ActionProposalMembershipProofError,
   ActionProposalOperationConflictError,
   ActionProposalPersistenceConflictError,
   ActionProposalReviewRequiredError,
@@ -150,12 +151,14 @@ export function createActionApprovalWorker({
         )) {
           return denied("runtime_disabled");
         }
+        let membershipCheckedAt: Date | undefined;
         if (observationGroupId !== undefined) {
           try {
             if (!await membershipChecker.isCurrentMember({
               chatId: observationGroupId,
               openId: job.actorOpenId,
             })) return denied("not_current_member");
+            membershipCheckedAt = requireDate(now());
           } catch {
             return retryable("membership_unavailable");
           }
@@ -172,7 +175,13 @@ export function createActionApprovalWorker({
         let mutation: ApplyActionProposalActionResult;
         try {
           mutation = await repository.applyApprovalAction(
-            toMutationInput(job, intent, requireReviewAttestation),
+            toMutationInput(
+              job,
+              intent,
+              requireReviewAttestation,
+              membershipCheckedAt,
+              requireDate(now()),
+            ),
           );
         } catch (error) {
           return classifyStableOrRetryable(error);
@@ -308,12 +317,15 @@ function toMutationInput(
   job: ActionProposalApprovalInteractionJob,
   intent?: ApprovalInteractionIntent,
   requireReviewAttestation = false,
+  membershipCheckedAt?: Date,
+  at = requireDate(job.receivedAt),
 ) {
   const common = {
     ...toPreflightInput(job, requireReviewAttestation),
     callbackEventId: job.eventId,
     operationKey: `action-approval:${job.appId}:${job.eventId}`,
-    at: requireDate(job.receivedAt),
+    ...(membershipCheckedAt === undefined ? {} : { membershipCheckedAt }),
+    at,
   };
   if (job.action === "approve") return { ...common, action: "approve" as const };
   if (job.action === "request_revision") {
@@ -385,6 +397,9 @@ function renderCommittedResult(result: ApplyActionProposalActionResult): string 
 }
 
 function classifyStableOrRetryable(error: unknown): ActionApprovalWorkerResult {
+  if (error instanceof ActionProposalMembershipProofError) {
+    return retryable("membership_unavailable");
+  }
   if (error instanceof ActionProposalReviewRequiredError) return denied("review_required");
   if (error instanceof ActionProposalAuthorizationError) return denied("not_authorized");
   if (error instanceof ActionProposalIneligibleError || error instanceof KnowledgeDraftEvidenceError) {

@@ -140,8 +140,8 @@ async function executeClaim(input: {
       openId: input.claim.draft.assigneeOpenId,
     });
   } catch {
-    await recordFailure(input, input.claim, "failed", "membership_unavailable");
-    return { ...base, status: "failed", code: "membership_unavailable" };
+    await recordFailure(input, input.claim, "retryable", "membership_unavailable");
+    return { ...base, status: "retrying", code: "membership_unavailable" };
   }
   if (!currentMember) {
     await recordFailure(input, input.claim, "failed", "assignee_not_current_member");
@@ -149,8 +149,8 @@ async function executeClaim(input: {
   }
   const gate = normalizeRuntime(input.runtimeSnapshot());
   if (!canCreateForGroup(gate, input.claim.draft.sourceGroupId)) {
-    await recordFailure(input, input.claim, "failed", "runtime_disabled");
-    return { ...base, status: "skipped", code: "runtime_disabled" };
+    await recordFailure(input, input.claim, "retryable", "runtime_disabled");
+    return { ...base, status: "retrying", code: "runtime_disabled" };
   }
 
   let dispatched: ClaimedFeishuTaskCreation;

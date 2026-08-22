@@ -34,7 +34,8 @@ export type FeishuTaskResultDispatcherResult = {
 export type FeishuTaskResultDispatcherDependencies = {
   repository: Pick<FormalTaskExecutionRepository,
     "claimResultPresentationSend" | "getResultPresentationContext" |
-    "beginResultPresentationAttempt" | "failResultPresentationPreparation" |
+    "beginResultPresentationAttempt" | "deferResultPresentationSend" |
+    "failResultPresentationPreparation" |
     "completeResultPresentationSend" | "failResultPresentationSend">;
   cardClient: Pick<FeishuInteractiveCardClient, "sendCard">;
   canSendResultCards(groupId?: string): boolean;
@@ -106,7 +107,7 @@ async function dispatchClaim(input: {
   }
   if (!isExactContext(input.claim, context)) return failPreparation(input, "stale_presentation");
   if (!readGate(input.canSendResultCards, context.presentation.groupId)) {
-    return failPreparation(input, "runtime_disabled");
+    return deferForRuntimePause(input);
   }
   let cardJson: string;
   try {
@@ -120,7 +121,7 @@ async function dispatchClaim(input: {
     at: requireDate(input.now()),
   });
   if (!readGate(input.canSendResultCards, context.presentation.groupId)) {
-    return failExternalAttempt(input, "permanent", "runtime_disabled");
+    return deferForRuntimePause(input);
   }
   let sent: { messageId: string };
   try {
@@ -147,6 +148,24 @@ async function dispatchClaim(input: {
   } catch {
     return failExternalAttempt(input, "outcome_unknown", "outcome_unknown");
   }
+}
+
+async function deferForRuntimePause(
+  input: Parameters<typeof dispatchClaim>[0],
+): Promise<FeishuTaskResultDispatcherResult> {
+  const deferredAt = requireDate(input.now());
+  await input.repository.deferResultPresentationSend({
+    presentationId: input.claim.presentation.id,
+    workerId: input.claim.workerId,
+    errorCode: "runtime_disabled",
+    retryAt: new Date(deferredAt.getTime() + input.retryDelayMs),
+    at: deferredAt,
+  });
+  return {
+    status: "retrying",
+    presentationId: input.claim.presentation.id,
+    code: "runtime_disabled",
+  };
 }
 
 function failFromCardError(

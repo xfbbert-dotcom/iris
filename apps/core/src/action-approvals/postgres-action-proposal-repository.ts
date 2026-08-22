@@ -422,11 +422,27 @@ export class ActionProposalReviewRequiredError extends Error {
   }
 }
 
+export class ActionProposalMembershipProofError extends Error {
+  constructor() {
+    super("action proposal membership proof is missing or stale");
+    this.name = "ActionProposalMembershipProofError";
+  }
+}
+
+const DEFAULT_MEMBERSHIP_PROOF_MAX_AGE_MS = 30_000;
+
 export function createPostgresActionProposalRepository({
   dataSource,
+  membershipProofMaxAgeMs = DEFAULT_MEMBERSHIP_PROOF_MAX_AGE_MS,
+  monotonicNow = () => performance.now(),
 }: {
   dataSource: PostgresKnowledgeDraftDataSource;
+  membershipProofMaxAgeMs?: number;
+  monotonicNow?: () => number;
 }): ActionProposalRepository {
+  if (!Number.isSafeInteger(membershipProofMaxAgeMs) || membershipProofMaxAgeMs < 1) {
+    throw new Error("membershipProofMaxAgeMs is invalid");
+  }
   return {
     upsertTargetPolicy(input) {
       return upsertTargetPolicy(dataSource, input);
@@ -454,7 +470,10 @@ export function createPostgresActionProposalRepository({
       return cancelStaleFormalTaskProposals(dataSource, input);
     },
     applyApprovalAction(input) {
-      return applyApprovalAction(dataSource, input);
+      return applyApprovalAction(dataSource, input, {
+        maxAgeMs: membershipProofMaxAgeMs,
+        monotonicNow,
+      });
     },
     applyGovernanceDisposition(input) {
       return applyGovernanceDisposition(dataSource, input);
@@ -2045,9 +2064,11 @@ async function listInvalidatedProposalIds(
 async function applyApprovalAction(
   dataSource: PostgresKnowledgeDraftDataSource,
   input: ApplyActionProposalActionInput,
+  membershipProof: { maxAgeMs: number; monotonicNow(): number },
 ): Promise<ApplyActionProposalActionResult> {
   const normalized = normalizeApplyActionInput(input);
   const fingerprint = actionApprovalFingerprint(normalized);
+  const transactionStartedAt = requireMonotonicTime(membershipProof.monotonicNow());
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
     const replay = await inspectNormalizedApprovalActionReplay(client, normalized, fingerprint);
@@ -2055,7 +2076,14 @@ async function applyApprovalAction(
 
     const proposal = await lockProposal(client, normalized.proposalId);
     if (proposal.action_type === "create_feishu_task") {
-      return applyFormalTaskApprovalAction(client, proposal, normalized, fingerprint);
+      return applyFormalTaskApprovalAction(
+        client,
+        proposal,
+        normalized,
+        fingerprint,
+        membershipProof,
+        transactionStartedAt,
+      );
     }
     if (
       proposal.status !== "pending_approval" ||
@@ -3052,8 +3080,39 @@ async function applyFormalTaskGovernanceDisposition(
 function actionApprovalFingerprint(
   normalized: ReturnType<typeof normalizeApplyActionInput>,
 ): string {
-  const { at: _auditTimestamp, requireReviewAttestation: _reviewGate, ...intent } = normalized;
+  const {
+    at: _auditTimestamp,
+    membershipCheckedAt: _membershipProof,
+    requireReviewAttestation: _reviewGate,
+    ...intent
+  } = normalized;
   return operationFingerprint({ operation: "apply_action_proposal_action", ...intent });
+}
+
+function requireFreshActionApprovalMembershipProof(
+  input: ReturnType<typeof normalizeApplyActionInput>,
+  proof: { maxAgeMs: number; monotonicNow(): number },
+  transactionStartedAt: number,
+): void {
+  if (input.membershipCheckedAt === undefined) {
+    throw new ActionProposalMembershipProofError();
+  }
+  const validationElapsedMs = Math.max(
+    0,
+    requireMonotonicTime(proof.monotonicNow()) - transactionStartedAt,
+  );
+  const proofAgeMs = input.at.getTime() + validationElapsedMs -
+    input.membershipCheckedAt.getTime();
+  if (proofAgeMs < 0 || proofAgeMs > proof.maxAgeMs) {
+    throw new ActionProposalMembershipProofError();
+  }
+}
+
+function requireMonotonicTime(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error("monotonic time is invalid");
+  }
+  return value;
 }
 
 async function inspectNormalizedApprovalActionReplay(
@@ -3901,6 +3960,8 @@ async function applyFormalTaskApprovalAction(
   proposal: ProposalRow,
   input: ReturnType<typeof normalizeApplyActionInput>,
   fingerprint: string,
+  membershipProof: { maxAgeMs: number; monotonicNow(): number },
+  transactionStartedAt: number,
 ): Promise<ApplyActionProposalActionResult> {
   if (
     proposal.status !== "pending_approval" ||
@@ -3910,7 +3971,11 @@ async function applyFormalTaskApprovalAction(
     Number(requireDatabaseValue(proposal.task_target_policy_version)) !==
       input.expectedTargetPolicyVersion
   ) throw new ActionProposalVersionConflictError();
-  const { draft, policy } = await loadCurrentFormalTaskApprovalFacts(client, proposal);
+  const { draft, policy } = await loadCurrentFormalTaskApprovalFacts(
+    client,
+    proposal,
+    input.action === "approve" ? input.at : requireDate(proposal.created_at),
+  );
   const requirement = await lockRequirement(client, input.requirementId);
   if (
     requirement.proposal_id !== proposal.id ||
@@ -3942,6 +4007,11 @@ async function applyFormalTaskApprovalAction(
       fingerprint,
     );
   }
+  requireFreshActionApprovalMembershipProof(
+    input,
+    membershipProof,
+    transactionStartedAt,
+  );
   await requireCurrentReviewAttestation(client, input);
 
   const approvalId = randomUUID();
@@ -4949,6 +5019,7 @@ function proposalSelect(): string {
 async function loadCurrentFormalTaskApprovalFacts(
   client: KnowledgeDraftTransactionClient,
   proposal: ProposalRow,
+  validationAt = requireDate(proposal.created_at),
 ): Promise<{ draft: FormalTaskProposalDraftRow; policy: FeishuTaskPolicyRow }> {
   if (proposal.action_type !== "create_feishu_task") {
     throw new ActionProposalPersistenceConflictError();
@@ -4995,7 +5066,7 @@ async function loadCurrentFormalTaskApprovalFacts(
   );
   const policy = policyResult.rows[0];
   const dueAt = draft.due_at === null ? undefined : requireDate(draft.due_at);
-  const proposalCreatedAt = requireDate(proposal.created_at);
+  const dueValidationAt = requireDate(validationAt);
   if (
     policy === undefined ||
     !policy.enabled ||
@@ -5003,8 +5074,8 @@ async function loadCurrentFormalTaskApprovalFacts(
     Number(policy.version) !== Number(draft.target_policy_version) ||
     !policy.allowed_assignee_open_ids.includes(draft.assignee_open_id) ||
     (dueAt !== undefined && (
-      dueAt.getTime() < proposalCreatedAt.getTime() ||
-      dueAt.getTime() > proposalCreatedAt.getTime() +
+      dueAt.getTime() < dueValidationAt.getTime() ||
+      dueAt.getTime() > dueValidationAt.getTime() +
         Number(policy.max_due_horizon_days) * 86_400_000
     ))
   ) throw new ActionProposalIneligibleError();
@@ -5490,6 +5561,9 @@ function normalizeApplyActionInput(input: ApplyActionProposalActionInput) {
       "requireReviewAttestation",
       input.requireReviewAttestation,
     ),
+    ...(input.membershipCheckedAt === undefined
+      ? {}
+      : { membershipCheckedAt: requireDate(input.membershipCheckedAt) }),
     ...(reason === undefined ? {} : { reason }),
     ...(action === "reject" ? { rejectionConfirmed: true as const } : {}),
     operationKey: requireReference("operationKey", input.operationKey),

@@ -10,6 +10,7 @@ import type {
 } from "../src/action-approvals/action-proposal-repository.js";
 import {
   ActionProposalIneligibleError,
+  ActionProposalMembershipProofError,
   ActionProposalAuthorizationError,
   ActionProposalOperationConflictError,
   ActionProposalVersionConflictError,
@@ -1068,12 +1069,45 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       actorOpenId: assigneeOpenId,
       action: "approve" as const,
       requireReviewAttestation: true,
+      membershipCheckedAt: at,
       operationKey: `task-approval:${label}:${suffix}`,
       at,
     };
     await expect(repository.preflightApprovalAction(approvalInput)).resolves.toEqual({
       sourceGroupId: taskGroupId,
+      actionType: "create_feishu_task",
     });
+    const { membershipCheckedAt: _membershipProof, ...missingMembershipProofInput } = approvalInput;
+    await expect(repository.applyApprovalAction({
+      ...missingMembershipProofInput,
+      callbackEventId: `task-approval-missing-membership-callback-${suffix}`,
+      operationKey: `task-approval-missing-membership:${label}:${suffix}`,
+    })).rejects.toBeInstanceOf(ActionProposalMembershipProofError);
+    await expect(repository.applyApprovalAction({
+      ...approvalInput,
+      callbackEventId: `task-approval-stale-membership-callback-${suffix}`,
+      membershipCheckedAt: plusSeconds(-31),
+      operationKey: `task-approval-stale-membership:${label}:${suffix}`,
+    })).rejects.toBeInstanceOf(ActionProposalMembershipProofError);
+    const contendedRepository = createPostgresActionProposalRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+      membershipProofMaxAgeMs: 30_000,
+      monotonicNow: vi.fn()
+        .mockReturnValueOnce(0)
+        .mockReturnValue(30_001),
+    });
+    await expect(contendedRepository.applyApprovalAction({
+      ...approvalInput,
+      callbackEventId: `task-approval-contended-membership-callback-${suffix}`,
+      operationKey: `task-approval-contended-membership:${label}:${suffix}`,
+    })).rejects.toBeInstanceOf(ActionProposalMembershipProofError);
+    await expect(repository.applyApprovalAction({
+      ...approvalInput,
+      callbackEventId: `task-approval-expired-callback-${suffix}`,
+      membershipCheckedAt: new Date("2026-07-23T12:00:00.000Z"),
+      operationKey: `task-approval-expired:${label}:${suffix}`,
+      at: new Date("2026-07-23T12:00:00.000Z"),
+    })).rejects.toBeInstanceOf(ActionProposalIneligibleError);
     await expect(repository.applyApprovalAction(approvalInput)).resolves.toMatchObject({
       outcome: "applied",
       action: "approve",
@@ -1624,7 +1658,10 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       actorOpenId: ownerOpenId,
       action: "approve",
       requireReviewAttestation: false,
-    })).resolves.toEqual({ sourceGroupId: groupId });
+    })).resolves.toEqual({
+      sourceGroupId: groupId,
+      actionType: "publish_knowledge_draft",
+    });
 
     await expect(repository.applyApprovalAction({
       ...baseInput,
@@ -1792,7 +1829,10 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       actorOpenId: ownerOpenId,
       action: "approve",
       requireReviewAttestation: false,
-    })).resolves.toEqual({ sourceGroupId: groupId });
+    })).resolves.toEqual({
+      sourceGroupId: groupId,
+      actionType: "publish_knowledge_draft",
+    });
     await expect(repository.applyApprovalAction({
       ...approvalInput,
       at: plusSeconds(4),

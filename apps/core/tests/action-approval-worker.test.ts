@@ -14,6 +14,7 @@ import type {
 import {
   ActionProposalAuthorizationError,
   ActionProposalIneligibleError,
+  ActionProposalMembershipProofError,
   ActionProposalOperationConflictError,
   ActionProposalReviewRequiredError,
   ActionProposalVersionConflictError,
@@ -61,7 +62,8 @@ describe("ActionApprovalWorker", () => {
       action: "approve",
       requireReviewAttestation: false,
       operationKey: "action-approval:cli_app:event-1",
-      at: job().receivedAt,
+      membershipCheckedAt: at,
+      at,
     });
     expect(harness.observe).toHaveBeenCalledWith(expect.objectContaining({
       groupId: "oc_source",
@@ -85,7 +87,7 @@ describe("ActionApprovalWorker", () => {
       getContext: async () => taskContext(),
       preflight: async () => ({
         sourceGroupId: "oc_source",
-        actionType: "publish_knowledge_draft",
+        actionType: "create_feishu_task",
       }),
     });
 
@@ -160,6 +162,9 @@ describe("ActionApprovalWorker", () => {
 
   it.each([
     ["membership", { membership: async () => { throw new Error("private"); } }, "membership_unavailable"],
+    ["stale membership proof", {
+      apply: async () => { throw new ActionProposalMembershipProofError(); },
+    }, "membership_unavailable"],
     ["context", { getContext: async () => { throw new Error("private"); } }, "repository_unavailable"],
     ["mutation", { apply: async () => { throw new Error("private"); } }, "repository_unavailable"],
   ] as const)("classifies transient %s failure", async (_label, overrides, code) => {

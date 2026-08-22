@@ -59,6 +59,44 @@ describe("FeishuTaskResultDispatcher", () => {
     });
   });
 
+  it("defers result delivery without consuming an attempt when the runtime pauses after claim", async () => {
+    const fixture = createFixture({ enabledSequence: [true, true, false] });
+
+    await expect(fixture.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      presentationId: "result-presentation-1",
+      code: "runtime_disabled",
+    }]);
+    expect(fixture.repository.beginResultPresentationAttempt).not.toHaveBeenCalled();
+    expect(fixture.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(fixture.repository.deferResultPresentationSend).toHaveBeenCalledWith({
+      presentationId: "result-presentation-1",
+      workerId: "result-worker-1",
+      retryAt: new Date(at.getTime() + 60_000),
+      errorCode: "runtime_disabled",
+      at,
+    });
+  });
+
+  it("defers result delivery when the runtime pauses immediately before transmission", async () => {
+    const fixture = createFixture({ enabledSequence: [true, true, true, false] });
+
+    await expect(fixture.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      presentationId: "result-presentation-1",
+      code: "runtime_disabled",
+    }]);
+    expect(fixture.repository.beginResultPresentationAttempt).toHaveBeenCalledOnce();
+    expect(fixture.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(fixture.repository.deferResultPresentationSend).toHaveBeenCalledWith({
+      presentationId: "result-presentation-1",
+      workerId: "result-worker-1",
+      retryAt: new Date(at.getTime() + 60_000),
+      errorCode: "runtime_disabled",
+      at,
+    });
+  });
+
   it.each([
     ["request_not_sent", "retrying", "request_not_sent"],
     ["retryable_remote_failure", "retrying", "retryable_remote_failure"],
@@ -145,6 +183,7 @@ const claim = {
 
 function createFixture(overrides: {
   enabled?: boolean;
+  enabledSequence?: boolean[];
   context?: typeof context;
   claim?: typeof claim;
   sendError?: Error;
@@ -156,6 +195,7 @@ function createFixture(overrides: {
       .mockResolvedValue(undefined),
     getResultPresentationContext: vi.fn(async () => overrides.context ?? context),
     beginResultPresentationAttempt: vi.fn(async () => undefined),
+    deferResultPresentationSend: vi.fn(async () => undefined),
     failResultPresentationPreparation: vi.fn(async () => undefined),
     completeResultPresentationSend: vi.fn(async () => undefined),
     failResultPresentationSend: vi.fn(async () => undefined),
@@ -165,10 +205,11 @@ function createFixture(overrides: {
       ? vi.fn(async () => ({ messageId: "om_result_1" }))
       : vi.fn(async () => { throw overrides.sendError; }),
   };
+  const enabledSequence = [...(overrides.enabledSequence ?? [])];
   const dispatcher = createFeishuTaskResultDispatcher({
     repository,
     cardClient,
-    canSendResultCards: () => overrides.enabled ?? true,
+    canSendResultCards: () => enabledSequence.shift() ?? overrides.enabled ?? true,
     workerId: "result-worker-1",
     leaseMs: 30_000,
     retryDelayMs: 60_000,

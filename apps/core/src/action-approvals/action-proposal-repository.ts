@@ -431,6 +431,7 @@ export type ApplyActionProposalActionInput = {
   actorOpenId: string;
   action: "approve" | "request_revision" | "reject";
   requireReviewAttestation: boolean;
+  membershipCheckedAt?: Date;
   reason?: string;
   rejectionConfirmed?: boolean;
   operationKey: string;

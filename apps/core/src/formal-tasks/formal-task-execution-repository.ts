@@ -224,6 +224,13 @@ export interface FormalTaskExecutionRepository {
     workerId: string;
     at: Date;
   }): Promise<void>;
+  deferResultPresentationSend(input: {
+    presentationId: string;
+    workerId: string;
+    errorCode: string;
+    retryAt: Date;
+    at: Date;
+  }): Promise<void>;
   failResultPresentationPreparation(input: {
     presentationId: string;
     workerId: string;

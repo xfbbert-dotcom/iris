@@ -139,3 +139,9 @@ rollback_safe_off=true
 
 只有真人闭环、精确回读、幂等计数和最终安全关闭全部通过，才能把 task creation 标记为
 “真实 pilot 通过”。否则状态保持“代码候选与自动门禁完成，真实验收待执行”。
+
+## 9. 后续清单（不阻断本阶段）
+
+- 将共享审批 worker 的终态卡片标题和 execution observation reason 按 action type 区分；
+  `create_feishu_task` 不再沿用 knowledge publication 的展示措辞。该项仅影响运维可读性，
+  不改变批准、权限、执行或幂等事实，因此不延长本阶段退出门禁。

@@ -288,8 +288,14 @@ const checkDefinitions: CheckDefinition[] = [
       if (!readKnowledgeCardRuntimeConfig(env).enabled) {
         return fail("IRIS_KNOWLEDGE_CARD_ENABLED=true is required for Feishu task creation.");
       }
-      if (!readActionApprovalRuntimeConfig(env).enabled) {
+      const approvalConfig = readActionApprovalRuntimeConfig(env);
+      if (!approvalConfig.enabled) {
         return fail("IRIS_APPROVAL_ACTIONS_ENABLED=true is required for Feishu task creation.");
+      }
+      if (config.groupAllowlist.some((groupId) =>
+        !approvalConfig.enabledGroupIds.includes(groupId)
+      )) {
+        return fail("Every Feishu task creation group must be enabled for action approvals.");
       }
       if (!readActionReviewRuntimeConfig(env).enabled) {
         return fail("IRIS_ACTION_REVIEW_ENABLED=true is required for Feishu task creation.");

@@ -139,6 +139,7 @@ export function createPostgresFormalTaskExecutionRepository({
     claimResultPresentationSend: (input) => claimResultPresentationSend(dataSource, input),
     getResultPresentationContext: (id) => getResultPresentationContext(dataSource, id),
     beginResultPresentationAttempt: (input) => beginResultPresentationAttempt(dataSource, input),
+    deferResultPresentationSend: (input) => deferResultPresentationSend(dataSource, input),
     failResultPresentationPreparation: (input) => failResultPresentationPreparation(dataSource, input),
     completeResultPresentationSend: (input) => completeResultPresentationSend(dataSource, input),
     failResultPresentationSend: (input) => failResultPresentationSend(dataSource, input),
@@ -1063,6 +1064,44 @@ async function beginResultPresentationAttempt(
   });
 }
 
+async function deferResultPresentationSend(
+  dataSource: PostgresFormalTaskDataSource,
+  input: Parameters<FormalTaskExecutionRepository["deferResultPresentationSend"]>[0],
+): Promise<void> {
+  const normalized = {
+    ...normalizeResultDeliveryMutation(input),
+    errorCode: requireReference("errorCode", input.errorCode),
+    retryAt: requireDate(input.retryAt),
+  };
+  if (normalized.retryAt.getTime() <= normalized.at.getTime()) {
+    throw new Error("retryAt is invalid");
+  }
+  await withTransaction(dataSource, async (client) => {
+    const presentation = await lockResultPresentation(client, normalized.presentationId);
+    const outbox = await lockResultOutbox(client, normalized.presentationId);
+    if (
+      presentation.state !== "pending_send" ||
+      !(outbox.state === "processing" || outbox.state === "external_attempting") ||
+      outbox.worker_id !== normalized.workerId
+    ) throw new FormalTaskExecutionPersistenceConflictError();
+    await client.query(
+      `UPDATE feishu_task_result_presentation_outbox
+       SET state = 'pending', attempts = GREATEST(attempts - 1, 0),
+           worker_id = NULL, lease_until = NULL, retry_at = $3,
+           error_code = $4, updated_at = $5
+       WHERE presentation_id = $1 AND worker_id = $2
+         AND state IN ('processing', 'external_attempting')`,
+      [
+        normalized.presentationId,
+        normalized.workerId,
+        normalized.retryAt,
+        normalized.errorCode,
+        normalized.at,
+      ],
+    );
+  });
+}
+
 async function failResultPresentationPreparation(
   dataSource: PostgresFormalTaskDataSource,
   input: Parameters<FormalTaskExecutionRepository["failResultPresentationPreparation"]>[0],
@@ -1339,6 +1378,10 @@ async function lockRetryCandidate(
        AND ${currentBindingPredicate()}
        AND draft.source_group_id = ANY($2::text[])
        AND NOT (draft.source_group_id = ANY($3::text[]))
+       AND (revision.due_at IS NULL OR (
+         revision.due_at >= $1
+         AND revision.due_at <= $1 + policy.max_due_horizon_days * INTERVAL '1 day'
+       ))
      ORDER BY execution.retry_at ASC, execution.created_at ASC, execution.id ASC
      FOR UPDATE OF execution, proposal SKIP LOCKED LIMIT 1`,
     [at, gate.allowedGroupIds, gate.disabledGroupIds],

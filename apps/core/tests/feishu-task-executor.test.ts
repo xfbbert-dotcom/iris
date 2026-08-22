@@ -79,16 +79,42 @@ describe("FeishuTaskExecutor", () => {
     }));
   });
 
-  it("treats unavailable membership as a pre-dispatch terminal failure", async () => {
+  it("retries an approved task when membership lookup is temporarily unavailable", async () => {
     const fixture = createFixture({ membershipError: true });
 
     await expect(fixture.executor.processBatch({ limit: 1 })).resolves.toEqual([{
-      status: "failed",
+      status: "retrying",
       proposalId: "proposal-1",
       executionId: "execution-1",
       code: "membership_unavailable",
     }]);
     expect(fixture.creator.createTask).not.toHaveBeenCalled();
+    expect(fixture.repository.recordCreationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      classification: "retryable",
+      retryAt: new Date(at.getTime() + 60_000),
+      responseClassification: "membership_unavailable",
+      expectedExecutionVersion: 1,
+    }));
+  });
+
+  it("retries an approved task when the runtime is disabled after claim", async () => {
+    const fixture = createFixture({ runtimeEnabledSequence: [true, true, false] });
+
+    await expect(fixture.executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      proposalId: "proposal-1",
+      executionId: "execution-1",
+      code: "runtime_disabled",
+    }]);
+    expect(fixture.membershipChecker.isCurrentMember).toHaveBeenCalledOnce();
+    expect(fixture.repository.markExternalAttempt).not.toHaveBeenCalled();
+    expect(fixture.creator.createTask).not.toHaveBeenCalled();
+    expect(fixture.repository.recordCreationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      classification: "retryable",
+      retryAt: new Date(at.getTime() + 60_000),
+      responseClassification: "runtime_disabled",
+      expectedExecutionVersion: 1,
+    }));
   });
 
   it("schedules bounded retryable failures with the same durable request binding", async () => {
@@ -234,6 +260,7 @@ function createFixture(overrides: {
   callExternalTools?: boolean;
   isMember?: boolean;
   membershipError?: boolean;
+  runtimeEnabledSequence?: boolean[];
   claim?: typeof claim;
   createOutcome?: unknown;
   completeError?: boolean;
@@ -265,12 +292,13 @@ function createFixture(overrides: {
       return overrides.isMember ?? true;
     }),
   };
+  const runtimeEnabledSequence = [...(overrides.runtimeEnabledSequence ?? [])];
   const executor = createFeishuTaskExecutor({
     repository,
     creator: creator as never,
     membershipChecker,
     runtimeSnapshot: () => ({
-      deploymentEnabled: true,
+      deploymentEnabled: runtimeEnabledSequence.shift() ?? true,
       globalEnabled: true,
       groupAllowlist: ["oc_pilot"],
       disabledGroupIds: [],

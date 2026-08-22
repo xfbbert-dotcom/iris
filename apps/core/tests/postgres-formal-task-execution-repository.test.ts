@@ -164,18 +164,54 @@ runIfDatabase("PostgresFormalTaskExecutionRepository with Postgres", () => {
           taskSpecHash: seeded.taskSpecHash,
         },
       });
-    await repository.beginResultPresentationAttempt({
+    await repository.deferResultPresentationSend({
       presentationId: resultPresentationId,
       workerId: "task-result-worker",
+      errorCode: "runtime_disabled",
+      retryAt: plusSeconds(10),
       at: plusSeconds(4),
+    });
+    await expect(repository.claimResultPresentationSend({
+      workerId: "task-result-worker-paused-early",
+      leaseUntil: plusSeconds(39),
+      at: plusSeconds(9),
+    })).resolves.toBeUndefined();
+    const resumedBeforeAttempt = await repository.claimResultPresentationSend({
+      workerId: "task-result-worker-resumed-before-attempt",
+      leaseUntil: plusSeconds(41),
+      at: plusSeconds(11),
+    });
+    expect(resumedBeforeAttempt).toMatchObject({ attempts: 1 });
+    await repository.beginResultPresentationAttempt({
+      presentationId: resultPresentationId,
+      workerId: "task-result-worker-resumed-before-attempt",
+      at: plusSeconds(12),
+    });
+    await repository.deferResultPresentationSend({
+      presentationId: resultPresentationId,
+      workerId: "task-result-worker-resumed-before-attempt",
+      errorCode: "runtime_disabled",
+      retryAt: plusSeconds(20),
+      at: plusSeconds(13),
+    });
+    const resumedImmediatelyBeforeSend = await repository.claimResultPresentationSend({
+      workerId: "task-result-worker-resumed-before-send",
+      leaseUntil: plusSeconds(51),
+      at: plusSeconds(21),
+    });
+    expect(resumedImmediatelyBeforeSend).toMatchObject({ attempts: 1 });
+    await repository.beginResultPresentationAttempt({
+      presentationId: resultPresentationId,
+      workerId: "task-result-worker-resumed-before-send",
+      at: plusSeconds(22),
     });
     await repository.failResultPresentationSend({
       presentationId: resultPresentationId,
-      workerId: "task-result-worker",
+      workerId: "task-result-worker-resumed-before-send",
       classification: "retryable",
       errorCode: "request_not_sent",
       retryAt: plusSeconds(64),
-      at: plusSeconds(5),
+      at: plusSeconds(23),
     });
     await expect(repository.claimResultPresentationSend({
       workerId: "task-result-worker-early",
@@ -275,6 +311,46 @@ runIfDatabase("PostgresFormalTaskExecutionRepository with Postgres", () => {
     expect(second?.execution.id).not.toBe(first?.execution.id);
     expect(second?.execution.requestFingerprint).toBe(first?.execution.requestFingerprint);
     expect(second?.execution.clientTokenHash).toBe(first?.execution.clientTokenHash);
+  });
+
+  it("does not retry a known-safe request after its approved due time expires", async () => {
+    const seeded = await seedApprovedTask(pool, "expired-retry", {
+      dueAtUtc: plusSeconds(30).toISOString(),
+    });
+    const repository = createPostgresFormalTaskExecutionRepository({ dataSource: pool });
+    const first = await repository.claimNextCreation({
+      runtimeGate: runtimeGate(seeded.groupId),
+      workerId: "task-executor-expired-retry-1",
+      leaseUntil: plusSeconds(30),
+      operationKey: `task-execution-claim:expired-retry-1:${seeded.suffix}`,
+      at,
+    });
+    const dispatched = await repository.markExternalAttempt({
+      executionId: first!.execution.id,
+      expectedExecutionVersion: first!.execution.version,
+      workerId: "task-executor-expired-retry-1",
+      operationKey: `task-execution-dispatch:expired-retry-1:${seeded.suffix}`,
+      at: plusSeconds(1),
+    });
+    await repository.recordCreationFailure({
+      proposalId: seeded.proposalId,
+      executionId: dispatched.execution.id,
+      expectedProposalVersion: dispatched.proposal.version,
+      expectedExecutionVersion: dispatched.execution.version,
+      classification: "retryable",
+      responseClassification: "request_not_sent",
+      retryAt: plusSeconds(60),
+      operationKey: `task-execution-retryable:expired-retry:${seeded.suffix}`,
+      at: plusSeconds(2),
+    });
+
+    await expect(repository.claimNextCreation({
+      runtimeGate: runtimeGate(seeded.groupId),
+      workerId: "task-executor-expired-retry-2",
+      leaseUntil: plusSeconds(91),
+      operationKey: `task-execution-claim:expired-retry-2:${seeded.suffix}`,
+      at: plusSeconds(61),
+    })).resolves.toBeUndefined();
   });
 
   it("claims an outcome-unknown reconciliation attempt without changing its token or payload", async () => {
@@ -555,7 +631,11 @@ runIfDatabase("PostgresFormalTaskExecutionRepository with Postgres", () => {
   });
 });
 
-async function seedApprovedTask(pool: pg.Pool, label: string) {
+async function seedApprovedTask(
+  pool: pg.Pool,
+  label: string,
+  overrides: { dueAtUtc?: string } = {},
+) {
   const suffix = `${label}-${randomUUID()}`;
   const groupId = `oc_${suffix}`;
   const assigneeOpenId = `ou_${suffix}`;
@@ -590,7 +670,7 @@ async function seedApprovedTask(pool: pg.Pool, label: string) {
         title: "Archive pilot evidence",
         description: "Verify and archive the exact acceptance evidence.",
         assigneeOpenId,
-        dueAtUtc: "2026-08-24T06:00:00.123Z",
+        dueAtUtc: overrides.dueAtUtc ?? "2026-08-24T06:00:00.123Z",
         reminderMinutes: 30,
         sourceGroupId: groupId,
         targetPolicyId: policy.id,
@@ -701,6 +781,7 @@ async function seedApprovedTask(pool: pg.Pool, label: string) {
     actorOpenId: assigneeOpenId,
     action: "approve",
     requireReviewAttestation: true,
+    membershipCheckedAt: at,
     operationKey: `task-approval:${suffix}`,
     at,
   });
@@ -743,7 +824,7 @@ function plusSeconds(seconds: number): Date {
 
 async function cleanupOwnedOutboxes(pool: pg.Pool): Promise<void> {
   const ownedDraftPattern =
-    "^task-draft-(success|retry|reconciliation|operator-reconcile|stale-claim|stale-dispatch|disabled|operation-conflict)-";
+    "^task-draft-(success|retry|expired-retry|reconciliation|operator-reconcile|stale-claim|stale-dispatch|disabled|operation-conflict)-";
   await pool.query(
     `UPDATE formal_task_draft_presentation_outbox outbox
      SET state = 'failed', error_code = 'test_isolation', updated_at = NOW()

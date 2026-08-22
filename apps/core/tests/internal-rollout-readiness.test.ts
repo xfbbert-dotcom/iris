@@ -186,6 +186,21 @@ describe("buildInternalRolloutReadinessReport", () => {
     });
   });
 
+  it("blocks governed Feishu task creation when its pilot group cannot receive approvals", () => {
+    const report = buildInternalRolloutReadinessReport(
+      {
+        ...formalTaskActionEnabledEnv(),
+        IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_other",
+      },
+      { formalTaskActionStatus: formalTaskActionStatus() },
+    );
+
+    expect(checksById(report).formalTaskActions).toMatchObject({
+      status: "fail",
+      detail: "Every Feishu task creation group must be enabled for action approvals.",
+    });
+  });
+
   it.each([
     [
       { ...formalTaskActionStatus(), counts: { ...formalTaskActionStatus().counts, migration0057Applied: false } },
