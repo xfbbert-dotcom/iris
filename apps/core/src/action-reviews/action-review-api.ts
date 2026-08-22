@@ -149,7 +149,7 @@ export function registerActionReviewApi(
           });
           if (context === undefined) return sendUnavailable(reply, 403);
           const operationKey = `action-review:${createHash("sha256")
-            .update(`${session.sessionId}\u0000${proposalId}\u0000${context.proposalVersion}\u0000${context.contentHash}`)
+            .update(`${session.sessionId}\u0000${proposalId}\u0000${context.proposalVersion}\u0000${context.contentHash}\u0000${context.actionTargetFingerprint}`)
             .digest("hex")}`;
           await runtime.repository.recordReviewAttestation({
             proposalId,
@@ -158,6 +158,7 @@ export function registerActionReviewApi(
             expectedSubjectRevision: context.subjectRevision,
             expectedSubjectVersion: context.subjectVersion,
             expectedContentHash: context.contentHash,
+            expectedActionTargetFingerprint: context.actionTargetFingerprint,
             sessionIdHash: createHash("sha256").update(session.sessionId).digest("hex"),
             operationKey,
             at: now(),

@@ -155,7 +155,7 @@ EMPTY_VALUE= # empty on purpose
     expect(report.checks).toContainEqual(expect.objectContaining({
       id: "actionReviews",
       status: "fail",
-      detail: "Action-review migration 0034 is not applied.",
+      detail: "Action-review migration 0053 is not applied.",
     }));
   });
 
@@ -170,7 +170,7 @@ EMPTY_VALUE= # empty on purpose
   });
 });
 
-function enabledActionReviewReport(migration0034Applied: boolean) {
+function enabledActionReviewReport(migration0053Applied: boolean) {
   const zeroOutbox = {
     pending: 0,
     processing: 0,
@@ -201,7 +201,7 @@ function enabledActionReviewReport(migration0034Applied: boolean) {
     actionReviewStatus: {
       configured: true,
       running: true,
-      migration0034Applied,
+      migration0053Applied,
     },
   });
 }

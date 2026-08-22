@@ -24,6 +24,7 @@ describe("renderActionApprovalCard", () => {
       },
     });
     expect(rendered.json).toContain("Risk: medium");
+    expect(rendered.json).toContain("Publish new Wiki page");
     expect(rendered.json).toContain("Target: Company Wiki");
     expect(rendered.json).toContain("Draft revision: 2");
     expect(rendered.json).toContain("group_confirmation: satisfied");
@@ -54,6 +55,23 @@ describe("renderActionApprovalCard", () => {
       });
   });
 
+  it("shows safe managed-page metadata and replacement intent without hashes or draft text", () => {
+    const rendered = renderActionApprovalCard(input({
+      actionType: "update_knowledge_publication",
+      managedTarget: {
+        managedPageId: "managed-1",
+        documentSourceId: "source-1",
+        targetSourceUri: "https://example.test/wiki/managed-1",
+      },
+    }));
+
+    expect(rendered.json).toContain("Replace the single managed body block on existing Wiki page");
+    expect(rendered.json).toContain("Managed page ID: managed-1");
+    expect(rendered.json).toContain("https://example.test/wiki/managed-1");
+    expect(rendered.json).not.toMatch(/[a-f0-9]{64}/u);
+    expect(rendered.json).not.toMatch(/full draft body|secret evidence/iu);
+  });
+
   it("adds the authenticated review link only when a public review origin is configured", () => {
     const withoutOrigin = renderActionApprovalCard(input());
     const withOrigin = renderActionApprovalCard(input({
@@ -80,6 +98,8 @@ describe("renderActionApprovalCard", () => {
 });
 
 type InputOverrides = {
+  actionType?: ActionProposalContext["proposal"]["actionType"];
+  managedTarget?: ActionProposalContext["managedTarget"];
   presentation?: Partial<ActionApprovalPresentation>;
   requirement?: Partial<ActionApprovalRequirement>;
   policy?: Partial<PublicationTargetPolicy>;
@@ -105,7 +125,7 @@ function input(overrides: InputOverrides = {}) {
   const context: ActionProposalContext = {
     proposal: {
       id: "proposal-1",
-      actionType: "publish_knowledge_draft",
+      actionType: overrides.actionType ?? "publish_knowledge_draft",
       subjectType: "knowledge_draft",
       subjectId: "draft-1",
       subjectRevision: 2,
@@ -139,6 +159,7 @@ function input(overrides: InputOverrides = {}) {
       requirement,
     ],
     approvals: [],
+    ...(overrides.managedTarget === undefined ? {} : { managedTarget: overrides.managedTarget }),
   };
   const policy: PublicationTargetPolicy = {
     id: "policy-1",

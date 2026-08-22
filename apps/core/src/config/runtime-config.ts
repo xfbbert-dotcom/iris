@@ -6,6 +6,7 @@ export type IrisCapability = {
   proactiveSpeech: boolean;
   generateKnowledgeDrafts: boolean;
   writeKnowledgeBase: boolean;
+  updateManagedKnowledge: boolean;
   callExternalTools: boolean;
 };
 
@@ -33,6 +34,7 @@ export function createDefaultRuntimeConfig(env: RuntimeConfigEnv = process.env):
       proactiveSpeech: true,
       generateKnowledgeDrafts: true,
       writeKnowledgeBase: false,
+      updateManagedKnowledge: false,
       callExternalTools: false
     }
   };

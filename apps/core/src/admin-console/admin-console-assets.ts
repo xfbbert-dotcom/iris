@@ -302,6 +302,7 @@ export function renderAdminConsoleHtml(): string {
         </table>
       </div>
       <div id="publication-queue-empty" class="empty-state">Connect to load publication proposals.</div>
+      <aside id="managed-update-detail" class="empty-state" aria-live="polite">Select an existing-page update to inspect metadata.</aside>
     </section>
 
     <section class="proactive-candidate-panel" aria-labelledby="proactive-candidates-heading">
@@ -1128,6 +1129,7 @@ const publicationQueueSubject = document.getElementById("publication-queue-subje
 const publicationQueueLimit = document.getElementById("publication-queue-limit");
 const publicationQueueRows = document.getElementById("publication-queue-rows");
 const publicationQueueEmpty = document.getElementById("publication-queue-empty");
+const managedUpdateDetail = document.getElementById("managed-update-detail");
 const proactiveCandidateScan = document.getElementById("proactive-candidate-scan");
 const proactiveCandidateRefresh = document.getElementById("proactive-candidate-refresh");
 const proactiveCandidateGroup = document.getElementById("proactive-candidate-group");
@@ -1161,6 +1163,7 @@ const capabilityLabels = {
   proactiveSpeech: "Proactive speech",
   generateKnowledgeDrafts: "Generate knowledge drafts",
   writeKnowledgeBase: "Write knowledge base",
+  updateManagedKnowledge: "Update managed knowledge",
   callExternalTools: "Call external tools",
 };
 
@@ -1915,12 +1918,93 @@ function renderPublicationQueue(proposals) {
       });
       actions.append(button);
     }
+    if (proposal.actionType === "update_knowledge_publication") {
+      const inspect = document.createElement("button");
+      inspect.type = "button";
+      inspect.className = "secondary";
+      inspect.textContent = "Inspect update";
+      inspect.addEventListener("click", async () => {
+        inspect.disabled = true;
+        try {
+          const detail = await requestJson("/internal/action-proposals/" + encodeURIComponent(proposal.id));
+          renderManagedUpdateDetail(detail, proposal);
+        } catch (error) {
+          addEvent("Managed update inspection failed: " + error.message);
+        } finally {
+          inspect.disabled = false;
+        }
+      });
+      actions.append(inspect);
+    }
     actionsCell.append(actions);
 
     row.append(proposalCell, subjectCell, statusCell, riskCell, targetCell, versionCell, updatedCell, actionsCell);
     publicationQueueRows.append(row);
   }
   publicationQueueEmpty.textContent = (proposals || []).length === 0 ? "No publication proposals match the current filters." : "";
+}
+
+function renderManagedUpdateDetail(detail, proposal) {
+  managedUpdateDetail.replaceChildren();
+  const target = detail.managedTarget;
+  const page = detail.managedPage;
+  if (!target || !page) {
+    managedUpdateDetail.textContent = "Managed update metadata is unavailable.";
+    return;
+  }
+  const rows = document.createElement("dl");
+  rows.className = "compact-status";
+  const executions = detail.managedExecutions || [];
+  const values = [
+    ["Action", proposal.actionType], ["Proposal lifecycle", proposal.status],
+    ["Managed page", page.id], ["Source", page.sourceId || "not linked"], ["Policy", proposal.targetPolicyId + " v" + proposal.targetPolicyVersion],
+    ["Barrier", page.state], ["Expected revision", target.expectedRevision], ["Current revision", page.currentRevision || "not observed"],
+    ["Current hash", target.currentBodyHash], ["Proposed hash", target.proposedBodyHash],
+    ["Executions", executions.map((item) =>
+      item.state + " / " + item.reasonCode + " / " + item.requestFingerprint).join(", ") || "none"],
+    ["Execution updated", executions.map((item) => item.id + " / " + item.updatedAt).join(", ") || "none"],
+    ["Event history", executions.flatMap((item) => item.events || []).map((event) =>
+      event.type + " / " + event.reasonCode + " / " + event.at).join(", ") || "none"],
+  ];
+  renderDefinitionList(rows, values);
+  managedUpdateDetail.append(rows);
+  if (typeof page.safeWikiUrl === "string" && /^https:\\/\\/www\\.feishu\\.cn\\/wiki\\/[A-Za-z0-9._~%-]+$/u.test(page.safeWikiUrl)) {
+    const link = document.createElement("a");
+    link.href = page.safeWikiUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Open managed Wiki page";
+    managedUpdateDetail.append(link);
+  }
+  const execution = (detail.managedExecutions || []).find((item) =>
+    item.state === "outcome_unknown" || item.state === "reconciliation_required" || item.state === "remote_applied");
+  if (execution) {
+    const reconcile = document.createElement("button");
+    reconcile.type = "button";
+    reconcile.className = "secondary";
+    reconcile.textContent = "Request reconciliation";
+    reconcile.addEventListener("click", async () => {
+      reconcile.disabled = true;
+      try {
+        const operator = readOperator().trim();
+        if (!operator) throw new Error("operator_required");
+        await requestJson("/internal/managed-knowledge-updates/" + encodeURIComponent(execution.id) + "/reconcile", {
+          method: "POST",
+          headers: { "x-iris-operator": operator },
+          body: JSON.stringify({ expectedExecutionVersion: execution.version, expectedManagedPageVersion: page.version,
+            operationKey: createOpaqueOperationKey() }),
+        });
+        addEvent("Managed update reconciliation requested");
+        await refreshPublicationQueue();
+      } catch {
+        setConnection("Request failed", "warn");
+        addEvent("Managed update reconciliation failed");
+      } finally {
+        reconcile.disabled = false;
+      }
+    });
+    managedUpdateDetail.append(reconcile);
+  }
 }
 
 async function refreshPublicationQueue() {

@@ -1043,6 +1043,78 @@ describe("admin console assets", () => {
     expect(script).not.toContain("currentRevision.content");
   });
 
+  it("inspects managed-update metadata and keeps a failed reconciliation content-free", async () => {
+    const fetch = vi.fn((path: string, options?: unknown) => {
+      if (path === "/internal/action-proposals?status=reconciliation_required&limit=20") {
+        return Promise.resolve(jsonResponse({ ok: true, proposals: [{
+          id: "proposal-1",
+          actionType: "update_knowledge_publication",
+          subjectId: "draft-1",
+          subjectRevision: 2,
+          subjectVersion: 7,
+          targetPolicyId: "policy-1",
+          targetPolicyVersion: 3,
+          riskLevel: "medium",
+          status: "reconciliation_required",
+          version: 4,
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        }] }));
+      }
+      if (path === "/internal/action-proposals/proposal-1") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          managedTarget: {
+            id: "target-1", expectedRevision: "13", currentBodyHash: "a".repeat(64),
+            proposedBodyHash: "b".repeat(64), state: "reconciliation_required",
+          },
+          managedPage: {
+            id: "page-1", sourceId: "source-1", state: "reconciliation_required", version: 8,
+            safeWikiUrl: "https://www.feishu.cn/wiki/wiki-node-1",
+          },
+          managedExecutions: [{
+            id: "execution-1", state: "outcome_unknown", version: 4, reasonCode: "timeout",
+            requestFingerprint: "f".repeat(64),
+            events: [{ type: "remote_outcome_unknown", toVersion: 4, reasonCode: "timeout",
+              at: "2026-08-20T00:01:00.000Z" }],
+            rawRemoteError: "raw timeout body", documentToken: "docx_secret", draftBody: "Approved body",
+          }],
+        }));
+      }
+      if (path === "/internal/managed-knowledge-updates/execution-1/reconcile") {
+        const request = options as { method?: string; headers?: Record<string, string>; body?: string };
+        expect(request.method).toBe("POST");
+        expect(request.headers).toMatchObject({
+          Authorization: "Bearer operator-secret",
+          "x-iris-operator": "operator@example.com",
+        });
+        expect(JSON.parse(request.body ?? "")).toMatchObject({
+          expectedExecutionVersion: 4,
+          expectedManagedPageVersion: 8,
+        });
+        return Promise.resolve(errorResponse(503, "raw timeout body"));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, { token: "operator-secret", operator: "operator@example.com" });
+    console.element("publication-queue-status").value = "reconciliation_required";
+    console.element("publication-queue-limit").value = "20";
+
+    await console.trigger("publication-queue-refresh", "click");
+    const inspect = console.allElements().find((element) => element.textContent === "Inspect update");
+    expect(inspect).toBeDefined();
+    await inspect!.trigger("click");
+    const reconcile = console.allElements().find((element) => element.textContent === "Request reconciliation");
+    expect(reconcile).toBeDefined();
+    await expect(reconcile!.trigger("click")).resolves.toBeUndefined();
+
+    const visible = console.allElements().map((element) => element.textContent).join("\n");
+    expect(visible).toContain("Managed page");
+    expect(visible).toContain("outcome_unknown / timeout");
+    expect(visible).toContain("remote_outcome_unknown / timeout");
+    expect(visible).toContain("Managed update reconciliation failed");
+    expect(visible).not.toMatch(/Approved body|docx_secret|raw timeout body/iu);
+  });
+
   it("renders a scoped knowledge-conflict review and recovery surface without unsafe fields", () => {
     const html = renderAdminConsoleHtml();
     const css = renderAdminConsoleCss();

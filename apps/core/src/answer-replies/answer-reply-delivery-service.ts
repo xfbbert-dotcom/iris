@@ -391,6 +391,7 @@ export function createAnswerReplyDeliveryService({
       decisions = await verifier.verify({
         chatId,
         documentSourceIds,
+        sourceSnapshotBindings: toAnswerSourceSnapshotBindings(receipt),
         ...(crossGroupGrantBindings.length === 0 ? {} : { crossGroupGrantBindings }),
       });
     } catch {
@@ -679,6 +680,26 @@ function toAnswerSourcePermissionGrantBindings(
       version: source.crossGroupGrantVersion!,
       grantorGroupId: source.crossGroupGrantorGroupId!,
       granteeGroupId: source.crossGroupGranteeGroupId!,
+    });
+  }
+  return result;
+}
+
+function toAnswerSourceSnapshotBindings(
+  receipt: AnswerReplyReceipt,
+): Array<{ documentSourceId: string; documentSnapshotId: string }> {
+  const result: Array<{ documentSourceId: string; documentSnapshotId: string }> = [];
+  const seen = new Map<string, string>();
+  for (const source of receipt.sources) {
+    const previousSnapshotId = seen.get(source.documentSourceId);
+    if (previousSnapshotId !== undefined) {
+      if (previousSnapshotId !== source.documentSnapshotId) throw contractError();
+      continue;
+    }
+    seen.set(source.documentSourceId, source.documentSnapshotId);
+    result.push({
+      documentSourceId: source.documentSourceId,
+      documentSnapshotId: source.documentSnapshotId,
     });
   }
   return result;

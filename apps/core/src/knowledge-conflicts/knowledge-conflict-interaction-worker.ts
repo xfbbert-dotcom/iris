@@ -4,6 +4,10 @@ import type {
   ActionProposalRepository,
   PublicationTargetPolicy,
 } from "../action-approvals/action-proposal-repository.js";
+import type { ManagedKnowledgePage } from
+  "../action-approvals/managed-knowledge-page.js";
+import type { ManagedKnowledgePageRepository } from
+  "../action-approvals/managed-knowledge-page-repository.js";
 import type { FeishuGroupMembershipChecker } from
   "../feishu/feishu-group-membership-checker.js";
 import type { AuthenticatedKnowledgeConflictConfirmationInteraction } from
@@ -98,6 +102,7 @@ export type KnowledgeConflictInteractionWorkerDependencies = {
   membershipChecker: FeishuGroupMembershipChecker;
   drafts: Pick<KnowledgeDraftRepository, "getDraft" | "createDraft">;
   publicationTargets: Pick<ActionProposalRepository, "listTargetPolicies" | "getTargetPolicy">;
+  managedPages: Pick<ManagedKnowledgePageRepository, "findPageForConflict">;
   cardRuntime: KnowledgeDraftPresentationRuntime;
   canProcessKnowledgeConflicts(groupId: string): boolean;
   botOpenId: string;
@@ -235,6 +240,22 @@ export function createKnowledgeConflictInteractionWorker(
         return denied("runtime_disabled");
       }
 
+      let managedPage: ManagedKnowledgePage | undefined;
+      try {
+        managedPage = await dependencies.managedPages.findPageForConflict({
+          documentSourceId: candidate.targetDocumentSourceId,
+          authorizationGroupId: candidate.groupId,
+        });
+      } catch {
+        return retryable("repository_unavailable");
+      }
+      const managedUpdateTarget = managedPage === undefined
+        ? undefined
+        : exactManagedUpdateTarget(candidate, managedPage, targetPolicy);
+      if (managedPage !== undefined && managedUpdateTarget === undefined) {
+        return retryable("repository_unavailable");
+      }
+
       const identity = draftIdentity(candidate.id);
       const revision = conflictRevision(candidate, job.actorOpenId, targetPolicy);
       const draftAt = requireDate(now());
@@ -252,6 +273,7 @@ export function createKnowledgeConflictInteractionWorker(
             },
             publicationTarget: { id: targetPolicy.id, version: targetPolicy.version },
           },
+          ...(managedUpdateTarget === undefined ? {} : { managedUpdateTarget }),
           revision,
           at: draftAt,
         });
@@ -324,6 +346,41 @@ export function createKnowledgeConflictInteractionWorker(
         return retryable("presentation_unavailable");
       }
     },
+  };
+}
+
+function exactManagedUpdateTarget(
+  candidate: KnowledgeConflictCandidate,
+  page: ManagedKnowledgePage,
+  targetPolicy: PublicationTargetPolicy,
+) {
+  if (page.state !== "active" ||
+    page.linkedDocumentSourceId !== candidate.targetDocumentSourceId ||
+    page.authorizationGroupId !== candidate.groupId ||
+    page.targetPolicyId !== targetPolicy.id ||
+    page.targetPolicyVersion !== targetPolicy.version ||
+    page.currentRemoteRevisionId === undefined ||
+    page.currentBodyContentHash === undefined) {
+    return undefined;
+  }
+  return {
+    conflictCandidateId: candidate.id,
+    conflictCandidateVersion: candidate.version,
+    managedPageId: page.id,
+    managedPageVersion: page.version,
+    linkedDocumentSourceId: candidate.targetDocumentSourceId,
+    targetSnapshotId: candidate.targetSnapshotId,
+    targetSnapshotHash: candidate.targetContentHash,
+    ...(candidate.targetSourceVersion === undefined ? {} : {
+      targetSourceVersion: candidate.targetSourceVersion,
+    }),
+    remoteDocumentToken: page.remoteDocumentToken,
+    managedBodyBlockId: page.managedBodyBlockId,
+    expectedRemoteRevisionId: page.currentRemoteRevisionId,
+    currentBodyContentHash: page.currentBodyContentHash,
+    authorizationGroupId: candidate.groupId,
+    targetPolicyId: targetPolicy.id,
+    targetPolicyVersion: targetPolicy.version,
   };
 }
 

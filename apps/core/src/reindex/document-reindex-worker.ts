@@ -6,6 +6,8 @@ import type {
   DocumentReindexQueue,
   FailedDocumentReindexJobResult,
 } from "./document-reindex-queue.js";
+import type { DocumentReindexCompletionRepository } from
+  "./document-reindex-completion-repository.js";
 
 export type DocumentReindexJobResult =
   | { status: "indexed"; documentSnapshotId: string; embeddingProfileId: string; fragmentCount: number }
@@ -40,10 +42,16 @@ export type DocumentReindexWorkerDependencies = {
       documentSnapshotId: string;
       embeddingProfileId: string;
     }): Promise<boolean>;
+    countFragmentsForSnapshotProfile?(input: {
+      documentSnapshotId: string;
+      embeddingProfileId: string;
+    }): Promise<number>;
   };
   indexer: {
     indexSnapshot(snapshot: DocumentSnapshot): Promise<DocumentSemanticIndexResult>;
   };
+  completions?: Pick<DocumentReindexCompletionRepository, "recordSuccessfulCompletion">;
+  now?: () => Date;
 };
 
 const MAX_DOCUMENT_REINDEX_WORKER_BATCH_LIMIT = 100;
@@ -58,6 +66,7 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
       for (const job of jobs) {
         try {
           const result = await processJob(dependencies, job);
+          await recordSuccessfulCompletion(dependencies, result);
           await dependencies.queue.handleProcessedJob(job);
           results.push(result);
         } catch (error) {
@@ -82,6 +91,33 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
       return results;
     },
   };
+}
+
+async function recordSuccessfulCompletion(
+  dependencies: DocumentReindexWorkerDependencies,
+  result: DocumentReindexJobResult,
+): Promise<void> {
+  if (dependencies.completions === undefined || result.status === "failed" ||
+    (result.status === "skipped" && result.reason !== "already_indexed")) return;
+  const fragmentCount = result.status === "indexed"
+    ? result.fragmentCount
+    : dependencies.fragments.countFragmentsForSnapshotProfile === undefined
+      ? 1
+      : await dependencies.fragments.countFragmentsForSnapshotProfile({
+          documentSnapshotId: result.documentSnapshotId,
+          embeddingProfileId: result.embeddingProfileId,
+        });
+  if (!Number.isSafeInteger(fragmentCount) || fragmentCount < 0 ||
+    (result.status === "skipped" && fragmentCount < 1)) {
+    throw new Error("document reindex completion fragment count is invalid");
+  }
+  await dependencies.completions.recordSuccessfulCompletion({
+    documentSnapshotId: result.documentSnapshotId,
+    embeddingProfileId: result.embeddingProfileId,
+    completionKind: result.status === "indexed" ? "indexed" : "already_indexed",
+    fragmentCount,
+    completedAt: (dependencies.now ?? (() => new Date()))(),
+  });
 }
 
 async function handleFailedJobWithRetry({

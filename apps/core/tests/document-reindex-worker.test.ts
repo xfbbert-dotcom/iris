@@ -33,6 +33,71 @@ describe("DocumentReindexWorker", () => {
     expect(queue.handleProcessedJob).toHaveBeenCalledWith(job());
   });
 
+  it("durably records zero-fragment completion before acknowledging the queue job", async () => {
+    const order: string[] = [];
+    const queued = job();
+    const queue = queueFixture([queued]);
+    queue.handleProcessedJob.mockImplementation(async () => { order.push("acknowledged"); });
+    const completions = {
+      recordSuccessfulCompletion: vi.fn(async () => { order.push("completion-recorded"); }),
+    };
+    const worker = createDocumentReindexWorker({
+      queue,
+      activeEmbeddingProfileId: "profile-1536",
+      snapshots: { findSnapshotById: vi.fn(async () => snapshot()) },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => false) },
+      indexer: { indexSnapshot: vi.fn(async () => ({
+        status: "indexed" as const,
+        snapshotId: "snapshot-1",
+        fragmentCount: 0,
+      })) },
+      completions,
+    });
+
+    await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "indexed",
+      documentSnapshotId: "snapshot-1",
+      embeddingProfileId: "profile-1536",
+      fragmentCount: 0,
+    }]);
+    expect(completions.recordSuccessfulCompletion).toHaveBeenCalledWith({
+      documentSnapshotId: "snapshot-1",
+      embeddingProfileId: "profile-1536",
+      fragmentCount: 0,
+      completionKind: "indexed",
+      completedAt: expect.any(Date),
+    });
+    expect(order).toEqual(["completion-recorded", "acknowledged"]);
+  });
+
+  it("records proven already-indexed completion but not wrong-profile or failed jobs", async () => {
+    const completions = { recordSuccessfulCompletion: vi.fn(async () => undefined) };
+    const worker = createDocumentReindexWorker({
+      queue: queueFixture([
+        job({ documentSnapshotId: "already" }),
+        job({ documentSnapshotId: "wrong", embeddingProfileId: "profile-old" }),
+        job({ documentSnapshotId: "failed" }),
+      ]),
+      activeEmbeddingProfileId: "profile-1536",
+      snapshots: { findSnapshotById: vi.fn(async (id) => snapshot({ id })) },
+      fragments: {
+        hasFragmentsForSnapshotProfile: vi.fn(async ({ documentSnapshotId }) =>
+          documentSnapshotId === "already"),
+      },
+      indexer: { indexSnapshot: vi.fn(async () => { throw new Error("index failed"); }) },
+      completions,
+    });
+
+    await worker.processBatch({ limit: 3 });
+
+    expect(completions.recordSuccessfulCompletion).toHaveBeenCalledTimes(1);
+    expect(completions.recordSuccessfulCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      documentSnapshotId: "already",
+      embeddingProfileId: "profile-1536",
+      completionKind: "already_indexed",
+    }));
+  });
+
   it("rejects non-finite batch limits before dequeuing jobs", async () => {
     const queue = queueFixture([]);
     const worker = createDocumentReindexWorker({

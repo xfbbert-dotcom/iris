@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
+import type { ManagedKnowledgePage } from
+  "../src/action-approvals/managed-knowledge-page.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import {
   FeishuInteractiveCardClientError,
@@ -30,6 +32,60 @@ describe("KnowledgeConflictDispatcher", () => {
     await expect(harness.dispatcher.processBatch({ limit: 10 })).resolves.toEqual([]);
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
     expect(harness.repository.beginDeliveryAttempt).not.toHaveBeenCalled();
+  });
+
+  it("renders replace-existing metadata when the exact managed page is eligible", async () => {
+    const harness = createHarness({
+      findEligiblePage: async () => managedPage(),
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "sent",
+      deliveryId: "delivery-1",
+      code: "send_succeeded",
+    }]);
+    expect(harness.managedPages.findPageForConflict).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      authorizationGroupId: "oc_group",
+    });
+    const cardJson = harness.cardClient.sendCard.mock.calls[0]?.[0].cardJson ?? "";
+    expect(cardJson).toMatch(/replace existing managed page/iu);
+    expect(cardJson).toContain("managed\\\\-1");
+    expect(cardJson).toContain("12");
+    expect(cardJson).not.toMatch(/publish a new managed page/iu);
+  });
+
+  it("renders publish-new only after a completed managed-page lookup returns no match", async () => {
+    const harness = createHarness({ findEligiblePage: async () => undefined });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "sent",
+      deliveryId: "delivery-1",
+      code: "send_succeeded",
+    }]);
+    const cardJson = harness.cardClient.sendCard.mock.calls[0]?.[0].cardJson ?? "";
+    expect(cardJson).toMatch(/publish a new managed page/iu);
+    expect(cardJson).not.toMatch(/replace existing managed page/iu);
+  });
+
+  it.each([
+    ["resolver failure", async () => { throw new Error("database unavailable"); }],
+    ["ineligible existing page", async () => managedPage({ state: "blocked" })],
+    ["indeterminate result", async () => managedPage({ linkedDocumentSourceId: "other-source" })],
+  ])("fails closed without sending a misleading card on %s", async (_label, findEligiblePage) => {
+    const harness = createHarness({ findEligiblePage });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      deliveryId: "delivery-1",
+      code: "managed_target_unavailable",
+    }]);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(harness.repository.beginDeliveryAttempt).not.toHaveBeenCalled();
+    expect(harness.repository.failDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      classification: "retryable",
+      errorCode: "managed_target_unavailable",
+    }));
   });
 
   it("rechecks gates, bot membership, and exact live evidence before the external-attempt boundary", async () => {
@@ -408,6 +464,7 @@ type HarnessOverrides = {
   gates?: (groupId: string) => GateState;
   botMember?: (groupId: string) => Promise<boolean>;
   findSource?: (id: string) => Promise<DocumentSource | undefined>;
+  findEligiblePage?: (...args: any[]) => Promise<ManagedKnowledgePage | undefined>;
   validate?: () => Promise<
     | { status: "current"; candidate: KnowledgeConflictCandidate; permissionAttestedAt: Date }
     | { status: "superseded"; candidate: KnowledgeConflictCandidate; reason: string }
@@ -461,16 +518,23 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const cardClient = {
     sendCard: vi.fn(overrides.send ?? (async () => ({ messageId: "om_conflict" }))),
   };
+  const managedPages = {
+    findPageForConflict: vi.fn(
+      overrides.findEligiblePage ?? (async () => undefined),
+    ),
+  };
   return {
     repository,
     currentValidator,
     cardClient,
+    managedPages,
     dispatcher: createKnowledgeConflictDispatcher({
       repository,
       currentValidator,
       documentSources: {
         findSourceById: vi.fn(overrides.findSource ?? (async () => source())),
       },
+      managedPages,
       cardClient,
       readDeliveryGates: overrides.gates ?? (() => openGates()),
       isBotCurrentMember: overrides.botMember ?? (async () => true),
@@ -559,6 +623,27 @@ function source(): DocumentSource {
     createdAt: at,
     updatedAt: at,
     evidence: [],
+  };
+}
+
+function managedPage(overrides: Partial<ManagedKnowledgePage> = {}): ManagedKnowledgePage {
+  return {
+    id: "managed-1",
+    originKnowledgePublicationId: "publication-1",
+    targetPolicyId: "policy-1",
+    targetPolicyVersion: 3,
+    authorizationGroupId: "oc_group",
+    remoteNodeToken: "node-managed-1",
+    remoteDocumentToken: "doc-managed-1",
+    managedBodyBlockId: "block-managed-1",
+    linkedDocumentSourceId: "source-1",
+    currentRemoteRevisionId: "12",
+    currentBodyContentHash: "b".repeat(64),
+    state: "active",
+    version: 4,
+    createdAt: at,
+    updatedAt: at,
+    ...overrides,
   };
 }
 

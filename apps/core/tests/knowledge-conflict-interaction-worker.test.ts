@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PublicationTargetPolicy } from
   "../src/action-approvals/action-proposal-repository.js";
+import type { ManagedKnowledgePage } from
+  "../src/action-approvals/managed-knowledge-page.js";
 import type { AuthenticatedKnowledgeConflictConfirmationInteraction } from
   "../src/knowledge-conflicts/knowledge-conflict-callback-identity-store.js";
 import { createKnowledgeConflictCallbackNonce } from
@@ -257,6 +259,81 @@ describe("KnowledgeConflictInteractionWorker", () => {
       operationKey: expect.stringMatching(/^knowledge-conflict-draft-present-[0-9a-f]{64}$/u),
       at,
     });
+  });
+
+  it("binds the exact eligible managed page into the conflict draft creation", async () => {
+    const harness = createHarness({ managedPage: managedPage() });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toMatchObject({
+      status: "applied",
+      code: "draft_created",
+    });
+    expect(harness.managedPages.findPageForConflict).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      authorizationGroupId: "oc_group",
+    });
+    expect(harness.drafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({
+      managedUpdateTarget: {
+        conflictCandidateId: "candidate-1",
+        conflictCandidateVersion: 3,
+        managedPageId: "managed-1",
+        managedPageVersion: 4,
+        linkedDocumentSourceId: "source-1",
+        targetSnapshotId: "snapshot-1",
+        targetSnapshotHash: "a".repeat(64),
+        targetSourceVersion: "v7",
+        remoteDocumentToken: "doc-managed-1",
+        managedBodyBlockId: "block-managed-1",
+        expectedRemoteRevisionId: "12",
+        currentBodyContentHash: "b".repeat(64),
+        authorizationGroupId: "oc_group",
+        targetPolicyId: "policy-1",
+        targetPolicyVersion: 7,
+      },
+    }));
+  });
+
+  it("retains publication drafting only after a successful zero-eligible-target lookup", async () => {
+    const harness = createHarness({ managedPage: undefined });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toMatchObject({
+      status: "applied",
+      code: "draft_created",
+    });
+    expect(harness.managedPages.findPageForConflict).toHaveBeenCalledOnce();
+    expect(harness.drafts.createDraft.mock.calls[0]?.[0]).not.toHaveProperty("managedUpdateTarget");
+  });
+
+  it.each([
+    "updating",
+    "resync_required",
+    "reconciliation_required",
+    "blocked",
+    "retired",
+  ] as const)("does not publish-new when the existing managed page is %s", async (state) => {
+    const harness = createHarness({ managedPage: managedPage({ state }) });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "retryable",
+      code: "repository_unavailable",
+    });
+    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+  });
+
+  it("retries managed-target resolution failures without creating an unbound draft", async () => {
+    const harness = createHarness({
+      findPageForConflict: async () => {
+        throw new Error("managed resolver permission or database failure");
+      },
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "retryable",
+      code: "repository_unavailable",
+    });
+    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
   });
 
   it("attests only the target source included in the governed draft", async () => {
@@ -659,6 +736,8 @@ type HarnessOverrides = {
   policies?: PublicationTargetPolicy[];
   listTargetPolicies?: (...args: any[]) => Promise<PublicationTargetPolicy[]>;
   getTargetPolicy?: (...args: any[]) => Promise<PublicationTargetPolicy | undefined>;
+  managedPage?: ManagedKnowledgePage;
+  findPageForConflict?: (...args: any[]) => Promise<ManagedKnowledgePage | undefined>;
   validate?: (...args: any[]) => Promise<Validation>;
   canProcessKnowledgeConflicts?: (groupId: string) => boolean;
   isCurrentMember?: () => Promise<boolean>;
@@ -715,6 +794,10 @@ function createHarness(overrides: HarnessOverrides = {}) {
     listTargetPolicies: vi.fn(overrides.listTargetPolicies ?? (async () => overrides.policies ?? [policy()])),
     getTargetPolicy: vi.fn(overrides.getTargetPolicy ?? (async () => policy())),
   };
+  const managedPages = {
+    findPageForConflict: vi.fn(overrides.findPageForConflict ??
+      (async () => overrides.managedPage)),
+  };
   const cardRuntime = {
     repository: {
       getDraft: drafts.getDraft,
@@ -746,6 +829,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     membershipChecker,
     drafts,
     publicationTargets,
+    managedPages,
     cardRuntime: cardRuntime as never,
     ...(overrides.useDefaultPresentation ? {} : { presentKnowledgeDraft }),
     canProcessKnowledgeConflicts: overrides.canProcessKnowledgeConflicts ?? (() => true),
@@ -760,8 +844,30 @@ function createHarness(overrides: HarnessOverrides = {}) {
     membershipChecker,
     drafts,
     publicationTargets,
+    managedPages,
     cardRuntime,
     presentKnowledgeDraft,
+  };
+}
+
+function managedPage(overrides: Partial<ManagedKnowledgePage> = {}): ManagedKnowledgePage {
+  return {
+    id: "managed-1",
+    originKnowledgePublicationId: "publication-1",
+    targetPolicyId: "policy-1",
+    targetPolicyVersion: 7,
+    authorizationGroupId: "oc_group",
+    remoteNodeToken: "wiki-managed-1",
+    remoteDocumentToken: "doc-managed-1",
+    managedBodyBlockId: "block-managed-1",
+    linkedDocumentSourceId: "source-1",
+    currentRemoteRevisionId: "12",
+    currentBodyContentHash: "b".repeat(64),
+    state: "active",
+    version: 4,
+    createdAt: at,
+    updatedAt: at,
+    ...overrides,
   };
 }
 

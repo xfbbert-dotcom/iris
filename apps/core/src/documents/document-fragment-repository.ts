@@ -118,6 +118,10 @@ export interface DocumentFragmentRepository {
     documentSnapshotId: string;
     embeddingProfileId: string;
   }): Promise<boolean>;
+  countFragmentsForSnapshotProfile(input: {
+    documentSnapshotId: string;
+    embeddingProfileId: string;
+  }): Promise<number>;
 }
 
 type DocumentFragmentRow = {
@@ -280,6 +284,15 @@ join document_sources ds
   on ds.id = f.document_source_id
   and ds.${usageColumn} = true
   and ds.permission_state in ('unknown', 'readable')
+  and not exists (
+    select 1
+    from managed_knowledge_pages managed
+    where managed.linked_document_source_id = ds.id
+      and (
+        managed.state <> 'active'
+        or managed.current_reconciled_snapshot_id is distinct from f.document_snapshot_id
+      )
+  )
 ${filters.sourceTypeClause}${filters.grantJoinClause}join ${embeddingTable} e
   on e.document_fragment_id = f.id
 where f.embedding_profile_id = $1
@@ -351,6 +364,15 @@ ${filters.grantSelectClause}
     on ds.id = f.document_source_id
     and ds.${usageColumn} = true
     and ds.permission_state in ('unknown', 'readable')
+    and not exists (
+      select 1
+      from managed_knowledge_pages managed
+      where managed.linked_document_source_id = ds.id
+        and (
+          managed.state <> 'active'
+          or managed.current_reconciled_snapshot_id is distinct from f.document_snapshot_id
+        )
+    )
 ${knowledgeEligibilityClause}${filters.sourceTypeClause}${filters.grantJoinClause}  join ${embeddingTable} e
     on e.document_fragment_id = f.id
   where f.embedding_profile_id = $1
@@ -410,6 +432,20 @@ select exists (
 
       return result.rows[0]?.exists === true;
     },
+
+    async countFragmentsForSnapshotProfile(input) {
+      const result = await dependencies.queryable.query<{ count: string | number }>(
+        `SELECT COUNT(*)::INTEGER AS count
+           FROM document_fragments
+          WHERE document_snapshot_id = $1 AND embedding_profile_id = $2`,
+        [input.documentSnapshotId, input.embeddingProfileId],
+      );
+      const count = Number(result.rows[0]?.count);
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new Error("document fragment count is invalid");
+      }
+      return count;
+    },
   };
 }
 
@@ -440,7 +476,9 @@ async function withTransactionIfSupported<T>(
 }
 
 function supportsTransactions(queryable: Queryable): queryable is TransactionalQueryable {
-  return "connect" in queryable && typeof queryable.connect === "function";
+  return "connect" in queryable
+    && typeof queryable.connect === "function"
+    && !("release" in queryable && typeof queryable.release === "function");
 }
 
 function validateReplacementEmbeddings(

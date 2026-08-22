@@ -88,12 +88,31 @@ export type KnowledgeConflictDraftGovernanceAttestation = {
   };
 };
 
+export type KnowledgeConflictManagedUpdateTarget = {
+  conflictCandidateId: string;
+  conflictCandidateVersion: number;
+  managedPageId: string;
+  managedPageVersion: number;
+  linkedDocumentSourceId: string;
+  targetSnapshotId: string;
+  targetSnapshotHash: string;
+  targetSourceVersion?: string;
+  remoteDocumentToken: string;
+  managedBodyBlockId: string;
+  expectedRemoteRevisionId: string;
+  currentBodyContentHash: string;
+  authorizationGroupId: string;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
+};
+
 export type CreateKnowledgeDraftInput = {
   id: string;
   operationKey: string;
   originKind: KnowledgeDraftOriginKind;
   createdBy: string;
   knowledgeConflictGovernance?: KnowledgeConflictDraftGovernanceAttestation;
+  managedUpdateTarget?: KnowledgeConflictManagedUpdateTarget;
   revision: KnowledgeDraftRevisionInput;
   at: Date;
 };

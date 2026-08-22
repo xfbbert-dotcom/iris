@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 
+import type { ManagedKnowledgePage } from
+  "../action-approvals/managed-knowledge-page.js";
+import type { ManagedKnowledgePageRepository } from
+  "../action-approvals/managed-knowledge-page-repository.js";
 import type { DocumentSource } from "../documents/document-source-registry.js";
 import {
   FeishuInteractiveCardClientError,
@@ -42,6 +46,7 @@ export type KnowledgeConflictDispatcherCode =
   | "permission_blocked"
   | "validation_unavailable"
   | "source_unavailable"
+  | "managed_target_unavailable"
   | "bot_not_in_group"
   | "membership_unavailable"
   | "render_failed"
@@ -65,6 +70,7 @@ export type KnowledgeConflictDispatcherDependencies = {
   >;
   currentValidator: KnowledgeConflictCurrentValidator;
   documentSources: { findSourceById(id: string): Promise<DocumentSource | undefined> };
+  managedPages: Pick<ManagedKnowledgePageRepository, "findPageForConflict">;
   cardClient: Pick<FeishuInteractiveCardClient, "sendCard">;
   renderer?: (input: KnowledgeConflictCardRenderInput) => KnowledgeConflictCardRenderResult;
   readDeliveryGates(groupId: string): KnowledgeConflictDeliveryGates;
@@ -81,6 +87,7 @@ export function createKnowledgeConflictDispatcher({
   repository,
   currentValidator,
   documentSources,
+  managedPages,
   cardClient,
   renderer = renderKnowledgeConflictCard,
   readDeliveryGates,
@@ -105,6 +112,7 @@ export function createKnowledgeConflictDispatcher({
     repository,
     currentValidator,
     documentSources,
+    managedPages,
     cardClient,
     renderer,
     readDeliveryGates,
@@ -143,6 +151,7 @@ type DispatchClaimInput = {
   repository: KnowledgeConflictDispatcherDependencies["repository"];
   currentValidator: KnowledgeConflictCurrentValidator;
   documentSources: KnowledgeConflictDispatcherDependencies["documentSources"];
+  managedPages: KnowledgeConflictDispatcherDependencies["managedPages"];
   cardClient: KnowledgeConflictDispatcherDependencies["cardClient"];
   renderer: NonNullable<KnowledgeConflictDispatcherDependencies["renderer"]>;
   readDeliveryGates: KnowledgeConflictDispatcherDependencies["readDeliveryGates"];
@@ -171,12 +180,29 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<KnowledgeConfli
   }
   if (!exactSource(candidate, source)) return fail(input, "permanent", "stale_candidate");
 
+  let managedPage: ManagedKnowledgePage | undefined;
+  try {
+    managedPage = await input.managedPages.findPageForConflict({
+      documentSourceId: candidate.targetDocumentSourceId,
+      authorizationGroupId: candidate.groupId,
+    });
+  } catch {
+    return fail(input, "retryable", "managed_target_unavailable");
+  }
+  const managedUpdateTarget = managedPage === undefined
+    ? undefined
+    : exactManagedUpdateTarget(candidate, managedPage);
+  if (managedPage !== undefined && managedUpdateTarget === undefined) {
+    return fail(input, "retryable", "managed_target_unavailable");
+  }
+
   let rendered: KnowledgeConflictCardRenderResult;
   try {
     rendered = input.renderer({
       candidate,
       source,
       nonce: createKnowledgeConflictCallbackNonce(delivery.id),
+      ...(managedUpdateTarget === undefined ? {} : { managedUpdateTarget }),
     });
   } catch {
     return fail(input, "permanent", "render_failed");
@@ -396,6 +422,24 @@ function exactSource(
     && validDate(source.updatedAt)
     && validDate(candidate.targetSourceUpdatedAt)
     && source.updatedAt.getTime() === candidate.targetSourceUpdatedAt.getTime();
+}
+
+function exactManagedUpdateTarget(
+  candidate: KnowledgeConflictDeliveryClaim["candidate"],
+  page: ManagedKnowledgePage,
+): KnowledgeConflictCardRenderInput["managedUpdateTarget"] {
+  if (page.state !== "active" ||
+    page.linkedDocumentSourceId !== candidate.targetDocumentSourceId ||
+    page.authorizationGroupId !== candidate.groupId ||
+    page.currentRemoteRevisionId === undefined ||
+    page.currentBodyContentHash === undefined) {
+    return undefined;
+  }
+  return {
+    managedPageId: page.id,
+    managedPageVersion: page.version,
+    expectedRemoteRevisionId: page.currentRemoteRevisionId,
+  };
 }
 
 function exactValidatedCandidate(

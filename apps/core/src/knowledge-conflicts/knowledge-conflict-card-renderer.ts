@@ -17,6 +17,11 @@ export type KnowledgeConflictCardRenderInput = {
   candidate: KnowledgeConflictCandidate;
   source: DocumentSource;
   nonce: string;
+  managedUpdateTarget?: {
+    managedPageId: string;
+    managedPageVersion: number;
+    expectedRemoteRevisionId: string;
+  };
 };
 
 export type KnowledgeConflictCardRenderResult = {
@@ -75,12 +80,16 @@ export function renderKnowledgeConflictCard(
     candidate.targetSourceVersion ?? `snapshot ${candidate.targetSnapshotId}`,
     MAX_TARGET_CODE_POINTS,
   );
+  const managedTarget = normalizeManagedTarget(input.managedUpdateTarget);
 
   const buttons = [
     component({
       tag: "button",
       name: "create_update_draft",
-      text: { tag: "plain_text", content: "生成更新草稿" },
+      text: {
+        tag: "plain_text",
+        content: managedTarget === undefined ? "生成发布草稿" : "生成替换草稿",
+      },
       type: "primary",
       form_action_type: "submit",
       behaviors: [{ type: "callback", value: callbackValue("create_update_draft") }],
@@ -131,6 +140,13 @@ export function renderKnowledgeConflictCard(
       tag: "markdown",
       content: [
         `**Target:** ${target}`,
+        ...(managedTarget === undefined
+          ? ["Confirmation may publish a new managed page after governed review."]
+          : [
+              "Confirmation authorizes a proposal to replace existing managed page after governed review.",
+              `Managed page ID: ${escapeFeishuMarkdown(managedTarget.managedPageId)}`,
+              `Expected remote revision: ${escapeFeishuMarkdown(managedTarget.expectedRemoteRevisionId)}`,
+            ]),
         `Document evidence: ${documentLabels.join(", ")}`,
         `Group evidence: ${groupLabels.join(", ")}`,
       ].join("\n"),
@@ -153,6 +169,17 @@ export function renderKnowledgeConflictCard(
     throw new Error("knowledge conflict card is too large");
   }
   return { card, json, componentCount };
+}
+
+function normalizeManagedTarget(
+  value: KnowledgeConflictCardRenderInput["managedUpdateTarget"],
+): KnowledgeConflictCardRenderInput["managedUpdateTarget"] {
+  if (value === undefined) return undefined;
+  return {
+    managedPageId: requireIdentifier(value.managedPageId),
+    managedPageVersion: requirePositiveInteger(value.managedPageVersion),
+    expectedRemoteRevisionId: requireIdentifier(value.expectedRemoteRevisionId),
+  };
 }
 
 function assertBinding(input: KnowledgeConflictCardRenderInput): void {
@@ -252,6 +279,13 @@ function requireNonce(value: string): string {
   const normalized = requireIdentifier(value);
   if (normalized.length > MAX_NONCE_CHARS) throw new KnowledgeConflictCardBindingError();
   return normalized;
+}
+
+function requirePositiveInteger(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new KnowledgeConflictCardBindingError();
+  }
+  return Number(value);
 }
 
 function referenceOrder(left: string, right: string): number {

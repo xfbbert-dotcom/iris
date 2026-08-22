@@ -34,6 +34,8 @@ import {
 import { createDocumentEmbeddingProvider } from "../model/embedding-input-format.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createDocumentReindexPlanner } from "../reindex/document-reindex-planner.js";
+import { createDocumentReindexCompletionRepository } from
+  "../reindex/document-reindex-completion-repository.js";
 import type {
   DocumentReindexDeadLetter,
   ReplayDocumentReindexDeadLettersResult,
@@ -104,7 +106,8 @@ export type ReindexWorkerRuntimeDependencies = {
     embeddingProfiles: Pick<EmbeddingProfileRepository, "getProfileById">;
   }) => Pick<
     DocumentFragmentRepository,
-    "replaceFragmentsForSnapshot" | "hasFragmentsForSnapshotProfile"
+    "replaceFragmentsForSnapshot" | "hasFragmentsForSnapshotProfile" |
+    "countFragmentsForSnapshotProfile"
   >;
   createEmbeddingProvider?: (config: EmbeddingProviderConfig) => EmbeddingProvider;
   createWorkerLoop?: typeof createDocumentReindexWorkerLoop;
@@ -168,6 +171,7 @@ export function createReindexWorkerRuntime({
   );
   const snapshots = createSnapshots({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
+  const reindexCompletions = createDocumentReindexCompletionRepository({ queryable: pool });
   const embedder = createDocumentEmbeddingProvider({
     model: embeddingConfig.model,
     delegate: createEmbedding(embeddingConfig),
@@ -192,6 +196,7 @@ export function createReindexWorkerRuntime({
     snapshots,
     fragments,
     indexer,
+    completions: reindexCompletions,
   });
   const loop: DocumentReindexWorkerLoop = createLoop({
     worker,

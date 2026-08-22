@@ -25,6 +25,12 @@ export function renderActionReviewPage(input: {
           </div>`,
     )
     .join("");
+  const actionDescription = context.actionType === "publish_knowledge_draft"
+    ? "Publish new Wiki page"
+    : "Replace the single managed body block on existing Wiki page";
+  const managedTargetDetails = context.managedTarget === undefined
+    ? ""
+    : renderManagedTargetDetails(context.managedTarget);
 
   return renderDocument({
     pageTitle: "完整正文审阅",
@@ -45,6 +51,13 @@ export function renderActionReviewPage(input: {
           <dl>
             <dt>内容哈希</dt>
             <dd class="value-wrap">${escapeHtml(context.contentHash)}</dd>
+            <dt>行动</dt>
+            <dd>${escapeHtml(actionDescription)}</dd>
+            ${context.actionType === "update_knowledge_publication"
+              ? '<dt>警告</dt><dd class="warning">This approval replaces only the single managed body block.</dd>'
+              : ""}
+            <dt>行动目标指纹</dt>
+            <dd class="value-wrap">${escapeHtml(context.actionTargetFingerprint)}</dd>
             <dt>修订版本</dt>
             <dd>${escapeHtml(context.subjectRevision)}</dd>
             <dt>草稿版本</dt>
@@ -55,6 +68,9 @@ export function renderActionReviewPage(input: {
             <dd>${escapeHtml(context.riskLevel)}</dd>
             <dt>目标</dt>
             <dd class="value-wrap">${escapeHtml(context.targetDisplayName)}</dd>
+            <dt>目标策略</dt>
+            <dd class="value-wrap">${escapeHtml(context.targetPolicyId)} / ${escapeHtml(context.targetPolicyVersion)}</dd>
+            ${managedTargetDetails}
             <dt>审批要求</dt>
             <dd>
               <dl class="requirements">${requirements}</dl>
@@ -118,6 +134,7 @@ function renderDocument(input: { pageTitle: string; body: string }): string {
       dt:first-child { margin-top: 0; }
       dd { margin: 4px 0 0; }
       .value-wrap { overflow-wrap: anywhere; word-break: break-word; }
+      .warning { border-left: 3px solid #c2410c; padding-left: 12px; color: #9a3412; font-weight: 700; }
       .requirements { display: grid; gap: 4px; }
       .requirement { border-left: 3px solid #cbd5e1; padding-left: 12px; }
       .requirement dt { margin-top: 8px; }
@@ -134,6 +151,46 @@ function renderDocument(input: { pageTitle: string; body: string }): string {
   <body>${input.body}
   </body>
 </html>`;
+}
+
+function renderManagedTargetDetails(target: NonNullable<ActionReviewContext["managedTarget"]>): string {
+  const targetUrl = requireSafeTargetUrl(target.targetSourceUri);
+  return `
+            <dt>托管页面</dt>
+            <dd class="value-wrap"><a href="${escapeHtml(targetUrl)}">${escapeHtml(target.managedPageId)}</a></dd>
+            <dt>托管页面版本</dt>
+            <dd>${escapeHtml(target.managedPageVersion)}</dd>
+            <dt>文档来源</dt>
+            <dd class="value-wrap">${escapeHtml(target.documentSourceId)}</dd>
+            <dt>目标快照</dt>
+            <dd class="value-wrap">${escapeHtml(target.targetSnapshotId)} / ${escapeHtml(target.targetSnapshotHash)}</dd>
+            <dt>冲突候选</dt>
+            <dd class="value-wrap">${escapeHtml(target.conflictCandidateId)} / ${escapeHtml(target.conflictCandidateVersion)}</dd>
+            <dt>远程文档</dt>
+            <dd class="value-wrap">${escapeHtml(target.remoteDocumentToken)}</dd>
+            <dt>托管正文块</dt>
+            <dd class="value-wrap">${escapeHtml(target.managedBodyBlockId)}</dd>
+            <dt>预期远程修订</dt>
+            <dd class="value-wrap">${escapeHtml(target.expectedRemoteRevisionId)}</dd>
+            <dt>当前正文哈希</dt>
+            <dd class="value-wrap">${escapeHtml(target.currentBodyContentHash)}</dd>
+            <dt>授权组</dt>
+            <dd class="value-wrap">${escapeHtml(target.authorizationGroupId)}</dd>`;
+}
+
+function requireSafeTargetUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("action review target URI is invalid");
+  }
+  if (
+    !(url.protocol === "https:" || url.protocol === "http:") ||
+    url.username !== "" ||
+    url.password !== ""
+  ) throw new Error("action review target URI is invalid");
+  return url.toString();
 }
 
 function escapeHtml(value: string | number): string {

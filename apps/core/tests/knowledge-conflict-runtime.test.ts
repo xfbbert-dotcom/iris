@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
@@ -17,6 +19,22 @@ import {
 } from "../src/runtime/knowledge-conflict-runtime.js";
 
 describe("createKnowledgeConflictRuntime", () => {
+  it("shares the exact managed-page resolver with production card dispatch and draft creation", () => {
+    const source = readFileSync(
+      new URL("../src/runtime/knowledge-conflict-runtime.ts", import.meta.url),
+      "utf8",
+    );
+    const dispatcherComposition = source.match(
+      /const dispatcher = createKnowledgeConflictDispatcher\(\{([\s\S]*?)\n  \}\);/u,
+    )?.[1];
+    const interactionComposition = source.match(
+      /const interactionWorker = createKnowledgeConflictInteractionWorker\(\{([\s\S]*?)\n  \}\);/u,
+    )?.[1];
+
+    expect(dispatcherComposition).toMatch(/\bmanagedPages,/u);
+    expect(interactionComposition).toMatch(/\bmanagedPages,/u);
+  });
+
   it("returns undefined without opening resources when disabled", () => {
     const createPostgresPool = vi.fn();
 

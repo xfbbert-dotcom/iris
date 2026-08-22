@@ -32,14 +32,14 @@ describe("createActionReviewRuntime", () => {
     await expect(runtime?.getStatus()).resolves.toEqual({
       configured: true,
       running: true,
-      migration0034Applied: true,
+      migration0053Applied: true,
     });
     await runtime?.close();
     await runtime?.close();
     await expect(runtime?.getStatus()).resolves.toEqual({
       configured: true,
       running: false,
-      migration0034Applied: true,
+      migration0053Applied: true,
     });
     expect(close).toHaveBeenCalledOnce();
   });
@@ -58,7 +58,7 @@ describe("createActionReviewRuntime", () => {
     await expect(runtime?.getStatus()).resolves.toEqual({
       configured: true,
       running: true,
-      migration0034Applied: false,
+      migration0053Applied: false,
     });
     await runtime?.close();
   });

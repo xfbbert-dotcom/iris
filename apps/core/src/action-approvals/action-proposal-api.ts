@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import type { ActionApprovalRuntime } from "../runtime/action-approval-runtime.js";
+import type { ManagedKnowledgeUpdateMetadata } from "./managed-knowledge-page-repository.js";
 import {
   KNOWLEDGE_DRAFT_REASON_MAX_CHARS,
   KNOWLEDGE_DRAFT_RISK_LEVELS,
@@ -18,6 +19,8 @@ import {
   ActionProposalPersistenceConflictError,
   ActionProposalVersionConflictError,
 } from "./postgres-action-proposal-repository.js";
+import { ManagedKnowledgePageOperationConflictError } from
+  "./postgres-managed-knowledge-page-repository.js";
 
 const MAX_LIST_LIMIT = 100;
 const MAX_REFERENCE_CHARS = 512;
@@ -62,11 +65,41 @@ export function registerActionProposalApi(
       if (proposal === undefined) {
         return reply.code(404).send({ ok: false, error: "action_proposal_not_found" });
       }
-      return { ok: true, proposal };
+      const metadata = runtime.managedKnowledgeAdmin === undefined
+        ? undefined
+        : await runtime.managedKnowledgeAdmin.getProposalMetadata(proposal.proposal.id);
+      return {
+        ok: true,
+        proposal,
+        ...(metadata === undefined
+          ? {}
+        : projectManagedKnowledgeMetadata(metadata)),
+      };
     } catch (error) {
       return handleError(reply, error);
     }
   });
+
+  app.post<{ Params: { id: string } }>(
+    "/internal/managed-knowledge-updates/:id/reconcile",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (runtime === undefined || runtime.managedKnowledgeAdmin === undefined) return unavailable(reply);
+      try {
+        const operator = requireOperator(request.headers["x-iris-operator"]);
+        const body = parseManagedReconciliationBody(unwrapBody(request.body));
+        const execution = await runtime.managedKnowledgeAdmin.reconcile({
+          executionId: requireReference("id", request.params.id),
+          ...body,
+          operator,
+          at: requireDate(now()),
+        });
+        return { ok: true, execution };
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    },
+  );
 
   app.get<{ Params: { id: string } }>(
     "/internal/action-proposals/:id/events",
@@ -205,6 +238,42 @@ function parseProposalQuery(value: unknown): {
   };
 }
 
+function projectManagedKnowledgeMetadata(metadata: ManagedKnowledgeUpdateMetadata) {
+  return {
+    managedTarget: {
+      id: metadata.managedTarget.id,
+      expectedRevision: metadata.managedTarget.expectedRevision,
+      currentBodyHash: metadata.managedTarget.currentBodyHash,
+      proposedBodyHash: metadata.managedTarget.proposedBodyHash,
+      state: metadata.managedTarget.state,
+    },
+    managedPage: {
+      id: metadata.page.id,
+      ...(metadata.page.sourceId === undefined ? {} : { sourceId: metadata.page.sourceId }),
+      state: metadata.page.state,
+      version: metadata.page.version,
+      ...(metadata.page.currentRevision === undefined ? {} : { currentRevision: metadata.page.currentRevision }),
+      safeWikiUrl: metadata.page.safeWikiUrl,
+    },
+    managedExecutions: metadata.executions.map((execution) => ({
+      id: execution.id,
+      state: execution.state,
+      version: execution.version,
+      requestFingerprint: execution.requestFingerprint,
+      ...(execution.reasonCode === undefined ? {} : { reasonCode: execution.reasonCode }),
+      createdAt: execution.createdAt,
+      updatedAt: execution.updatedAt,
+      events: execution.events.map((event) => ({
+        type: event.type,
+        ...(event.fromVersion === undefined ? {} : { fromVersion: event.fromVersion }),
+        toVersion: event.toVersion,
+        ...(event.reasonCode === undefined ? {} : { reasonCode: event.reasonCode }),
+        at: event.at,
+      })),
+    })),
+  };
+}
+
 function parseDispositionBody(value: unknown) {
   const body = requireRecord(value, "request");
   assertOnlyKeys(body, [
@@ -259,6 +328,18 @@ function parseGrantBody(value: unknown) {
   };
 }
 
+function parseManagedReconciliationBody(value: unknown) {
+  const body = requireRecord(value, "request");
+  assertOnlyKeys(body, ["expectedExecutionVersion", "expectedManagedPageVersion", "operationKey"]);
+  return {
+    expectedExecutionVersion: requirePositiveInteger("expectedExecutionVersion", body.expectedExecutionVersion),
+    expectedManagedPageVersion: requirePositiveInteger(
+      "expectedManagedPageVersion", body.expectedManagedPageVersion,
+    ),
+    operationKey: requireReference("operationKey", body.operationKey),
+  };
+}
+
 function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof ActionProposalAuthorizationError) {
     return reply.code(403).send({ ok: false, error: "action_proposal_not_authorized" });
@@ -266,7 +347,8 @@ function handleError(reply: FastifyReply, error: unknown) {
   if (error instanceof ActionProposalVersionConflictError) {
     return reply.code(409).send({ ok: false, error: "action_proposal_version_conflict" });
   }
-  if (error instanceof ActionProposalOperationConflictError) {
+  if (error instanceof ActionProposalOperationConflictError ||
+    error instanceof ManagedKnowledgePageOperationConflictError) {
     return reply.code(409).send({ ok: false, error: "action_proposal_operation_conflict" });
   }
   if (error instanceof ActionProposalIneligibleError) {

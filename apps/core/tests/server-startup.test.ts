@@ -55,6 +55,43 @@ afterEach(async () => {
 });
 
 describe("Core server startup", () => {
+  it("fails closed during composition for a malformed managed-update deployment flag", async () => {
+    const createActionApprovalRuntime = vi.fn(() => undefined);
+
+    await expect(buildApp({
+      readinessEnv: { IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "enabled" },
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime,
+    })).rejects.toThrow("IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED must be true or false");
+
+    expect(createActionApprovalRuntime).not.toHaveBeenCalled();
+  });
+
+  it("reports an enabled managed-update deployment without its worker dependency as not ready", async () => {
+    const app = await buildApp({
+      readinessEnv: {
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot",
+      },
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime: () => undefined,
+    });
+
+    const readiness = (await app.inject({ method: "GET", url: "/internal/readiness" })).json();
+
+    expect(readiness).toMatchObject({ ok: false, status: "blocked" });
+    expect(readiness.checks).toContainEqual(expect.objectContaining({
+      id: "managedKnowledgeUpdates", status: "fail",
+    }));
+    await app.close();
+  });
+
   it("wires the governed chat knowledge-draft command into the event worker", async () => {
     const answerDraftRuntime: AnswerDraftRuntime = {
       answerDraftOrchestrator: { generateDraft: vi.fn() },
@@ -1495,7 +1532,7 @@ function fakeActionReviewRuntime(
     getStatus: vi.fn(async () => ({
       configured: true as const,
       running: true,
-      migration0034Applied: true,
+      migration0053Applied: true,
     })),
     close: vi.fn(async () => undefined),
     ...overrides,

@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { canonicalManagedBodyHash } from "../action-approvals/managed-knowledge-page.js";
+
 import {
   KNOWLEDGE_DRAFT_ORIGIN_KINDS,
   KNOWLEDGE_DRAFT_REASON_MAX_CHARS,
@@ -25,6 +27,7 @@ import {
   type KnowledgeDraftEvent,
   type KnowledgeDraftMutationResult,
   type KnowledgeConflictDraftGovernanceAttestation,
+  type KnowledgeConflictManagedUpdateTarget,
   type KnowledgeDraftRepository,
   type KnowledgeDraftRevisionView,
   type KnowledgeDraftStatusCounts,
@@ -226,6 +229,12 @@ async function createDraft(
     at,
     maxAgeMs: permissionAgeMs,
   });
+  const managedUpdateTarget = normalizeManagedUpdateTarget({
+    originKind,
+    target: input.managedUpdateTarget,
+    governance: knowledgeConflictGovernance,
+    revision,
+  });
   const fingerprint = knowledgeConflictGovernance === undefined
     ? operationFingerprint({
         operation: "create",
@@ -249,6 +258,7 @@ async function createDraft(
           },
           publicationTarget: knowledgeConflictGovernance.publicationTarget,
         },
+        ...(managedUpdateTarget === undefined ? {} : { managedUpdateTarget }),
       });
 
   return withTransaction(dataSource, async (client) => {
@@ -257,7 +267,7 @@ async function createDraft(
       client,
       operationKey,
       fingerprint,
-      knowledgeConflictGovernance === undefined
+      knowledgeConflictGovernance === undefined || managedUpdateTarget !== undefined
         ? undefined
         : (event) => isExactLegacyKnowledgeConflictCreate({
             client,
@@ -335,6 +345,16 @@ async function createDraft(
         knowledgeConflictGovernance,
       );
     }
+    if (managedUpdateTarget !== undefined) {
+      await insertManagedUpdateTarget(client, {
+        draftId: id,
+        draftRevision: 1,
+        draftVersion: 1,
+        target: managedUpdateTarget,
+        proposedBodyContentHash: canonicalManagedBodyHash(revision.content),
+        at,
+      });
+    }
     await insertEvent(client, {
       draftId: id,
       eventType: "created",
@@ -347,6 +367,89 @@ async function createDraft(
     });
     return { outcome: "applied", draft: await requireDraft(client, id, at, permissionAgeMs) };
   });
+}
+
+async function insertManagedUpdateTarget(
+  client: KnowledgeDraftEvidenceQueryable,
+  input: {
+    draftId: string;
+    draftRevision: number;
+    draftVersion: number;
+    target: KnowledgeConflictManagedUpdateTarget;
+    proposedBodyContentHash: string;
+    at: Date;
+  },
+): Promise<void> {
+  const target = input.target;
+  if (target.currentBodyContentHash === input.proposedBodyContentHash) {
+    throw new KnowledgeDraftVersionConflictError();
+  }
+  const page = await client.query<Record<string, unknown>>(
+    `SELECT id, target_policy_id, target_policy_version, authorization_group_id,
+       remote_document_token, managed_body_block_id, linked_document_source_id,
+       current_remote_revision_id, current_body_content_hash, state, version
+     FROM managed_knowledge_pages WHERE id = $1 FOR UPDATE`,
+    [target.managedPageId],
+  );
+  const candidate = await client.query<Record<string, unknown>>(
+    `SELECT version, group_id, target_document_source_id, target_snapshot_id,
+       target_content_hash, target_source_version
+     FROM knowledge_conflict_candidates WHERE id = $1 FOR UPDATE`,
+    [target.conflictCandidateId],
+  );
+  const pageRow = page.rows[0];
+  const candidateRow = candidate.rows[0];
+  if (pageRow === undefined || candidateRow === undefined ||
+    pageRow.state !== "active" ||
+    Number(pageRow.version) !== target.managedPageVersion ||
+    pageRow.linked_document_source_id !== target.linkedDocumentSourceId ||
+    pageRow.authorization_group_id !== target.authorizationGroupId ||
+    pageRow.target_policy_id !== target.targetPolicyId ||
+    Number(pageRow.target_policy_version) !== target.targetPolicyVersion ||
+    pageRow.remote_document_token !== target.remoteDocumentToken ||
+    pageRow.managed_body_block_id !== target.managedBodyBlockId ||
+    pageRow.current_remote_revision_id !== target.expectedRemoteRevisionId ||
+    pageRow.current_body_content_hash !== target.currentBodyContentHash ||
+    Number(candidateRow.version) !== target.conflictCandidateVersion ||
+    candidateRow.group_id !== target.authorizationGroupId ||
+    candidateRow.target_document_source_id !== target.linkedDocumentSourceId ||
+    candidateRow.target_snapshot_id !== target.targetSnapshotId ||
+    candidateRow.target_content_hash !== target.targetSnapshotHash ||
+    (candidateRow.target_source_version ?? undefined) !== target.targetSourceVersion) {
+    throw new KnowledgeDraftVersionConflictError();
+  }
+  const identityHash = operationFingerprint({
+    draftId: input.draftId,
+    draftRevision: input.draftRevision,
+  });
+  const id = `knowledge-update-target-${identityHash}`;
+  const operationKey = `bind-managed-update-target:${identityHash}`;
+  const fingerprint = operationFingerprint({
+    operation: "bind_conflict_draft_managed_update_target",
+    id,
+    draftId: input.draftId,
+    draftRevision: input.draftRevision,
+    draftVersion: input.draftVersion,
+    ...target,
+    proposedBodyContentHash: input.proposedBodyContentHash,
+  });
+  await client.query(
+    `INSERT INTO knowledge_publication_update_targets (
+      id,draft_id,draft_revision,draft_version,conflict_candidate_id,conflict_candidate_version,
+      managed_page_id,managed_page_version,linked_document_source_id,target_snapshot_id,
+      target_snapshot_hash,target_source_version,remote_document_token,managed_body_block_id,
+      expected_remote_revision_id,current_body_content_hash,proposed_body_content_hash,
+      authorization_group_id,target_policy_id,target_policy_version,operation_key,
+      operation_fingerprint,created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+    [id, input.draftId, input.draftRevision, input.draftVersion, target.conflictCandidateId,
+      target.conflictCandidateVersion, target.managedPageId, target.managedPageVersion,
+      target.linkedDocumentSourceId, target.targetSnapshotId, target.targetSnapshotHash,
+      target.targetSourceVersion ?? null, target.remoteDocumentToken, target.managedBodyBlockId,
+      target.expectedRemoteRevisionId, target.currentBodyContentHash, input.proposedBodyContentHash,
+      target.authorizationGroupId, target.targetPolicyId, target.targetPolicyVersion, operationKey,
+      fingerprint, input.at],
+  );
 }
 
 async function reviseDraft(
@@ -770,6 +873,87 @@ function normalizeKnowledgeConflictGovernance(input: {
   };
 }
 
+function normalizeManagedUpdateTarget(input: {
+  originKind: KnowledgeDraftOriginKind;
+  target: KnowledgeConflictManagedUpdateTarget | undefined;
+  governance: KnowledgeConflictDraftGovernanceAttestation | undefined;
+  revision: ReturnType<typeof normalizeKnowledgeDraftRevisionInput>;
+}): KnowledgeConflictManagedUpdateTarget | undefined {
+  if (input.target === undefined) return undefined;
+  if (input.originKind !== "knowledge_conflict" || input.governance === undefined ||
+    input.revision.sourceGroupId === undefined) {
+    throw new Error("managed update target requires a governed conflict draft");
+  }
+  const target: KnowledgeConflictManagedUpdateTarget = {
+    conflictCandidateId: requireReference(
+      "managedUpdateTarget.conflictCandidateId",
+      input.target.conflictCandidateId,
+    ),
+    conflictCandidateVersion: requirePositiveInteger(
+      "managedUpdateTarget.conflictCandidateVersion",
+      input.target.conflictCandidateVersion,
+    ),
+    managedPageId: requireReference("managedUpdateTarget.managedPageId", input.target.managedPageId),
+    managedPageVersion: requirePositiveInteger(
+      "managedUpdateTarget.managedPageVersion",
+      input.target.managedPageVersion,
+    ),
+    linkedDocumentSourceId: requireReference(
+      "managedUpdateTarget.linkedDocumentSourceId",
+      input.target.linkedDocumentSourceId,
+    ),
+    targetSnapshotId: requireReference(
+      "managedUpdateTarget.targetSnapshotId",
+      input.target.targetSnapshotId,
+    ),
+    targetSnapshotHash: requireHash(
+      "managedUpdateTarget.targetSnapshotHash",
+      input.target.targetSnapshotHash,
+    ),
+    ...(input.target.targetSourceVersion === undefined ? {} : {
+      targetSourceVersion: requireReference(
+        "managedUpdateTarget.targetSourceVersion",
+        input.target.targetSourceVersion,
+      ),
+    }),
+    remoteDocumentToken: requireReference(
+      "managedUpdateTarget.remoteDocumentToken",
+      input.target.remoteDocumentToken,
+    ),
+    managedBodyBlockId: requireReference(
+      "managedUpdateTarget.managedBodyBlockId",
+      input.target.managedBodyBlockId,
+    ),
+    expectedRemoteRevisionId: requireReference(
+      "managedUpdateTarget.expectedRemoteRevisionId",
+      input.target.expectedRemoteRevisionId,
+    ),
+    currentBodyContentHash: requireHash(
+      "managedUpdateTarget.currentBodyContentHash",
+      input.target.currentBodyContentHash,
+    ),
+    authorizationGroupId: requireReference(
+      "managedUpdateTarget.authorizationGroupId",
+      input.target.authorizationGroupId,
+    ),
+    targetPolicyId: requireReference(
+      "managedUpdateTarget.targetPolicyId",
+      input.target.targetPolicyId,
+    ),
+    targetPolicyVersion: requirePositiveInteger(
+      "managedUpdateTarget.targetPolicyVersion",
+      input.target.targetPolicyVersion,
+    ),
+  };
+  if (target.authorizationGroupId !== input.revision.sourceGroupId ||
+    target.targetPolicyId !== input.governance.publicationTarget.id ||
+    target.targetPolicyVersion !== input.governance.publicationTarget.version ||
+    !input.governance.permission.documentSourceIds.includes(target.linkedDocumentSourceId)) {
+    throw new Error("managed update target does not match conflict governance");
+  }
+  return target;
+}
+
 async function validateKnowledgeConflictTargetPolicy(
   queryable: KnowledgeDraftEvidenceQueryable,
   governance: KnowledgeConflictDraftGovernanceAttestation,
@@ -1063,6 +1247,13 @@ function requireReference(name: string, value: unknown): string {
 
 function normalizeOptionalReference(name: string, value: unknown): string | undefined {
   return value === undefined ? undefined : requireReference(name, value);
+}
+
+function requireHash(name: string, value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value;
 }
 
 function requireString(name: string, value: unknown, maxChars: number): string {

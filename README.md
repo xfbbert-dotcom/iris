@@ -46,6 +46,15 @@ existing confirmation, review, approval, and publication path. Until the dedicat
 and nonpilot-control runbook passes, this loop is not part of the accepted daily-pilot capability
 set.
 
+Managed existing-page knowledge updates are implemented and locally verified, but remain
+default-off (`IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED=false` with an empty allowlist). They are
+restricted to fresh Iris-created, single managed plain-text blocks and require exact identity,
+confirmation, OAuth review, approval, one-block mutation, and exact resync. Controlled Feishu
+acceptance is pending; it is not delivered or deployed until the content-free evidence in
+`docs/development/iris-managed-knowledge-update-pilot.md` records a real allowlisted pilot with an
+immutable image/tag/SHA, timestamps, and operators. This does not alter the already accepted
+publication pilot facts above.
+
 High-impact capabilities remain bounded: proactive deliveries require human review, knowledge-base
 writes open only for an intentional governed session, and every known non-pilot group remains
 disabled.

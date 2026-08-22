@@ -13,6 +13,8 @@ describe("action review renderer", () => {
     const context: ActionReviewContext = {
       proposalId: "proposal-1",
       proposalVersion: 7,
+      actionType: "publish_knowledge_draft",
+      actionTargetFingerprint: "b".repeat(64),
       draftId: "draft-1",
       subjectRevision: 3,
       subjectVersion: 11,
@@ -20,6 +22,8 @@ describe("action review renderer", () => {
       content: `<script>alert(1)</script>\nBody & \"quoted\" 'text'`,
       contentHash: "a".repeat(64),
       riskLevel: "medium",
+      targetPolicyId: "policy-1",
+      targetPolicyVersion: 3,
       targetDisplayName: `Knowledge <target> & \"quoted\" 'name'`,
       requirements: [{ kind: "designated_owner", state: "pending" }],
     };
@@ -40,9 +44,43 @@ describe("action review renderer", () => {
     expect(html).toContain("风险");
     expect(html).toContain("审批要求");
     expect(html).toContain("目标");
+    expect(html).toContain("Publish new Wiki page");
+    expect(html).toContain(context.actionTargetFingerprint);
     expect(html).not.toContain("ou_owner");
     expect(html).toContain('<form method="post" action="/review/action-proposals/proposal-1/attest">');
     expect(html.match(/<form\b/gu)).toHaveLength(1);
+  });
+
+  it("renders the exact managed target and single-block replacement warning for updates", () => {
+    const context: ActionReviewContext = {
+      ...reviewContext(),
+      actionType: "update_knowledge_publication",
+      actionTargetFingerprint: "c".repeat(64),
+      managedTarget: {
+        managedPageId: "managed-1",
+        managedPageVersion: 4,
+        documentSourceId: "source-1",
+        targetSourceUri: "https://example.test/wiki/managed-1",
+        targetSnapshotId: "snapshot-1",
+        targetSnapshotHash: "d".repeat(64),
+        conflictCandidateId: "candidate-1",
+        conflictCandidateVersion: 7,
+        remoteDocumentToken: "doc-1",
+        managedBodyBlockId: "blk_body",
+        expectedRemoteRevisionId: "12",
+        currentBodyContentHash: "e".repeat(64),
+        authorizationGroupId: "group-1",
+      },
+    };
+
+    const html = renderActionReviewPage({ context, csrfToken: "csrf-1" });
+
+    expect(html).toContain("Replace the single managed body block on existing Wiki page");
+    expect(html).toContain("managed-1");
+    expect(html).toContain("blk_body");
+    expect(html).toContain("snapshot-1");
+    expect(html).toContain(context.actionTargetFingerprint);
+    expect(html).toContain('href="https://example.test/wiki/managed-1"');
   });
 
   it("uses semantic, local-only markup that keeps long values readable on narrow screens", () => {
@@ -85,6 +123,8 @@ function reviewContext(): ActionReviewContext {
   return {
     proposalId: "proposal-1",
     proposalVersion: 7,
+    actionType: "publish_knowledge_draft",
+    actionTargetFingerprint: "b".repeat(64),
     draftId: "draft-1",
     subjectRevision: 3,
     subjectVersion: 11,
@@ -92,6 +132,8 @@ function reviewContext(): ActionReviewContext {
     content: "Full draft body",
     contentHash: "a".repeat(64),
     riskLevel: "medium",
+    targetPolicyId: "policy-1",
+    targetPolicyVersion: 3,
     targetDisplayName: "Knowledge base",
     requirements: [{ kind: "designated_owner", state: "pending" }],
   };

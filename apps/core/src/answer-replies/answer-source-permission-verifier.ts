@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 export type AnswerSourcePermissionDecision = {
   documentSourceId: string;
   outcome: "allowed" | "denied" | "error";
+  reason?: "managed_source_unavailable";
 };
 
 export interface AnswerSourcePermissionVerifier {
@@ -10,7 +11,13 @@ export interface AnswerSourcePermissionVerifier {
     chatId: string;
     documentSourceIds: readonly string[];
     crossGroupGrantBindings?: readonly AnswerSourcePermissionGrantBinding[];
+    sourceSnapshotBindings?: readonly AnswerSourceSnapshotBinding[];
   }): Promise<AnswerSourcePermissionDecision[]>;
+};
+
+export type AnswerSourceSnapshotBinding = {
+  documentSourceId: string;
+  documentSnapshotId: string;
 };
 
 export type AnswerSourcePermissionGrantBinding = {
@@ -32,6 +39,16 @@ type AnswerSourcePermissionChecker = (
   accessContext?: AnswerSourcePermissionAccessContext,
 ) => Promise<boolean>;
 
+export type AnswerSourceFreshnessQueryable = {
+  query: <T = unknown>(sql: string, values?: unknown[]) => Promise<{ rows: T[] }>;
+};
+
+type ManagedSourceStateRow = {
+  linked_document_source_id: unknown;
+  state: unknown;
+  current_reconciled_snapshot_id: unknown;
+};
+
 type NormalizedSourceId = {
   dedupeKey: string;
   documentSourceId: string;
@@ -40,11 +57,18 @@ type NormalizedSourceId = {
 
 export function createAnswerSourcePermissionVerifier({
   canReadDocument,
+  managedSourceQueryable,
 }: {
   canReadDocument: AnswerSourcePermissionChecker;
+  managedSourceQueryable?: AnswerSourceFreshnessQueryable;
 }): AnswerSourcePermissionVerifier {
   return {
-    async verify({ chatId, documentSourceIds, crossGroupGrantBindings }) {
+    async verify({
+      chatId,
+      documentSourceIds,
+      crossGroupGrantBindings,
+      sourceSnapshotBindings,
+    }) {
       const decisions: AnswerSourcePermissionDecision[] = [];
       const seen = new Set<string>();
       const grantBoundDocumentSourceIds = normalizeGrantBoundDocumentSourceIds({
@@ -60,6 +84,29 @@ export function createAnswerSourcePermissionVerifier({
           outcome: "error" as const,
         }));
       }
+      const expectedSnapshots = normalizeSourceSnapshotBindings({
+        documentSourceIds,
+        sourceSnapshotBindings,
+      });
+      if (expectedSnapshots === undefined) {
+        return documentSourceIds.map((documentSourceId) => ({
+          documentSourceId: typeof documentSourceId === "string"
+            ? documentSourceId
+            : invalidSourceId(`type:${typeof documentSourceId}`).documentSourceId,
+          outcome: "error" as const,
+        }));
+      }
+      const normalizedSourceIds = uniqueValidSourceIds(documentSourceIds);
+      let managedSourceStates: Map<string, "active" | "barred"> | undefined;
+      try {
+        managedSourceStates = await loadManagedSourceStates(
+          managedSourceQueryable,
+          normalizedSourceIds,
+          expectedSnapshots,
+        );
+      } catch {
+        managedSourceStates = undefined;
+      }
 
       for (const documentSourceId of documentSourceIds) {
         const normalized = normalizeSourceId(documentSourceId);
@@ -74,6 +121,18 @@ export function createAnswerSourcePermissionVerifier({
         }
 
         try {
+          if (managedSourceStates === undefined) {
+            decisions.push({ documentSourceId: normalized.documentSourceId, outcome: "error" });
+            continue;
+          }
+          if (managedSourceStates.get(normalized.documentSourceId) === "barred") {
+            decisions.push({
+              documentSourceId: normalized.documentSourceId,
+              outcome: "denied",
+              reason: "managed_source_unavailable",
+            });
+            continue;
+          }
           const allowed = await canReadDocument(
             normalized.documentSourceId,
             chatId,
@@ -96,6 +155,80 @@ export function createAnswerSourcePermissionVerifier({
       return decisions;
     },
   };
+}
+
+function uniqueValidSourceIds(documentSourceIds: readonly string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const documentSourceId of documentSourceIds) {
+    const normalized = normalizeSourceId(documentSourceId);
+    if (!normalized.valid || seen.has(normalized.documentSourceId)) continue;
+    seen.add(normalized.documentSourceId);
+    result.push(normalized.documentSourceId);
+  }
+  return result;
+}
+
+async function loadManagedSourceStates(
+  queryable: AnswerSourceFreshnessQueryable | undefined,
+  documentSourceIds: readonly string[],
+  expectedSnapshots: ReadonlyMap<string, string>,
+): Promise<Map<string, "active" | "barred">> {
+  const states = new Map<string, "active" | "barred">();
+  if (queryable === undefined || documentSourceIds.length === 0) return states;
+
+  const result = await queryable.query<ManagedSourceStateRow>(
+    `SELECT linked_document_source_id, state, current_reconciled_snapshot_id
+     FROM managed_knowledge_pages
+     WHERE linked_document_source_id = ANY($1::text[])
+     ORDER BY linked_document_source_id ASC`,
+    [[...documentSourceIds]],
+  );
+  const requested = new Set(documentSourceIds);
+  for (const row of result.rows) {
+    if (
+      typeof row.linked_document_source_id !== "string"
+      || !requested.has(row.linked_document_source_id)
+      || states.has(row.linked_document_source_id)
+      || typeof row.state !== "string"
+    ) {
+      throw new Error("managed source freshness result is invalid");
+    }
+    const expectedSnapshotId = expectedSnapshots.get(row.linked_document_source_id);
+    const snapshotIsCurrent = typeof row.current_reconciled_snapshot_id === "string"
+      && row.current_reconciled_snapshot_id.trim().length > 0
+      && (expectedSnapshotId === undefined
+        || row.current_reconciled_snapshot_id === expectedSnapshotId);
+    states.set(
+      row.linked_document_source_id,
+      row.state === "active" && snapshotIsCurrent ? "active" : "barred",
+    );
+  }
+  return states;
+}
+
+function normalizeSourceSnapshotBindings(input: {
+  documentSourceIds: readonly string[];
+  sourceSnapshotBindings: readonly AnswerSourceSnapshotBinding[] | undefined;
+}): Map<string, string> | undefined {
+  if (input.sourceSnapshotBindings === undefined) return new Map();
+  if (!Array.isArray(input.sourceSnapshotBindings)) return undefined;
+  const requested = new Set(input.documentSourceIds);
+  const result = new Map<string, string>();
+  for (const binding of input.sourceSnapshotBindings) {
+    if (
+      binding === null || typeof binding !== "object"
+      || typeof binding.documentSourceId !== "string"
+      || !requested.has(binding.documentSourceId)
+      || typeof binding.documentSnapshotId !== "string"
+      || binding.documentSnapshotId.trim().length === 0
+      || result.has(binding.documentSourceId)
+    ) {
+      return undefined;
+    }
+    result.set(binding.documentSourceId, binding.documentSnapshotId);
+  }
+  return result.size === requested.size ? result : undefined;
 }
 
 function normalizeGrantBoundDocumentSourceIds(input: {

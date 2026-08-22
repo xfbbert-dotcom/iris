@@ -4,7 +4,11 @@ import type {
 } from "../knowledge-governance/knowledge-draft.js";
 import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
 
-export const ACTION_PROPOSAL_ACTION_TYPE = "publish_knowledge_draft" as const;
+export const ACTION_PROPOSAL_ACTION_TYPES = [
+  "publish_knowledge_draft",
+  "update_knowledge_publication",
+] as const;
+export const ACTION_PROPOSAL_ACTION_TYPE = ACTION_PROPOSAL_ACTION_TYPES[0];
 export const ACTION_PROPOSAL_STATUSES = [
   "pending_approval",
   "approved",
@@ -26,6 +30,7 @@ export const ACTION_ROLE_GRANT_TYPES = [
 ] as const;
 
 export type ActionProposalStatus = (typeof ACTION_PROPOSAL_STATUSES)[number];
+export type ActionProposalActionType = (typeof ACTION_PROPOSAL_ACTION_TYPES)[number];
 export type ActionApprovalRequirementKind =
   (typeof ACTION_APPROVAL_REQUIREMENT_KINDS)[number];
 export type ActionRoleGrantType = (typeof ACTION_ROLE_GRANT_TYPES)[number];
@@ -33,7 +38,7 @@ export type ActionApprovalRoleRefType = "source_group" | "feishu_user" | "unassi
 
 export type ActionProposal = {
   id: string;
-  actionType: typeof ACTION_PROPOSAL_ACTION_TYPE;
+  actionType: ActionProposalActionType;
   subjectType: "knowledge_draft";
   subjectId: string;
   subjectRevision: number;
@@ -62,6 +67,7 @@ export type ActionApprovalRequirementSnapshot = {
 };
 
 export type BuildApprovalRequirementSnapshotInput = {
+  actionType?: ActionProposalActionType;
   sourceGroupId?: string;
   riskLevel: KnowledgeDraftRiskLevel;
   reviewer?: KnowledgeDraftReviewer;
@@ -87,12 +93,17 @@ export function buildApprovalRequirementSnapshot(
 ): ActionApprovalRequirementSnapshot[] {
   if (!isRecord(input)) throw validationError("approval requirement input must be an object");
   assertOnlyKeys(input, [
+    "actionType",
     "sourceGroupId",
     "riskLevel",
     "reviewer",
     "groupConfirmation",
     "targetPolicy",
   ]);
+  const actionType = input.actionType ?? "publish_knowledge_draft";
+  if (!ACTION_PROPOSAL_ACTION_TYPES.includes(actionType)) {
+    throw validationError("actionType is invalid");
+  }
   if (!(["low", "medium", "high"] as const).includes(input.riskLevel)) {
     throw validationError("riskLevel is invalid");
   }
@@ -124,7 +135,8 @@ export function buildApprovalRequirementSnapshot(
     });
   }
 
-  if (input.riskLevel === "low" && sourceGroupId !== undefined) return requirements;
+  if (input.riskLevel === "low" && sourceGroupId !== undefined &&
+    actionType === "publish_knowledge_draft") return requirements;
   if (input.riskLevel === "high") {
     requirements.push({
       kind: "iris_admin_or_authorized_owner",
@@ -135,8 +147,10 @@ export function buildApprovalRequirementSnapshot(
     return requirements;
   }
 
+  const requiresAdminFallback = actionType === "update_knowledge_publication" &&
+    reviewer?.type !== "feishu_user";
   requirements.push({
-    kind: "designated_owner",
+    kind: requiresAdminFallback ? "iris_admin_or_authorized_owner" : "designated_owner",
     roleRefType: reviewer?.type === "feishu_user" ? "feishu_user" : "unassigned",
     ...(reviewer?.type === "feishu_user" ? { roleRef: reviewer.ref } : {}),
     ...common,

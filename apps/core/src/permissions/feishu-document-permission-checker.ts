@@ -13,6 +13,14 @@ export type FeishuDocumentPermissionChecker = {
   canReadSource(source: DocumentSource): Promise<boolean>;
 };
 
+export type FeishuExactDocumentPermissionChecker = {
+  canReadExactSource(input: {
+    source: DocumentSource;
+    remoteWikiNodeToken?: string;
+    remoteDocumentToken: string;
+  }): Promise<boolean>;
+};
+
 export type FeishuDocumentPermissionCheckerDependencies = {
   baseUrl: string;
   tokenProvider: FeishuTenantAccessTokenProvider;
@@ -37,7 +45,8 @@ export function createFeishuDocumentPermissionChecker({
   minProbeIntervalMs = DEFAULT_FEISHU_PERMISSION_MIN_PROBE_INTERVAL_MS,
   now = Date.now,
   sleep = sleepWithTimer,
-}: FeishuDocumentPermissionCheckerDependencies): FeishuDocumentPermissionChecker {
+}: FeishuDocumentPermissionCheckerDependencies): FeishuDocumentPermissionChecker &
+FeishuExactDocumentPermissionChecker {
   const safeTimeoutMs = readPositiveSafeInteger(
     timeoutMs,
     "Feishu document permission timeoutMs",
@@ -53,49 +62,70 @@ export function createFeishuDocumentPermissionChecker({
   });
   const inFlightBySource = new Map<string, Promise<boolean>>();
 
+  const probeSource = (
+    source: DocumentSource,
+    expected?: { remoteWikiNodeToken?: string; remoteDocumentToken: string },
+  ): Promise<boolean> => {
+    const locator = parseDocumentLocator(source.sourceUri);
+    if (locator === undefined || !matchesExpectedLocator(locator, expected)) {
+      return Promise.resolve(false);
+    }
+
+    const sourceKey = [
+      source.id,
+      source.sourceUri,
+      expected?.remoteWikiNodeToken ?? "",
+      expected?.remoteDocumentToken ?? "",
+    ].join("\u0000");
+    const existingProbe = inFlightBySource.get(sourceKey);
+    if (existingProbe !== undefined) {
+      return existingProbe;
+    }
+
+    const probe = scheduleProbe(async () => {
+      const tenantAccessToken = await tokenProvider.getTenantAccessToken();
+      const documentId = await resolveDocumentId({
+        locator,
+        baseUrl,
+        tenantAccessToken,
+        fetch,
+        timeoutMs: safeTimeoutMs,
+      });
+      if (documentId === undefined ||
+        (expected !== undefined && documentId !== expected.remoteDocumentToken)) {
+        return false;
+      }
+
+      return canReadDocumentMetadata({
+        documentId,
+        baseUrl,
+        tenantAccessToken,
+        fetch,
+        timeoutMs: safeTimeoutMs,
+      });
+    });
+    inFlightBySource.set(sourceKey, probe);
+
+    const clearProbe = () => {
+      if (inFlightBySource.get(sourceKey) === probe) {
+        inFlightBySource.delete(sourceKey);
+      }
+    };
+    void probe.then(clearProbe, clearProbe);
+    return probe;
+  };
+
   return {
     canReadSource(source) {
-      const locator = parseDocumentLocator(source.sourceUri);
-      if (locator === undefined) {
-        return Promise.resolve(false);
-      }
-
-      const sourceKey = `${source.id}\u0000${source.sourceUri}`;
-      const existingProbe = inFlightBySource.get(sourceKey);
-      if (existingProbe !== undefined) {
-        return existingProbe;
-      }
-
-      const probe = scheduleProbe(async () => {
-        const tenantAccessToken = await tokenProvider.getTenantAccessToken();
-        const documentId = await resolveDocumentId({
-          locator,
-          baseUrl,
-          tenantAccessToken,
-          fetch,
-          timeoutMs: safeTimeoutMs,
-        });
-        if (documentId === undefined) {
-          return false;
-        }
-
-        return canReadDocumentMetadata({
-          documentId,
-          baseUrl,
-          tenantAccessToken,
-          fetch,
-          timeoutMs: safeTimeoutMs,
-        });
+      return probeSource(source);
+    },
+    canReadExactSource(input) {
+      return probeSource(input.source, {
+        ...(input.remoteWikiNodeToken === undefined
+          ? {}
+          : { remoteWikiNodeToken: input.remoteWikiNodeToken }),
+        remoteDocumentToken: input.remoteDocumentToken,
       });
-      inFlightBySource.set(sourceKey, probe);
-
-      const clearProbe = () => {
-        if (inFlightBySource.get(sourceKey) === probe) {
-          inFlightBySource.delete(sourceKey);
-        }
-      };
-      void probe.then(clearProbe, clearProbe);
-      return probe;
     },
   };
 }
@@ -132,6 +162,17 @@ function createSerialProbeScheduler({
 type DocumentLocator =
   | { type: "direct"; documentId: string }
   | { type: "wiki"; wikiNodeToken: string };
+
+function matchesExpectedLocator(
+  locator: DocumentLocator,
+  expected?: { remoteWikiNodeToken?: string; remoteDocumentToken: string },
+): boolean {
+  if (expected === undefined) return true;
+  if (locator.type === "wiki") {
+    return locator.wikiNodeToken === expected.remoteWikiNodeToken;
+  }
+  return locator.documentId === expected.remoteDocumentToken;
+}
 
 function parseDocumentLocator(sourceUri: string): DocumentLocator | undefined {
   const directDocumentId = parseFeishuDocxDocumentId(sourceUri);

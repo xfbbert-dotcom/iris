@@ -1517,7 +1517,7 @@ describe("createAnswerDraftRuntime", () => {
       runtimeController,
       dependencies: {
         createPostgresPool: vi.fn(() => ({
-          query: vi.fn(),
+          query: vi.fn(async () => ({ rows: [] })),
           end: vi.fn(async () => undefined),
         })),
         createDocumentFragmentRepository: vi.fn(() => ({
@@ -1609,7 +1609,7 @@ describe("createAnswerDraftRuntime", () => {
       runtimeController,
       dependencies: {
         createPostgresPool: vi.fn(() => ({
-          query: vi.fn(),
+          query: vi.fn(async () => ({ rows: [] })),
           end: vi.fn(async () => undefined),
         })),
         createDocumentFragmentRepository: vi.fn(() => ({
@@ -1658,7 +1658,10 @@ describe("createAnswerDraftRuntime", () => {
       },
       runtimeController,
       dependencies: {
-        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(async () => ({ rows: [] })),
+          end: vi.fn(async () => undefined),
+        })),
         createDocumentFragmentRepository: vi.fn(() => ({
           searchSimilarFragments: vi.fn(async () => []),
         })),
@@ -1725,7 +1728,7 @@ describe("createAnswerDraftRuntime", () => {
       runtimeController,
       dependencies: {
         createPostgresPool: vi.fn(() => ({
-          query: vi.fn(),
+          query: vi.fn(async () => ({ rows: [] })),
           end: vi.fn(async () => undefined),
         })),
         createDocumentFragmentRepository: vi.fn(() => ({

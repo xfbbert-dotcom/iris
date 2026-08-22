@@ -26,9 +26,14 @@ import {
   createPostgresKnowledgeConflictRepository,
   type PostgresKnowledgeConflictDataSource,
 } from "../src/knowledge-conflicts/postgres-knowledge-conflict-repository.js";
+import { createPostgresManagedKnowledgePageRepository } from
+  "../src/action-approvals/postgres-managed-knowledge-page-repository.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
+import { insertManagedKnowledgePageFixture } from
+  "./managed-knowledge-page-postgres-fixture.js";
 
-const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim()
+  || process.env.DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 const renderedFingerprint = "2a035ec5e0873f3169db97d0f4c6163bc1b645253b20f41ee5272bcfd12434bf";
 
@@ -329,6 +334,68 @@ describe("answer reply knowledge-conflict send boundary", () => {
 });
 
 describe("answer reply cross-group grant boundary", () => {
+  it("locks every traced source identity in sorted order before managed-state verification", async () => {
+    const incomingMessageId = "incoming-managed-source-lock-order";
+    const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+    const sources = [
+      sourceTraceRow({
+        id: testSourceTraceId(deliveryId, 1),
+        delivery_id: deliveryId,
+        document_source_id: "source-z",
+      }),
+      sourceTraceRow({
+        id: testSourceTraceId(deliveryId, 2),
+        delivery_id: deliveryId,
+        prompt_rank: 2,
+        document_source_id: "source-a",
+      }),
+    ];
+    const statements: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = async (sql: string, values?: unknown[]) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      statements.push({ sql: normalized, values });
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+        || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+      if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
+      if (normalized.includes("FROM managed_knowledge_pages")) {
+        return {
+          rows: [{ linked_document_source_id: "source-a", state: "updating" }],
+        };
+      }
+      return { rows: [] };
+    };
+    const repository = createPostgresAnswerReplyRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresAnswerReplyDataSource,
+    });
+
+    await expect(repository.beginAnswerSend({
+      deliveryId,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+
+    const sourceLockKeys = statements
+      .filter(({ sql, values }) =>
+        sql.includes("pg_advisory_xact_lock")
+        && String(values?.[0]).startsWith("managed-knowledge-source:"))
+      .map(({ values }) => values?.[0]);
+    expect(sourceLockKeys).toEqual([
+      "managed-knowledge-source:source-a",
+      "managed-knowledge-source:source-z",
+    ]);
+    const lastSourceLockIndex = statements.reduce((lastIndex, { sql, values }, index) =>
+      sql.includes("pg_advisory_xact_lock")
+        && String(values?.[0]).startsWith("managed-knowledge-source:")
+        ? index
+        : lastIndex, -1);
+    const managedStateIndex = statements.findIndex(({ sql }) =>
+      sql.includes("FROM managed_knowledge_pages"));
+    expect(lastSourceLockIndex).toBeLessThan(managedStateIndex);
+  });
+
   it("locks grant bindings in stable order during prepare and fails before delivery persistence", async () => {
     const lockedGrantIds: string[] = [];
     const query = async (sql: string, values?: unknown[]) => {
@@ -398,6 +465,91 @@ describe("answer reply cross-group grant boundary", () => {
         && normalized.includes("FOR UPDATE")) {
         deliveryLocked = true;
       }
+      return { rows: [] };
+    };
+    const repository = createPostgresAnswerReplyRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresAnswerReplyDataSource,
+    });
+
+    await expect(repository.beginAnswerSend({
+      deliveryId,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    expect(deliveryLocked).toBe(false);
+  });
+
+  it.each([
+    "updating",
+    "resync_required",
+    "reconciliation_required",
+    "blocked",
+    "retired",
+  ])("rejects a managed source in %s before locking or mutating its prepared delivery", async (state) => {
+    const incomingMessageId = `incoming-managed-${state}`;
+    const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+    const sources = [sourceTraceRow({
+      id: testSourceTraceId(deliveryId, 1),
+      delivery_id: deliveryId,
+      document_source_id: "source-managed",
+    })];
+    let deliveryLocked = false;
+    const query = async (sql: string) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+        || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+      if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
+      if (normalized.includes("FROM managed_knowledge_pages")) {
+        return { rows: [{ linked_document_source_id: "source-managed", state }] };
+      }
+      if (normalized.includes("FROM answer_reply_deliveries")
+        && normalized.includes("FOR UPDATE")) {
+        deliveryLocked = true;
+      }
+      return { rows: [] };
+    };
+    const repository = createPostgresAnswerReplyRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresAnswerReplyDataSource,
+    });
+
+    await expect(repository.beginAnswerSend({
+      deliveryId,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    expect(deliveryLocked).toBe(false);
+  });
+
+  it("rejects an active managed source when the prepared citation snapshot is no longer current", async () => {
+    const incomingMessageId = "incoming-managed-stale-snapshot";
+    const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+    const sources = [sourceTraceRow({
+      id: testSourceTraceId(deliveryId, 1),
+      delivery_id: deliveryId,
+      document_source_id: "source-managed",
+      document_snapshot_id: "snapshot-old",
+    })];
+    let deliveryLocked = false;
+    const query = async (sql: string) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+        || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+      if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
+      if (normalized.includes("FROM managed_knowledge_pages")) {
+        return { rows: [{
+          linked_document_source_id: "source-managed",
+          state: "active",
+          current_reconciled_snapshot_id: "snapshot-new",
+        }] };
+      }
+      if (normalized.includes("FROM answer_reply_deliveries")
+        && normalized.includes("FOR UPDATE")) deliveryLocked = true;
       return { rows: [] };
     };
     const repository = createPostgresAnswerReplyRepository({
@@ -588,6 +740,194 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
         documentSourceIds: ["source-revoked"],
       },
     ]);
+  });
+
+  it.each([
+    "updating",
+    "resync_required",
+    "reconciliation_required",
+    "blocked",
+    "retired",
+  ] as const)("rejects a real managed source in %s at send start", async (state) => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const documentSourceId = `managed-send-${state}-${suffix}`;
+    const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
+    const documentSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
+    await insertManagedKnowledgePageFixture({
+      queryable: pool!,
+      state,
+      documentSourceId,
+      currentReconciledSnapshotId: documentSnapshotId,
+      suffix: `send-${state}-${suffix}`,
+    });
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput(`managed-send-${state}-${suffix}`, {
+      sourceTraces: [sourceTrace({ documentSourceId, documentSnapshotId, sourceUri })],
+    }));
+
+    await expect(repository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: prepared.receipt.delivery.version,
+      at: new Date("2026-08-20T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: prepared.receipt.delivery.incomingMessageId,
+    })).resolves.toMatchObject({ delivery: { state: "prepared", version: 1 } });
+  });
+
+  it.each([
+    ["active managed", true],
+    ["unmanaged", false],
+  ] as const)("allows a real %s source at send start", async (_label, managed) => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const documentSourceId = `managed-send-control-${suffix}`;
+    const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
+    const documentSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
+    if (managed) {
+      await insertManagedKnowledgePageFixture({
+        queryable: pool!,
+        state: "active",
+        documentSourceId,
+        currentReconciledSnapshotId: documentSnapshotId,
+        suffix: `send-active-${suffix}`,
+      });
+    }
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput(`managed-send-control-${suffix}`, {
+      sourceTraces: [sourceTrace({ documentSourceId, documentSnapshotId, sourceUri })],
+    }));
+
+    await expect(repository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: prepared.receipt.delivery.version,
+      at: new Date("2026-08-20T00:01:00.000Z"),
+    })).resolves.toMatchObject({ delivery: { state: "sending", version: 2 } });
+  });
+
+  it("atomically rejects a prepared managed answer after a later snapshot becomes current", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const documentSourceId = `managed-send-snapshot-race-${suffix}`;
+    const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
+    const oldSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
+    const page = await insertManagedKnowledgePageFixture({
+      queryable: pool!,
+      state: "active",
+      documentSourceId,
+      currentReconciledSnapshotId: oldSnapshotId,
+      suffix: `send-snapshot-race-${suffix}`,
+    });
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput(`managed-send-snapshot-race-${suffix}`, {
+      sourceTraces: [sourceTrace({
+        documentSourceId,
+        documentSnapshotId: oldSnapshotId,
+        sourceUri,
+      })],
+    }));
+    const newSnapshotId = `answer-snapshot-new-${suffix}`;
+    await pool!.query(
+      `INSERT INTO document_snapshots (
+         id,document_source_id,source_uri,fetch_status,body_text,content_hash,
+         source_version,fetched_at,created_at
+       ) VALUES ($1,$2,$3,'succeeded','New managed answer snapshot',repeat('b',64),
+         'revision-2',$4,$4)`,
+      [newSnapshotId, documentSourceId, sourceUri, new Date("2026-08-20T00:00:30.000Z")],
+    );
+    await pool!.query(
+      "UPDATE managed_knowledge_pages SET current_reconciled_snapshot_id = $2 WHERE id = $1",
+      [page.pageId, newSnapshotId],
+    );
+
+    await expect(repository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: prepared.receipt.delivery.version,
+      at: new Date("2026-08-20T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: prepared.receipt.delivery.incomingMessageId,
+    })).resolves.toMatchObject({ delivery: { state: "prepared", version: 1 } });
+  });
+
+  it("serializes an initially unmanaged send against concurrent source linking", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const documentSourceId = `managed-send-link-race-${suffix}`;
+    const sourceUri = `https://tenant.feishu.cn/wiki/${documentSourceId}`;
+    const applicationName = `managed_link_race_${suffix}`;
+    const documentSnapshotId = await insertAnswerDocumentSource(
+      pool!, { documentSourceId, sourceUri },
+    );
+    const page = await insertManagedKnowledgePageFixture({
+      queryable: pool!,
+      state: "active",
+      suffix: `send-link-race-${suffix}`,
+    });
+    const answerRepository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await answerRepository.prepare(prepareInput(`managed-send-link-race-${suffix}`, {
+      sourceTraces: [sourceTrace({ documentSourceId, documentSnapshotId, sourceUri })],
+    }));
+    const blocker = await pool!.connect();
+    const linkPool = new pg.Pool({
+      connectionString: databaseUrl,
+      options: `-c search_path=${schema},public`,
+      application_name: applicationName,
+    });
+    const managedRepository = createPostgresManagedKnowledgePageRepository({
+      dataSource: linkPool,
+    });
+    let send: Promise<unknown> | undefined;
+    let link: Promise<unknown> | undefined;
+    let blockerOpen = false;
+    try {
+      await blocker.query("BEGIN");
+      blockerOpen = true;
+      await blocker.query(
+        "SELECT id FROM answer_reply_deliveries WHERE id = $1 FOR UPDATE",
+        [prepared.receipt.delivery.id],
+      );
+      send = answerRepository.beginAnswerSend({
+        deliveryId: prepared.receipt.delivery.id,
+        expectedVersion: prepared.receipt.delivery.version,
+        at: new Date("2026-08-20T00:01:00.000Z"),
+      });
+      await waitForAdvisoryLockHeld(
+        pool!,
+        `managed-knowledge-source:${documentSourceId}`,
+      );
+      link = managedRepository.linkSource({
+        managedPageId: page.pageId,
+        expectedVersion: page.pageVersion,
+        documentSourceId,
+        operationKey: `managed-link-race-${suffix}`,
+        actor: "test",
+        at: new Date("2026-08-20T00:01:00.000Z"),
+      });
+      await waitForApplicationLockWait(pool!, applicationName);
+
+      await blocker.query("COMMIT");
+      blockerOpen = false;
+      await expect(send).resolves.toMatchObject({
+        delivery: { state: "sending", version: 2 },
+      });
+      await expect(link).resolves.toMatchObject({
+        outcome: "applied",
+        page: { linkedDocumentSourceId: documentSourceId },
+      });
+    } finally {
+      if (blockerOpen) await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      await Promise.allSettled([send, link].filter(
+        (operation): operation is Promise<unknown> => operation !== undefined,
+      ));
+      await linkPool.end();
+    }
   });
 
   it("atomically upgrades an unsent semantic replay when a preflight denial arrives", async () => {
@@ -1869,6 +2209,73 @@ function sourceTrace(
     initialPermissionCheckedAt: new Date("2026-08-01T23:59:00.000Z"),
     ...overrides,
   };
+}
+
+async function insertAnswerDocumentSource(inputPool: pg.Pool, input: {
+  documentSourceId: string;
+  sourceUri: string;
+}): Promise<string> {
+  const at = new Date("2026-08-20T00:00:00.000Z");
+  await inputPool.query(
+    `INSERT INTO document_sources (
+       id, source_type, source_uri, permission_state, sync_state,
+       can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+     ) VALUES ($1, 'authorized_wiki_document', $2, 'readable', 'synced',
+       TRUE, TRUE, $3, $3)`,
+    [input.documentSourceId, input.sourceUri, at],
+  );
+  const documentSnapshotId = `answer-snapshot-${input.documentSourceId}`;
+  await inputPool.query(
+    `INSERT INTO document_snapshots (
+       id,document_source_id,source_uri,fetch_status,body_text,content_hash,
+       source_version,fetched_at,created_at
+     ) VALUES ($1,$2,$3,'succeeded','Managed answer snapshot',repeat('a',64),
+       'revision-1',$4,$4)`,
+    [documentSnapshotId, input.documentSourceId, input.sourceUri, at],
+  );
+  return documentSnapshotId;
+}
+
+async function waitForAdvisoryLockHeld(inputPool: pg.Pool, key: string): Promise<void> {
+  const probe = await inputPool.connect();
+  try {
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      await probe.query("BEGIN");
+      try {
+        const result = await probe.query<{ acquired: boolean }>(
+          "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS acquired",
+          [key],
+        );
+        if (result.rows[0]?.acquired === false) return;
+      } finally {
+        await probe.query("ROLLBACK");
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+  } finally {
+    probe.release();
+  }
+  throw new Error(`timed out waiting for advisory lock ${key}`);
+}
+
+async function waitForApplicationLockWait(
+  inputPool: pg.Pool,
+  applicationName: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const result = await inputPool.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_stat_activity
+         WHERE application_name = $1
+           AND wait_event_type = 'Lock'
+           AND query ILIKE '%pg_advisory_xact_lock%'
+       ) AS waiting`,
+      [applicationName],
+    );
+    if (result.rows[0]?.waiting === true) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${applicationName} to block on its source lock`);
 }
 
 function repositoryForRows(overrides: {

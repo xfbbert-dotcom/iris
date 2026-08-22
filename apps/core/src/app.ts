@@ -17,7 +17,12 @@ import {
   createFeishuGateway,
   type FeishuCallbackRequest
 } from "./feishu/feishu-gateway.js";
-import { readFeishuAuthConfig, readServerPort, type EnvLike } from "./config/env.js";
+import {
+  readFeishuAuthConfig,
+  readManagedKnowledgeUpdateDeploymentConfig,
+  readServerPort,
+  type EnvLike,
+} from "./config/env.js";
 import {
   RuntimeController,
   type RuntimeCapabilityName
@@ -320,6 +325,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
   "proactiveSpeech",
   "generateKnowledgeDrafts",
   "writeKnowledgeBase",
+  "updateManagedKnowledge",
   "callExternalTools",
 ]);
 const deadLettersPresentReason = "dead_letters_present" as const;
@@ -470,11 +476,31 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         composedKnowledgeConflictRuntime.interactionWorker,
       );
     }
+    documentSyncRuntime =
+      (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
+    documentSyncRuntime?.start();
+    const managedKnowledgeUpdateDeployment = readManagedKnowledgeUpdateDeploymentConfig(
+      dependencies.readinessEnv ?? process.env,
+    );
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
     )({
       runtimeController,
       knowledgeCardRuntime,
+      ...(documentSyncRuntime?.managedKnowledgeUpdateQueue !== undefined &&
+        documentSyncRuntime.activeEmbeddingProfileId !== undefined
+        ? {
+            managedKnowledgeUpdates: {
+              deploymentEnabled: managedKnowledgeUpdateDeployment.enabled,
+              groupAllowlist: managedKnowledgeUpdateDeployment.groupAllowlist,
+              activeEmbeddingProfileId: documentSyncRuntime.activeEmbeddingProfileId,
+              syncQueue: documentSyncRuntime.managedKnowledgeUpdateQueue,
+              intervalMs: 1_000,
+              batchLimit: 10,
+              staleDispatchMs: 300_000,
+            },
+          }
+        : {}),
       ...(agentExecutionLedgerRuntime === undefined
         ? {}
         : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
@@ -577,9 +603,6 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         }),
       );
     }
-    documentSyncRuntime =
-      (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
-    documentSyncRuntime?.start();
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -782,6 +805,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     );
     const knowledgeConflicts = await getKnowledgeConflictStatus(composedKnowledgeConflictRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
+    const managedKnowledgeUpdates = getManagedKnowledgeUpdateStatus({
+      deployment: managedKnowledgeUpdateDeployment,
+      actionApprovalStatus: actionApprovals,
+    });
     const proactiveSignals = await getProactiveSignalsStatus({
       planner: proactiveSignalPlannerRuntime,
       delivery: proactiveSignalDeliveryRuntime,
@@ -827,6 +854,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       reindex: await getReindexStatus(reindexWorkerRuntime),
       knowledgeConflicts,
       actionApprovals: actionApprovals ?? { ok: true, enabled: false, running: false },
+      managedKnowledgeUpdates,
       proactiveSignals,
     };
 
@@ -845,6 +873,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       composedKnowledgeConflictRuntime,
     );
     const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
+    const managedKnowledgeUpdateStatus = getManagedKnowledgeUpdateStatus({
+      deployment: managedKnowledgeUpdateDeployment,
+      actionApprovalStatus,
+    });
     const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
@@ -853,6 +885,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         knowledgeCardStatus,
         knowledgeConflictStatus,
         actionApprovalStatus,
+        managedKnowledgeUpdateStatus,
         actionReviewStatus,
       },
     );
@@ -2154,7 +2187,14 @@ async function getKnowledgeConflictStatus(runtime: KnowledgeConflictRuntime | un
 async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefined) {
   if (runtime === undefined) return undefined;
   try {
-    return { ok: true, ...(await runtime.getStatus()) };
+    const status = await runtime.getStatus();
+    return {
+      ok: true,
+      ...status,
+      ...("managedKnowledgeUpdates" in status && status.managedKnowledgeUpdates !== undefined
+        ? { managedKnowledgeUpdates: projectManagedKnowledgeUpdateStatus(status.managedKnowledgeUpdates) }
+        : {}),
+    };
   } catch {
     return {
       ok: false,
@@ -2163,6 +2203,95 @@ async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefine
       degradedReason: "action_approval_status_unavailable" as const,
     };
   }
+}
+
+function projectManagedKnowledgeUpdateStatus(status: {
+  running: boolean;
+  intervalMs: number;
+  batchLimit: number;
+  latestBatch?: {
+    status: "succeeded" | "partial_failed" | "failed";
+    startedAt: Date;
+    finishedAt: Date;
+    executionCount: number;
+    reconciliationCount: number;
+    executorFailed: boolean;
+    reconcilerFailed: boolean;
+    failed: boolean;
+    errorCode?: "managed_update_worker_failed";
+  };
+  migration0055Applied: boolean;
+  migration0056Applied: boolean;
+  reconciliation: { outcomeUnknown: number; reconciliationRequired: number };
+}) {
+  return {
+    running: status.running,
+    intervalMs: status.intervalMs,
+    batchLimit: status.batchLimit,
+    ...(status.latestBatch === undefined
+      ? {}
+      : {
+          latestBatch: {
+            status: status.latestBatch.status,
+            startedAt: new Date(status.latestBatch.startedAt),
+            finishedAt: new Date(status.latestBatch.finishedAt),
+            executionCount: status.latestBatch.executionCount,
+            reconciliationCount: status.latestBatch.reconciliationCount,
+            executorFailed: status.latestBatch.executorFailed,
+            reconcilerFailed: status.latestBatch.reconcilerFailed,
+            failed: status.latestBatch.failed,
+            ...(status.latestBatch.errorCode === undefined
+              ? {}
+              : { errorCode: status.latestBatch.errorCode }),
+          },
+        }),
+    migration0055Applied: status.migration0055Applied,
+    migration0056Applied: status.migration0056Applied,
+    reconciliation: {
+      outcomeUnknown: status.reconciliation.outcomeUnknown,
+      reconciliationRequired: status.reconciliation.reconciliationRequired,
+    },
+  };
+}
+
+function getManagedKnowledgeUpdateStatus({
+  deployment,
+  actionApprovalStatus,
+}: {
+  deployment: ReturnType<typeof readManagedKnowledgeUpdateDeploymentConfig>;
+  actionApprovalStatus: Awaited<ReturnType<typeof getActionApprovalStatus>>;
+}) {
+  if (!deployment.enabled) return { ok: true, enabled: false, running: false };
+  const status = actionApprovalStatus !== undefined && "managedKnowledgeUpdates" in actionApprovalStatus
+    ? actionApprovalStatus.managedKnowledgeUpdates
+    : undefined;
+  if (status === undefined) {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      migration0055Applied: false,
+      migration0056Applied: false,
+    };
+  }
+  const latestBatchFailed = status.latestBatch !== undefined && (
+    status.latestBatch.failed ||
+    status.latestBatch.status !== "succeeded" ||
+    status.latestBatch.executorFailed ||
+    status.latestBatch.reconcilerFailed
+  );
+  return {
+    ok: actionApprovalStatus?.ok === true && status.running && !latestBatchFailed,
+    enabled: true,
+    running: status.running,
+    migration0055Applied: status.migration0055Applied,
+    migration0056Applied: status.migration0056Applied,
+    worker: {
+      running: status.running,
+      ...(status.latestBatch === undefined ? {} : { latestBatch: status.latestBatch }),
+    },
+    reconciliation: status.reconciliation,
+  };
 }
 
 async function getProactiveSignalsStatus({
@@ -2227,7 +2356,7 @@ async function getActionReviewStatus(runtime: ActionReviewRuntime | undefined) {
     return {
       configured: true,
       running: false,
-      migration0034Applied: false,
+      migration0053Applied: false,
     };
   }
 }

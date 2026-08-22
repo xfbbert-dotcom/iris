@@ -4,6 +4,11 @@ import { existsSync, readFileSync } from "node:fs";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { canonicalManagedBodyHash } from
+  "../src/action-approvals/managed-knowledge-page.js";
+import { createPostgresManagedKnowledgePageRepository } from
+  "../src/action-approvals/postgres-managed-knowledge-page-repository.js";
+
 import {
   KnowledgeDraftEvidenceError,
   KnowledgeDraftOperationConflictError,
@@ -69,6 +74,59 @@ describe("knowledge draft migration contract", () => {
 });
 
 describe("PostgresKnowledgeDraftRepository semantic conflict replay", () => {
+  it("creates the exact immutable managed update target inside conflict draft creation", async () => {
+    const fixture = semanticConflictDraftDataSource();
+    const repository = createPostgresKnowledgeDraftRepository({ dataSource: fixture.dataSource });
+    const managedPages = createPostgresManagedKnowledgePageRepository({
+      dataSource: fixture.dataSource,
+    });
+    const input = semanticConflictCreateInput(new Date("2026-08-13T04:00:00.000Z"));
+
+    const creation = await repository.createDraft({
+      ...input,
+      managedUpdateTarget: {
+        conflictCandidateId: "candidate-1",
+        conflictCandidateVersion: 3,
+        managedPageId: "managed-1",
+        managedPageVersion: 4,
+        linkedDocumentSourceId: "source-1",
+        targetSnapshotId: "snapshot-1",
+        targetSnapshotHash: "a".repeat(64),
+        targetSourceVersion: "source-v7",
+        remoteDocumentToken: "doc-managed-1",
+        managedBodyBlockId: "block-managed-1",
+        expectedRemoteRevisionId: "12",
+        currentBodyContentHash: "b".repeat(64),
+        authorizationGroupId: "group-1",
+        targetPolicyId: "policy-1",
+        targetPolicyVersion: 7,
+      },
+    });
+
+    await expect(managedPages.getTargetForDraft({
+      draftId: creation.draft.id,
+      revision: creation.draft.currentRevisionNumber,
+    })).resolves.toMatchObject({
+      draftId: "semantic-conflict-draft-1",
+      draftRevision: 1,
+      draftVersion: 1,
+      conflictCandidateId: "candidate-1",
+      conflictCandidateVersion: 3,
+      managedPageId: "managed-1",
+      managedPageVersion: 4,
+      linkedDocumentSourceId: "source-1",
+      targetSnapshotId: "snapshot-1",
+      targetSnapshotHash: "a".repeat(64),
+      targetSourceVersion: "source-v7",
+      expectedRemoteRevisionId: "12",
+      currentBodyContentHash: "b".repeat(64),
+      proposedBodyContentHash: canonicalManagedBodyHash(input.revision.content),
+      authorizationGroupId: "group-1",
+      targetPolicyId: "policy-1",
+      targetPolicyVersion: 7,
+    });
+  });
+
   it("accepts a later fresh attestation for the same draft intent and rejects altered intent", async () => {
     const fixture = semanticConflictDraftDataSource();
     const repository = createPostgresKnowledgeDraftRepository({
@@ -731,6 +789,7 @@ function semanticConflictCreateInput(atValue: Date) {
 
 function semanticConflictDraftDataSource() {
   const attestations: Date[] = [];
+  let updateTarget: Record<string, unknown> | undefined;
   let created = false;
   let operationFingerprint: string | undefined;
   let draftVersion = 1;
@@ -775,6 +834,36 @@ function semanticConflictDraftDataSource() {
         version: 7,
       }] };
     }
+    if (sql.includes("FROM managed_knowledge_pages") && sql.includes("WHERE id = $1")) {
+      return { rows: [{
+        id: "managed-1",
+        origin_knowledge_publication_id: "publication-1",
+        target_policy_id: "policy-1",
+        target_policy_version: 7,
+        authorization_group_id: "group-1",
+        remote_node_token: "wiki-managed-1",
+        remote_document_token: "doc-managed-1",
+        managed_body_block_id: "block-managed-1",
+        linked_document_source_id: "source-1",
+        current_remote_revision_id: "12",
+        current_body_content_hash: "b".repeat(64),
+        expected_resync_content_hash: null,
+        state: "active",
+        version: 4,
+        created_at: createdAt,
+        updated_at: createdAt,
+      }] };
+    }
+    if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+      return { rows: [{
+        version: 3,
+        group_id: "group-1",
+        target_document_source_id: "source-1",
+        target_snapshot_id: "snapshot-1",
+        target_content_hash: "a".repeat(64),
+        target_source_version: "source-v7",
+      }] };
+    }
     if (sql.includes("INSERT INTO knowledge_drafts")) {
       created = true;
       return { rows: [] };
@@ -786,6 +875,37 @@ function semanticConflictDraftDataSource() {
         attestations.push(new Date(attestedAt));
       }
       return { rows: [] };
+    }
+    if (sql.includes("INSERT INTO knowledge_publication_update_targets")) {
+      updateTarget = {
+        id: params[0],
+        draft_id: params[1],
+        draft_revision: params[2],
+        draft_version: params[3],
+        conflict_candidate_id: params[4],
+        conflict_candidate_version: params[5],
+        managed_page_id: params[6],
+        managed_page_version: params[7],
+        linked_document_source_id: params[8],
+        target_snapshot_id: params[9],
+        target_snapshot_hash: params[10],
+        target_source_version: params[11],
+        remote_document_token: params[12],
+        managed_body_block_id: params[13],
+        expected_remote_revision_id: params[14],
+        current_body_content_hash: params[15],
+        proposed_body_content_hash: params[16],
+        authorization_group_id: params[17],
+        target_policy_id: params[18],
+        target_policy_version: params[19],
+        operation_key: params[20],
+        operation_fingerprint: params[21],
+        created_at: params[22],
+      };
+      return { rows: [] };
+    }
+    if (sql.includes("FROM knowledge_publication_update_targets")) {
+      return { rows: updateTarget === undefined ? [] : [updateTarget] };
     }
     if (sql.includes("INSERT INTO knowledge_draft_events")) {
       operationFingerprint = String(params[6]);

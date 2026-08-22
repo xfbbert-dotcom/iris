@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { copyFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,112 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("reserves one ordered managed knowledge publication update ledger migration", async () => {
+    const migrationNames = await readdir(defaultMigrationsDir());
+    expect(migrationNames.filter((name) => name.startsWith("0052_"))).toEqual([
+      "0052_managed_knowledge_publication_updates.sql",
+    ]);
+    expect(migrationNames.indexOf("0052_managed_knowledge_publication_updates.sql"))
+      .toBeGreaterThan(migrationNames.indexOf("0051_document_source_group_grants.sql"));
+
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0052_managed_knowledge_publication_updates.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+    expect(normalized).toContain("managed_knowledge_updates_one_unresolved_page_idx");
+    expect(normalized).toContain("managed_knowledge_page_events_append_only");
+    expect(normalized).toContain("knowledge_publication_update_execution_events_append_only");
+    expect(normalized).toContain("knowledge_publication_updates_append_only");
+    expect(normalized).toContain("references knowledge_conflict_candidates(id) on delete restrict");
+    expect(normalized).toContain("references managed_knowledge_pages(id) on delete restrict");
+    expect(normalized).toContain("remote_request_dispatched_at is not null");
+    expect(normalized).toContain("response_revision_id is not null");
+    const dropGuard = normalized.indexOf(
+      "drop trigger action_review_attestations_append_only on action_review_attestations",
+    );
+    const backfill = normalized.indexOf(
+      "update action_review_attestations set action_target_fingerprint = content_hash",
+    );
+    const restoreGuard = normalized.indexOf(
+      "create trigger action_review_attestations_append_only",
+    );
+    expect(dropGuard).toBeGreaterThanOrEqual(0);
+    expect(backfill).toBeGreaterThan(dropGuard);
+    expect(restoreGuard).toBeGreaterThan(backfill);
+    expect(normalized).not.toContain("drop trigger action_review_attestations_truncate_guard");
+  });
+
+  it("reserves ordered 0053 compatibility for target-bound review attestations", async () => {
+    const migrationNames = (await readdir(defaultMigrationsDir())).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const migrationName = "0053_action_review_target_fingerprint_compatibility.sql";
+    expect(migrationNames.filter((name) => name.startsWith("0053_"))).toEqual([migrationName]);
+    expect(migrationNames.indexOf(migrationName))
+      .toBeGreaterThan(migrationNames.indexOf("0052_managed_knowledge_publication_updates.sql"));
+
+    const migrationPath = join(defaultMigrationsDir(), migrationName);
+    expect(existsSync(migrationPath)).toBe(true);
+    if (!existsSync(migrationPath)) return;
+    const normalized = (await readFile(migrationPath, "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("add column if not exists action_target_fingerprint text");
+    expect(normalized).toContain(
+      "drop trigger if exists action_review_attestations_append_only on action_review_attestations",
+    );
+    expect(normalized).toContain(
+      "set action_target_fingerprint = content_hash where action_target_fingerprint is null",
+    );
+    expect(normalized).toContain("create trigger action_review_attestations_append_only");
+    expect(normalized).not.toContain("drop trigger action_review_attestations_truncate_guard");
+    expect(normalized).not.toMatch(/delete from action_review_attestations/iu);
+    expect(normalized).toContain(
+      "unique (proposal_id, proposal_version, actor_open_id, content_hash, action_target_fingerprint)",
+    );
+  });
+
+  it("reserves ordered 0055 compatibility for exact managed update execution identity", async () => {
+    const migrationNames = (await readdir(defaultMigrationsDir())).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const migrationName = "0055_managed_update_execution_identity.sql";
+    expect(migrationNames.filter((name) => name.startsWith("0055_"))).toEqual([migrationName]);
+    expect(migrationNames.indexOf(migrationName))
+      .toBeGreaterThan(migrationNames.indexOf("0054_managed_knowledge_runtime_capability.sql"));
+
+    const normalized = (await readFile(join(defaultMigrationsDir(), migrationName), "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("add column approval_id text references action_approvals(id)");
+    expect(normalized).toContain("add column executor_id text");
+    expect(normalized).toContain("before insert or update on knowledge_publication_update_executions");
+    expect(normalized).not.toMatch(/update knowledge_publication_update_executions/iu);
+  });
+
+  it("reserves ordered 0056 compatibility for exact-profile reindex completion", async () => {
+    const migrationNames = (await readdir(defaultMigrationsDir())).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const migrationName = "0056_managed_resync_index_completion.sql";
+    expect(migrationNames.filter((name) => name.startsWith("0056_"))).toEqual([migrationName]);
+    expect(migrationNames.indexOf(migrationName))
+      .toBeGreaterThan(migrationNames.indexOf("0055_managed_update_execution_identity.sql"));
+
+    const normalized = (await readFile(join(defaultMigrationsDir(), migrationName), "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("create table document_snapshot_reindex_completions");
+    expect(normalized).toContain("unique (document_snapshot_id, embedding_profile_id)");
+    expect(normalized).toContain("add column current_reconciled_snapshot_id text");
+    expect(normalized).not.toMatch(/update managed_knowledge_pages/iu);
+    expect(normalized).not.toMatch(/delete from/iu);
+  });
+
   it("reserves exactly one ordered 0046 knowledge-conflict migration", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
     expect(migrationNames.filter((name) => name.startsWith("0046_"))).toEqual([
@@ -726,6 +833,25 @@ describe("defaultMigrationsDir", () => {
     });
   });
 
+  it("backfills the managed-update capability off without overwriting an existing value", async () => {
+    const migrationName = "0054_managed_knowledge_runtime_capability.sql";
+    const migrationPath = join(defaultMigrationsDir(), migrationName);
+    expect(existsSync(migrationPath)).toBe(true);
+    if (!existsSync(migrationPath)) return;
+
+    const normalized = (await readFile(migrationPath, "utf8"))
+      .replace(/\s+/gu, " ")
+      .trim()
+      .toLowerCase();
+    expect(normalized).toContain("update runtime_control_state");
+    expect(normalized).toContain(
+      "capabilities = capabilities || '{\"updatemanagedknowledge\":false}'::jsonb",
+    );
+    expect(normalized).toContain(
+      "where not (capabilities ? 'updatemanagedknowledge')",
+    );
+  });
+
   it("includes durable group memories with same-group idempotency and message evidence", async () => {
     const migration = await readFile(
       join(defaultMigrationsDir(), "0017_group_memories.sql"),
@@ -792,6 +918,241 @@ describe("defaultMigrationsDir", () => {
     );
     expect(normalized).toContain("content_hash ~ '^[0-9a-f]{64}$'");
   });
+});
+
+runIfDatabase("managed update execution identity migration upgrades with Postgres", () => {
+  it("keeps legacy rows readable while requiring identity for every new execution", async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `managed_update_identity_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await client.query("CREATE TABLE action_approvals (id TEXT PRIMARY KEY)");
+      await client.query("CREATE TABLE knowledge_publication_update_executions (id TEXT PRIMARY KEY)");
+      await client.query("INSERT INTO knowledge_publication_update_executions (id) VALUES ('legacy')");
+
+      await client.query(await readFile(
+        join(defaultMigrationsDir(), "0055_managed_update_execution_identity.sql"),
+        "utf8",
+      ));
+
+      await expect(client.query(
+        "SELECT id,approval_id,executor_id FROM knowledge_publication_update_executions WHERE id = 'legacy'",
+      )).resolves.toMatchObject({
+        rows: [{ id: "legacy", approval_id: null, executor_id: null }],
+      });
+      await expect(client.query(
+        "INSERT INTO knowledge_publication_update_executions (id) VALUES ('identity-less')",
+      )).rejects.toThrow(/requires approval and executor identity/iu);
+      await client.query("INSERT INTO action_approvals (id) VALUES ('approval-1')");
+      await expect(client.query(
+        "INSERT INTO knowledge_publication_update_executions (id,approval_id,executor_id) VALUES ('new','approval-1','worker-1')",
+      )).resolves.toMatchObject({ rowCount: 1 });
+      await expect(client.query(
+        "UPDATE knowledge_publication_update_executions SET executor_id = 'worker-2' WHERE id = 'new'",
+      )).rejects.toThrow(/identity is immutable/iu);
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
+  });
+});
+
+runIfDatabase("action-review target fingerprint migration upgrades with Postgres", () => {
+  it("rolls back a failed 0052 without leaving append-only protection disabled", async () => {
+    const harness = await createActionReviewUpgradeHarness("rollback");
+    try {
+      await seedLegacyActionReviewAttestation(harness.client, "rollback");
+      const migrationName = "0052_managed_knowledge_publication_updates.sql";
+      const migrationSql = await readFile(join(defaultMigrationsDir(), migrationName), "utf8");
+      await writeFile(
+        join(harness.migrationsDir, migrationName),
+        `${migrationSql}\nSELECT deliberately_missing_action_review_migration_function();\n`,
+      );
+
+      await expect(runMigrations({
+        client: harness.client,
+        migrationsDir: harness.migrationsDir,
+      })).rejects.toThrow();
+      await expect(harness.client.query(
+        "UPDATE action_review_attestations SET reviewed_at = NOW() WHERE id = 'legacy-rollback'",
+      )).rejects.toThrow(/append-only/iu);
+      await expect(harness.client.query(
+        "SELECT name FROM schema_migrations WHERE name = $1",
+        [migrationName],
+      )).resolves.toMatchObject({ rows: [] });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("upgrades a populated 0051 database through 0052 and restores append-only guards", async () => {
+    const harness = await createActionReviewUpgradeHarness("master");
+    try {
+      await seedLegacyActionReviewAttestation(harness.client, "master");
+      const compatibilityMigration = "0053_action_review_target_fingerprint_compatibility.sql";
+      const compatibilityPath = join(defaultMigrationsDir(), compatibilityMigration);
+      expect(existsSync(compatibilityPath)).toBe(true);
+      if (!existsSync(compatibilityPath)) return;
+      for (const migrationName of [
+        "0052_managed_knowledge_publication_updates.sql",
+        compatibilityMigration,
+      ]) {
+        await copyFile(
+          join(defaultMigrationsDir(), migrationName),
+          join(harness.migrationsDir, migrationName),
+        );
+      }
+
+      await expect(runMigrations({
+        client: harness.client,
+        migrationsDir: harness.migrationsDir,
+      })).resolves.toMatchObject({
+        applied: ["0052_managed_knowledge_publication_updates.sql", compatibilityMigration],
+      });
+      await expect(harness.client.query(
+        "SELECT action_target_fingerprint FROM action_review_attestations WHERE id = 'legacy-master'",
+      )).resolves.toMatchObject({
+        rows: [{ action_target_fingerprint: "c".repeat(64) }],
+      });
+      await expect(harness.client.query(
+        "UPDATE action_review_attestations SET reviewed_at = NOW() WHERE id = 'legacy-master'",
+      )).rejects.toThrow(/append-only/iu);
+      await expect(harness.client.query(
+        "TRUNCATE action_review_attestations",
+      )).rejects.toThrow(/append-only/iu);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("repairs an already-recorded 0052 database and permits one exact renewal identity", async () => {
+    const harness = await createActionReviewUpgradeHarness("compatibility");
+    try {
+      await seedLegacyActionReviewAttestation(harness.client, "compatibility");
+      await harness.client.query(
+        "INSERT INTO schema_migrations (name) VALUES ('0052_managed_knowledge_publication_updates.sql')",
+      );
+      const compatibilityMigration = "0053_action_review_target_fingerprint_compatibility.sql";
+      const compatibilityPath = join(defaultMigrationsDir(), compatibilityMigration);
+      expect(existsSync(compatibilityPath)).toBe(true);
+      if (!existsSync(compatibilityPath)) return;
+      for (const migrationName of [
+        "0052_managed_knowledge_publication_updates.sql",
+        compatibilityMigration,
+      ]) {
+        await copyFile(
+          join(defaultMigrationsDir(), migrationName),
+          join(harness.migrationsDir, migrationName),
+        );
+      }
+
+      await expect(runMigrations({
+        client: harness.client,
+        migrationsDir: harness.migrationsDir,
+      })).resolves.toMatchObject({
+        applied: [compatibilityMigration],
+        skipped: expect.arrayContaining(["0052_managed_knowledge_publication_updates.sql"]),
+      });
+      await harness.client.query(`
+        INSERT INTO action_review_attestations (
+          id, proposal_id, actor_open_id, subject_revision, subject_version,
+          proposal_version, content_hash, action_target_fingerprint, session_id_hash,
+          operation_key, operation_fingerprint, reviewed_at
+        ) VALUES (
+          'fresh-compatibility', 'proposal-compatibility', 'reviewer', 1, 1, 1,
+          repeat('c', 64), repeat('f', 64), repeat('d', 64),
+          'fresh-operation-compatibility', repeat('e', 64), NOW()
+        )
+      `);
+      await expect(harness.client.query(
+        "SELECT count(*)::int AS count FROM action_review_attestations WHERE proposal_id = 'proposal-compatibility'",
+      )).resolves.toMatchObject({ rows: [{ count: 2 }] });
+      await expect(harness.client.query(`
+        INSERT INTO action_review_attestations (
+          id, proposal_id, actor_open_id, subject_revision, subject_version,
+          proposal_version, content_hash, action_target_fingerprint, session_id_hash,
+          operation_key, operation_fingerprint, reviewed_at
+        ) VALUES (
+          'duplicate-compatibility', 'proposal-compatibility', 'reviewer', 1, 1, 1,
+          repeat('c', 64), repeat('f', 64), repeat('d', 64),
+          'duplicate-operation-compatibility', repeat('e', 64), NOW()
+        )
+      `)).rejects.toMatchObject({ code: "23505" });
+      await expect(harness.client.query(
+        "UPDATE action_review_attestations SET reviewed_at = NOW() WHERE id = 'legacy-compatibility'",
+      )).rejects.toThrow(/append-only/iu);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  async function createActionReviewUpgradeHarness(label: string) {
+    const migrationsDir = await mkdtemp(join(tmpdir(), `iris-action-review-${label}-`));
+    const migrationNames = await readdir(defaultMigrationsDir());
+    for (const migrationName of migrationNames.filter((name) => name < "0052_")) {
+      await copyFile(
+        join(defaultMigrationsDir(), migrationName),
+        join(migrationsDir, migrationName),
+      );
+    }
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `action_review_upgrade_${label}_${randomUUID().replaceAll("-", "")}`;
+    await client.query(`CREATE SCHEMA ${schema}`);
+    await client.query(`SET search_path TO ${schema}, public`);
+    await runMigrations({ client, migrationsDir });
+    return {
+      client,
+      migrationsDir,
+      async close() {
+        await client.query("RESET search_path").catch(() => undefined);
+        await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+        client.release();
+        await pool.end();
+      },
+    };
+  }
+
+  async function seedLegacyActionReviewAttestation(client: pg.PoolClient, label: string) {
+    await client.query(`
+      INSERT INTO knowledge_publication_target_policies (
+        id, space_id, display_name, allowed_group_ids, allowed_risk_levels,
+        enabled, version, operation_key, operation_fingerprint, created_by,
+        updated_by, created_at, updated_at
+      ) VALUES (
+        'policy-${label}', 'space-${label}', 'Policy', ARRAY[]::TEXT[], ARRAY['medium'],
+        TRUE, 1, 'policy-operation-${label}', repeat('a', 64), 'test', 'test', NOW(), NOW()
+      );
+      INSERT INTO knowledge_drafts (
+        id, origin_kind, status, current_revision_number, version,
+        created_by, created_at, updated_at
+      ) VALUES ('draft-${label}', 'user_requested', 'pending_review', 1, 1, 'test', NOW(), NOW());
+      INSERT INTO knowledge_draft_revisions (
+        draft_id, revision_number, title, content, risk_level, author, created_at
+      ) VALUES ('draft-${label}', 1, 'Title', 'Body', 'medium', 'test', NOW());
+      INSERT INTO action_proposals (
+        id, action_type, subject_type, subject_id, subject_revision, subject_version,
+        target_policy_id, target_policy_version, risk_level, status, operation_key,
+        operation_fingerprint, version, created_at, updated_at
+      ) VALUES (
+        'proposal-${label}', 'publish_knowledge_draft', 'knowledge_draft', 'draft-${label}',
+        1, 1, 'policy-${label}', 1, 'medium', 'pending_approval',
+        'proposal-operation-${label}', repeat('b', 64), 1, NOW(), NOW()
+      );
+      INSERT INTO action_review_attestations (
+        id, proposal_id, actor_open_id, subject_revision, subject_version,
+        proposal_version, content_hash, session_id_hash, operation_key,
+        operation_fingerprint, reviewed_at
+      ) VALUES (
+        'legacy-${label}', 'proposal-${label}', 'reviewer', 1, 1, 1,
+        repeat('c', 64), repeat('d', 64), 'legacy-operation-${label}', repeat('e', 64), NOW()
+      );
+    `);
+  }
 });
 
 runIfDatabase("conversation-state extraction migration upgrade with Postgres", () => {

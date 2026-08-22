@@ -5,7 +5,10 @@ import type {
   ActionProposalRepository,
   ClaimApprovedPublicationExecutionResult,
   CompletePublicationExecutionInput,
+  CompletePublicationExecutionResult,
 } from "./action-proposal-repository.js";
+import { canonicalManagedBodyHash } from "./managed-knowledge-page.js";
+import type { ManagedKnowledgePageRepository } from "./managed-knowledge-page-repository.js";
 
 const MAX_BATCH_LIMIT = 100;
 
@@ -28,7 +31,9 @@ export type KnowledgePublicationPublisherResult = Pick<
   | "remoteDocumentVersion"
   | "contentHash"
   | "permissionCheckSummary"
->;
+> & {
+  managedBodyBlockId?: string;
+};
 
 export type KnowledgePublicationPublisher = {
   publish(input: {
@@ -55,6 +60,7 @@ export type KnowledgePublicationExecutorDependencies = {
   workerId: string;
   now?: () => Date;
   agentExecutionObserver?: AgentExecutionObserver;
+  managedPages?: Pick<ManagedKnowledgePageRepository, "registerPublication">;
 };
 
 export function createKnowledgePublicationExecutor({
@@ -64,6 +70,7 @@ export function createKnowledgePublicationExecutor({
   workerId,
   now = () => new Date(),
   agentExecutionObserver,
+  managedPages,
 }: KnowledgePublicationExecutorDependencies) {
   const safeWorkerId = requireIdentifier("workerId", workerId);
   return {
@@ -71,7 +78,11 @@ export function createKnowledgePublicationExecutor({
       const safeLimit = sanitizeLimit(limit);
       const initialGate = normalizeRuntimeSnapshot(runtimeSnapshot());
       if (!initialGate.globalEnabled || !initialGate.capabilities.writeKnowledgeBase) return [];
-      const proposals = await repository.listProposals({ statuses: ["approved"], limit: safeLimit });
+      const proposals = await repository.listProposals({
+        statuses: ["approved"],
+        actionTypes: ["publish_knowledge_draft"],
+        limit: safeLimit,
+      });
       const results: KnowledgePublicationExecutorResult[] = [];
       for (const proposal of proposals) {
         const gate = normalizeRuntimeSnapshot(runtimeSnapshot());
@@ -104,6 +115,8 @@ export function createKnowledgePublicationExecutor({
           proposalId: proposal.id,
           now,
           agentExecutionObserver,
+          managedPages,
+          workerId: safeWorkerId,
         }));
       }
       return results;
@@ -118,6 +131,8 @@ async function publishClaim(input: {
   proposalId: string;
   now: () => Date;
   agentExecutionObserver: AgentExecutionObserver | undefined;
+  managedPages: Pick<ManagedKnowledgePageRepository, "registerPublication"> | undefined;
+  workerId: string;
 }): Promise<KnowledgePublicationExecutorResult> {
   await observePublicationExecution(
     input,
@@ -141,7 +156,7 @@ async function publishClaim(input: {
     return { status: "failed", proposalId: input.proposalId, code: "publisher_failed" };
   }
   try {
-    await input.repository.completePublicationExecution({
+    const completed = await input.repository.completePublicationExecution({
       proposalId: input.claim.proposal.id,
       executionId: input.claim.execution.id,
       expectedProposalVersion: input.claim.proposal.version,
@@ -156,6 +171,7 @@ async function publishClaim(input: {
       ),
       at: requireDate(input.now()),
     });
+    await registerManagedPublication(input, published, completed.publication);
   } catch {
     await markExecutionFailed(input, "reconciliation_required", "completion_failed");
     await observePublicationExecution(
@@ -173,6 +189,74 @@ async function publishClaim(input: {
   return { status: "published", proposalId: input.proposalId, code: "publication_succeeded" };
 }
 
+async function registerManagedPublication(
+  input: {
+    claim: ClaimApprovedPublicationExecutionResult;
+    managedPages: Pick<ManagedKnowledgePageRepository, "registerPublication"> | undefined;
+    workerId: string;
+    now: () => Date;
+    agentExecutionObserver: AgentExecutionObserver | undefined;
+  },
+  published: KnowledgePublicationPublisherResult,
+  publication: CompletePublicationExecutionResult["publication"],
+): Promise<void> {
+  const bodyBlockId = published.managedBodyBlockId?.trim();
+  const authorizationGroupId = input.claim.draft.sourceGroupId?.trim();
+  if (
+    input.managedPages === undefined ||
+    bodyBlockId === undefined ||
+    bodyBlockId === "" ||
+    authorizationGroupId === undefined ||
+    authorizationGroupId === ""
+  ) {
+    return;
+  }
+  if (!matchesDurablePublication(published, publication)) {
+    await observePublicationExecution(
+      input,
+      "action_execution_completed",
+      "managed_registration_identity_mismatch",
+    );
+    return;
+  }
+  const revision = publication.remoteDocumentVersion;
+  if (!isPositiveRevision(revision)) return;
+  const publicationHash = createHash("sha256").update(publication.id).digest("hex");
+  try {
+    await input.managedPages.registerPublication({
+      id: `managed-page:${publicationHash}`,
+      originKnowledgePublicationId: publication.id,
+      targetPolicyId: publication.targetPolicyId,
+      targetPolicyVersion: publication.targetPolicyVersion,
+      authorizationGroupId,
+      remoteNodeToken: publication.remoteNodeToken,
+      remoteDocumentToken: publication.remoteDocumentToken,
+      managedBodyBlockId: bodyBlockId,
+      currentRemoteRevisionId: String(revision),
+      currentBodyContentHash: canonicalManagedBodyHash(input.claim.draft.content),
+      operationKey: `managed-publication-register:${publicationHash}`,
+      actor: input.workerId,
+      at: requireDate(input.now()),
+    });
+  } catch {
+    await observePublicationExecution(input, "action_execution_completed", "managed_registration_failed");
+  }
+}
+
+function matchesDurablePublication(
+  published: KnowledgePublicationPublisherResult,
+  publication: CompletePublicationExecutionResult["publication"],
+): boolean {
+  return (
+    published.remoteNodeToken === publication.remoteNodeToken &&
+    published.remoteDocumentToken === publication.remoteDocumentToken &&
+    published.remoteDocumentType === publication.remoteDocumentType &&
+    isPositiveRevision(published.remoteDocumentVersion) &&
+    published.remoteDocumentVersion === publication.remoteDocumentVersion &&
+    published.contentHash === publication.contentHash
+  );
+}
+
 async function observePublicationExecution(
   input: {
     claim: ClaimApprovedPublicationExecutionResult;
@@ -184,7 +268,12 @@ async function observePublicationExecution(
     | "action_execution_completed"
     | "action_execution_failed"
     | "action_execution_reconciliation_required",
-  decisionReason?: "publication_succeeded" | "publisher_failed" | "completion_failed",
+  decisionReason?:
+    | "publication_succeeded"
+    | "publisher_failed"
+    | "completion_failed"
+    | "managed_registration_failed"
+    | "managed_registration_identity_mismatch",
 ): Promise<void> {
   if (input.agentExecutionObserver === undefined) {
     return;
@@ -291,6 +380,10 @@ function sanitizeLimit(value: unknown): number {
     throw new Error("batch limit is invalid");
   }
   return Number(value);
+}
+
+function isPositiveRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
 function requireIdentifier(name: string, value: unknown): string {

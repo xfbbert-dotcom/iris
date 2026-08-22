@@ -493,6 +493,19 @@ describe("createDocumentSyncRuntime", () => {
     const fetcher = {
       fetch: vi.fn(),
     };
+    const managedPages = {
+      findByRemoteIdentity: vi.fn(),
+      linkSource: vi.fn(),
+      recordSnapshotObservation: vi.fn(),
+      findResyncReadyExecution: vi.fn(),
+      completeResync: vi.fn(),
+    };
+    const blockReader = {
+      readManagedBlock: vi.fn(),
+    };
+    const managedKnowledgeObserver = {
+      observe: vi.fn(),
+    };
     const queue = {
       enqueue: vi.fn(async () => undefined),
       dequeueBatch: vi.fn(async () => []),
@@ -555,6 +568,7 @@ describe("createDocumentSyncRuntime", () => {
     };
     let runnerInput:
       | {
+          managedKnowledgeObserver?: { observe(input: unknown): Promise<void> };
           syncedSnapshotReindexer?: SyncedSnapshotReindexer;
         }
       | undefined;
@@ -570,6 +584,9 @@ describe("createDocumentSyncRuntime", () => {
       createDocumentSnapshotRepository: vi.fn(() => snapshots),
       createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
       createFeishuDocumentBodyFetcher: vi.fn(() => fetcher),
+      createPostgresManagedKnowledgePageRepository: vi.fn(() => managedPages),
+      createFeishuManagedKnowledgeBlockReader: vi.fn(() => blockReader),
+      createManagedKnowledgeSyncObserver: vi.fn(() => managedKnowledgeObserver),
       createDocumentSyncQueue: vi.fn(() => queue),
       createDocumentReindexQueue: vi.fn(() => reindexQueue),
       createDocumentReindexPlanner: vi.fn(() => reindexPlanner),
@@ -608,6 +625,18 @@ describe("createDocumentSyncRuntime", () => {
       timeoutMs: 7000,
       maxContentChars: 6000,
     });
+    expect(dependencies.createPostgresManagedKnowledgePageRepository).toHaveBeenCalledWith({
+      dataSource: pool,
+    });
+    expect(dependencies.createFeishuManagedKnowledgeBlockReader).toHaveBeenCalledWith({
+      baseUrl: "https://open.example.com",
+      tokenProvider,
+      timeoutMs: 7000,
+    });
+    expect(dependencies.createManagedKnowledgeSyncObserver).toHaveBeenCalledWith({
+      repository: managedPages,
+      blockReader,
+    });
     expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith({
       eval: expect.any(Function),
       rPush: expect.any(Function),
@@ -634,7 +663,9 @@ describe("createDocumentSyncRuntime", () => {
       registry: documentSources,
       snapshots,
       fetcher,
+      managedKnowledgeObserver,
       syncedSnapshotReindexer: {
+        activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
         enqueueSyncedSnapshotReindex: expect.any(Function),
       },
     });

@@ -95,6 +95,18 @@ describe("createPostgresRuntimeControlStateRepository", () => {
     await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
   });
 
+  it("rejects legacy durable capability snapshots without updateManagedKnowledge", async () => {
+    const capabilities = defaultCapabilities() as Record<string, unknown>;
+    delete capabilities.updateManagedKnowledge;
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([validRow({ capabilities })]),
+    });
+
+    await expect(repository.getSnapshot()).rejects.toThrow(
+      "invalid runtime control snapshot: capabilities",
+    );
+  });
+
   it("rejects sparse disabled group ID arrays", async () => {
     const disabledGroupIds = ["chat-a", , "chat-c"];
     const repository = createPostgresRuntimeControlStateRepository({
@@ -244,6 +256,7 @@ function defaultCapabilities() {
     proactiveSpeech: true,
     generateKnowledgeDrafts: true,
     writeKnowledgeBase: false,
+    updateManagedKnowledge: false,
     callExternalTools: false,
   };
 }

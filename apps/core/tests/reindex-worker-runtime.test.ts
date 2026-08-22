@@ -29,6 +29,7 @@ describe("createReindexWorkerRuntime", () => {
     const fragments = {
       replaceFragmentsForSnapshot: vi.fn(),
       hasFragmentsForSnapshotProfile: vi.fn(),
+      countFragmentsForSnapshotProfile: vi.fn(async () => 1),
     };
     const loop = {
       start: vi.fn(),
@@ -160,6 +161,7 @@ describe("createReindexWorkerRuntime", () => {
     const fragments = {
       replaceFragmentsForSnapshot: vi.fn(),
       hasFragmentsForSnapshotProfile: vi.fn(),
+      countFragmentsForSnapshotProfile: vi.fn(async () => 1),
     };
     let capturedWorker:
       | { processBatch(input: { limit: number }): Promise<unknown> }
@@ -302,6 +304,7 @@ function runtimeDependencies() {
     createDocumentFragmentRepository: vi.fn(() => ({
       replaceFragmentsForSnapshot: vi.fn(),
       hasFragmentsForSnapshotProfile: vi.fn(),
+      countFragmentsForSnapshotProfile: vi.fn(async () => 1),
     })),
     createEmbeddingProvider: vi.fn(() => ({ embedTexts: vi.fn(async () => []) })),
     createWorkerLoop: vi.fn(() => ({

@@ -18,6 +18,7 @@ const DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
 const RAW_CONTENT_RESPONSE_OVERHEAD_BYTES = 4096;
 const WIKI_NODE_RESPONSE_MAX_BYTES = 65_536;
+const DOCUMENT_METADATA_RESPONSE_MAX_BYTES = 65_536;
 export const MAX_FEISHU_DOCUMENT_TOKEN_CHARS = 512;
 const invalidFeishuDocumentTokenPattern = /,|%/u;
 
@@ -125,6 +126,17 @@ export function createFeishuDocumentBodyFetcher({
         });
       }
 
+      const shouldBracketRevision = source.sourceType === "authorized_wiki_document";
+      const revisionBefore = shouldBracketRevision
+        ? await tryFetchDocumentRevision({
+            baseUrl,
+            documentId,
+            tenantAccessToken,
+            fetch,
+            timeoutMs: safeTimeoutMs,
+          })
+        : undefined;
+
       const { response, responseBody } = await fetchJsonWithTimeout({
         fetch,
         url: `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
@@ -152,12 +164,68 @@ export function createFeishuDocumentBodyFetcher({
       }
 
       const bodyText = readRawContent(responseBody, safeMaxContentChars);
+      const revisionAfter = shouldBracketRevision
+        ? await tryFetchDocumentRevision({
+            baseUrl,
+            documentId,
+            tenantAccessToken,
+            fetch,
+            timeoutMs: safeTimeoutMs,
+          })
+        : undefined;
+      const sourceVersion = revisionBefore !== undefined && revisionAfter === revisionBefore
+        ? String(revisionBefore)
+        : undefined;
       return {
         bodyText,
+        ...(sourceVersion === undefined ? {} : { sourceVersion }),
         fetchedAt: now(),
       };
     },
   };
+}
+
+async function tryFetchDocumentRevision({
+  baseUrl,
+  documentId,
+  tenantAccessToken,
+  fetch,
+  timeoutMs,
+}: {
+  baseUrl: string;
+  documentId: string;
+  tenantAccessToken: string;
+  fetch: typeof globalThis.fetch;
+  timeoutMs: number;
+}): Promise<number | undefined> {
+  try {
+    const { response, responseBody } = await fetchJsonWithTimeout({
+      fetch,
+      url: `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
+        documentId,
+      )}`,
+      init: {
+        method: "GET",
+        headers: { authorization: `Bearer ${tenantAccessToken}` },
+      },
+      timeoutMs,
+      timeoutMessage: "Feishu document metadata request timed out",
+      jsonErrorMessage: "Feishu document metadata response was not valid JSON",
+      maxResponseBytes: DOCUMENT_METADATA_RESPONSE_MAX_BYTES,
+      responseSizeErrorMessage:
+        `Feishu document metadata response exceeds ${DOCUMENT_METADATA_RESPONSE_MAX_BYTES} bytes`,
+    });
+    if (!response.ok || !isRecord(responseBody) || responseBody.code !== 0 ||
+      !isRecord(responseBody.data) || !isRecord(responseBody.data.document)) {
+      return undefined;
+    }
+    const revision = responseBody.data.document.revision_id;
+    return typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
+      ? revision
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function fetchWikiDocumentId({
@@ -327,7 +395,10 @@ function normalizeFeishuDocumentToken(value: unknown): string | undefined {
   return token;
 }
 
-function readRawContent(responseBody: unknown, maxContentChars: number): string {
+function readRawContent(
+  responseBody: unknown,
+  maxContentChars: number,
+): string {
   if (!isRecord(responseBody)) {
     throw new Error("Feishu document raw content response did not include content");
   }

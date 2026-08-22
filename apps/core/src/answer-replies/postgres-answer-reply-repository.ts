@@ -5,6 +5,8 @@ import {
   KnowledgeConflictVersionConflictError,
   lockCurrentKnowledgeConflictCandidateForAnswerSend,
 } from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
+import { acquireManagedKnowledgeSourceLocks } from
+  "../documents/managed-knowledge-source-lock.js";
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import {
   createAnswerReplyEventId,
@@ -365,6 +367,11 @@ export function createPostgresAnswerReplyRepository(input: {
       return withTransaction(dataSource, async (client) => {
         await acquireAdvisoryLock(client, normalized.deliveryId);
         const prelockedSources = await loadSources(client, normalized.deliveryId);
+        await acquireManagedKnowledgeSourceLocks(
+          client,
+          prelockedSources.map(({ documentSourceId }) => documentSourceId),
+        );
+        await lockManagedSourceFreshness(client, prelockedSources);
         await lockCurrentSourceGrantBindings(client, prelockedSources);
         const binding = await loadKnowledgeConflictBinding(client, normalized.deliveryId);
         const lockedCandidate = binding === undefined
@@ -745,6 +752,53 @@ type SourceGrantBinding = {
   grantorGroupId: string;
   granteeGroupId: string;
 };
+
+type ManagedSourceStateRow = {
+  linked_document_source_id: unknown;
+  state: unknown;
+  current_reconciled_snapshot_id: unknown;
+};
+
+async function lockManagedSourceFreshness(
+  client: AnswerReplyTransactionClient,
+  sources: readonly AnswerReplySourceTraceInput[],
+): Promise<void> {
+  const documentSourceIds = [...new Set(
+    sources.map(({ documentSourceId }) => documentSourceId),
+  )].sort();
+  if (documentSourceIds.length === 0) return;
+
+  const result = await client.query<ManagedSourceStateRow>(
+    `SELECT linked_document_source_id, state, current_reconciled_snapshot_id
+     FROM managed_knowledge_pages
+     WHERE linked_document_source_id = ANY($1::text[])
+     ORDER BY linked_document_source_id ASC
+     FOR SHARE`,
+    [documentSourceIds],
+  );
+  const requested = new Set(documentSourceIds);
+  const snapshotsBySource = new Map<string, Set<string>>();
+  for (const source of sources) {
+    const snapshotIds = snapshotsBySource.get(source.documentSourceId) ?? new Set<string>();
+    snapshotIds.add(source.documentSnapshotId);
+    snapshotsBySource.set(source.documentSourceId, snapshotIds);
+  }
+  const seen = new Set<string>();
+  for (const row of result.rows) {
+    if (
+      typeof row.linked_document_source_id !== "string"
+      || !requested.has(row.linked_document_source_id)
+      || seen.has(row.linked_document_source_id)
+      || row.state !== "active"
+      || snapshotsBySource.get(row.linked_document_source_id)?.size !== 1
+      || row.current_reconciled_snapshot_id
+        !== [...snapshotsBySource.get(row.linked_document_source_id)!][0]
+    ) {
+      throw new AnswerReplyGrantStaleError();
+    }
+    seen.add(row.linked_document_source_id);
+  }
+}
 
 async function lockCurrentSourceGrantBindings(
   client: AnswerReplyTransactionClient,

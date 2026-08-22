@@ -39,7 +39,13 @@ describe("FeishuKnowledgePublicationPublisher", () => {
             },
           }],
         });
-        return jsonResponse({ code: 0, data: { revision_id: 5 } });
+        return jsonResponse({
+          code: 0,
+          data: {
+            revision_id: 5,
+            children: [{ block_id: "blk_body", block_type: 2 }],
+          },
+        });
       }
       throw new Error(`unexpected URL: ${href}`);
     });
@@ -73,9 +79,100 @@ describe("FeishuKnowledgePublicationPublisher", () => {
       remoteDocumentToken: "docx_new",
       remoteDocumentType: "docx",
       remoteDocumentVersion: 5,
+      managedBodyBlockId: "blk_body",
       contentHash: expect.stringMatching(/^[0-9a-f]{64}$/u),
       permissionCheckSummary: "feishu_write_access_verified",
     });
+  });
+
+  it("publishes successfully without managed identity when the append response omits the created block", async () => {
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/open-apis/wiki/v2/spaces/space-1/nodes")) {
+        return jsonResponse({
+          code: 0,
+          data: { node: { node_token: "wikcn_new", obj_token: "docx_new", obj_type: "docx" } },
+        });
+      }
+      if (href.endsWith("/open-apis/docx/v1/documents/docx_new/blocks/docx_new/children")) {
+        return jsonResponse({ code: 0, data: { revision_id: 5 } });
+      }
+      throw new Error(`unexpected URL: ${href}`);
+    });
+    const publisher = createFeishuKnowledgePublicationPublisher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      timeoutMs: 1_000,
+    });
+
+    const result = await publisher.publish({
+      proposal: { id: "proposal-1" } as never,
+      execution: { id: "execution-1" } as never,
+      draft: {
+        id: "draft-1",
+        revisionNumber: 1,
+        version: 3,
+        title: "Pilot summary",
+        content: "Line one",
+        riskLevel: "low",
+        suggestedPublication: { spaceId: "space-1" },
+      },
+      policy: { id: "policy-1", spaceId: "space-1" } as never,
+    });
+
+    expect(result).not.toHaveProperty("managedBodyBlockId");
+    expect(result).toMatchObject({ remoteDocumentVersion: 5 });
+  });
+
+  it("omits managed identity when the append response contains more than one text block", async () => {
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/open-apis/wiki/v2/spaces/space-1/nodes")) {
+        return jsonResponse({
+          code: 0,
+          data: { node: { node_token: "wikcn_new", obj_token: "docx_new", obj_type: "docx" } },
+        });
+      }
+      if (href.endsWith("/open-apis/docx/v1/documents/docx_new/blocks/docx_new/children")) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            revision_id: 5,
+            children: [
+              { block_id: "blk_body", block_type: 2 },
+              { block_id: "", block_type: 2 },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected URL: ${href}`);
+    });
+    const publisher = createFeishuKnowledgePublicationPublisher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      timeoutMs: 1_000,
+    });
+
+    const result = await publisher.publish({
+      proposal: { id: "proposal-1" } as never,
+      execution: { id: "execution-1" } as never,
+      draft: {
+        id: "draft-1",
+        revisionNumber: 1,
+        version: 3,
+        title: "Pilot summary",
+        content: "Line one",
+        riskLevel: "low",
+        suggestedPublication: { spaceId: "space-1" },
+      },
+      policy: { id: "policy-1", spaceId: "space-1" } as never,
+    });
+
+    expect(result).not.toHaveProperty("managedBodyBlockId");
   });
 
   it("fails safely without leaking upstream bodies or tenant tokens", async () => {

@@ -21,6 +21,139 @@ afterEach(() => {
 });
 
 describe("GET /internal/readiness", () => {
+  it("injects the parsed default-off deployment contract with the real document-sync queue", async () => {
+    const syncQueue = { enqueue: vi.fn(async () => undefined) };
+    const documentSyncRuntime = fakeDocumentSyncRuntimeForReadiness() as DocumentSyncRuntime & {
+      managedKnowledgeUpdateQueue: typeof syncQueue;
+    };
+    documentSyncRuntime.managedKnowledgeUpdateQueue = syncQueue;
+    const createActionApprovalRuntime = vi.fn(() => undefined);
+    const app = await buildApp({
+      readinessEnv: readyRolloutEnv({
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot",
+      }),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime,
+    });
+
+    expect(createActionApprovalRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      managedKnowledgeUpdates: {
+        deploymentEnabled: true,
+        groupAllowlist: ["oc_pilot"],
+        activeEmbeddingProfileId: "profile-active",
+        syncQueue,
+        intervalMs: 1_000,
+        batchLimit: 10,
+        staleDispatchMs: 300_000,
+      },
+    }));
+    await app.close();
+  });
+
+  it("injects disabled managed-update recovery configuration when the real queue is available", async () => {
+    const syncQueue = { enqueue: vi.fn(async () => undefined) };
+    const documentSyncRuntime = fakeDocumentSyncRuntimeForReadiness() as DocumentSyncRuntime & {
+      managedKnowledgeUpdateQueue: typeof syncQueue;
+    };
+    documentSyncRuntime.managedKnowledgeUpdateQueue = syncQueue;
+    const createActionApprovalRuntime = vi.fn(() => undefined);
+    const app = await buildApp({
+      readinessEnv: readyRolloutEnv({
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "false",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "",
+      }),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime,
+    });
+
+    expect(createActionApprovalRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      managedKnowledgeUpdates: expect.objectContaining({
+        deploymentEnabled: false,
+        groupAllowlist: [],
+        syncQueue,
+      }),
+    }));
+    await app.close();
+  });
+
+  it("projects enabled managed-update status and readiness without sensitive producer fields", async () => {
+    const actionApprovalRuntime = {
+      repository: {},
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({
+        enabled: true,
+        running: true,
+        planner: { running: true, intervalMs: 1_000, batchLimit: 10 },
+        dispatcher: { running: true, intervalMs: 1_000, batchLimit: 10 },
+        publicationExecutor: { running: true, intervalMs: 1_000, batchLimit: 10 },
+        proposals: { pending_approval: 0, approved: 0, executing: 0, succeeded: 0, failed: 0,
+          cancelled: 0, expired: 0, reconciliation_required: 0 },
+        outbox: { pending: 0, processing: 0, external_attempting: 0, sent: 0, failed: 0,
+          outcome_unknown: 0, terminalFailed: 0 },
+        managedKnowledgeUpdates: {
+          running: true, intervalMs: 1_000, batchLimit: 10,
+          migration0055Applied: true, migration0056Applied: true,
+          reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
+          latestBatch: {
+            status: "partial_failed",
+            startedAt: new Date("2026-08-22T03:00:00.000Z"),
+            finishedAt: new Date("2026-08-22T03:00:01.000Z"),
+            executionCount: 0,
+            reconciliationCount: 1,
+            executorFailed: true,
+            reconcilerFailed: false,
+            failed: true,
+            errorCode: "managed_update_worker_failed",
+          },
+          draftBody: "Approved body", documentToken: "docx_secret", remoteError: "raw timeout body",
+        },
+      })),
+    } as unknown as ActionApprovalRuntime;
+    const app = await buildApp({
+      readinessEnv: readyRolloutEnv({
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+        IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot",
+      }),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntimeForReadiness() as DocumentSyncRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createActionApprovalRuntime: () => actionApprovalRuntime,
+    });
+
+    const status = await app.inject({ method: "GET", url: "/internal/status" });
+    const readiness = await app.inject({ method: "GET", url: "/internal/readiness" });
+    expect(status.json().components.managedKnowledgeUpdates).toMatchObject({
+      ok: false,
+      enabled: true,
+      migration0055Applied: true,
+      migration0056Applied: true,
+      worker: {
+        running: true,
+        latestBatch: {
+          status: "partial_failed",
+          executionCount: 0,
+          reconciliationCount: 1,
+          executorFailed: true,
+          reconcilerFailed: false,
+          failed: true,
+          errorCode: "managed_update_worker_failed",
+        },
+      },
+      reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
+    });
+    expect(status.body + readiness.body).not.toMatch(/Approved body|docx_secret|raw timeout body/iu);
+    await app.close();
+  });
+
   it("uses live content-free cross-group grant counts and fails closed when they are unreadable", async () => {
     const runtime = fakeDocumentSyncRuntimeForReadiness({
       migration0051Applied: true,
@@ -154,7 +287,7 @@ describe("GET /internal/readiness", () => {
     expect(report.checks).toContainEqual(expect.objectContaining({
       id: "actionReviews",
       status: "fail",
-      detail: "Action-review migration 0034 is not applied.",
+      detail: "Action-review migration 0053 is not applied.",
     }));
     await app.close();
   });
@@ -186,13 +319,14 @@ describe("memory extraction internal API", () => {
       "reindex",
       "knowledgeConflicts",
       "actionApprovals",
+      "managedKnowledgeUpdates",
       "proactiveSignals",
     ]);
     expect(consolidated.json().summary).toMatchObject({
-      componentCount: 12,
+      componentCount: 13,
       healthyComponentCount: 3,
       enabledComponentCount: 3,
-      disabledComponentCount: 9,
+      disabledComponentCount: 10,
       disabledComponents: [
         "answerDraft",
         "agentExecutionLedger",
@@ -202,16 +336,23 @@ describe("memory extraction internal API", () => {
         "reindex",
         "knowledgeConflicts",
         "actionApprovals",
+        "managedKnowledgeUpdates",
         "proactiveSignals",
       ],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 9,
+        disabled: 10,
         degraded: 0,
         stopped: 0,
       },
     });
     expect(consolidated.json().components.memoryExtraction).toEqual({
+      status: "disabled",
+      ok: true,
+      enabled: false,
+      running: false,
+    });
+    expect(consolidated.json().components.managedKnowledgeUpdates).toEqual({
       status: "disabled",
       ok: true,
       enabled: false,
@@ -761,6 +902,7 @@ function fakeDocumentSyncRuntimeForReadiness(
     registerUserSubmittedDocument: vi.fn(),
     deadLetters: {} as DocumentSyncRuntime["deadLetters"],
     wikiSpaces: {} as DocumentSyncRuntime["wikiSpaces"],
+    activeEmbeddingProfileId: "profile-active",
   };
 }
 
@@ -790,7 +932,7 @@ function memoryExtractionStatus(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function readyRolloutEnv(): EnvLike {
+function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {
   return {
     DATABASE_URL: "postgres://iris:iris@localhost:5432/iris",
     REDIS_URL: "redis://localhost:6379",
@@ -814,6 +956,7 @@ function readyRolloutEnv(): EnvLike {
     IRIS_EMBEDDING_API_KEY: "embedding-key",
     IRIS_EMBEDDING_MODEL: "embedding-model",
     IRIS_EMBEDDING_DIMENSIONS: "1536",
+    ...overrides,
   };
 }
 
@@ -831,7 +974,7 @@ function readyActionReviewEnv(): EnvLike {
   };
 }
 
-function readyActionReviewRuntimeDependencies(migration0034Applied: boolean) {
+function readyActionReviewRuntimeDependencies(migration0053Applied: boolean) {
   const zeroOutbox = {
     pending: 0,
     processing: 0,
@@ -866,7 +1009,7 @@ function readyActionReviewRuntimeDependencies(migration0034Applied: boolean) {
   } as unknown as ActionApprovalRuntime;
   const actionReviewRuntime = {
     close: vi.fn(async () => undefined),
-    getStatus: vi.fn(async () => ({ configured: true, running: true, migration0034Applied })),
+    getStatus: vi.fn(async () => ({ configured: true, running: true, migration0053Applied })),
   } as unknown as ActionReviewRuntime;
   return {
     createKnowledgeCardRuntime: () => knowledgeCardRuntime,

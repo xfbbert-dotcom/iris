@@ -8,6 +8,7 @@ import type {
 
 import type {
   ActionApprovalRequirementKind,
+  ActionProposalActionType,
   ActionProposal,
   ActionProposalStatus,
   ActionRoleGrantType,
@@ -94,11 +95,18 @@ export type ActionProposalContext = {
   proposal: ActionProposal;
   requirements: ActionApprovalRequirement[];
   approvals: ActionApproval[];
+  managedTarget?: {
+    managedPageId: string;
+    documentSourceId: string;
+    targetSourceUri: string;
+  };
 };
 
 export type ActionReviewContext = {
   proposalId: string;
   proposalVersion: number;
+  actionType: ActionProposalActionType;
+  actionTargetFingerprint: string;
   draftId: string;
   subjectRevision: number;
   subjectVersion: number;
@@ -106,7 +114,24 @@ export type ActionReviewContext = {
   content: string;
   contentHash: string;
   riskLevel: KnowledgeDraftRiskLevel;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
   targetDisplayName: string;
+  managedTarget?: {
+    managedPageId: string;
+    managedPageVersion: number;
+    documentSourceId: string;
+    targetSourceUri: string;
+    targetSnapshotId: string;
+    targetSnapshotHash: string;
+    conflictCandidateId: string;
+    conflictCandidateVersion: number;
+    remoteDocumentToken: string;
+    managedBodyBlockId: string;
+    expectedRemoteRevisionId: string;
+    currentBodyContentHash: string;
+    authorizationGroupId: string;
+  };
   requirements: Array<{
     kind: ActionApprovalRequirementKind;
     state: "pending" | "satisfied" | "invalidated";
@@ -120,6 +145,7 @@ export type RecordActionReviewAttestationInput = {
   expectedSubjectRevision: number;
   expectedSubjectVersion: number;
   expectedContentHash: string;
+  expectedActionTargetFingerprint: string;
   sessionIdHash: string;
   operationKey: string;
   at: Date;
@@ -133,6 +159,7 @@ export type CurrentActionReviewAttestationInput = Pick<
   | "expectedSubjectRevision"
   | "expectedSubjectVersion"
   | "expectedContentHash"
+  | "expectedActionTargetFingerprint"
 >;
 
 export type ActionApprovalPresentationState =
@@ -240,6 +267,7 @@ export type KnowledgePublication = {
 
 export type ActionProposalDraftCandidate = {
   id: string;
+  actionType: ActionProposalActionType;
   sourceGroupId?: string;
   currentRevision: number;
   version: number;
@@ -279,6 +307,7 @@ export type UpsertActionRoleGrantInput = {
 
 export type CreateActionProposalInput = {
   proposalId: string;
+  actionType?: ActionProposalActionType;
   draftId: string;
   expectedRevision: number;
   expectedDraftVersion: number;
@@ -531,7 +560,9 @@ export interface ActionProposalRepository {
   listEvents(id: string): Promise<ActionProposalEvent[]>;
   listProposals(input: {
     statuses?: ActionProposalStatus[];
+    actionTypes?: ActionProposalActionType[];
     subjectId?: string;
+    authorizationGroupIds?: string[];
     limit: number;
   }): Promise<ActionProposal[]>;
   getStatusCounts(): Promise<ActionProposalStatusCounts>;

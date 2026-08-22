@@ -71,22 +71,22 @@ describe("buildInternalRolloutReadinessReport", () => {
       actionReviewStatus: {
         configured: true,
         running: true,
-        migration0034Applied: false,
+        migration0053Applied: false,
       },
     })).actionReviews).toMatchObject({
       status: "fail",
-      detail: "Action-review migration 0034 is not applied.",
+      detail: "Action-review migration 0053 is not applied.",
     });
 
     expect(checksById(buildInternalRolloutReadinessReport(env, {
       actionReviewStatus: {
         configured: true,
         running: true,
-        migration0034Applied: true,
+        migration0053Applied: true,
       },
     })).actionReviews).toMatchObject({
       status: "pass",
-      detail: "Action-review runtime is configured and running with migration 0034 applied.",
+      detail: "Action-review runtime is configured and running with migration 0053 applied.",
     });
   });
 
@@ -123,6 +123,90 @@ describe("buildInternalRolloutReadinessReport", () => {
     expect(report.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
       status: "pass",
       detail: "Action approvals are safely disabled.",
+    });
+  });
+
+  it("keeps managed knowledge updates healthy while the deployment contract is disabled", () => {
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv())).managedKnowledgeUpdates)
+      .toMatchObject({
+        status: "pass",
+        detail: "Managed knowledge updates are safely disabled.",
+      });
+  });
+
+  it("blocks managed updates when more than one pilot group is configured", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv({
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot,oc_second",
+    }));
+
+    expect(checksById(report).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST must contain exactly one group",
+    });
+  });
+
+  it("fails enabled managed knowledge updates without the 0055 identity migration or a healthy worker", () => {
+    const env = readyRolloutEnv({
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_ENABLED: "true",
+      IRIS_MANAGED_KNOWLEDGE_UPDATE_GROUP_ALLOWLIST: "oc_pilot",
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+      IRIS_ACTION_REVIEW_ENABLED: "true",
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+      IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+      FEISHU_ENCRYPT_KEY: "managed-update-encrypt-key",
+    });
+    const baseStatus = {
+      ok: true,
+      enabled: true,
+      running: true,
+      migration0055Applied: true,
+      migration0056Applied: true,
+      worker: { running: true },
+      reconciliation: { outcomeUnknown: 0, reconciliationRequired: 0 },
+    };
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: { ...baseStatus, migration0055Applied: false },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge update migration 0055 is not applied.",
+    });
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: { ...baseStatus, migration0056Applied: false },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge update migration 0056 is not applied.",
+    });
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: {
+        ...baseStatus,
+        reconciliation: { outcomeUnknown: 1, reconciliationRequired: 0 },
+      },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge updates have unresolved outcome-unknown executions.",
+    });
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      managedKnowledgeUpdateStatus: {
+        ...baseStatus,
+        ok: false,
+        worker: {
+          running: true,
+          latestBatch: {
+            status: "partial_failed",
+            failed: true,
+            executorFailed: true,
+            reconcilerFailed: false,
+          },
+        },
+      },
+    })).managedKnowledgeUpdates).toMatchObject({
+      status: "fail",
+      detail: "Managed knowledge update worker latest batch failed.",
     });
   });
 
@@ -716,7 +800,7 @@ function actionReviewStatus(overrides: Record<string, unknown> = {}) {
   return {
     configured: true,
     running: true,
-    migration0034Applied: true,
+    migration0053Applied: true,
     ...overrides,
   };
 }

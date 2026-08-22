@@ -54,15 +54,20 @@ describe("KnowledgePublicationExecutor", () => {
         remoteDocumentToken: "docx_remote",
         remoteDocumentType: "docx" as const,
         remoteDocumentVersion: 12,
+        managedBodyBlockId: "blk_body",
         contentHash: "d".repeat(64),
         permissionCheckSummary: "feishu_write_access_verified",
       })),
+    };
+    const managedPages = {
+      registerPublication: vi.fn(async () => ({ outcome: "applied" as const, page: {} as never })),
     };
     const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
 
     const executor = createKnowledgePublicationExecutor({
       repository,
       publisher,
+      managedPages,
       agentExecutionObserver: { observe },
       runtimeSnapshot: () => ({
         globalEnabled: true,
@@ -78,6 +83,11 @@ describe("KnowledgePublicationExecutor", () => {
       proposalId: proposal.id,
       code: "publication_succeeded",
     }]);
+    expect(repository.listProposals).toHaveBeenCalledWith({
+      statuses: ["approved"],
+      actionTypes: ["publish_knowledge_draft"],
+      limit: 1,
+    });
     expect(repository.claimApprovedPublicationExecution).toHaveBeenCalledWith({
       proposalId: proposal.id,
       expectedProposalVersion: proposal.version,
@@ -108,6 +118,21 @@ describe("KnowledgePublicationExecutor", () => {
       operationKey: expect.stringMatching(/^publication-complete:/u),
       at,
     }));
+    expect(managedPages.registerPublication).toHaveBeenCalledWith({
+      id: "managed-page:6ad314c92c79382558441e90dfb1d0dcd07bbdd5c7a6cb5131f30e62414384d7",
+      originKnowledgePublicationId: "publication-1",
+      targetPolicyId: "policy-1",
+      targetPolicyVersion: 2,
+      authorizationGroupId: "oc_group",
+      remoteNodeToken: "wikcn_remote",
+      remoteDocumentToken: "docx_remote",
+      managedBodyBlockId: "blk_body",
+      currentRemoteRevisionId: "12",
+      currentBodyContentHash: "5c1d6e35932ed6e0eef579d02ae38073835b7ab387d1940bdb2f5198dd3c46ef",
+      operationKey: "managed-publication-register:6ad314c92c79382558441e90dfb1d0dcd07bbdd5c7a6cb5131f30e62414384d7",
+      actor: "publication-worker-1",
+      at,
+    });
     expect(observe.mock.calls.map(([event]) => event)).toEqual([
       expect.objectContaining({
         groupId: "oc_group",
@@ -132,6 +157,126 @@ describe("KnowledgePublicationExecutor", () => {
     expect(JSON.stringify(observe.mock.calls)).not.toMatch(
       /Iris pilot note|Pilot scope|wikcn_remote|docx_remote/iu,
     );
+  });
+
+  it("keeps the durable publication successful when managed registration fails", async () => {
+    const proposal = actionProposal();
+    const claim = publicationClaim({ proposal });
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const managedPages = {
+      registerPublication: vi.fn(async () => {
+        throw new Error("managed page database unavailable");
+      }),
+    };
+    const executor = createKnowledgePublicationExecutor({
+      repository: {
+        listProposals: vi.fn(async () => [proposal]),
+        claimApprovedPublicationExecution: vi.fn(async () => claim),
+        completePublicationExecution: vi.fn(async () => ({
+          outcome: "applied" as const,
+          publication: {
+            id: "publication-1",
+            targetPolicyId: "policy-1",
+            targetPolicyVersion: 2,
+            remoteNodeToken: "wikcn_remote",
+            remoteDocumentToken: "docx_remote",
+            remoteDocumentType: "docx",
+            remoteDocumentVersion: 12,
+            contentHash: "d".repeat(64),
+          },
+        } as never)),
+        failPublicationExecution: vi.fn(),
+      },
+      publisher: {
+        publish: vi.fn(async () => ({
+          remoteNodeToken: "wikcn_remote",
+          remoteDocumentToken: "docx_remote",
+          remoteDocumentType: "docx" as const,
+          remoteDocumentVersion: 12,
+          managedBodyBlockId: "blk_body",
+          contentHash: "d".repeat(64),
+          permissionCheckSummary: "feishu_write_access_verified",
+        })),
+      },
+      managedPages,
+      agentExecutionObserver: { observe },
+      runtimeSnapshot: () => ({
+        globalEnabled: true,
+        disabledGroupIds: [],
+        capabilities: { writeKnowledgeBase: true },
+      }),
+      workerId: "publication-worker-1",
+      now: () => at,
+    });
+
+    await expect(executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "published",
+      proposalId: proposal.id,
+      code: "publication_succeeded",
+    }]);
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({
+      decisionReason: "managed_registration_failed",
+    }));
+  });
+
+  it("does not register a replayed durable document with a later publication block", async () => {
+    const proposal = actionProposal();
+    const claim = publicationClaim({ proposal });
+    const managedPages = {
+      registerPublication: vi.fn(async () => ({ outcome: "applied" as const, page: {} as never })),
+    };
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const executor = createKnowledgePublicationExecutor({
+      repository: {
+        listProposals: vi.fn(async () => [proposal]),
+        claimApprovedPublicationExecution: vi.fn(async () => claim),
+        completePublicationExecution: vi.fn(async () => ({
+          outcome: "already_applied" as const,
+          publication: {
+            id: "publication-1",
+            targetPolicyId: "policy-1",
+            targetPolicyVersion: 2,
+            remoteNodeToken: "wikcn_durable",
+            remoteDocumentToken: "docx_durable",
+            remoteDocumentType: "docx",
+            remoteDocumentVersion: 12,
+            contentHash: "d".repeat(64),
+          },
+        } as never)),
+        failPublicationExecution: vi.fn(),
+      },
+      publisher: {
+        publish: vi.fn(async () => ({
+          remoteNodeToken: "wikcn_later",
+          remoteDocumentToken: "docx_later",
+          remoteDocumentType: "docx" as const,
+          remoteDocumentVersion: 13,
+          managedBodyBlockId: "blk_later",
+          contentHash: "e".repeat(64),
+          permissionCheckSummary: "feishu_write_access_verified",
+        })),
+      },
+      managedPages,
+      agentExecutionObserver: { observe },
+      runtimeSnapshot: () => ({
+        globalEnabled: true,
+        disabledGroupIds: [],
+        capabilities: { writeKnowledgeBase: true },
+      }),
+      workerId: "publication-worker-1",
+      now: () => at,
+    });
+
+    await expect(executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "published",
+      proposalId: proposal.id,
+      code: "publication_succeeded",
+    }]);
+    expect(managedPages.registerPublication).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({
+      decisionReason: "managed_registration_identity_mismatch",
+    }));
+    expect(JSON.stringify(observe.mock.calls)).not.toMatch(/wikcn_|docx_|blk_/u);
   });
 
   it("marks a claimed execution failed when publishing is rejected before completion", async () => {
@@ -246,6 +391,7 @@ describe("KnowledgePublicationExecutor", () => {
   it("keeps a successful publication result when execution observation fails", async () => {
     const proposal = actionProposal();
     const claim = publicationClaim({ proposal });
+    const managedPages = { registerPublication: vi.fn() };
     const executor = createKnowledgePublicationExecutor({
       repository: {
         listProposals: vi.fn(async () => [proposal]),
@@ -265,6 +411,7 @@ describe("KnowledgePublicationExecutor", () => {
           permissionCheckSummary: "feishu_write_access_verified",
         })),
       },
+      managedPages,
       agentExecutionObserver: {
         observe: vi.fn(async () => {
           throw new Error("ledger unavailable");
@@ -284,6 +431,60 @@ describe("KnowledgePublicationExecutor", () => {
       proposalId: proposal.id,
       code: "publication_succeeded",
     }]);
+    expect(managedPages.registerPublication).not.toHaveBeenCalled();
+  });
+
+  it("does not let an approved update proposal consume the publication batch limit", async () => {
+    const publicationProposal = actionProposal();
+    const updateProposal = {
+      ...actionProposal(),
+      id: "proposal-update",
+      actionType: "update_knowledge_publication" as const,
+    };
+    const approved = [updateProposal, publicationProposal];
+    const claim = publicationClaim({ proposal: publicationProposal });
+    const repository = {
+      listProposals: vi.fn(async (input: {
+        statuses?: string[];
+        actionTypes?: string[];
+        limit: number;
+      }) => approved
+        .filter((proposal) => input.actionTypes?.includes(proposal.actionType) ?? true)
+        .slice(0, input.limit)),
+      claimApprovedPublicationExecution: vi.fn(async (input: { proposalId: string }) => {
+        if (input.proposalId !== publicationProposal.id) throw new Error("wrong action type");
+        return claim;
+      }),
+      completePublicationExecution: vi.fn(),
+      failPublicationExecution: vi.fn(async () => ({
+        outcome: "applied" as const,
+        proposal: claim.proposal,
+        execution: { ...claim.execution, state: "failed" as const, version: 2 },
+      })),
+    };
+    const executor = createKnowledgePublicationExecutor({
+      repository,
+      publisher: { publish: vi.fn(async () => { throw new Error("stop after claim"); }) },
+      runtimeSnapshot: () => ({
+        globalEnabled: true,
+        disabledGroupIds: [],
+        capabilities: { writeKnowledgeBase: true },
+      }),
+      workerId: "publication-worker-1",
+      now: () => at,
+    });
+
+    await expect(executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "failed",
+      proposalId: publicationProposal.id,
+      code: "publisher_failed",
+    }]);
+    expect(repository.claimApprovedPublicationExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ proposalId: publicationProposal.id }),
+    );
+    expect(repository.claimApprovedPublicationExecution).not.toHaveBeenCalledWith(
+      expect.objectContaining({ proposalId: updateProposal.id }),
+    );
   });
 
   it("does not claim or publish while knowledge-base writing is disabled", async () => {

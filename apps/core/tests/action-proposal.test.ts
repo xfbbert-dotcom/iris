@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACTION_APPROVAL_REQUIREMENT_KINDS,
   ACTION_PROPOSAL_ACTION_TYPE,
+  ACTION_PROPOSAL_ACTION_TYPES,
   ACTION_PROPOSAL_STATUSES,
   ACTION_ROLE_GRANT_TYPES,
   ActionProposalValidationError,
@@ -12,6 +13,10 @@ import {
 describe("action proposal contracts", () => {
   it("publishes the bounded Phase 5B-2A enums", () => {
     expect(ACTION_PROPOSAL_ACTION_TYPE).toBe("publish_knowledge_draft");
+    expect(ACTION_PROPOSAL_ACTION_TYPES).toEqual([
+      "publish_knowledge_draft",
+      "update_knowledge_publication",
+    ]);
     expect(ACTION_PROPOSAL_STATUSES).toEqual([
       "pending_approval",
       "approved",
@@ -55,6 +60,38 @@ describe("action proposal contracts", () => {
         sourceId: "presentation-1",
       },
     }]);
+  });
+
+  it("requires an explicit OAuth-reviewable owner approval for a low-risk managed update", () => {
+    expect(buildApprovalRequirementSnapshot({
+      actionType: "update_knowledge_publication",
+      sourceGroupId: "oc_group",
+      riskLevel: "low",
+      reviewer: { type: "feishu_user", ref: "ou_owner" },
+      groupConfirmation: {
+        actorOpenId: "ou_member",
+        presentationId: "presentation-1",
+      },
+      targetPolicy: { id: "policy-1", version: 4 },
+    }).map(({ kind, roleRefType, roleRef, satisfiedBy }) => ({
+      kind,
+      roleRefType,
+      roleRef,
+      satisfied: satisfiedBy !== undefined,
+    }))).toEqual([
+      {
+        kind: "group_confirmation",
+        roleRefType: "source_group",
+        roleRef: "oc_group",
+        satisfied: true,
+      },
+      {
+        kind: "designated_owner",
+        roleRefType: "feishu_user",
+        roleRef: "ou_owner",
+        satisfied: false,
+      },
+    ]);
   });
 
   it("builds the exact medium-risk requirement snapshot", () => {
