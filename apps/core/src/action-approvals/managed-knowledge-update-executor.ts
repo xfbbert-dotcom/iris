@@ -155,16 +155,8 @@ async function executeClaim(input: {
   if (bindingFailure !== undefined) {
     return persistPreflightFailure(input, bindingFailure);
   }
-  let permissionAllowed: boolean;
-  try {
-    permissionAllowed = await input.permissionVerifier.verify({
-      documentSourceId: input.claim.target.linkedDocumentSourceId,
-      authorizationGroupId: input.claim.target.authorizationGroupId,
-    });
-  } catch {
-    return persistPermissionFailure(input, "permission_unavailable");
-  }
-  if (!permissionAllowed) return persistPermissionFailure(input, "permission_denied");
+  const permissionFailure = await livePermissionFailure(input);
+  if (permissionFailure !== undefined) return persistPermissionFailure(input, permissionFailure);
   let preflight: ManagedKnowledgeBlockObservation;
   try {
     preflight = await input.updater.preflight(remoteIdentity(input.claim));
@@ -288,6 +280,29 @@ async function handleExplicitTransient(
       code: "human_edit_or_unexpected_readback",
     };
   }
+  const permissionFailure = await livePermissionFailure(input);
+  if (permissionFailure !== undefined) {
+    const failed = await persistOutcome(input, {
+      expectedExecutionVersion: uncertain.execution.version,
+      classification: "failed",
+      pageDisposition: "blocked",
+      responseClassification: permissionFailure,
+      reconciliationReasonCode: permissionFailure,
+      operationPrefix: "managed-update-retry-permission-failed",
+    });
+    await observe(
+      input,
+      failed.execution.version,
+      "action_execution_failed",
+      permissionFailure,
+    );
+    return {
+      status: "failed",
+      proposalId: input.claim.proposal.id,
+      executionId: input.claim.execution.id,
+      code: permissionFailure,
+    };
+  }
   let retry;
   try {
     const retryAt = requireDate(input.now());
@@ -339,6 +354,28 @@ async function handleExplicitTransient(
     proposalId: input.claim.proposal.id,
     executionId: input.claim.execution.id,
     code: retryCode,
+  };
+}
+
+async function livePermissionFailure(
+  input: Parameters<typeof executeClaim>[0],
+): Promise<"permission_denied" | "permission_unavailable" | undefined> {
+  try {
+    const allowed = await input.permissionVerifier.verify(permissionInput(input.claim));
+    return allowed ? undefined : "permission_denied";
+  } catch {
+    return "permission_unavailable";
+  }
+}
+
+function permissionInput(claim: ClaimedManagedKnowledgeUpdate) {
+  return {
+    managedPageId: claim.page.id,
+    documentSourceId: claim.target.linkedDocumentSourceId,
+    authorizationGroupId: claim.target.authorizationGroupId,
+    remoteNodeToken: claim.page.remoteNodeToken,
+    remoteDocumentToken: claim.target.remoteDocumentToken,
+    managedBodyBlockId: claim.target.managedBodyBlockId,
   };
 }
 

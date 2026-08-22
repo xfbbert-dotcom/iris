@@ -419,14 +419,22 @@ async function livePermissionFailure(
   input: Parameters<typeof reconcileManagedKnowledgeUpdate>[0],
 ): Promise<"permission_denied" | "permission_unavailable" | undefined> {
   try {
-    const allowed = await input.permissionVerifier.verify({
-      documentSourceId: input.claim.target.linkedDocumentSourceId,
-      authorizationGroupId: input.claim.target.authorizationGroupId,
-    });
+    const allowed = await input.permissionVerifier.verify(permissionInput(input.claim));
     return allowed ? undefined : "permission_denied";
   } catch {
     return "permission_unavailable";
   }
+}
+
+function permissionInput(claim: ClaimedManagedKnowledgeUpdate) {
+  return {
+    managedPageId: claim.page.id,
+    documentSourceId: claim.target.linkedDocumentSourceId,
+    authorizationGroupId: claim.target.authorizationGroupId,
+    remoteNodeToken: claim.page.remoteNodeToken,
+    remoteDocumentToken: claim.target.remoteDocumentToken,
+    managedBodyBlockId: claim.target.managedBodyBlockId,
+  };
 }
 
 async function requireReconciliation(

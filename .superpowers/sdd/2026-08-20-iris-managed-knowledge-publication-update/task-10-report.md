@@ -237,13 +237,15 @@ performed. The live pilot remains **not yet run / controlled Feishu acceptance p
   and a readable/synced source. Search eligibility, permission verification, and the atomic send
   transaction all require citations to the still-current reconciled snapshot, so a prepared answer
   from an older snapshot cannot pass after later reactivation.
-- **Coherent managed observation:** Feishu raw fetches now carry the remote revision as
-  `sourceVersion`. A managed observation is recorded only when that revision equals the managed
-  block revision and the canonical full-body snapshot equals the managed block body. Missing,
-  changing, or mismatched revision/body facts fail closed for managed observation while preserving
-  ordinary snapshot sync.
+- **Coherent managed observation:** authorized Wiki fetches now bracket raw-content retrieval with
+  document-metadata revision reads and emit `sourceVersion` only when both positive revisions are
+  equal. A managed observation is recorded only when that revision equals the managed block
+  revision and the canonical full-body snapshot equals the managed block body. Missing, changing,
+  or mismatched revision/body facts fail closed for managed observation while preserving ordinary
+  snapshot sync.
 - **Permission revalidation:** durable claim and reactivation gates require `readable`, never
-  `unknown`. Both the update executor and uncertainty reconciler perform a live, group-scoped
+  `unknown`. Both the update executor and uncertainty reconciler bind the current durable page,
+  authorization group, source, Wiki/document identity, and managed block, then perform a live
   Feishu permission preflight immediately before every remote mutation. Denied or unavailable live
   proof blocks mutation; the existing write-policy, capability, authorization-group, and approval
   bindings remain exact.
@@ -292,3 +294,60 @@ During the final gate, the backup test briefly exposed an untracked
 `.tmp-iris-backup-test-L1FPGz` directory. At gate completion, a literal-path check found it already
 absent, an exact top-level scan found zero `.tmp-iris-backup-test-*` entries, and `git status` did not
 list it. No temporary backup artifact is included in the commit.
+
+## Review Blocker Closure — Revision Coherence and Exact Permission Binding
+
+### Changes
+
+- Replaced reliance on the undocumented raw-content `revision_id` field. Authorized Wiki fetches
+  read the documented document metadata before and after raw content and emit `sourceVersion` only
+  when both reads return the same positive safe-integer revision. Metadata failure or revision drift
+  omits the version while preserving the ordinary snapshot body; the managed observer therefore
+  refuses an incoherent managed observation without disabling ordinary document sync.
+- Added a dedicated exact-permission capability. The managed mutation verifier now reloads and
+  binds the durable page ID, authorization group, linked source, Wiki node, document token, and
+  managed block before probing Feishu. Wiki locators must match the durable node and resolve live to
+  the durable document; exact Docx locators must match the durable document token while the page's
+  Wiki node remains independently bound by the durable page tuple.
+- The executor now repeats that exact permission check after an explicit-transient exact-old-state
+  readback and before claiming its one same-client-token retry. Denied or unavailable proof records
+  `failed` plus a `blocked` page and sends no second mutation. The uncertainty reconciler uses the
+  same exact verifier for stale claims and safe retries.
+- Runtime composition supplies the shared managed-page repository to the verifier. The general
+  read-only permission interface remains separate from the exact managed-mutation interface, so
+  unrelated answer and conflict paths retain their narrower dependency.
+
+### RED, review, and focused evidence
+
+- Revision-coherence RED cases failed when raw-content revision data was trusted and when metadata
+  was not bracketed; the final fetcher/observer focused suite passed, including stable, changed, and
+  unavailable-first-metadata cases.
+- Exact-binding/retry RED cases produced 13 expected failures across the checker, verifier, and
+  executor before implementation. The first independent review then found a direct-Docx regression;
+  its isolated RED test failed because the exact checker rejected a correct document token whenever
+  the durable page also had a Wiki node. The direct branch now compares only the exact document token
+  while the verifier separately binds the page node.
+- After that review fix, the seven directly related test files passed 113/113. The independent final
+  review found no remaining C/D release blocker and made no file changes.
+
+### Final verification
+
+The post-review `npm run verify` completed with terminal exit 0:
+
+| Gate | Result |
+| --- | --- |
+| `git diff --check` | PASS (line-ending warnings only) |
+| TypeScript typecheck | PASS |
+| Build | PASS |
+| Core Vitest | PASS — 201 files passed / 3 skipped; 3,714 tests passed / 288 skipped |
+| Python pytest | PASS — 181 passed |
+| Pilot/static Node tests | PASS — 174 passed / 1 skipped |
+| Compose and pilot configuration | PASS |
+| Readiness | PASS — 19/19 checks |
+
+Configured-PostgreSQL tests remain skipped because no configured test database URL was present, and
+the executable Caddy boundary probe remains the single pilot skip because the Docker daemon was
+unavailable. No live Feishu request or mutation, deployment, runtime enablement, push, or merge was
+performed. Controlled Feishu acceptance remains pending. A possible Wiki node remap during one
+ingestion fetch is recorded as non-blocking follow-up risk; exact mutation permission is re-resolved
+and fail-closed immediately before writes.

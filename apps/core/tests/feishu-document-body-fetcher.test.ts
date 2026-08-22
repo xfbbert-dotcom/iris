@@ -83,7 +83,7 @@ describe("FeishuDocumentBodyFetcher", () => {
     ).toBeUndefined();
   });
 
-  it("fetches raw content for docx document sources", async () => {
+  it("does not trust an undocumented raw-content revision for docx sources", async () => {
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
     const fetch = vi.fn(async () => jsonResponse({
       code: 0,
@@ -98,7 +98,6 @@ describe("FeishuDocumentBodyFetcher", () => {
 
     await expect(fetcher.fetch(source())).resolves.toEqual({
       bodyText: "Doc body",
-      sourceVersion: "12",
       fetchedAt: new Date("2026-07-03T03:00:00.000Z"),
     });
     expect(tokenProvider.getTenantAccessToken).toHaveBeenCalledOnce();
@@ -148,7 +147,7 @@ describe("FeishuDocumentBodyFetcher", () => {
     );
   });
 
-  it("resolves Feishu wiki document nodes before fetching raw content", async () => {
+  it("brackets Wiki raw content with one stable document revision", async () => {
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
     const fetch = vi
       .fn()
@@ -158,7 +157,15 @@ describe("FeishuDocumentBodyFetcher", () => {
           data: { node: { obj_token: "doc_token_from_wiki", obj_type: "docx" } },
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { content: "Wiki doc body" } }));
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { document: { revision_id: 12 } },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { content: "Wiki doc body" } }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { document: { revision_id: 12 } },
+      }));
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn/",
       tokenProvider,
@@ -178,6 +185,7 @@ describe("FeishuDocumentBodyFetcher", () => {
       ),
     ).resolves.toEqual({
       bodyText: "Wiki doc body",
+      sourceVersion: "12",
       fetchedAt: new Date("2026-07-03T03:30:00.000Z"),
     });
     expect(tokenProvider.getTenantAccessToken).toHaveBeenCalledOnce();
@@ -192,6 +200,15 @@ describe("FeishuDocumentBodyFetcher", () => {
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
+      "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_from_wiki",
+      expect.objectContaining({
+        method: "GET",
+        headers: { authorization: "Bearer tenant-token" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
       "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_from_wiki/raw_content",
       expect.objectContaining({
         method: "GET",
@@ -199,6 +216,87 @@ describe("FeishuDocumentBodyFetcher", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_from_wiki",
+      expect.objectContaining({
+        method: "GET",
+        headers: { authorization: "Bearer tenant-token" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("keeps ordinary Wiki content but omits sourceVersion when the bracket revision changes", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { node: { obj_token: "doc_token_from_wiki", obj_type: "docx" } },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { document: { revision_id: 12 } },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { content: "Wiki doc body" } }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { document: { revision_id: 13 } },
+      }));
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+      now: () => new Date("2026-07-03T03:31:00.000Z"),
+    });
+
+    await expect(fetcher.fetch(source({
+      sourceType: "authorized_wiki_document",
+      sourceUri: "https://acme.feishu.cn/wiki/wiki_token_1",
+      originGroupId: undefined,
+      originMessageId: undefined,
+      authorizedSpaceId: "space-1",
+    }))).resolves.toEqual({
+      bodyText: "Wiki doc body",
+      fetchedAt: new Date("2026-07-03T03:31:00.000Z"),
+    });
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("still closes the revision bracket when the first metadata read is unavailable", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { node: { obj_token: "doc_token_from_wiki", obj_type: "docx" } },
+      }))
+      .mockResolvedValueOnce(jsonResponse(
+        { code: 999, msg: "unavailable" },
+        { ok: false, status: 503 },
+      ))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { content: "Wiki doc body" } }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { document: { revision_id: 12 } },
+      }));
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+      now: () => new Date("2026-07-03T03:32:00.000Z"),
+    });
+
+    await expect(fetcher.fetch(source({
+      sourceType: "authorized_wiki_document",
+      sourceUri: "https://acme.feishu.cn/wiki/wiki_token_1",
+      originGroupId: undefined,
+      originMessageId: undefined,
+      authorizedSpaceId: "space-1",
+    }))).resolves.toEqual({
+      bodyText: "Wiki doc body",
+      fetchedAt: new Date("2026-07-03T03:32:00.000Z"),
+    });
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
 
   it("times out raw content requests", async () => {

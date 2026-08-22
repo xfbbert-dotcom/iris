@@ -287,6 +287,7 @@ export function createActionApprovalRuntime({
         tokenProvider,
       });
       const permissionVerifier = createMutationPermissionVerifier({
+        managedPages,
         documentSources,
         permissionChecker,
       });

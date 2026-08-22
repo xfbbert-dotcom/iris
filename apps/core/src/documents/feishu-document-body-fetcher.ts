@@ -18,6 +18,7 @@ const DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
 const RAW_CONTENT_RESPONSE_OVERHEAD_BYTES = 4096;
 const WIKI_NODE_RESPONSE_MAX_BYTES = 65_536;
+const DOCUMENT_METADATA_RESPONSE_MAX_BYTES = 65_536;
 export const MAX_FEISHU_DOCUMENT_TOKEN_CHARS = 512;
 const invalidFeishuDocumentTokenPattern = /,|%/u;
 
@@ -125,6 +126,17 @@ export function createFeishuDocumentBodyFetcher({
         });
       }
 
+      const shouldBracketRevision = source.sourceType === "authorized_wiki_document";
+      const revisionBefore = shouldBracketRevision
+        ? await tryFetchDocumentRevision({
+            baseUrl,
+            documentId,
+            tenantAccessToken,
+            fetch,
+            timeoutMs: safeTimeoutMs,
+          })
+        : undefined;
+
       const { response, responseBody } = await fetchJsonWithTimeout({
         fetch,
         url: `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
@@ -151,16 +163,69 @@ export function createFeishuDocumentBodyFetcher({
         );
       }
 
-      const rawContent = readRawContent(responseBody, safeMaxContentChars);
+      const bodyText = readRawContent(responseBody, safeMaxContentChars);
+      const revisionAfter = shouldBracketRevision
+        ? await tryFetchDocumentRevision({
+            baseUrl,
+            documentId,
+            tenantAccessToken,
+            fetch,
+            timeoutMs: safeTimeoutMs,
+          })
+        : undefined;
+      const sourceVersion = revisionBefore !== undefined && revisionAfter === revisionBefore
+        ? String(revisionBefore)
+        : undefined;
       return {
-        bodyText: rawContent.bodyText,
-        ...(rawContent.sourceVersion === undefined
-          ? {}
-          : { sourceVersion: rawContent.sourceVersion }),
+        bodyText,
+        ...(sourceVersion === undefined ? {} : { sourceVersion }),
         fetchedAt: now(),
       };
     },
   };
+}
+
+async function tryFetchDocumentRevision({
+  baseUrl,
+  documentId,
+  tenantAccessToken,
+  fetch,
+  timeoutMs,
+}: {
+  baseUrl: string;
+  documentId: string;
+  tenantAccessToken: string;
+  fetch: typeof globalThis.fetch;
+  timeoutMs: number;
+}): Promise<number | undefined> {
+  try {
+    const { response, responseBody } = await fetchJsonWithTimeout({
+      fetch,
+      url: `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
+        documentId,
+      )}`,
+      init: {
+        method: "GET",
+        headers: { authorization: `Bearer ${tenantAccessToken}` },
+      },
+      timeoutMs,
+      timeoutMessage: "Feishu document metadata request timed out",
+      jsonErrorMessage: "Feishu document metadata response was not valid JSON",
+      maxResponseBytes: DOCUMENT_METADATA_RESPONSE_MAX_BYTES,
+      responseSizeErrorMessage:
+        `Feishu document metadata response exceeds ${DOCUMENT_METADATA_RESPONSE_MAX_BYTES} bytes`,
+    });
+    if (!response.ok || !isRecord(responseBody) || responseBody.code !== 0 ||
+      !isRecord(responseBody.data) || !isRecord(responseBody.data.document)) {
+      return undefined;
+    }
+    const revision = responseBody.data.document.revision_id;
+    return typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
+      ? revision
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function fetchWikiDocumentId({
@@ -333,7 +398,7 @@ function normalizeFeishuDocumentToken(value: unknown): string | undefined {
 function readRawContent(
   responseBody: unknown,
   maxContentChars: number,
-): { bodyText: string; sourceVersion?: string } {
+): string {
   if (!isRecord(responseBody)) {
     throw new Error("Feishu document raw content response did not include content");
   }
@@ -362,14 +427,7 @@ function readRawContent(
     throw new Error(`Feishu document raw content exceeds ${maxContentChars} characters`);
   }
 
-  const revision = responseBody.data.revision_id;
-  const sourceVersion = typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
-    ? String(revision)
-    : typeof revision === "string" && /^[1-9][0-9]*$/u.test(revision) &&
-        Number.isSafeInteger(Number(revision))
-      ? revision
-      : undefined;
-  return { bodyText, ...(sourceVersion === undefined ? {} : { sourceVersion }) };
+  return bodyText;
 }
 
 function trimTrailingSlash(value: string): string {

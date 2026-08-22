@@ -60,6 +60,92 @@ describe("createFeishuDocumentPermissionChecker", () => {
     );
   });
 
+  it("allows an exact Wiki source only when the live node resolves to the expected document", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          code: 0,
+          data: { node: { obj_type: "docx", obj_token: "doccnExpected" } },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { document: { title: "Wiki" } } }));
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(checker.canReadExactSource({
+      source: source({ sourceUri: "https://example.feishu.cn/wiki/wikcnExpected" }),
+      remoteWikiNodeToken: "wikcnExpected",
+      remoteDocumentToken: "doccnExpected",
+    })).resolves.toBe(true);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an exact Wiki source when its live node resolves to another document", async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      code: 0,
+      data: { node: { obj_type: "docx", obj_token: "doccnDifferent" } },
+    }));
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(checker.canReadExactSource({
+      source: source({ sourceUri: "https://example.feishu.cn/wiki/wikcnExpected" }),
+      remoteWikiNodeToken: "wikcnExpected",
+      remoteDocumentToken: "doccnExpected",
+    })).resolves.toBe(false);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an exact Wiki source whose registered locator is another node", async () => {
+    const fetch = vi.fn();
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider,
+      fetch,
+    });
+
+    await expect(checker.canReadExactSource({
+      source: source({ sourceUri: "https://example.feishu.cn/wiki/wikcnDifferent" }),
+      remoteWikiNodeToken: "wikcnExpected",
+      remoteDocumentToken: "doccnExpected",
+    })).resolves.toBe(false);
+
+    expect(tokenProvider.getTenantAccessToken).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("allows an exact direct Docx source while the durable page node is bound separately", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({ code: 0, data: { document: { title: "Direct" } } }),
+    );
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(checker.canReadExactSource({
+      source: source({ sourceUri: "https://example.feishu.cn/docx/doccnDirectToken" }),
+      remoteWikiNodeToken: "wikcnDurablePage",
+      remoteDocumentToken: "doccnDirectToken",
+    })).resolves.toBe(true);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/docx/v1/documents/doccnDirectToken",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
   it("serializes and spaces distinct live permission probes below Feishu wiki limits", async () => {
     let nowMs = 0;
     let activeFetches = 0;

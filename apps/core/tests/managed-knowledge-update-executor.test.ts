@@ -96,8 +96,12 @@ describe("ManagedKnowledgeUpdateExecutor", () => {
         code,
       }]);
     expect(dependencies.permissionVerifier.verify).toHaveBeenCalledWith({
+      managedPageId: "managed-1",
       documentSourceId: "source-1",
       authorizationGroupId: "group-1",
+      remoteNodeToken: "node-1",
+      remoteDocumentToken: "docx-1",
+      managedBodyBlockId: "blk_body",
     });
     expect(dependencies.updater.preflight).not.toHaveBeenCalled();
     expect(dependencies.updater.update).not.toHaveBeenCalled();
@@ -275,11 +279,57 @@ describe("ManagedKnowledgeUpdateExecutor", () => {
     }]);
 
     expect(dependencies.managedPages.claimRemoteRetry).toHaveBeenCalledOnce();
+    expect(dependencies.permissionVerifier.verify).toHaveBeenCalledTimes(2);
     expect(dependencies.updater.update).toHaveBeenCalledTimes(2);
     expect(dependencies.updater.update.mock.calls.map(([input]) => input.clientToken)).toEqual([
       "9d8f9c68-9d9a-5f1c-9f5b-d4fa75c9d4ef",
       "9d8f9c68-9d9a-5f1c-9f5b-d4fa75c9d4ef",
     ]);
+  });
+
+  it.each([
+    [false, "permission_denied"],
+    [undefined, "permission_unavailable"],
+  ] as const)("blocks an explicit transient retry when the fresh permission result is %s", async (
+    allowed,
+    code,
+  ) => {
+    const dependencies = executorDependencies();
+    dependencies.updater.update.mockResolvedValueOnce({
+      kind: "not_applied_retryable",
+      code: "rate_limited",
+    });
+    dependencies.updater.readBack.mockResolvedValue({
+      revision: 12,
+      blockType: "text",
+      canonicalBodyHash: oldHash,
+    });
+    dependencies.permissionVerifier.verify
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(async () => {
+        if (allowed === undefined) throw new Error("permission probe unavailable");
+        return allowed;
+      });
+
+    await expect(createManagedKnowledgeUpdateExecutor(dependencies).processBatch({ limit: 1 }))
+      .resolves.toEqual([{
+        status: "failed",
+        proposalId: "proposal-1",
+        executionId: "execution-1",
+        code,
+      }]);
+
+    expect(dependencies.permissionVerifier.verify).toHaveBeenCalledTimes(2);
+    expect(dependencies.managedPages.claimRemoteRetry).not.toHaveBeenCalled();
+    expect(dependencies.updater.update).toHaveBeenCalledOnce();
+    expect(dependencies.managedPages.recordRemoteOutcome).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        expectedExecutionVersion: 3,
+        classification: "failed",
+        pageDisposition: "blocked",
+        responseClassification: code,
+      }),
+    );
   });
 
   it.each([

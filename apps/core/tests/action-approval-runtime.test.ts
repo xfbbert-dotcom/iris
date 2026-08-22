@@ -189,6 +189,7 @@ describe("ActionApprovalRuntime", () => {
       syncQueue,
     }));
     expect(dependencies.createManagedMutationPermissionVerifier).toHaveBeenCalledWith({
+      managedPages: dependencies.managedPageRepository,
       documentSources: dependencies.documentSourceRegistry,
       permissionChecker: dependencies.documentPermissionChecker,
     });
@@ -429,7 +430,10 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     getSnapshot: vi.fn(() => ({ running: true, intervalMs: 2_000, batchLimit: 7 })),
   };
   const documentSourceRegistry = { findSourceById: vi.fn() };
-  const documentPermissionChecker = { canReadSource: vi.fn() };
+  const documentPermissionChecker = {
+    canReadSource: vi.fn(),
+    canReadExactSource: vi.fn(),
+  };
   const managedMutationPermissionVerifier = { verify: vi.fn() };
   const dependencies = {
     createPostgresPool: vi.fn(() => pool),
