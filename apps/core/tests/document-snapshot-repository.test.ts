@@ -777,12 +777,12 @@ values ($1, 'group_visible_document', $2, 'Whitespace snapshot source', 'group-1
       await insertMissingProfileSnapshotFixture({
         client,
         documentSourceId: managedSourceId,
-        fetchedAt: new Date("2026-08-20T00:00:00.000Z"),
+        fetchedAt: new Date("1900-01-01T00:00:00.000Z"),
       });
       await insertMissingProfileSnapshotFixture({
         client,
         documentSourceId: unmanagedSourceId,
-        fetchedAt: new Date("2026-08-20T00:01:00.000Z"),
+        fetchedAt: new Date("1900-01-01T00:01:00.000Z"),
       });
       await insertManagedKnowledgePageFixture({
         queryable: client,
@@ -818,12 +818,12 @@ values ($1, 'group_visible_document', $2, 'Whitespace snapshot source', 'group-1
       await insertMissingProfileSnapshotFixture({
         client,
         documentSourceId: activeSourceId,
-        fetchedAt: new Date("2026-08-20T00:00:00.000Z"),
+        fetchedAt: new Date("1900-01-01T00:00:00.000Z"),
       });
       await insertMissingProfileSnapshotFixture({
         client,
         documentSourceId: unmanagedSourceId,
-        fetchedAt: new Date("2026-08-20T00:01:00.000Z"),
+        fetchedAt: new Date("1900-01-01T00:01:00.000Z"),
       });
       await insertManagedKnowledgePageFixture({
         queryable: client,
