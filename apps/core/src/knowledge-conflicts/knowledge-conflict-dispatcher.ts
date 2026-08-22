@@ -70,7 +70,7 @@ export type KnowledgeConflictDispatcherDependencies = {
   >;
   currentValidator: KnowledgeConflictCurrentValidator;
   documentSources: { findSourceById(id: string): Promise<DocumentSource | undefined> };
-  managedPages: Pick<ManagedKnowledgePageRepository, "findEligiblePageForConflict">;
+  managedPages: Pick<ManagedKnowledgePageRepository, "findPageForConflict">;
   cardClient: Pick<FeishuInteractiveCardClient, "sendCard">;
   renderer?: (input: KnowledgeConflictCardRenderInput) => KnowledgeConflictCardRenderResult;
   readDeliveryGates(groupId: string): KnowledgeConflictDeliveryGates;
@@ -182,7 +182,7 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<KnowledgeConfli
 
   let managedPage: ManagedKnowledgePage | undefined;
   try {
-    managedPage = await input.managedPages.findEligiblePageForConflict({
+    managedPage = await input.managedPages.findPageForConflict({
       documentSourceId: candidate.targetDocumentSourceId,
       authorizationGroupId: candidate.groupId,
     });

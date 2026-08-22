@@ -44,7 +44,7 @@ describe("KnowledgeConflictDispatcher", () => {
       deliveryId: "delivery-1",
       code: "send_succeeded",
     }]);
-    expect(harness.managedPages.findEligiblePageForConflict).toHaveBeenCalledWith({
+    expect(harness.managedPages.findPageForConflict).toHaveBeenCalledWith({
       documentSourceId: "source-1",
       authorizationGroupId: "oc_group",
     });
@@ -70,6 +70,7 @@ describe("KnowledgeConflictDispatcher", () => {
 
   it.each([
     ["resolver failure", async () => { throw new Error("database unavailable"); }],
+    ["ineligible existing page", async () => managedPage({ state: "blocked" })],
     ["indeterminate result", async () => managedPage({ linkedDocumentSourceId: "other-source" })],
   ])("fails closed without sending a misleading card on %s", async (_label, findEligiblePage) => {
     const harness = createHarness({ findEligiblePage });
@@ -518,7 +519,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     sendCard: vi.fn(overrides.send ?? (async () => ({ messageId: "om_conflict" }))),
   };
   const managedPages = {
-    findEligiblePageForConflict: vi.fn(
+    findPageForConflict: vi.fn(
       overrides.findEligiblePage ?? (async () => undefined),
     ),
   };

@@ -129,6 +129,29 @@ describe("managed knowledge page exact remote identity lookup", () => {
       remoteWikiNodeToken: "wiki-node-1",
     })).rejects.toThrow("remote identity is ambiguous");
   });
+
+  it("does not hide an existing ineligible page behind an absent-page result", async () => {
+    const query = vi.fn(async () => ({
+      rows: [{
+        ...pageRow,
+        linked_document_source_id: "source-1",
+        state: "blocked",
+      }],
+      rowCount: 1,
+    }));
+    const repository = createPostgresManagedKnowledgePageRepository({
+      dataSource: { query } as never,
+    });
+
+    await expect(repository.findPageForConflict({
+      documentSourceId: "source-1",
+      authorizationGroupId: "group-1",
+    })).resolves.toMatchObject({ id: "managed-1", state: "blocked" });
+    expect(query).toHaveBeenCalledWith(
+      expect.not.stringMatching(/state\s*=\s*'active'/iu),
+      ["source-1", "group-1"],
+    );
+  });
 });
 
 describe("managed update admin metadata projection", () => {

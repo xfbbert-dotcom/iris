@@ -268,7 +268,7 @@ describe("KnowledgeConflictInteractionWorker", () => {
       status: "applied",
       code: "draft_created",
     });
-    expect(harness.managedPages.findEligiblePageForConflict).toHaveBeenCalledWith({
+    expect(harness.managedPages.findPageForConflict).toHaveBeenCalledWith({
       documentSourceId: "source-1",
       authorizationGroupId: "oc_group",
     });
@@ -300,13 +300,30 @@ describe("KnowledgeConflictInteractionWorker", () => {
       status: "applied",
       code: "draft_created",
     });
-    expect(harness.managedPages.findEligiblePageForConflict).toHaveBeenCalledOnce();
+    expect(harness.managedPages.findPageForConflict).toHaveBeenCalledOnce();
     expect(harness.drafts.createDraft.mock.calls[0]?.[0]).not.toHaveProperty("managedUpdateTarget");
+  });
+
+  it.each([
+    "updating",
+    "resync_required",
+    "reconciliation_required",
+    "blocked",
+    "retired",
+  ] as const)("does not publish-new when the existing managed page is %s", async (state) => {
+    const harness = createHarness({ managedPage: managedPage({ state }) });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "retryable",
+      code: "repository_unavailable",
+    });
+    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
   });
 
   it("retries managed-target resolution failures without creating an unbound draft", async () => {
     const harness = createHarness({
-      findEligiblePageForConflict: async () => {
+      findPageForConflict: async () => {
         throw new Error("managed resolver permission or database failure");
       },
     });
@@ -720,7 +737,7 @@ type HarnessOverrides = {
   listTargetPolicies?: (...args: any[]) => Promise<PublicationTargetPolicy[]>;
   getTargetPolicy?: (...args: any[]) => Promise<PublicationTargetPolicy | undefined>;
   managedPage?: ManagedKnowledgePage;
-  findEligiblePageForConflict?: (...args: any[]) => Promise<ManagedKnowledgePage | undefined>;
+  findPageForConflict?: (...args: any[]) => Promise<ManagedKnowledgePage | undefined>;
   validate?: (...args: any[]) => Promise<Validation>;
   canProcessKnowledgeConflicts?: (groupId: string) => boolean;
   isCurrentMember?: () => Promise<boolean>;
@@ -778,7 +795,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     getTargetPolicy: vi.fn(overrides.getTargetPolicy ?? (async () => policy())),
   };
   const managedPages = {
-    findEligiblePageForConflict: vi.fn(overrides.findEligiblePageForConflict ??
+    findPageForConflict: vi.fn(overrides.findPageForConflict ??
       (async () => overrides.managedPage)),
   };
   const cardRuntime = {

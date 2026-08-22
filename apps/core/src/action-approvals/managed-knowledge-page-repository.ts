@@ -25,7 +25,7 @@ export type RegisterManagedPublicationInput = {
   at: Date;
 };
 
-export type EligibleManagedPageForConflictInput = {
+export type ManagedPageForConflictInput = {
   documentSourceId: string;
   authorizationGroupId: string;
 };
@@ -217,7 +217,7 @@ export type ManagedExecutionMutationResult = {
 export interface ManagedKnowledgePageRepository {
   registerPublication(input: RegisterManagedPublicationInput): Promise<ManagedPageMutationResult>;
   findByRemoteIdentity(input: FindManagedPageByRemoteIdentityInput): Promise<ManagedKnowledgePage | undefined>;
-  findEligiblePageForConflict(input: EligibleManagedPageForConflictInput): Promise<ManagedKnowledgePage | undefined>;
+  findPageForConflict(input: ManagedPageForConflictInput): Promise<ManagedKnowledgePage | undefined>;
   linkSource(input: LinkManagedPageSourceInput): Promise<ManagedPageMutationResult>;
   recordSnapshotObservation(input: RecordManagedSnapshotObservationInput): Promise<ManagedSnapshotObservationResult>;
   bindConflictDraft(input: BindManagedUpdateTargetInput): Promise<ManagedTargetMutationResult>;

@@ -20,7 +20,7 @@ import type {
   ClaimManagedUpdateInput,
   ClaimedManagedKnowledgeUpdate,
   CompleteManagedResyncInput,
-  EligibleManagedPageForConflictInput,
+  ManagedPageForConflictInput,
   FindManagedPageByRemoteIdentityInput,
   LinkManagedPageSourceInput,
   MarkManagedRemoteRequestDispatchedInput,
@@ -71,7 +71,7 @@ export function createPostgresManagedKnowledgePageRepository({
   return {
     registerPublication: (input) => registerPublication(dataSource, input),
     findByRemoteIdentity: (input) => findByRemoteIdentity(dataSource, input),
-    findEligiblePageForConflict: (input) => findEligiblePageForConflict(dataSource, input),
+    findPageForConflict: (input) => findPageForConflict(dataSource, input),
     linkSource: (input) => linkSource(dataSource, input),
     recordSnapshotObservation: (input) => recordSnapshotObservation(dataSource, input),
     bindConflictDraft: (input) => bindConflictDraft(dataSource, input),
@@ -171,12 +171,12 @@ async function registerPublication(
   });
 }
 
-async function findEligiblePageForConflict(
+async function findPageForConflict(
   dataSource: PostgresKnowledgeDraftDataSource,
-  input: EligibleManagedPageForConflictInput,
+  input: ManagedPageForConflictInput,
 ): Promise<ManagedKnowledgePage | undefined> {
   const result = await dataSource.query<PageRow>(`${pageSelect()} WHERE linked_document_source_id = $1
-    AND authorization_group_id = $2 AND state = 'active'`, [ref("documentSourceId", input.documentSourceId), ref("authorizationGroupId", input.authorizationGroupId)]);
+    AND authorization_group_id = $2`, [ref("documentSourceId", input.documentSourceId), ref("authorizationGroupId", input.authorizationGroupId)]);
   return result.rows[0] === undefined ? undefined : mapPage(result.rows[0]);
 }
 

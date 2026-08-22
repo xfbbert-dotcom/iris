@@ -102,7 +102,7 @@ export type KnowledgeConflictInteractionWorkerDependencies = {
   membershipChecker: FeishuGroupMembershipChecker;
   drafts: Pick<KnowledgeDraftRepository, "getDraft" | "createDraft">;
   publicationTargets: Pick<ActionProposalRepository, "listTargetPolicies" | "getTargetPolicy">;
-  managedPages: Pick<ManagedKnowledgePageRepository, "findEligiblePageForConflict">;
+  managedPages: Pick<ManagedKnowledgePageRepository, "findPageForConflict">;
   cardRuntime: KnowledgeDraftPresentationRuntime;
   canProcessKnowledgeConflicts(groupId: string): boolean;
   botOpenId: string;
@@ -242,7 +242,7 @@ export function createKnowledgeConflictInteractionWorker(
 
       let managedPage: ManagedKnowledgePage | undefined;
       try {
-        managedPage = await dependencies.managedPages.findEligiblePageForConflict({
+        managedPage = await dependencies.managedPages.findPageForConflict({
           documentSourceId: candidate.targetDocumentSourceId,
           authorizationGroupId: candidate.groupId,
         });
