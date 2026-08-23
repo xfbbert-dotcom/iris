@@ -69,6 +69,59 @@ describe("FeishuMentionAnswerResponder", () => {
     }));
   });
 
+  it("routes task drafting when a later clause only negates due dates and reminders", async () => {
+    const taskRequestText =
+      "请起草一个飞书任务草稿：任务标题为“Iris 受治理任务创建真人验收 2026-08-23”；负责人为 @_user_2；描述为“这是一个可安全关闭或删除的测试任务”。不要设置截止时间和提醒，只起草一个任务。";
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "A normal answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const formalTaskDraftCommand = {
+      execute: vi.fn<ChatFormalTaskDraftCommand["execute"]>(async () => ({
+        status: "created",
+        draftId: "formal-task-draft-clause-1",
+        presentationId: "formal-task-presentation-clause-1",
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-task-clause" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      formalTaskDraftCommand,
+      replier,
+    });
+    const observedAt = new Date("2026-08-23T12:00:00.000Z");
+
+    await expect(responder.maybeRespond({
+      messageId: "om_create_task_with_field_negation",
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      senderOpenId: "ou_requester",
+      text: `@_user_1 ${taskRequestText}`,
+      mentions: [
+        { key: "@_user_1", openId: "ou_iris", name: "Iris" },
+        { key: "@_user_2", openId: "ou_assignee", name: "群主" },
+      ],
+      observedAt,
+    })).resolves.toEqual({ status: "replied", replyMessageId: "reply-task-clause" });
+
+    expect(formalTaskDraftCommand.execute).toHaveBeenCalledWith({
+      messageId: "om_create_task_with_field_negation",
+      chatId: "oc_pilot",
+      requesterOpenId: "ou_requester",
+      requestText: taskRequestText,
+      assigneeOpenIds: ["ou_assignee"],
+      observedAt,
+    });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
   it.each([
     "@_user_1 飞书任务是什么？",
     "@_user_1 不要创建任务草稿",

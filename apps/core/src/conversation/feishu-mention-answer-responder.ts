@@ -144,7 +144,7 @@ const formalTaskDraftIntentPatterns = [
   /\b(?:create|make|prepare|generate|draft)\b.{0,40}\b(?:feishu\s+)?task(?:\s+draft)?\b/iu,
 ] as const;
 const negatedFormalTaskDraftIntentPatterns = [
-  /(?:不要|别|无需|不用|禁止|取消).{0,24}(?:创建|生成|起草|准备|整理).{0,20}任务/u,
+  /(?:不要|别|无需|不用|禁止|取消)[^，。；！？,.;!?\r\n]{0,24}(?:创建|生成|起草|准备|整理).{0,20}任务/u,
   /\b(?:do\s+not|don't|dont|never)\b.{0,40}\b(?:create|make|prepare|generate|draft)\b.{0,32}\btask\b/iu,
 ] as const;
 const formalTaskDraftQuestionPatterns = [
