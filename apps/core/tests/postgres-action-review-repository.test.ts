@@ -671,6 +671,8 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     label: string,
     riskLevel: "medium" | "high",
     actorOpenId: string,
+    content = "full body",
+    allowedGroupIds: string[] = [],
   ) {
     const documentSourceId = `review-source-${label}-${suffix}`;
     await pool.query(
@@ -692,7 +694,7 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       createdBy: "test",
       revision: {
         title: "Pilot SOP",
-        content: "full body",
+        content,
         riskLevel,
         reviewer: { type: "feishu_user", ref: actorOpenId },
         suggestedPublication: { spaceId: `review-space-${label}-${suffix}` },
@@ -707,7 +709,7 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       id: `review-policy-${label}-${suffix}`,
       spaceId: `review-space-${label}-${suffix}`,
       displayName: `Review policy ${label}`,
-      allowedGroupIds: [],
+      allowedGroupIds,
       allowedRiskLevels: [riskLevel],
       enabled: true,
       expectedVersion: 0,
@@ -756,8 +758,14 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
   }
 
   async function createManagedUpdateReviewCase(label: string, actorOpenId: string) {
-    const acceptance = await createReviewCase(label, "medium", actorOpenId);
     const authorizationGroupId = `review-group-${label}-${suffix}`;
+    const acceptance = await createReviewCase(
+      label,
+      "medium",
+      actorOpenId,
+      "  full body\r\n",
+      [authorizationGroupId],
+    );
     const targetSourceUri = `https://example.test/wiki/${label}-${suffix}`;
     const targetSnapshotId = `review-snapshot-${label}-${suffix}`;
     const targetSnapshotHash = "d".repeat(64);
@@ -775,10 +783,6 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     await pool.query(
       "UPDATE knowledge_drafts SET source_group_id = $2 WHERE id = $1",
       [acceptance.draft.id, authorizationGroupId],
-    );
-    await pool.query(
-      "UPDATE knowledge_draft_revisions SET content = $3 WHERE draft_id = $1 AND revision_number = $2",
-      [acceptance.draft.id, 1, "  full body\r\n"],
     );
     await pool.query(
       "UPDATE document_sources SET origin_group_id = $2, source_uri = $3 WHERE id = $1",
@@ -840,18 +844,28 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
         at,
       ],
     );
-    await pool.query(
-      `INSERT INTO knowledge_drafts (
-        id, origin_kind, status, current_revision_number, version, created_by, created_at, updated_at
-      ) VALUES ($1, 'user_requested', 'published', 1, 1, 'test', $2, $2)`,
-      [originDraftId, at],
-    );
-    await pool.query(
-      `INSERT INTO knowledge_draft_revisions (
-        draft_id, revision_number, title, content, risk_level, author, created_at
-      ) VALUES ($1, 1, 'Origin', 'Prior body', 'medium', 'test', $2)`,
-      [originDraftId, at],
-    );
+    const originClient = await pool.connect();
+    try {
+      await originClient.query("BEGIN");
+      await originClient.query(
+        `INSERT INTO knowledge_drafts (
+          id, origin_kind, status, current_revision_number, version, created_by, created_at, updated_at
+        ) VALUES ($1, 'user_requested', 'published', 1, 1, 'test', $2, $2)`,
+        [originDraftId, at],
+      );
+      await originClient.query(
+        `INSERT INTO knowledge_draft_revisions (
+          draft_id, revision_number, title, content, risk_level, author, created_at
+        ) VALUES ($1, 1, 'Origin', 'Prior body', 'medium', 'test', $2)`,
+        [originDraftId, at],
+      );
+      await originClient.query("COMMIT");
+    } catch (error) {
+      await originClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      originClient.release();
+    }
     await pool.query(
       `INSERT INTO action_proposals (
         id, action_type, subject_type, subject_id, subject_revision, subject_version,
