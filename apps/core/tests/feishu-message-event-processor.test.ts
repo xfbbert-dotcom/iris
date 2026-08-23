@@ -54,7 +54,7 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
-  it("attempts replies first and passes the persisted message to extraction planning", async () => {
+  it("persists the trigger before replying and passes it to extraction planning", async () => {
     const calls: string[] = [];
     const messageReplayGuard: ConversationMessageReplayGuard = {
       async runUnlessDeleted<T>({ effect }: { effect: () => Promise<T> }) {
@@ -110,8 +110,8 @@ describe("FeishuMessageEventProcessor", () => {
     await processor.process(rawEventFixture());
 
     expect(calls).toEqual([
-      "guard", "reply",
       "guard", "persist",
+      "guard", "reply",
       "guard", "plan",
       "guard", "documents",
     ]);

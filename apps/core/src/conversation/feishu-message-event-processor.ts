@@ -69,21 +69,6 @@ export function createFeishuMessageEventProcessor({
         return;
       }
 
-      let mentionResponseError: unknown;
-      try {
-        const mentionResult = await messageReplayGuard.runUnlessDeleted({
-          identity: parsed,
-          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
-        });
-        if (mentionResult.status === "active") {
-          logMentionAnswerResult(parsed, mentionResult.value);
-        }
-        if (mentionResult.status === "deleted") return;
-      } catch (error) {
-        mentionResponseError = error;
-        logMentionAnswerFailure(parsed, error);
-      }
-
       const { senderOpenId } = parsed;
       const messageFact: UpsertConversationMessageInput = {
         provider: parsed.provider,
@@ -101,12 +86,38 @@ export function createFeishuMessageEventProcessor({
         sentAt: parsed.sentAt,
         rawEventIdempotencyKey: parsed.rawEventIdempotencyKey,
       };
-      const persistenceResult = await messageReplayGuard.runUnlessDeleted({
-        identity: parsed,
-        effect: () => messages.upsertMessage(messageFact),
-      });
-      if (persistenceResult.status === "deleted") return;
-      const persistedMessage = persistenceResult.value;
+      let persistenceError: unknown;
+      let persistedMessage: Awaited<ReturnType<typeof messages.upsertMessage>> | undefined;
+      try {
+        const persistenceResult = await messageReplayGuard.runUnlessDeleted({
+          identity: parsed,
+          effect: () => messages.upsertMessage(messageFact),
+        });
+        if (persistenceResult.status === "deleted") return;
+        persistedMessage = persistenceResult.value;
+      } catch (error) {
+        persistenceError = error;
+      }
+
+      let mentionResponseError: unknown;
+      try {
+        const mentionResult = await messageReplayGuard.runUnlessDeleted({
+          identity: parsed,
+          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
+        });
+        if (mentionResult.status === "active") {
+          logMentionAnswerResult(parsed, mentionResult.value);
+        }
+        if (mentionResult.status === "deleted") return;
+      } catch (error) {
+        mentionResponseError = error;
+        logMentionAnswerFailure(parsed, error);
+      }
+
+      if (persistenceError !== undefined) throw persistenceError;
+      if (persistedMessage === undefined) {
+        throw new Error("conversation message persistence returned no message");
+      }
 
       let memoryExtractionPlannerError: unknown;
       if (memoryExtractionPlanner !== undefined) {
