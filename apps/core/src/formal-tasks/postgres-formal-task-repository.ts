@@ -250,7 +250,18 @@ async function upsertTargetPolicy(
   input: UpsertFeishuTaskTargetPolicyInput,
 ): Promise<FeishuTaskTargetPolicyMutationResult> {
   const normalized = normalizePolicyInput(input);
-  const fingerprint = operationFingerprint({ operation: "upsert_task_policy", ...normalized });
+  const fingerprint = operationFingerprint({
+    operation: "upsert_task_policy",
+    id: normalized.id,
+    sourceGroupId: normalized.sourceGroupId,
+    displayName: normalized.displayName,
+    allowedAssigneeOpenIds: normalized.allowedAssigneeOpenIds,
+    maxDueHorizonDays: normalized.maxDueHorizonDays,
+    enabled: normalized.enabled,
+    expectedVersion: normalized.expectedVersion,
+    operationKey: normalized.operationKey,
+    operator: normalized.operator,
+  });
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
     const replay = await client.query<PolicyOperationRow>(

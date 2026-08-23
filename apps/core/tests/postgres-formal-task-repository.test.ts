@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import Fastify from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -15,12 +16,15 @@ import {
   runMigrations,
   type MigrationClient,
 } from "../src/database/migrate.js";
+import { registerFormalTaskApi } from "../src/formal-tasks/formal-task-api.js";
+import type { FormalTaskRuntime } from "../src/runtime/formal-task-runtime.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 const suffix = randomUUID();
 const groupId = `formal-task-group-${suffix}`;
 const policyOnlyGroupId = `formal-task-policy-group-${suffix}`;
+const policyReplayGroupId = `formal-task-policy-replay-group-${suffix}`;
 const guardGroupId = `formal-task-guard-group-${suffix}`;
 const revisionGroupId = `formal-task-revision-group-${suffix}`;
 const transitionGroupId = `formal-task-transition-group-${suffix}`;
@@ -123,6 +127,56 @@ runIfDatabase("PostgresFormalTaskRepository with Postgres", () => {
       expectedVersion: 1,
       operationKey: `formal-task-policy:${suffix}:stale`,
     })).rejects.toBeInstanceOf(FormalTaskVersionConflictError);
+  });
+
+  it("replays an identical policy API write when the server timestamp advances", async () => {
+    const repository = createPostgresFormalTaskRepository({ dataSource: pool });
+    const app = Fastify();
+    const times = [
+      new Date("2026-08-22T06:00:00.000Z"),
+      new Date("2026-08-22T06:01:00.000Z"),
+    ];
+    registerFormalTaskApi(
+      app,
+      { repository } as unknown as FormalTaskRuntime,
+      undefined,
+      { authenticationConfigured: true, now: () => times.shift()! },
+    );
+    const payload = {
+      sourceGroupId: policyReplayGroupId,
+      displayName: "Policy API replay",
+      allowedAssigneeOpenIds: ["ou_assignee"],
+      maxDueHorizonDays: 30,
+      enabled: true,
+      expectedVersion: 0,
+      operationKey: `formal-task-policy:${suffix}:api-replay`,
+    };
+
+    try {
+      const first = await app.inject({
+        method: "PUT",
+        url: `/internal/formal-task-policies/policy-api-replay-${suffix}`,
+        headers: { "x-iris-operator": "operator@example.com" },
+        payload,
+      });
+      const replay = await app.inject({
+        method: "PUT",
+        url: `/internal/formal-task-policies/policy-api-replay-${suffix}`,
+        headers: { "x-iris-operator": "operator@example.com" },
+        payload,
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toMatchObject({ ok: true, outcome: "applied", policy: { version: 1 } });
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toMatchObject({
+        ok: true,
+        outcome: "already_applied",
+        policy: { version: 1, updatedAt: "2026-08-22T06:00:00.000Z" },
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it("creates one exact versioned draft with current same-group evidence", async () => {

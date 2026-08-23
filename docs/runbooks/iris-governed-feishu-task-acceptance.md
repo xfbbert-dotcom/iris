@@ -53,32 +53,47 @@ IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST=
 
 ## 4. 打开唯一受控窗口
 
-将任务创建 env allowlist 精确设置为唯一 pilot 群，同时开启现有 knowledge-card、action
-approval 和 OAuth review 的同群边界。重建 Core 后仍保持 global/群/capability disabled，确认：
+将部署环境显式设置为：
+
+```text
+IRIS_FEISHU_TASK_CREATION_ENABLED=true
+IRIS_FEISHU_TASK_CREATION_GROUP_ALLOWLIST=<唯一 pilot 群>
+```
+
+同时开启现有 knowledge-card、action approval 和 OAuth review 的同群边界。重建 Core 后仍保持
+global/群/capability disabled，确认：
 
 - task creation runtime 只识别一个群且 worker running；
 - knowledge-card、action-approval、action-review 均 healthy；
 - `generateTaskDrafts`、`createFeishuTasks`、`callExternalTools` 仍为 false；
 - 非 pilot 群和全部未知群继续 fail closed。
 
-在上述 durable gate 仍全部关闭时，通过 bearer 保护的
-`PUT /internal/formal-task-policies/:id` 创建本轮唯一任务目标策略。请求必须携带
-`x-iris-operator`，并精确提供：
+在上述 durable gate 仍全部关闭时，为 pilot 群选用稳定不变的 policy ID，并先调用 bearer
+保护的 `GET /internal/formal-task-policies/:id`：
 
-```json
+- 若返回 404，本次是首次创建，`expectedVersion` 使用 `0`；
+- 若返回 200，本次是回滚后的重跑或策略更新，`expectedVersion` 必须使用响应中的当前精确
+  `policy.version`，并完整替换策略字段；
+- 其他响应均停止，不得猜测版本、改换 policy ID 或直接写表。
+
+然后调用 `PUT /internal/formal-task-policies/:id` 启用本轮唯一任务目标策略。请求必须携带
+`x-iris-operator`，并精确提供以下字段（尖括号项先替换为上一步确定的实际值）：
+
+```text
 {
   "sourceGroupId": "<唯一 pilot 群>",
   "displayName": "Controlled Feishu task pilot",
   "allowedAssigneeOpenIds": ["<唯一真实负责人>"],
   "maxDueHorizonDays": 30,
   "enabled": true,
-  "expectedVersion": 0,
-  "operationKey": "<本轮唯一操作键>"
+  "expectedVersion": <首次为 0；重跑时为 GET 返回的当前整数版本>,
+  "operationKey": "<本次逻辑更新的唯一操作键>"
 }
 ```
 
-负责人必须是实时读取到的当前群成员且不能是机器人。创建和后续更新都使用精确
-`expectedVersion` 与新 `operationKey`；不得直接写表。通过
+负责人必须是实时读取到的当前群成员且不能是机器人。一次逻辑更新的网络重试必须复用完全
+相同的请求正文、`expectedVersion` 和 `operationKey`；只有新的逻辑更新才读取最新版本并生成新
+`operationKey`。不得直接写表。通过
 `GET /internal/formal-task-policies/:id` 复核 `enabled=true`、版本和
 `allowedAssigneeCount=1`。接口响应不返回负责人 open ID；命令输出和验收附件也不得记录群 ID、
 负责人 ID 或请求正文。
