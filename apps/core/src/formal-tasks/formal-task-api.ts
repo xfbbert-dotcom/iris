@@ -3,7 +3,11 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { FormalTaskRuntime } from "../runtime/formal-task-runtime.js";
 import type { FormalTaskActionRuntime } from "../runtime/formal-task-action-runtime.js";
 import { FORMAL_TASK_DRAFT_STATUSES } from "./formal-task-draft.js";
-import { FORMAL_TASK_RISK_LEVELS, type FormalTaskDraftView } from
+import {
+  FORMAL_TASK_RISK_LEVELS,
+  type FeishuTaskTargetPolicy,
+  type FormalTaskDraftView,
+} from
   "./formal-task-repository.js";
 import type {
   FeishuTaskCreationExecutionState,
@@ -42,6 +46,50 @@ export function registerFormalTaskApi(
     now?: () => Date;
   },
 ): void {
+  app.get<{ Params: { id: string } }>(
+    "/internal/formal-task-policies/:id",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (draftRuntime === undefined) return draftUnavailable(reply);
+      try {
+        const policy = await draftRuntime.repository.getTargetPolicy(
+          requireReference("id", request.params.id),
+        );
+        if (policy === undefined) {
+          return reply.code(404).send({ ok: false, error: "formal_task_policy_not_found" });
+        }
+        return { ok: true, policy: projectTargetPolicyMetadata(policy) };
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    },
+  );
+
+  app.put<{ Params: { id: string } }>(
+    "/internal/formal-task-policies/:id",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (draftRuntime === undefined) return draftUnavailable(reply);
+      try {
+        const operator = requireOperator(request.headers["x-iris-operator"]);
+        const body = parseTargetPolicy(unwrapBody(request.body));
+        const result = await draftRuntime.repository.upsertTargetPolicy({
+          id: requireReference("id", request.params.id),
+          ...body,
+          operator,
+          at: requireDate(now()),
+        });
+        return {
+          ok: true,
+          outcome: result.outcome,
+          policy: projectTargetPolicyMetadata(result.policy),
+        };
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    },
+  );
+
   app.get("/internal/formal-task-drafts", async (request, reply) => {
     if (!authenticationConfigured) return authenticationUnavailable(reply);
     if (draftRuntime === undefined) return draftUnavailable(reply);
@@ -135,6 +183,20 @@ export function registerFormalTaskApi(
   );
 }
 
+function projectTargetPolicyMetadata(policy: FeishuTaskTargetPolicy) {
+  return {
+    id: policy.id,
+    sourceGroupId: policy.sourceGroupId,
+    displayName: policy.displayName,
+    allowedAssigneeCount: policy.allowedAssigneeOpenIds.length,
+    maxDueHorizonDays: policy.maxDueHorizonDays,
+    enabled: policy.enabled,
+    version: policy.version,
+    createdAt: policy.createdAt,
+    updatedAt: policy.updatedAt,
+  };
+}
+
 function projectDraftMetadata(draft: FormalTaskDraftView) {
   return {
     id: draft.id,
@@ -147,6 +209,42 @@ function projectDraftMetadata(draft: FormalTaskDraftView) {
     evidenceStatus: draft.currentRevision.evidenceState.status,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
+  };
+}
+
+function parseTargetPolicy(value: unknown) {
+  const body = requireRecord(value, "request");
+  assertOnlyKeys(body, [
+    "sourceGroupId",
+    "displayName",
+    "allowedAssigneeOpenIds",
+    "maxDueHorizonDays",
+    "enabled",
+    "expectedVersion",
+    "operationKey",
+  ]);
+  return {
+    sourceGroupId: requireReference("sourceGroupId", body.sourceGroupId),
+    displayName: requireString("displayName", body.displayName, 256),
+    allowedAssigneeOpenIds: requireUniqueReferences(
+      "allowedAssigneeOpenIds",
+      body.allowedAssigneeOpenIds,
+      100,
+    ),
+    maxDueHorizonDays: requireIntegerBetween(
+      "maxDueHorizonDays",
+      body.maxDueHorizonDays,
+      1,
+      365,
+    ),
+    enabled: requireBoolean("enabled", body.enabled),
+    expectedVersion: requireIntegerBetween(
+      "expectedVersion",
+      body.expectedVersion,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    operationKey: requireReference("operationKey", body.operationKey),
   };
 }
 
@@ -323,6 +421,34 @@ function requirePositiveInteger(name: string, value: unknown): number {
     throw validationError(`${name} is invalid`);
   }
   return Number(value);
+}
+
+function requireIntegerBetween(
+  name: string,
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): number {
+  if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum) {
+    throw validationError(`${name} is invalid`);
+  }
+  return Number(value);
+}
+
+function requireBoolean(name: string, value: unknown): boolean {
+  if (typeof value !== "boolean") throw validationError(`${name} is invalid`);
+  return value;
+}
+
+function requireUniqueReferences(name: string, value: unknown, maximum: number): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > maximum) {
+    throw validationError(`${name} is invalid`);
+  }
+  const references = value.map((item) => requireReference(name, item));
+  if (new Set(references).size !== references.length) {
+    throw validationError(`${name} is invalid`);
+  }
+  return references;
 }
 
 function requireDate(value: unknown): Date {

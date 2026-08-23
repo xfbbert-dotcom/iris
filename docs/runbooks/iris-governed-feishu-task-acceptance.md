@@ -61,6 +61,28 @@ approval 和 OAuth review 的同群边界。重建 Core 后仍保持 global/群/
 - `generateTaskDrafts`、`createFeishuTasks`、`callExternalTools` 仍为 false；
 - 非 pilot 群和全部未知群继续 fail closed。
 
+在上述 durable gate 仍全部关闭时，通过 bearer 保护的
+`PUT /internal/formal-task-policies/:id` 创建本轮唯一任务目标策略。请求必须携带
+`x-iris-operator`，并精确提供：
+
+```json
+{
+  "sourceGroupId": "<唯一 pilot 群>",
+  "displayName": "Controlled Feishu task pilot",
+  "allowedAssigneeOpenIds": ["<唯一真实负责人>"],
+  "maxDueHorizonDays": 30,
+  "enabled": true,
+  "expectedVersion": 0,
+  "operationKey": "<本轮唯一操作键>"
+}
+```
+
+负责人必须是实时读取到的当前群成员且不能是机器人。创建和后续更新都使用精确
+`expectedVersion` 与新 `operationKey`；不得直接写表。通过
+`GET /internal/formal-task-policies/:id` 复核 `enabled=true`、版本和
+`allowedAssigneeCount=1`。接口响应不返回负责人 open ID；命令输出和验收附件也不得记录群 ID、
+负责人 ID 或请求正文。
+
 随后只对唯一 pilot 群开启 global、群以及上述三个 capability。每次开关后重新读取 live
 status/readiness；不得依赖启动时缓存或旧 OAuth 会话。
 
@@ -127,7 +149,8 @@ rollback_safe_off=true
 完成或任一失败后按顺序执行：
 
 1. durable-disable `callExternalTools`、`createFeishuTasks`、`generateTaskDrafts`，再 disable
-   pilot 群与 global；等待当前已承诺的结果持久化完成，不接受新 claim。
+   pilot 群与 global；等待当前已承诺的结果持久化完成，不接受新 claim。使用策略接口和
+   当前精确版本把本轮任务目标策略更新为 `enabled=false`，保留版本与操作事实。
 2. 将 `.env.pilot` 恢复为 `IRIS_FEISHU_TASK_CREATION_ENABLED=false` 和空 allowlist，重建
    Core；knowledge-card/action-approval/action-review 的临时同群配置也恢复为默认关闭。
 3. 确认 live status/readiness 表示安全关闭，所有 formal-task/approval/card 队列、DLQ、
