@@ -332,6 +332,39 @@ test("keeps model services private with dedicated model egress", () => {
   );
 });
 
+test("CI disables only Ollama's Sapphire Rapids backend through a validated wrapper", () => {
+  const setting = "IRIS_OLLAMA_DISABLE_SAPPHIRERAPIDS_BACKEND";
+  const backendPath = "/usr/lib/ollama/libggml-cpu-sapphirerapids.so";
+  const embeddingModel = compose.services["embedding-model"];
+  const productionCompose = loadPilotCompose(".env.pilot.example");
+
+  assert.equal(readEnvAssignment(pilotCiEnv, setting), "true");
+  assert.equal(readEnvAssignment(pilotEnvExample, setting), "false");
+  assert.equal(embeddingModel.environment[setting], "true");
+  assert.equal(
+    productionCompose.services["embedding-model"].environment[setting],
+    "false",
+    "the production/example Compose render must keep the backend enabled",
+  );
+  for (const [serviceName, service] of Object.entries(compose.services)) {
+    if (serviceName !== "embedding-model") {
+      assert.equal(service.environment?.[setting], undefined);
+    }
+  }
+
+  assert.deepEqual(embeddingModel.entrypoint, ["/bin/sh", "-ec"]);
+  const command = embeddingModel.command[0].replace(/\$\$/gu, "$");
+  assert.deepEqual(command.trim().split(/\r?\n/u).map((line) => line.trim()), [
+    "case \"" + "$" + "{" + setting + "}\" in",
+    "true) rm -f " + backendPath + " ;;",
+    "false) ;;",
+    "*) echo \"" + setting + " must be true or false\" >&2; exit 64 ;;",
+    "esac",
+    "exec /bin/ollama serve",
+  ]);
+  assert.doesNotMatch(command, /OLLAMA_LLM_LIBRARY/u);
+});
+
 test("keeps semantic thread and action extraction disabled by default", () => {
   const expectedValues = {
     IRIS_THREAD_EXTRACTION_GROUP_IDS: "",

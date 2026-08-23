@@ -258,8 +258,18 @@ services:
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_KEEP_ALIVE: 30m
       OLLAMA_MAX_LOADED_MODELS: "1"
+      IRIS_OLLAMA_DISABLE_SAPPHIRERAPIDS_BACKEND: ${IRIS_OLLAMA_DISABLE_SAPPHIRERAPIDS_BACKEND:-false}
       IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
       IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        case "$${IRIS_OLLAMA_DISABLE_SAPPHIRERAPIDS_BACKEND}" in
+          true) rm -f /usr/lib/ollama/libggml-cpu-sapphirerapids.so ;;
+          false) ;;
+          *) echo "IRIS_OLLAMA_DISABLE_SAPPHIRERAPIDS_BACKEND must be true or false" >&2; exit 64 ;;
+        esac
+        exec /bin/ollama serve
     depends_on:
       embedding-model-init:
         condition: service_completed_successfully

@@ -1962,6 +1962,36 @@ test("CI runs the proactive pre-send suppression race against real Postgres", ()
   );
 });
 
+test("CI runs formal-task PostgreSQL integrations serially", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  const postgresIntegrations = workflow.slice(
+    workflow.indexOf("- name: Test Postgres integrations"),
+    workflow.indexOf("- name: Validate Docker Compose"),
+  );
+  const requiredCommands = [
+    "npm --workspace apps/core test -- postgres-formal-task-repository.test.ts",
+    "npm --workspace apps/core test -- postgres-formal-task-card-repository.test.ts",
+    "npm --workspace apps/core test -- postgres-formal-task-execution-repository.test.ts",
+    "npm --workspace apps/core test -- postgres-action-proposal-repository.test.ts",
+    "npm --workspace apps/core test -- postgres-action-review-repository.test.ts",
+  ];
+  const activeLines = postgresIntegrations
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"));
+
+  assert.deepEqual(
+    activeLines.filter((line) => requiredCommands.includes(line)),
+    requiredCommands,
+    "each required integration suite must be one exact executable line in order",
+  );
+  assert.doesNotMatch(
+    postgresIntegrations,
+    /(?:^|\r?\n)\s*(?!#)[^\r\n]*(?:&|\|\|\s*true|\b(?:parallel|xargs)\b)/u,
+    "the serial PostgreSQL step must not background, parallelize, or mask a required suite",
+  );
+});
+
 test("CI keeps the pilot queues empty before the backup drill", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   const startStack = workflow.indexOf("- name: Start pilot stack");
