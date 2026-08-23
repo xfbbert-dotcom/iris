@@ -21,15 +21,15 @@ describe("renderActionApprovalCard", () => {
       schema: "2.0",
       header: {
         template: "orange",
-        title: { tag: "plain_text", content: "Approve knowledge publication" },
+        title: { tag: "plain_text", content: "审批知识发布" },
       },
     });
-    expect(rendered.json).toContain("Risk: medium");
-    expect(rendered.json).toContain("Publish new Wiki page");
-    expect(rendered.json).toContain("Target: Company Wiki");
-    expect(rendered.json).toContain("Draft revision: 2");
-    expect(rendered.json).toContain("group_confirmation: satisfied");
-    expect(rendered.json).toContain("designated_owner: pending");
+    expect(rendered.json).toContain("风险：中");
+    expect(rendered.json).toContain("操作：发布新的知识库页面");
+    expect(rendered.json).toContain("发布目标：Company Wiki");
+    expect(rendered.json).toContain("群内确认：已完成");
+    expect(rendered.json).toContain("负责人审批：待处理");
+    expect(rendered.json).not.toContain("Draft revision");
     expect(rendered.json).not.toMatch(/full draft body|secret evidence|oc_group|ou_owner/iu);
     expect(Buffer.byteLength(rendered.json, "utf8")).toBeLessThanOrEqual(24 * 1024);
     expect(rendered.componentCount).toBeLessThanOrEqual(100);
@@ -47,11 +47,13 @@ describe("renderActionApprovalCard", () => {
         input_type: "multiline_text",
         max_length: 1_000,
         required: false,
+        label: { content: "退回修改或拒绝时，请填写原因（最多 1,000 字）" },
+        placeholder: { content: "请说明需要修改的内容或拒绝原因" },
       });
     expect(form.elements.find((element) => isRecord(element) && element.name === "reject"))
       .toMatchObject({
         confirm: {
-          title: { tag: "plain_text", content: "Reject publication" },
+          title: { tag: "plain_text", content: "拒绝发布" },
         },
       });
   });
@@ -66,8 +68,8 @@ describe("renderActionApprovalCard", () => {
       },
     }));
 
-    expect(rendered.json).toContain("Replace the single managed body block on existing Wiki page");
-    expect(rendered.json).toContain("Managed page ID: managed-1");
+    expect(rendered.json).toContain("替换现有知识库页面中由 Iris 管理的正文区域");
+    expect(rendered.json).toContain("托管页面：managed-1");
     expect(rendered.json).toContain("https://example.test/wiki/managed-1");
     expect(rendered.json).not.toMatch(/[a-f0-9]{64}/u);
     expect(rendered.json).not.toMatch(/full draft body|secret evidence/iu);
@@ -79,8 +81,8 @@ describe("renderActionApprovalCard", () => {
       reviewPublicOrigin: "https://iris.quello.cn/",
     }));
 
-    expect(withoutOrigin.json).not.toContain("View full draft");
-    expect(withOrigin.json).toContain("View full draft");
+    expect(withoutOrigin.json).not.toContain("查看完整正文并完成审阅");
+    expect(withOrigin.json).toContain("查看完整正文并完成审阅");
     expect(withOrigin.json).toContain(
       "https://iris.quello.cn/review/action-proposals/proposal-1",
     );
@@ -90,15 +92,22 @@ describe("renderActionApprovalCard", () => {
     const rendered = renderActionApprovalCard(taskInput() as never);
 
     expect(rendered.card).toMatchObject({
-      header: { title: { content: "Approve Feishu task" } },
+      header: { title: { content: "审批飞书任务" } },
     });
-    expect(rendered.json).toContain("Create one Feishu task");
-    expect(rendered.json).toContain("Task title: Complete governed pilot");
-    expect(rendered.json).toContain("Assignee: ou_assignee");
-    expect(rendered.json).toContain("Due: 2026-08-24T06:00:00.000Z");
-    expect(rendered.json).toContain("Reminder: 30 minutes");
-    expect(rendered.json).toContain("Target: Pilot tasks");
-    expect(rendered.json).toContain("View full task");
+    expect(rendered.json).toContain("操作：创建一个真实飞书任务");
+    expect(rendered.json).toContain("风险：高（批准后将创建真实飞书任务）");
+    expect(rendered.json).toContain("任务标题：Complete governed pilot");
+    expect(rendered.json).toContain("负责人：你（当前审批人）");
+    expect(rendered.json).toContain("截止时间：2026年8月24日 14:00");
+    expect(rendered.json).toContain("提醒：提前30分钟");
+    expect(rendered.json).toContain("你的审批：待处理");
+    expect(rendered.json).toContain("查看完整任务并完成审阅");
+    expect(rendered.json).toContain("批准创建");
+    expect(rendered.json).toContain("退回修改");
+    expect(rendered.json).toContain("拒绝");
+    expect(rendered.json).not.toContain("ou_assignee");
+    expect(rendered.json).not.toContain("Pilot tasks");
+    expect(rendered.json).not.toContain("Draft revision");
     expect(rendered.json).not.toContain("full task description must stay on OAuth review");
   });
 

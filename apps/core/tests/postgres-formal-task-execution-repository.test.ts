@@ -544,6 +544,78 @@ runIfDatabase("PostgresFormalTaskExecutionRepository with Postgres", () => {
     expect(status.outbox.pending).toBeGreaterThanOrEqual(0);
   });
 
+  it("closes a permission-denied reconciliation as an audited failure without deleting facts", async () => {
+    const seeded = await seedApprovedTask(pool, "permission-denied-resolution");
+    const repository = createPostgresFormalTaskExecutionRepository({ dataSource: pool });
+    const claimed = await repository.claimNextCreation({
+      runtimeGate: runtimeGate(seeded.groupId),
+      workerId: "task-executor-permission-denied",
+      leaseUntil: plusSeconds(30),
+      operationKey: `task-execution-claim:permission-denied:${seeded.suffix}`,
+      at,
+    });
+    const dispatched = await repository.markExternalAttempt({
+      executionId: claimed!.execution.id,
+      expectedExecutionVersion: claimed!.execution.version,
+      workerId: "task-executor-permission-denied",
+      operationKey: `task-execution-dispatch:permission-denied:${seeded.suffix}`,
+      at: plusSeconds(1),
+    });
+    await repository.recordCreationFailure({
+      proposalId: seeded.proposalId,
+      executionId: dispatched.execution.id,
+      expectedProposalVersion: dispatched.proposal.version,
+      expectedExecutionVersion: dispatched.execution.version,
+      classification: "reconciliation_required",
+      responseClassification: "reconciliation_budget_exhausted",
+      operationKey: `task-execution-reconciliation-required:${seeded.suffix}`,
+      at: plusSeconds(2),
+    });
+
+    const resolution = {
+      executionId: dispatched.execution.id,
+      expectedExecutionVersion: 3,
+      evidenceCode: "feishu_permission_denied" as const,
+      operationKey: `task-execution-resolve-permission-denied:${seeded.suffix}`,
+      operator: "pilot-operator@example.com",
+      at: plusSeconds(3),
+    };
+    await expect(repository.resolvePermissionDenied(resolution)).resolves.toEqual({
+      outcome: "applied",
+      executionId: dispatched.execution.id,
+      state: "failed",
+      version: 4,
+    });
+    await expect(repository.resolvePermissionDenied({
+      ...resolution,
+      at: plusSeconds(4),
+    })).resolves.toEqual({
+      outcome: "already_applied",
+      executionId: dispatched.execution.id,
+      state: "failed",
+      version: 4,
+    });
+
+    await expect(pool.query(
+      `SELECT proposal.status AS proposal_status, execution.state AS execution_state,
+              execution.response_classification,
+              (SELECT count(*)::int FROM feishu_task_creations creation
+               WHERE creation.execution_id = execution.id) AS creation_count,
+              (SELECT count(*)::int FROM feishu_task_creation_execution_events event
+               WHERE event.execution_id = execution.id) AS event_count
+       FROM action_proposals proposal
+       JOIN feishu_task_creation_executions execution ON execution.proposal_id = proposal.id
+       WHERE execution.id = $1`,
+      [dispatched.execution.id],
+    )).resolves.toMatchObject({ rows: [{
+      proposal_status: "failed",
+      execution_state: "failed",
+      response_classification: expect.stringMatching(/^operator_confirmed_permission_denied:/u),
+      creation_count: 0,
+      event_count: 4,
+    }] });
+  });
+
   it("reclaims a stale pre-dispatch lease without creating another execution attempt", async () => {
     const seeded = await seedApprovedTask(pool, "stale-claim");
     const repository = createPostgresFormalTaskExecutionRepository({ dataSource: pool });

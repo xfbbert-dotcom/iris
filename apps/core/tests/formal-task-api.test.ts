@@ -154,6 +154,40 @@ describe("formal task internal API", () => {
     await app.close();
   });
 
+  it("requires exact operator evidence before closing a permission-denied reconciliation", async () => {
+    const { app, executionRepository } = fixture();
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/formal-task-executions/execution-1/resolve-permission-denied",
+      headers: { "x-iris-operator": "operator@example.com" },
+      payload: {
+        expectedExecutionVersion: 12,
+        evidenceCode: "feishu_permission_denied",
+        operationKey: "operator-task-permission-denied-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      execution: {
+        outcome: "applied",
+        executionId: "execution-1",
+        state: "failed",
+        version: 13,
+      },
+    });
+    expect(executionRepository.resolvePermissionDenied).toHaveBeenCalledWith({
+      executionId: "execution-1",
+      expectedExecutionVersion: 12,
+      evidenceCode: "feishu_permission_denied",
+      operationKey: "operator-task-permission-denied-1",
+      operator: "operator@example.com",
+      at,
+    });
+    await app.close();
+  });
+
   it.each([
     ["duplicate assignees", {
       sourceGroupId: "oc_pilot",
@@ -248,6 +282,12 @@ function fixture({ authenticationConfigured = true } = {}) {
       state: "outcome_unknown",
       version: 4,
       retryAt: at,
+    })),
+    resolvePermissionDenied: vi.fn(async () => ({
+      outcome: "applied",
+      executionId: "execution-1",
+      state: "failed",
+      version: 13,
     })),
   };
   const app = Fastify();

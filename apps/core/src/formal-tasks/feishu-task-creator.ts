@@ -273,6 +273,7 @@ function classifyCreateHttpError(
   if (status === 200) return undefined;
   const code = readNonzeroCode(body);
   if (code === undefined) return fallbackCreateHttpError(status);
+  if (code === 99_991_672) return { kind: "rejected", code: "forbidden" };
   if (status === 400 && code === 1_470_400) {
     return { kind: "rejected", code: "invalid_request" };
   }
@@ -300,6 +301,7 @@ function classifyGetHttpError(
 ): Exclude<FeishuTaskGetOutcome, { kind: "found" }> | undefined {
   if (status === 200) return undefined;
   const code = readNonzeroCode(body);
+  if (code === 99_991_672) return { kind: "rejected", code: "forbidden" };
   if (status === 404 && code === 1_470_404) return { kind: "missing" };
   if (status === 400 && code === 1_470_400) {
     return { kind: "rejected", code: "invalid_request" };

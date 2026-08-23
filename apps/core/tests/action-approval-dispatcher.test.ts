@@ -31,7 +31,7 @@ describe("ActionApprovalDispatcher", () => {
       send: async (input) => {
         order.push("send");
         expect(input.recipientOpenId).toBe("ou_owner");
-        expect(input.cardJson).toContain("Approve knowledge publication");
+        expect(input.cardJson).toContain("审批知识发布");
         expect(input.uuid).toHaveLength(50);
         return { messageId: "om_approval" };
       },

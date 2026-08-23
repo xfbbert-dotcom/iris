@@ -181,6 +181,27 @@ export function registerFormalTaskApi(
       }
     },
   );
+
+  app.post<{ Params: { id: string } }>(
+    "/internal/formal-task-executions/:id/resolve-permission-denied",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (actionRuntime === undefined) return actionUnavailable(reply);
+      try {
+        const operator = requireOperator(request.headers["x-iris-operator"]);
+        const body = parsePermissionDeniedResolution(unwrapBody(request.body));
+        const result = await actionRuntime.repository.resolvePermissionDenied({
+          executionId: requireReference("id", request.params.id),
+          ...body,
+          operator,
+          at: requireDate(now()),
+        });
+        return { ok: true, execution: result };
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    },
+  );
 }
 
 function projectTargetPolicyMetadata(policy: FeishuTaskTargetPolicy) {
@@ -326,6 +347,22 @@ function parseReconciliation(value: unknown) {
     ),
     operationKey: requireReference("operationKey", body.operationKey),
   };
+}
+
+function parsePermissionDeniedResolution(value: unknown) {
+  const body = requireRecord(value, "request");
+  assertOnlyKeys(body, ["expectedExecutionVersion", "evidenceCode", "operationKey"]);
+  if (body.evidenceCode !== "feishu_permission_denied") {
+    throw validationError("evidenceCode is invalid");
+  }
+  return {
+    expectedExecutionVersion: requirePositiveInteger(
+      "expectedExecutionVersion",
+      body.expectedExecutionVersion,
+    ),
+    evidenceCode: body.evidenceCode,
+    operationKey: requireReference("operationKey", body.operationKey),
+  } as const;
 }
 
 function handleError(reply: FastifyReply, error: unknown) {

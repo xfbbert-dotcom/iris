@@ -41,6 +41,7 @@ export function renderActionApprovalCard(
   input: ActionApprovalCardRenderInput,
 ): ActionApprovalCardRenderResult {
   assertExactBinding(input);
+  const isFormalTask = isFormalTaskActionProposalContext(input.context);
   let componentCount = 0;
   const component = <T extends Record<string, unknown>>(value: T): T => {
     componentCount += 1;
@@ -68,17 +69,17 @@ export function renderActionApprovalCard(
       required: false,
       label: {
         tag: "plain_text",
-        content: "Reason for revision or rejection (at most 1,000 characters)",
+        content: "退回修改或拒绝时，请填写原因（最多 1,000 字）",
       },
       placeholder: {
         tag: "plain_text",
-        content: "Describe the required change or rejection reason",
+        content: "请说明需要修改的内容或拒绝原因",
       },
     }),
     component({
       tag: "button",
       name: "approve",
-      text: { tag: "plain_text", content: "Approve" },
+      text: { tag: "plain_text", content: isFormalTask ? "批准创建" : "批准发布" },
       type: "primary",
       form_action_type: "submit",
       behaviors: [{ type: "callback", value: callbackValue("approve") }],
@@ -86,7 +87,7 @@ export function renderActionApprovalCard(
     component({
       tag: "button",
       name: "request_revision",
-      text: { tag: "plain_text", content: "Request revision" },
+      text: { tag: "plain_text", content: "退回修改" },
       type: "default",
       form_action_type: "submit",
       behaviors: [{ type: "callback", value: callbackValue("request_revision") }],
@@ -94,39 +95,41 @@ export function renderActionApprovalCard(
     component({
       tag: "button",
       name: "reject",
-      text: { tag: "plain_text", content: "Reject" },
+      text: { tag: "plain_text", content: "拒绝" },
       type: "danger",
       form_action_type: "submit",
       behaviors: [{ type: "callback", value: callbackValue("reject") }],
       confirm: {
         title: {
           tag: "plain_text",
-          content: proposal.actionType === "create_feishu_task" ? "Reject task" : "Reject publication",
+          content: proposal.actionType === "create_feishu_task" ? "拒绝创建任务" : "拒绝发布",
         },
         text: {
           tag: "plain_text",
-          content: "Confirm this rejection. The submitted reason will be recorded.",
+          content: "确认拒绝吗？你填写的原因会被记录。",
         },
       },
     }),
   ];
-  const metadata = [
-    proposal.actionType === "create_feishu_task"
-      ? "Iris / feishu_task_approval"
-      : "Iris / publication_approval",
-    `Action: ${actionDescription(proposal.actionType)}`,
-    `Risk: ${proposal.riskLevel}`,
-    `Target: ${requireDisplayName(input.policy.displayName)}`,
-    ...formalTaskMetadata(input.context),
-    ...(input.context.managedTarget === undefined ? [] : [
-      `Managed page ID: ${requireDisplayName(input.context.managedTarget.managedPageId)}`,
-      `[Target Wiki page](${requireSafeTargetUrl(input.context.managedTarget.targetSourceUri)})`,
-    ]),
-    `Draft revision: ${proposal.subjectRevision}`,
-    `Proposal version: ${proposal.version}`,
-  ].join("\n");
+  const metadata = (isFormalTask
+    ? [
+        "Iris / 飞书任务审批",
+        `操作：${actionDescription(proposal.actionType)}`,
+        "风险：高（批准后将创建真实飞书任务）",
+        ...formalTaskMetadata(input.context),
+      ]
+    : [
+        "Iris / 知识发布审批",
+        `操作：${actionDescription(proposal.actionType)}`,
+        `风险：${riskDescription(proposal.riskLevel)}`,
+        `发布目标：${requireDisplayName(input.policy.displayName)}`,
+        ...(input.context.managedTarget === undefined ? [] : [
+          `托管页面：${requireDisplayName(input.context.managedTarget.managedPageId)}`,
+          `[打开目标知识库页面](${requireSafeTargetUrl(input.context.managedTarget.targetSourceUri)})`,
+        ]),
+      ]).join("\n");
   const requirementSummary = input.context.requirements
-    .map((requirement) => `${requirement.kind}: ${requirement.state}`)
+    .map((requirement) => requirementDescription(requirement, isFormalTask))
     .join("\n");
   const bodyElements: Record<string, unknown>[] = [
     component({ tag: "markdown", content: metadata }),
@@ -136,7 +139,7 @@ export function renderActionApprovalCard(
   if (reviewUrl !== undefined) {
     bodyElements.push(component({
       tag: "markdown",
-      content: `[${proposal.actionType === "create_feishu_task" ? "View full task" : "View full draft"}](${reviewUrl})`,
+      content: `[${proposal.actionType === "create_feishu_task" ? "查看完整任务并完成审阅" : "查看完整正文并完成审阅"}](${reviewUrl})`,
     }));
   }
   bodyElements.push(component({
@@ -154,8 +157,8 @@ export function renderActionApprovalCard(
       title: {
         tag: "plain_text",
         content: proposal.actionType === "create_feishu_task"
-          ? "Approve Feishu task"
-          : "Approve knowledge publication",
+          ? "审批飞书任务"
+          : "审批知识发布",
       },
     },
     body: { elements: bodyElements },
@@ -207,12 +210,12 @@ function policyMatchesProposal(input: ActionApprovalCardRenderInput): boolean {
 function formalTaskMetadata(context: ActionProposalContext): string[] {
   if (!isFormalTaskActionProposalContext(context)) return [];
   return [
-    `Task title: ${requireDisplayName(context.formalTask.title)}`,
-    `Assignee: ${requireDisplayName(context.formalTask.assigneeOpenId)}`,
-    `Due: ${context.formalTask.dueAt?.toISOString() ?? "None"}`,
-    `Reminder: ${context.formalTask.reminderMinutes === undefined
-      ? "None"
-      : `${context.formalTask.reminderMinutes} minutes`}`,
+    `任务标题：${requireDisplayName(context.formalTask.title)}`,
+    "负责人：你（当前审批人）",
+    `截止时间：${context.formalTask.dueAt === undefined
+      ? "未设置"
+      : formatChinaDateTime(context.formalTask.dueAt)}`,
+    `提醒：${reminderDescription(context.formalTask.reminderMinutes)}`,
   ];
 }
 
@@ -224,10 +227,53 @@ function isFormalTaskActionProposalContext(
 
 function actionDescription(actionType: ActionProposalContext["proposal"]["actionType"]): string {
   return actionType === "publish_knowledge_draft"
-    ? "Publish new Wiki page"
+    ? "发布新的知识库页面"
     : actionType === "update_knowledge_publication"
-      ? "Replace the single managed body block on existing Wiki page"
-      : "Create one Feishu task";
+      ? "替换现有知识库页面中由 Iris 管理的正文区域"
+      : "创建一个真实飞书任务";
+}
+
+function riskDescription(riskLevel: ActionProposalContext["proposal"]["riskLevel"]): string {
+  return riskLevel === "high" ? "高" : riskLevel === "medium" ? "中" : "低";
+}
+
+function requirementDescription(
+  requirement: ActionApprovalRequirement,
+  isFormalTask: boolean,
+): string {
+  const label = requirement.kind === "group_confirmation"
+    ? "群内确认"
+    : isFormalTask
+      ? "你的审批"
+      : requirement.kind === "designated_owner"
+        ? "负责人审批"
+        : "授权负责人审批";
+  const state = requirement.state === "satisfied"
+    ? "已完成"
+    : requirement.state === "pending"
+      ? "待处理"
+      : "已失效";
+  return `${label}：${state}`;
+}
+
+function formatChinaDateTime(value: Date): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(value);
+}
+
+function reminderDescription(minutes: number | undefined): string {
+  if (minutes === undefined) return "未设置";
+  if (minutes === 0) return "到期时";
+  if (minutes === 60) return "提前1小时";
+  if (minutes === 1_440) return "提前1天";
+  return `提前${minutes}分钟`;
 }
 
 function requireSafeTargetUrl(value: string): string {

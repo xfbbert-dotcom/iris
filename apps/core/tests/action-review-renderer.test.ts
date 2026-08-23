@@ -42,9 +42,12 @@ describe("action review renderer", () => {
     expect(html).toContain("草稿版本");
     expect(html).toContain("提案版本");
     expect(html).toContain("风险");
-    expect(html).toContain("审批要求");
+    expect(html).toContain("审批状态");
     expect(html).toContain("目标");
-    expect(html).toContain("Publish new Wiki page");
+    expect(html).toContain("发布新的知识库页面");
+    expect(html).toContain("技术校验信息");
+    expect(html).toContain('<details class="technical-details">');
+    expect(html).not.toContain('<details class="technical-details" open>');
     expect(html).toContain(context.actionTargetFingerprint);
     expect(html).not.toContain("ou_owner");
     expect(html).toContain('<form method="post" action="/review/action-proposals/proposal-1/attest">');
@@ -75,7 +78,7 @@ describe("action review renderer", () => {
 
     const html = renderActionReviewPage({ context, csrfToken: "csrf-1" });
 
-    expect(html).toContain("Replace the single managed body block on existing Wiki page");
+    expect(html).toContain("替换现有知识库页面中由 Iris 管理的正文区域");
     expect(html).toContain("managed-1");
     expect(html).toContain("blk_body");
     expect(html).toContain("snapshot-1");
@@ -108,15 +111,23 @@ describe("action review renderer", () => {
 
     const html = renderActionReviewPage({ context, csrfToken: "csrf-task" });
 
-    expect(html).toContain("Create one Feishu task");
+    expect(html).toContain("创建一个真实飞书任务");
+    expect(html).toContain("高风险（确认后将创建真实飞书任务）");
     expect(html).toContain("Ship &lt;pilot&gt;");
     expect(html).toContain("Archive &amp; verify the exact acceptance evidence.");
-    expect(html).toContain("ou_assignee");
-    expect(html).toContain("2026-08-24T06:00:00.000Z");
-    expect(html).toContain("30 minutes");
+    expect(html).toContain("你（当前审批人）");
+    expect(html).toContain("2026年8月24日 14:00");
+    expect(html).toContain("提前30分钟");
+    expect(html).toContain("你的审批：待处理");
+    expect(html).toContain("确认已审阅");
+    expect(html).not.toContain("ou_assignee");
     expect(html).toContain("task-policy-1 / 3");
     expect(html).toContain("d".repeat(64));
     expect(html).toContain("c".repeat(64));
+    const technicalDetailsStart = html.indexOf('<details class="technical-details">');
+    expect(technicalDetailsStart).toBeGreaterThan(0);
+    expect(html.indexOf("d".repeat(64))).toBeGreaterThan(technicalDetailsStart);
+    expect(html.indexOf("task-policy-1 / 3")).toBeGreaterThan(technicalDetailsStart);
   });
 
   it("uses semantic, local-only markup that keeps long values readable on narrow screens", () => {

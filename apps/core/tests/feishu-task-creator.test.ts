@@ -102,6 +102,7 @@ describe("FeishuTaskCreator", () => {
     { name: "concurrent token", status: 500, code: 1470422, expected: { kind: "retryable", code: "server_error" } },
     { name: "unauthorized", status: 401, code: 99991663, expected: { kind: "rejected", code: "unauthorized" } },
     { name: "forbidden", status: 403, code: 1470403, expected: { kind: "rejected", code: "forbidden" } },
+    { name: "missing app permission", status: 400, code: 99991672, expected: { kind: "rejected", code: "forbidden" } },
     { name: "invalid request", status: 400, code: 1470400, expected: { kind: "rejected", code: "invalid_request" } },
     { name: "missing target", status: 404, code: 1470404, expected: { kind: "rejected", code: "not_found" } },
   ])("classifies a create $name without exposing the response", async ({ status, code, expected }) => {
@@ -123,6 +124,17 @@ describe("FeishuTaskCreator", () => {
     });
     await expect(creator.getTask({ taskGuid: "task-guid-1" })).resolves.toEqual({
       kind: "missing",
+    });
+  });
+
+  it("rejects a readback when Feishu reports the app permission is missing", async () => {
+    const creator = createCreator({
+      fetch: vi.fn(async () => jsonResponse({ code: 99991672, msg: "missing scope" }, { status: 400 })),
+    });
+
+    await expect(creator.getTask({ taskGuid: "task-guid-1" })).resolves.toEqual({
+      kind: "rejected",
+      code: "forbidden",
     });
   });
 

@@ -185,6 +185,22 @@ export type RequestFormalTaskReconciliationResult = {
   retryAt: Date;
 };
 
+export type ResolveFormalTaskPermissionDeniedInput = {
+  executionId: string;
+  expectedExecutionVersion: number;
+  evidenceCode: "feishu_permission_denied";
+  operationKey: string;
+  operator: string;
+  at: Date;
+};
+
+export type ResolveFormalTaskPermissionDeniedResult = {
+  outcome: "applied" | "already_applied";
+  executionId: string;
+  state: "failed";
+  version: number;
+};
+
 export interface FormalTaskExecutionRepository {
   getStatusCounts(): Promise<FormalTaskExecutionStatusCounts>;
   listExecutionMetadata(input: {
@@ -195,6 +211,9 @@ export interface FormalTaskExecutionRepository {
   requestReconciliation(
     input: RequestFormalTaskReconciliationInput,
   ): Promise<RequestFormalTaskReconciliationResult>;
+  resolvePermissionDenied(
+    input: ResolveFormalTaskPermissionDeniedInput,
+  ): Promise<ResolveFormalTaskPermissionDeniedResult>;
   claimNextCreation(input: {
     runtimeGate: FeishuTaskCreationRuntimeGate;
     workerId: string;

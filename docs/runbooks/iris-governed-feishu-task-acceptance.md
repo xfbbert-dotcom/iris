@@ -131,6 +131,21 @@ status/readiness；不得依赖启动时缓存或旧 OAuth 会话。
 
 负向用例不得通过删除 append-only 事实“恢复”。每个用例结束后先排空在途项，再开始下一项。
 
+### 6.1 权限拒绝误判的受限收口
+
+仅当旧版本把飞书“应用未开通所需权限”误判为未知结果，并最终耗尽回查预算时，才允许使用
+`POST /internal/formal-task-executions/:id/resolve-permission-denied`。操作前必须同时确认：
+
+- execution 为 `reconciliation_required`，原因是 `reconciliation_budget_exhausted`；
+- execution 不含任何远端任务 GUID、ID 或 URL，且不存在 `feishu_task_creations` 事实；
+- 飞书官方响应已确认是创建前的权限拒绝，证据码只能提交
+  `feishu_permission_denied`；
+- 请求携带精确 execution version、唯一 operation key 和当前 operator 身份。
+
+该动作只把原 execution 与 proposal 终态化为 `failed`，并追加 `failed`/`execution_failed`
+审计事件；不得删除历史、伪造成功、重新发送旧任务或复用它规避新的真人请求与审批。任一条件
+不满足时必须保持 `reconciliation_required`，等待人工核查远端任务。
+
 ## 7. 内容无关证据模板
 
 仅在私有验收记录填写以下字段：

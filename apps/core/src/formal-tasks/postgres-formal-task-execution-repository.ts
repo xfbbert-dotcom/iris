@@ -17,6 +17,8 @@ import type {
   RecordFeishuTaskCreationFailureInput,
   RequestFormalTaskReconciliationInput,
   RequestFormalTaskReconciliationResult,
+  ResolveFormalTaskPermissionDeniedInput,
+  ResolveFormalTaskPermissionDeniedResult,
 } from "./formal-task-execution-repository.js";
 import type { PostgresFormalTaskDataSource } from "./postgres-formal-task-repository.js";
 
@@ -133,6 +135,7 @@ export function createPostgresFormalTaskExecutionRepository({
     getStatusCounts: () => getStatusCounts(dataSource),
     listExecutionMetadata: (input) => listExecutionMetadata(dataSource, input),
     requestReconciliation: (input) => requestReconciliation(dataSource, input),
+    resolvePermissionDenied: (input) => resolvePermissionDenied(dataSource, input),
     claimNextCreation: (input) => claimNextCreation(dataSource, input),
     claimReconciliationAttempt: (input) => claimReconciliationAttempt(dataSource, input),
     markExternalAttempt: (input) => markExternalAttempt(dataSource, input),
@@ -294,6 +297,137 @@ async function requestReconciliation(
       state: "outcome_unknown",
       version: nextVersion,
       retryAt: normalized.at,
+    };
+  });
+}
+
+async function resolvePermissionDenied(
+  dataSource: PostgresFormalTaskDataSource,
+  input: ResolveFormalTaskPermissionDeniedInput,
+): Promise<ResolveFormalTaskPermissionDeniedResult> {
+  const normalized = {
+    executionId: requireReference("executionId", input.executionId),
+    expectedExecutionVersion: requirePositiveInteger(
+      "expectedExecutionVersion",
+      input.expectedExecutionVersion,
+    ),
+    evidenceCode: input.evidenceCode,
+    operationKey: requireReference("operationKey", input.operationKey),
+    operator: requireReference("operator", input.operator),
+    at: requireDate(input.at),
+  };
+  if (normalized.evidenceCode !== "feishu_permission_denied") {
+    throw new FormalTaskExecutionPersistenceConflictError();
+  }
+  const responseClassification = `operator_confirmed_permission_denied:${hash(JSON.stringify({
+    executionId: normalized.executionId,
+    expectedExecutionVersion: normalized.expectedExecutionVersion,
+    evidenceCode: normalized.evidenceCode,
+    operator: normalized.operator,
+  }))}`;
+  return withTransaction(dataSource, async (client) => {
+    const execution = await lockExecution(client, normalized.executionId);
+    const replay = await client.query<{
+      execution_id: string;
+      event_type: string;
+      from_version: string | number | null;
+      to_version: string | number;
+      response_classification: string | null;
+    }>(
+      `SELECT execution_id, event_type, from_version, to_version, response_classification
+       FROM feishu_task_creation_execution_events WHERE operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      const event = replay.rows[0];
+      if (
+        event.execution_id !== normalized.executionId ||
+        event.event_type !== "failed" ||
+        Number(event.from_version) !== normalized.expectedExecutionVersion ||
+        event.response_classification !== responseClassification
+      ) throw new FormalTaskExecutionOperationConflictError();
+      return {
+        outcome: "already_applied",
+        executionId: normalized.executionId,
+        state: "failed",
+        version: Number(event.to_version),
+      };
+    }
+    const proposal = await lockProposal(client, execution.proposal_id);
+    const creation = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM feishu_task_creations WHERE execution_id = $1
+       ) AS exists`,
+      [normalized.executionId],
+    );
+    if (
+      execution.state !== "reconciliation_required" ||
+      Number(execution.version) !== normalized.expectedExecutionVersion ||
+      execution.response_classification !== "reconciliation_budget_exhausted" ||
+      execution.remote_task_guid !== null ||
+      execution.remote_task_id !== null ||
+      execution.remote_task_url !== null ||
+      proposal.status !== "reconciliation_required" ||
+      creation.rows[0]?.exists !== false
+    ) throw new FormalTaskExecutionPersistenceConflictError();
+
+    const nextVersion = normalized.expectedExecutionVersion + 1;
+    const updated = await client.query<{ id: string }>(
+      `UPDATE feishu_task_creation_executions
+       SET state = 'failed', response_classification = $2,
+           worker_id = NULL, lease_until = NULL, retry_at = NULL,
+           version = $3, updated_at = $4
+       WHERE id = $1 AND state = 'reconciliation_required' AND version = $5
+       RETURNING id`,
+      [
+        normalized.executionId,
+        responseClassification,
+        nextVersion,
+        normalized.at,
+        normalized.expectedExecutionVersion,
+      ],
+    );
+    if (updated.rows.length !== 1) throw new FormalTaskExecutionPersistenceConflictError();
+    await insertExecutionEvent(client, {
+      executionId: normalized.executionId,
+      eventType: "failed",
+      operationKey: normalized.operationKey,
+      fromVersion: normalized.expectedExecutionVersion,
+      toVersion: nextVersion,
+      responseClassification,
+      at: normalized.at,
+    });
+    const proposalVersion = Number(proposal.version);
+    const updatedProposal = await client.query<{ id: string }>(
+      `UPDATE action_proposals
+       SET status = 'failed', version = version + 1, updated_at = $2
+       WHERE id = $1 AND status = 'reconciliation_required' AND version = $3
+       RETURNING id`,
+      [proposal.id, normalized.at, proposalVersion],
+    );
+    if (updatedProposal.rows.length !== 1) {
+      throw new FormalTaskExecutionPersistenceConflictError();
+    }
+    await client.query(
+      `INSERT INTO action_events (
+         id, proposal_id, event_type, operation_key, from_version, to_version,
+         reason_code, created_at
+       ) VALUES ($1, $2, 'execution_failed', $3, $4, $5, $6, $7)`,
+      [
+        randomUUID(),
+        proposal.id,
+        derivedOperationKey("formal-task-proposal-permission-denied", [normalized.operationKey]),
+        proposalVersion,
+        proposalVersion + 1,
+        responseClassification,
+        normalized.at,
+      ],
+    );
+    return {
+      outcome: "applied",
+      executionId: normalized.executionId,
+      state: "failed",
+      version: nextVersion,
     };
   });
 }
