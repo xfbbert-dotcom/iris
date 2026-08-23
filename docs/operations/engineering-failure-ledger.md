@@ -60,6 +60,26 @@ delivery mistakes while implementing it.
   is single-attempt `sent`, all canonical queue/DLQ counters are zero, public boundaries pass, and
   the fail-closed timer is explicitly cancelled only after those gates.
 
+### Bind maintenance commands to the exact release context
+
+- **Failure:** A backup script invoked from an immutable release silently used its historical
+  `/opt/iris/repository` defaults. That checkout had an older image tag and stale feature flags, so
+  fail-closed cleanup recreated Core from the wrong image and stopped public ingress. A subsequent
+  correct backup also exceeded the generic 30-second Compose command timeout during `pg_dump`.
+- **Root cause:** The command location, repository directory, environment file, Compose file, backup
+  directory, and long-running snapshot timeout were treated as independent implicit defaults even
+  though an exact-SHA release requires them to be one deployment identity.
+- **Prevention rule:** Run release maintenance only with an explicit, matching release root,
+  environment file, Compose file, durable backup directory, and a measured snapshot timeout. Never
+  infer the active image from a mutable checkout or from the caller's current directory.
+- **Guard:** Keep Caddy closed until the running Core image ID matches the approved immutable tag,
+  private readiness is green, durable runtime and capabilities are disabled, unresolved action
+  counts are zero, and a fresh encrypted backup passes size, mode, and age-header checks. Treat a
+  maintenance timeout as fail closed and independently verify Core before retrying.
+- **Exit condition:** The exact candidate is healthy, public `/health` is `200`, public
+  `/internal/status` is `404`, the new encrypted backup is verified, and no maintenance process is
+  still running.
+
 ## External Providers
 
 ### Treat model capacity and latency as runtime state, not a code hypothesis

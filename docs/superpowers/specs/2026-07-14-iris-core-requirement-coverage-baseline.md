@@ -61,6 +61,24 @@
   requester, real group confirmation, the real assignee's OAuth review/approval, one fresh task
   with exact readback, one result card, zero unknown/recovery counts, and final safe-off rollback.
 
+## Status Amendment - 2026-08-24 Governed Task Safe Deployment
+
+- Commit `693f6f2a673acb2e2e61090c33f0ca37f1f4bfb5` is deployed as the exact Core and AI Worker
+  image candidate. Private readiness and consolidated health are green, the public health route
+  returns `200`, and the public internal-status route remains `404`.
+- The deployment is intentionally fail closed: global and desired runtime state are disabled, all
+  durable capabilities are disabled, the formal-task target policy is disabled, the task-creation,
+  review, approval-card, and knowledge-card deployment flags are disabled, and their bounded group
+  scopes are empty. The encrypted paired backup was recreated after deployment.
+- The prior permission-denied execution is now terminal `failed` through the bounded operator
+  recovery endpoint. Its evidence and event history remain append-only; unresolved execution,
+  remote creation, and result-presentation counts are zero.
+- This is still **not** a passed real task-creation loop. The required Feishu task-write permission
+  is not effective until the app permission range is deliberately configured and the app version is
+  published. Those external permission changes require an awake human confirmation. After that,
+  acceptance still needs one fresh user request, group confirmation, assignee OAuth review and
+  approval, exact task readback, one result card, and the final safe-off rollback.
+
 ## 3. 当前真实结论
 
 当前 Iris 不是“只有一句话问答”的空壳：安全接收群聊、共享最近上下文、读取群文档、读取授权知识库、实时权限防泄露、回答与引用、运行时停用和恢复、知识草稿确认审批与知识库发布都已经工作；主动信号发现和投递链路也已完成默认关闭代码路径，最小 Admin Console 已经可以承担基础运行控制、文档源治理、知识草稿队列观察、发布队列治理、主动候选治理和审计摘要查看。
