@@ -55,14 +55,17 @@ acceptance is pending; it is not delivered or deployed until the content-free ev
 immutable image/tag/SHA, timestamps, and operators. This does not alter the already accepted
 publication pilot facts above.
 
-Governed Feishu task creation is also implemented as a default-off candidate. One explicit chat
-request can produce a versioned formal-task draft, but Task v2 is called only after the same exact
-task-spec hash passes group confirmation, assignee OAuth review, designated-owner approval, final
-membership and runtime checks. The first rollout is restricted to one allowlisted group through
-`IRIS_FEISHU_TASK_CREATION_ENABLED=false` and an empty allowlist by default. No real task-creation
-acceptance is claimed until `docs/runbooks/iris-governed-feishu-task-acceptance.md` records one fresh
-task, exact readback, one result card, drained recovery counts, and the safe-off rollback for an
-immutable image/tag/SHA.
+Governed Feishu task creation is implemented and has passed one bounded real-Feishu acceptance.
+One explicit chat request produced a versioned formal-task draft, and Task v2 was called only after
+the same exact task-spec hash passed group confirmation, assignee OAuth review, designated-owner
+approval, final membership, and runtime checks. The run recorded one fresh task, exact official
+readback, one result card, drained recovery counts, and a safe-off rollback for an immutable
+image/tag/SHA. The capability remains default-off for ordinary daily chat through
+`IRIS_FEISHU_TASK_CREATION_ENABLED=false`, an empty allowlist, and disabled `generateTaskDrafts`,
+`createFeishuTasks`, and `callExternalTools` runtime gates. It may be reopened only for a separate
+intentional governed session; the acceptance evidence is recorded in
+`docs/superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md` and the operating
+contract remains `docs/runbooks/iris-governed-feishu-task-acceptance.md`.
 
 High-impact capabilities remain bounded: proactive deliveries require human review, knowledge-base
 writes open only for an intentional governed session, and every known non-pilot group remains

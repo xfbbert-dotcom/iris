@@ -147,9 +147,9 @@ Feishu group and 3-5 cooperative users. This is the minimum useful product profi
   `IRIS_ACTION_EXTRACTION_GROUP_IDS=<pilot-group-id>`;
 - keep `proactiveSpeech=false`, proactive planner/delivery environment gates off, and all proactive
   allowlists empty until a controller explicitly opens a separate observed delivery window;
-- keep `generateKnowledgeDrafts=false`, `writeKnowledgeBase=false`, and `callExternalTools=false`
-  during ordinary daily chat. Open the governed knowledge publication path only for an intentional
-  review/approval session;
+- keep `generateKnowledgeDrafts=false`, `generateTaskDrafts=false`, `createFeishuTasks=false`,
+  `writeKnowledgeBase=false`, and `callExternalTools=false` during ordinary daily chat. Open either
+  governed write path only for a separate intentional review/approval session;
 - keep every known non-pilot group durably disabled.
 
 Prepare this profile with Caddy stopped and live/durable global runtime disabled. Recreate Core only
