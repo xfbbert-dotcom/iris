@@ -45,7 +45,7 @@ export type ActionReviewSessionCodecDependencies = {
 export const ACTION_REVIEW_OAUTH_COOKIE_NAME = "__Host-iris_review_oauth";
 export const ACTION_REVIEW_SESSION_COOKIE_NAME = "__Host-iris_review_session";
 
-const oauthLifetimeSeconds = 300;
+const oauthLifetimeSeconds = 900;
 const sessionLifetimeSeconds = 900;
 const randomTokenPattern = /^[A-Za-z0-9_-]{43}$/u;
 const codeVerifierPattern = /^[A-Za-z0-9_-]{64}$/u;

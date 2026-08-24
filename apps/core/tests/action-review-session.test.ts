@@ -33,18 +33,20 @@ describe("ActionReviewSessionCodec", () => {
     ).toBeUndefined();
     expect(codec.readOAuthTransaction(nonCanonicalTransaction(transaction.cookieValue), transaction.state)).toBeUndefined();
 
-    current = new Date("2026-07-22T08:05:00.000Z");
+    current = new Date("2026-07-22T08:15:00.000Z");
     expect(codec.readOAuthTransaction(transaction.cookieValue, transaction.state)).toBeUndefined();
   });
 
-  it("accepts OAuth transactions until their exact expiry boundary", () => {
+  it("keeps OAuth transactions valid through a realistic human handoff and expires at 15 minutes", () => {
     let current = new Date("2026-07-22T08:00:00.000Z");
     const codec = createActionReviewSessionCodec({ secret: "x".repeat(32), now: () => current });
     const transaction = codec.createOAuthTransaction("proposal-1");
 
-    current = new Date("2026-07-22T08:04:59.999Z");
+    current = new Date("2026-07-22T08:05:22.000Z");
     expect(codec.readOAuthTransaction(transaction.cookieValue, transaction.state)).toBeDefined();
-    current = new Date("2026-07-22T08:05:00.000Z");
+    current = new Date("2026-07-22T08:14:59.999Z");
+    expect(codec.readOAuthTransaction(transaction.cookieValue, transaction.state)).toBeDefined();
+    current = new Date("2026-07-22T08:15:00.000Z");
     expect(codec.readOAuthTransaction(transaction.cookieValue, transaction.state)).toBeUndefined();
   });
 
@@ -71,7 +73,7 @@ describe("ActionReviewSessionCodec", () => {
     const codec = createActionReviewSessionCodec({ secret: "x".repeat(32), now });
 
     expect(codec.serializeOAuthTransactionCookie("signed-value")).toBe(
-      "__Host-iris_review_oauth=signed-value; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=300",
+      "__Host-iris_review_oauth=signed-value; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=900",
     );
     expect(codec.clearOAuthTransactionCookie()).toBe(
       "__Host-iris_review_oauth=; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",

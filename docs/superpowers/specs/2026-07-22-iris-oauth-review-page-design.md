@@ -67,7 +67,7 @@
 ### 4.2 OAuth 事务 Cookie
 
 - 名称：`__Host-iris_review_oauth`；
-- `Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=300`；
+- `Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=900`；
 - HMAC-SHA256 签名；
 - 只包含随机 state、proposal ID、PKCE verifier、签发和过期时间；
 - callback 必须同时匹配 query state 与 Cookie state；

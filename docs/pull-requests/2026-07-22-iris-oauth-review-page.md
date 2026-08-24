@@ -5,7 +5,7 @@
 本 PR 在 Phase 5B-2A 的 `ActionProposal` 与飞书审批卡片之上增加最小的完整正文审阅能力：
 
 - 飞书 OAuth Authorization Code + PKCE S256；
-- 5 分钟 OAuth 事务 Cookie 与 15 分钟签名审阅会话，不持久化 user token；
+- 15 分钟 OAuth 事务 Cookie 与 15 分钟签名审阅会话，不持久化 user token；
 - 已认证用户的实时 proposal、版本、证据、目标策略和角色复核；
 - 服务端渲染完整正文、内容哈希、风险、目标和审批要求；
 - Postgres append-only `action_review_attestations`；

@@ -571,3 +571,19 @@ delivery mistakes while implementing it.
 - **Guard:** Full repository typecheck, runtime assembly tests, and the root `npm run verify` gate.
 - **Exit condition:** Focused assembly tests and the complete verification pipeline pass on the
   same working tree.
+
+### Match the OAuth transaction window to the bounded human handoff
+
+- **Failure:** A legitimate reviewer returned from Feishu OAuth with a state and authorization code,
+  but the temporary transaction Cookie had expired, so Core correctly returned the generic
+  unavailable page and recorded no review fact.
+- **Root cause:** The five-minute OAuth transaction lifetime was shorter than the real card-to-browser
+  handoff, while the proposal-bound review session already allowed fifteen minutes.
+- **Prevention rule:** Keep the signed, single-use OAuth transaction bounded to fifteen minutes,
+  retain PKCE and exact state matching, and clear the transaction Cookie on every callback outcome.
+- **Guard:** Session-codec behavior tests prove a transaction remains valid after five minutes,
+  remains valid immediately before fifteen minutes, expires at the exact boundary, and serializes
+  the same lifetime into the host-only Cookie.
+- **Exit condition:** The exact-SHA pilot completes one OAuth review on the existing proposal without
+  a duplicate draft, proposal, approval, execution, or remote task, then restores the full safe-off
+  profile.
