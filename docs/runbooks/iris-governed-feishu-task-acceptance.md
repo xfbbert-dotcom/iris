@@ -10,8 +10,9 @@
   OAuth 审阅和批准。机器人、管理员代批和内部 API 伪造均不算通过。
 - 候选提交、Core 镜像标签和实际运行镜像必须是同一个不可变 SHA；相关 CI 全部成功。
 - 只允许创建一个全新、可安全删除或关闭的验收任务。不得复用已有任务或生产交付事项。
-- 开始和结束时必须为安全关闭：global 与全部已知群 disabled，`generateTaskDrafts=false`、
-  `createFeishuTasks=false`、`callExternalTools=false`，任务创建 env disabled 且 allowlist 为空。
+- 开始和结束时必须为安全关闭：global 与全部已知群 disabled，`readGroupContext=false`、
+  `replyWhenMentioned=false`、`generateTaskDrafts=false`、`createFeishuTasks=false`、
+  `callExternalTools=false`，任务创建 env disabled 且 allowlist 为空。
 - formal-task pending/claimed/external-attempting/failed/outcome-unknown/reconciliation-required、
   result pending/processing/failed/outcome-unknown，以及相关队列/DLQ 最终全部为 `0`。
 - 任何身份、版本、哈希、成员关系、迁移、运行时、外部回读或计数不一致时立即回滚，
@@ -65,7 +66,8 @@ global/群/capability disabled，确认：
 
 - task creation runtime 只识别一个群且 worker running；
 - knowledge-card、action-approval、action-review 均 healthy；
-- `generateTaskDrafts`、`createFeishuTasks`、`callExternalTools` 仍为 false；
+- `readGroupContext`、`replyWhenMentioned`、`generateTaskDrafts`、`createFeishuTasks`、
+  `callExternalTools` 仍为 false；
 - 非 pilot 群和全部未知群继续 fail closed。
 
 在上述 durable gate 仍全部关闭时，为 pilot 群选用稳定不变的 policy ID，并先调用 bearer
@@ -98,7 +100,7 @@ global/群/capability disabled，确认：
 `allowedAssigneeCount=1`。接口响应不返回负责人 open ID；命令输出和验收附件也不得记录群 ID、
 负责人 ID 或请求正文。
 
-随后只对唯一 pilot 群开启 global、群以及上述三个 capability。每次开关后重新读取 live
+随后只对唯一 pilot 群开启 global、群以及上述五个 capability。每次开关后重新读取 live
 status/readiness；不得依赖启动时缓存或旧 OAuth 会话。
 
 ## 5. 真人成功闭环
@@ -178,8 +180,9 @@ rollback_safe_off=true
 
 完成或任一失败后按顺序执行：
 
-1. durable-disable `callExternalTools`、`createFeishuTasks`、`generateTaskDrafts`，再 disable
-   pilot 群与 global；等待当前已承诺的结果持久化完成，不接受新 claim。使用策略接口和
+1. durable-disable `callExternalTools`、`createFeishuTasks`、`generateTaskDrafts`、
+   `replyWhenMentioned`、`readGroupContext`，再 disable pilot 群与 global；等待当前已承诺的
+   结果持久化完成，不接受新 claim。使用策略接口和
    当前精确版本把本轮任务目标策略更新为 `enabled=false`，保留版本与操作事实。
 2. 将 `.env.pilot` 恢复为 `IRIS_FEISHU_TASK_CREATION_ENABLED=false` 和空 allowlist，重建
    Core；knowledge-card/action-approval/action-review 的临时同群配置也恢复为默认关闭。

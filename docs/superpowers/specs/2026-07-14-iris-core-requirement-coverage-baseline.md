@@ -27,7 +27,7 @@
 | IRIS-CORE-010 | Iris 读取所在群中出现过的可读文档正文 | 已实现 | 群文档链接发现、正文抓取、来源证据、同步、索引、群可见检索和真实飞书验收 | 后续扩展更多文件类型和解析质量 |
 | IRIS-CORE-011 | Iris 读取用户手动提供的文档 | 内部 MVP 已实现 | 手动文档注册、同步、来源策略和回答检索；Admin Console 与飞书群内显式提交命令均可登记 `user_submitted_document` 并入队同步；真实飞书验收验证全新文档提交、双 evidence 幂等、同步/索引、实时权限校验、后续普通问题命中目标文档且未误入提交命令路径 | 更细的用户级文档治理和更多文件类型进入 backlog；日常 pilot 观察员工提示语与引用质量 |
 | IRIS-CORE-012 | 文档/知识库权限撤销后不得继续泄露内容 | 已实现核心边界 | 答前实时 Feishu Permission Guard；拒绝审计；fail closed；权限回收真实验收 | 后续增加权限变更主动失效和批量回收，但答前安全边界已成立 |
-| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 首个通用审批闭环、完整正文审阅和首个执行器已通过真实 pilot；建任务候选已本地实现 | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实，并已通过真实 Feishu OAuth review pilot；5B-3 已把首个批准后的 `publish_knowledge_draft` proposal 幂等发布到授权 Feishu wiki root；`create_feishu_task` 复用同一 proposal/review/approval 契约，并增加精确 assignee、task-spec hash、Task v2 client token、执行/回查/结果事实；内部 API 不能伪造人工批准 | 建任务仍须完成单群真实 Feishu 验收后才可称为已交付；跨群通知、批量审批、复杂协作编辑和更细 reviewer 映射进入 backlog |
+| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 通用审批、完整正文审阅、知识发布与受治理建任务均已通过真实 pilot | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实，并已通过真实 Feishu OAuth review pilot；5B-3 已把首个批准后的 `publish_knowledge_draft` proposal 幂等发布到授权 Feishu wiki root；`create_feishu_task` 真实单群 pilot 复用了同一 proposal/review/approval 契约，并验证精确 assignee、task-spec hash、Task v2 client token、唯一远端任务、官方回读、唯一结果卡和最终安全关闭；内部 API 不能伪造人工批准 | 跨群通知、批量审批、复杂协作编辑和更细 reviewer 映射进入 backlog；日常 pilot 继续观察可读性与业务语言质量 |
 | IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 最小 Admin Console 已实现 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收；`/admin` 浏览器控制台可读取系统状态、readiness、runtime control，并可操作全局、群和 capability 开关；同一控制台可查看文档源摘要、同步健康、权限状态，并可按源切换回答/知识草稿策略与触发手动同步；知识草稿和正式任务草稿/执行仅暴露内容无关摘要，并提供安全请求修改/拒绝/回查入口；action proposal 队列可查看 pending/approved/executing/failed/reconciliation work 并执行安全请求修改/拒绝；主动候选治理可扫描单个显式群、查看候选并执行 dismiss / approve delivery；审计摘要视图可按事件类型/文档过滤查看 retained/dropped/inspected/matching 与聚合事件窗口；Caddy 仅放行精确静态 console 路由，`/internal/*` 仍保持 404 | 仍需增加持久化审计仓库和正式管理员身份模型；当前版本先满足 20-30 人内部运行控制 |
 | IRIS-CORE-015 | 多人安装和多公司使用 | 按白皮书延期 | 白皮书演进阶段 4 明确 multi-company / multi-tenant productization | 内部 MVP 稳定后增加 tenant ID、安装流程、租户密钥/数据隔离、租户管理员和计费 |
 
@@ -53,31 +53,31 @@
   bounded reconciliation, a source-group result card, lifecycle composition, readiness, and
   content-free operator recovery.
 - Deployment remains fail closed through `IRIS_FEISHU_TASK_CREATION_ENABLED=false`, an empty
-  one-group allowlist, and durable `generateTaskDrafts`, `createFeishuTasks`, and
-  `callExternalTools` capabilities. No model output or internal operator endpoint can manufacture
-  a confirmation, review attestation, approval, or new remote task.
-- This amendment records local implementation only. IRIS-CORE-013 is not upgraded for task
-  creation until the production-safe runbook records immutable SHA/image identity, one real
+  one-group allowlist, and durable `readGroupContext`, `replyWhenMentioned`,
+  `generateTaskDrafts`, `createFeishuTasks`, and `callExternalTools` capabilities. No model output
+  or internal operator endpoint can manufacture a confirmation, review attestation, approval, or
+  new remote task.
+- The production-safe runbook subsequently recorded immutable SHA/image identity, one real
   requester, real group confirmation, the real assignee's OAuth review/approval, one fresh task
   with exact readback, one result card, zero unknown/recovery counts, and final safe-off rollback.
 
-## Status Amendment - 2026-08-24 Governed Task Safe Deployment
+## Status Amendment - 2026-08-24 Governed Task Real Pilot
 
-- Commit `693f6f2a673acb2e2e61090c33f0ca37f1f4bfb5` is deployed as the exact Core and AI Worker
-  image candidate. Private readiness and consolidated health are green, the public health route
-  returns `200`, and the public internal-status route remains `404`.
-- The deployment is intentionally fail closed: global and desired runtime state are disabled, all
-  durable capabilities are disabled, the formal-task target policy is disabled, the task-creation,
-  review, approval-card, and knowledge-card deployment flags are disabled, and their bounded group
-  scopes are empty. The encrypted paired backup was recreated after deployment.
-- The prior permission-denied execution is now terminal `failed` through the bounded operator
-  recovery endpoint. Its evidence and event history remain append-only; unresolved execution,
-  remote creation, and result-presentation counts are zero.
-- This is still **not** a passed real task-creation loop. The required Feishu task-write permission
-  is not effective until the app permission range is deliberately configured and the app version is
-  published. Those external permission changes require an awake human confirmation. After that,
-  acceptance still needs one fresh user request, group confirmation, assignee OAuth review and
-  approval, exact task readback, one result card, and the final safe-off rollback.
+- Commit `1eb86c2b10d27becfdc3aa4f99d0bfbd32844ecf` is deployed as the exact Core and AI Worker candidate after
+  fixing the result-dispatcher's unscoped runtime gate. Typecheck, build, all 3,921 Core tests and
+  both focused result-delivery suites passed. The unrelated Windows restore-behavior suite reported
+  177/178 because one simulated restart cleanup took 11.68 seconds against its 11.5-second bound;
+  no pilot operations file changed in this fix.
+- One real requester produced one formal-task draft and proposal. The real assignee completed OAuth
+  review and approval. Exactly one execution, remote task, creation fact, result presentation and
+  successful result-card event were recorded; a later worker cycle kept all counts at one.
+- Official Feishu Task v2 readback matched remote identity, title, description, the unique assignee,
+  due and reminder without recording any private content or identifiers in acceptance output.
+- Final rollback disabled all five temporary capabilities, the pilot group, global runtime and the
+  target policy; restored the task/review/card deployment environment to default-off; rebuilt Core;
+  kept Caddy stopped; retained append-only facts; and verified formal-task, approval, card and
+  platform in-flight/DLQ/unknown/reconciliation counts at zero. Core, Postgres, Redis and AI Worker
+  remained healthy.
 
 ## 3. 当前真实结论
 
