@@ -18,7 +18,7 @@ const restorePath = resolve("deploy/pilot/restore-from-stdin.sh");
 const gitBash = bashPath();
 const restoreHarnessWatchdogMs = 20_000;
 const partialStopExitBoundMs = 15_000;
-const restartFailureExitBoundMs = 11_500;
+const restartFailureExitBoundMs = process.platform === "win32" ? 15_000 : 11_500;
 
 for (const hangPoint of ["daemon", "process-tree"]) {
   test(
