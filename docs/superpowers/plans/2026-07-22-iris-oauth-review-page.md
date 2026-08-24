@@ -14,7 +14,7 @@
 - `IRIS_ACTION_REVIEW_ENABLED` 默认 `false`；关闭时现有 5B-2A 行为与测试不变。
 - Web 页面不能创建 approval 或 execution；批准只接受飞书卡片回调。
 - 不持久化或记录 user access token、refresh token、正文、证据原文或用户 open ID 到普通日志。
-- Cookie 固定 `Secure; HttpOnly; SameSite=Lax; Path=/`；OAuth 事务 300 秒，审阅会话 900 秒。
+- Cookie 固定 `Secure; HttpOnly; SameSite=Lax; Path=/`；OAuth 事务 900 秒，审阅会话 900 秒。
 - 所有外部响应有 5 秒超时、响应体预算和稳定错误分类。
 - Caddy 只开放三个精确 review 路由；所有 `/internal/*` 继续 404。
 - 不添加前端框架或 OAuth 依赖。
