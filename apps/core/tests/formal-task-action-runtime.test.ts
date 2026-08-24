@@ -79,6 +79,14 @@ describe("FormalTaskActionRuntime", () => {
     expect(dependencies.createResultDispatcher).toHaveBeenCalledWith(expect.objectContaining({
       cardClient: dependencies.cardClient,
     }));
+    const resultDispatcherInput = dependencies.createResultDispatcher.mock.calls[0]![0];
+    expect(resultDispatcherInput.canSendResultCards()).toBe(true);
+    expect(resultDispatcherInput.canSendResultCards("oc_pilot")).toBe(true);
+    expect(resultDispatcherInput.canSendResultCards("oc_other")).toBe(false);
+    runtimeController.setCapability("callExternalTools", false);
+    expect(resultDispatcherInput.canSendResultCards()).toBe(false);
+    expect(resultDispatcherInput.canSendResultCards("oc_pilot")).toBe(false);
+    runtimeController.setCapability("callExternalTools", true);
     expect(runtime.canUseFormalTaskActionsForSourceGroup("oc_pilot")).toBe(true);
     expect(runtime.canUseFormalTaskActionsForSourceGroup("oc_other")).toBe(false);
 

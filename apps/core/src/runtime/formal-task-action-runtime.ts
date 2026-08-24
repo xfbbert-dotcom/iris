@@ -106,6 +106,9 @@ export function createFormalTaskActionRuntime({
       snapshot.groupAllowlist.includes(normalized) &&
       !snapshot.disabledGroupIds.includes(normalized);
   };
+  const canSendResultCards = (groupId?: string): boolean => groupId === undefined
+    ? config.groupAllowlist.some((allowedGroupId) => canUseGroup(allowedGroupId))
+    : canUseGroup(groupId);
 
   if (config.enabled) {
     const feishuConfig = readFeishuOpenApiConfig(env);
@@ -146,7 +149,7 @@ export function createFormalTaskActionRuntime({
     )({
       repository: executionRepository,
       cardClient: knowledgeCardRuntime!.approvalInteractions.cardClient,
-      canSendResultCards: canUseGroup,
+      canSendResultCards,
       workerId: RESULT_DISPATCHER_WORKER_ID,
       leaseMs: config.leaseMs,
       retryDelayMs: config.retryDelayMs,
