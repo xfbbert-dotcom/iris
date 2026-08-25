@@ -138,6 +138,8 @@ const FORMAL_TASK_DRAFT_MODEL_UNAVAILABLE =
   "模型服务暂时不可用，未创建任务草稿。请稍后再 @我一次。";
 const FORMAL_TASK_DRAFT_MODEL_INVALID_ERROR_MESSAGE =
   "formal task draft model response is invalid";
+const MEETING_CALENDAR_ACTION_UNAVAILABLE =
+  "当前尚未接入会议/日历执行，未创建任何会议或日程。";
 const formalTaskDraftIntentPatterns = [
   /(?:创建|新建|生成|起草|准备|整理).{0,20}(?:一个|一份|一项)?(?:飞书)?任务(?:草稿)?/u,
   /(?:把|将).{0,48}(?:整理|转换|变成|转成).{0,8}(?:飞书)?任务草稿/u,
@@ -175,6 +177,20 @@ const userSubmittedDocumentIntentPatterns = [
   /\bread\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
   /(?:\u8bf7(?:\u4f60)?|\u5e2e\u6211|\u5e2e\u5fd9|\u9ebb\u70e6(?:\u4f60)?)\s*(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)?\u6587\u6863/u,
   /(?:^|\s)(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)\u6587\u6863(?:\s|$|[\uff0c\u3002\uff01\uff1f,.!?])/u,
+] as const;
+const meetingCalendarActionIntentPatterns = [
+  /(?:预定|预订|预约|安排|创建|新建|发起|添加).{0,32}(?:会议(?!纪要|记录|材料|议程|摘要|总结)|日程|日历事件)/u,
+  /(?:把|将).{0,32}(?:会议|行程).{0,16}(?:加到|添加到|写入|放到).{0,12}(?:日历|日程)/u,
+  /\b(?:schedule|book|create|add)\b.{0,40}\b(?:meeting(?!\s+(?:notes?|minutes?|agenda|summary))|calendar\s+event)\b/iu,
+] as const;
+const negatedMeetingCalendarActionPatterns = [
+  /(?:不要|别|无需|不用|禁止|取消)[^，。；！？,.;!?\r\n]{0,24}(?:预定|预订|预约|安排|创建|新建|发起|添加)[^，。；！？,.;!?\r\n]{0,24}(?:会议|日程|日历事件)/u,
+  /\b(?:do\s+not|don't|dont|never)\b.{0,40}\b(?:schedule|book|create|add)\b.{0,40}\b(?:meeting|calendar\s+event)\b/iu,
+] as const;
+const meetingCalendarActionQuestionPatterns = [
+  /^(?:如何|怎么|怎样|为什么|何时|哪里|在哪).{0,64}(?:预定|预订|预约|安排|创建|新建|发起|添加).{0,32}(?:会议|日程|日历事件)/u,
+  /(?:预定|预订|预约|安排|创建|新建|发起|添加).{0,32}(?:会议|日程|日历事件).{0,24}(?:需要什么|怎么|如何|什么流程|哪些步骤|有什么要求)[？?]?$/u,
+  /^(?:how|what|why|when|where)\b.{0,80}\b(?:schedule|book|create|add)\b.{0,40}\b(?:meeting|calendar\s+event)\b/iu,
 ] as const;
 
 export function createFeishuMentionAnswerResponder({
@@ -375,6 +391,19 @@ export function createFeishuMentionAnswerResponder({
             await replier.replyText({
               messageId: input.messageId,
               text: USER_SUBMITTED_DOCUMENT_CONFIRMATION,
+              replyInThread: true,
+              uuid: replyUuid,
+            }),
+          );
+          replyDeduper.markHandled(input.messageId);
+          return result;
+        }
+
+        if (detectUnsupportedMeetingCalendarAction(fullQuestion)) {
+          const result = toRepliedResult(
+            await replier.replyText({
+              messageId: input.messageId,
+              text: MEETING_CALENDAR_ACTION_UNAVAILABLE,
               replyInThread: true,
               uuid: replyUuid,
             }),
@@ -621,6 +650,14 @@ function detectFormalTaskDraftCommand(text: string): boolean {
     formalTaskDraftQuestionPatterns.some((pattern) => pattern.test(text))
   ) return false;
   return formalTaskDraftIntentPatterns.some((pattern) => pattern.test(text));
+}
+
+function detectUnsupportedMeetingCalendarAction(text: string): boolean {
+  if (
+    negatedMeetingCalendarActionPatterns.some((pattern) => pattern.test(text)) ||
+    meetingCalendarActionQuestionPatterns.some((pattern) => pattern.test(text))
+  ) return false;
+  return meetingCalendarActionIntentPatterns.some((pattern) => pattern.test(text));
 }
 
 function collectTaskAssigneeOpenIds(

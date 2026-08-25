@@ -160,6 +160,197 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledOnce();
   });
 
+  it("rejects an explicit meeting-booking request without sending it to ordinary answering", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const answerReplyDeliveryService = {
+      respond: vi.fn(async () => ({ replyMessageId: "reply-ordinary-answer" })),
+    };
+    const formalTaskDraftCommand = {
+      execute: vi.fn<ChatFormalTaskDraftCommand["execute"]>(),
+    };
+    const replier = {
+      replyText: vi.fn(async () => ({ replyMessageId: "reply-meeting-unavailable" })),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      answerReplyDeliveryService,
+      formalTaskDraftCommand,
+      replier,
+    });
+
+    await expect(responder.maybeRespond({
+      messageId: "om_book_meeting",
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      senderOpenId: "ou_requester",
+      text: "@_user_1 周四我要参加奇绩创坛的管访，请帮我预定一个会议，负责人是 @_user_2",
+      mentions: [
+        { key: "@_user_1", openId: "ou_iris", name: "Iris" },
+        { key: "@_user_2", openId: "ou_owner", name: "奇怪" },
+      ],
+    })).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-meeting-unavailable",
+    });
+
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_book_meeting",
+      text: "当前尚未接入会议/日历执行，未创建任何会议或日程。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+    expect(formalTaskDraftCommand.execute).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(answerReplyDeliveryService.respond).not.toHaveBeenCalled();
+  });
+
+  it("keeps a meeting-booking process question on the ordinary answer path", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "会议预定流程说明。",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const replier = {
+      replyText: vi.fn(async () => ({ replyMessageId: "reply-meeting-process" })),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_meeting_process_question",
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      text: "@_user_1 如何预定公司管访会议？",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith(expect.objectContaining({
+      question: "如何预定公司管访会议？",
+    }));
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "会议预定流程说明。",
+    }));
+  });
+
+  it("keeps meeting-material creation on the ordinary answer path", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "会议纪要草稿。",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const replier = {
+      replyText: vi.fn(async () => ({ replyMessageId: "reply-meeting-notes" })),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_create_meeting_notes",
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      text: "@_user_1 请帮我创建一份会议纪要",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith(expect.objectContaining({
+      question: "请帮我创建一份会议纪要",
+    }));
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "会议纪要草稿。",
+    }));
+  });
+
+  it("keeps a negated meeting action with a process question on the ordinary answer path", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "会议预定流程说明。",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const replier = {
+      replyText: vi.fn(async () => ({ replyMessageId: "reply-negated-meeting" })),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_negated_meeting_action",
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      text: "@_user_1 不要帮我预定会议，请告诉我预定流程",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith(expect.objectContaining({
+      question: "不要帮我预定会议，请告诉我预定流程",
+    }));
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "会议预定流程说明。",
+    }));
+  });
+
+  it("keeps an explicit formal-task draft ahead of unsupported meeting-action routing", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const formalTaskDraftCommand = {
+      execute: vi.fn<ChatFormalTaskDraftCommand["execute"]>(async () => ({
+        status: "created",
+        draftId: "formal-task-draft-meeting",
+        presentationId: "formal-task-presentation-meeting",
+      })),
+    };
+    const replier = {
+      replyText: vi.fn(async () => ({ replyMessageId: "reply-meeting-task-draft" })),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      formalTaskDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_meeting_task_draft",
+      chatId: "oc_pilot",
+      senderId: "ou_requester",
+      senderOpenId: "ou_requester",
+      text: "@_user_1 请给 @_user_2 创建一个飞书任务草稿，描述为安排周四的管访会议",
+      mentions: [
+        { key: "@_user_1", openId: "ou_iris", name: "Iris" },
+        { key: "@_user_2", openId: "ou_owner", name: "奇怪" },
+      ],
+    });
+
+    expect(formalTaskDraftCommand.execute).toHaveBeenCalledOnce();
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "任务草稿已生成，尚未创建或分配飞书任务。请在群确认卡片中核对。",
+    }));
+  });
+
   it("handles an explicit knowledge-draft command before ordinary answer drafting", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const answerReplyDeliveryService = { respond: vi.fn() };
