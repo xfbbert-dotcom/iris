@@ -592,7 +592,9 @@ describe("AnswerDraftOrchestrator", () => {
         expect.objectContaining({ citationRef: "D1", text: "Document premise" }),
         expect.objectContaining({ citationRef: "A1", text: expect.stringContaining("验证目标") }),
       ],
-      liveChatMessages: [],
+      liveChatMessages: [
+        { speaker: "Alice", text: "目标会随体验积累而变化。" },
+      ],
     }));
     expect(JSON.stringify(vi.mocked(planner.plan).mock.calls[0]?.[0].evidence))
       .not.toContain(question);
@@ -604,7 +606,9 @@ describe("AnswerDraftOrchestrator", () => {
         expect.objectContaining({ citationRef: "D1" }),
         expect.objectContaining({ citationRef: "A1" }),
       ],
-      liveChatMessages: [],
+      liveChatMessages: [
+        { speaker: "Alice", text: "目标会随体验积累而变化。" },
+      ],
     }));
     expect(result.citedSourceRefs).toEqual(["D1"]);
   });

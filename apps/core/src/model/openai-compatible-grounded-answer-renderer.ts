@@ -21,6 +21,8 @@ const MAX_RENDERER_SPEAKER_CHARS = 256;
 const MAX_RENDERER_LIVE_CHAT_TEXT_CHARS = 2000;
 const MAX_RENDERED_ANSWER_CHARS = 8000;
 const RENDER_RESULT_FIELDS = new Set(["answerText", "evidenceState", "confidence"]);
+const CHINESE_NO_EVIDENCE_ANSWER =
+  "现有可用资料不足以回答这个问题。请补充与问题直接相关的群聊记录、知识库内容或其他可靠信息。";
 
 const GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT = [
   "You are Iris, rendering a validated evidence plan for an internal work chat.",
@@ -77,6 +79,19 @@ export function createOpenAICompatibleGroundedAnswerRenderer({
             "conflict grounded answer text",
           ),
           evidenceState: "conflict",
+          confidence: normalized.plan.confidence,
+        };
+      }
+      if (
+        normalized.plan.evidenceState === "none"
+        && /\p{Script=Han}/u.test(normalized.question)
+      ) {
+        if (normalized.plan.confidence === null) {
+          throw new Error("grounded answer requires a company-fact evidence plan");
+        }
+        return {
+          answerText: CHINESE_NO_EVIDENCE_ANSWER,
+          evidenceState: "none",
           confidence: normalized.plan.confidence,
         };
       }

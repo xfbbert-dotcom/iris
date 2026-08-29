@@ -55,6 +55,33 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
     expect(client.complete).not.toHaveBeenCalled();
   });
 
+  it("does not expose a long English template for a Chinese no-evidence answer", async () => {
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText:
+        "知识库中没有相关依据。Needed information: live chat history prior to the current turn.",
+      evidenceState: "none",
+      confidence: "low",
+    })) };
+
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "我们刚才聊了什么？",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "none",
+        premises: [],
+        proposedAnswer: null,
+        missingInformation: ["Prior live chat history"],
+        confidence: "low",
+      },
+      evidence: [],
+      liveChatMessages: [],
+    });
+
+    expect(result).toMatchObject({ evidenceState: "none", confidence: "low" });
+    expect(result.answerText).toMatch(/[\p{Script=Han}]/u);
+    expect(result.answerText).not.toMatch(/[A-Za-z]{4,}(?:\s+[A-Za-z]{4,}){2,}/u);
+  });
+
   it("accepts a partial answer only when state and confidence echo the plan", async () => {
     const client = {
       complete: vi.fn(async (_messages: readonly OpenAICompatibleChatMessage[]) => JSON.stringify({

@@ -273,6 +273,10 @@ export function createAnswerDraftOrchestrator({
             }
             citedSourceRefs = [];
           } else {
+            const planningLiveChatMessages = selectPlanningLiveChatMessages(
+              question,
+              context.liveChatMessages ?? [],
+            );
             const evidence = buildPlanningEvidence(question, context);
             const plan = conflictPlan?.plan ?? await runObservedProviderRequest({
               observer: agentExecutionObserver,
@@ -283,7 +287,7 @@ export function createAnswerDraftOrchestrator({
               request: () => planner.plan({
                 question,
                 evidence,
-                liveChatMessages: [],
+                liveChatMessages: planningLiveChatMessages,
               }),
             });
             if (plan.taskMode !== "company_fact") {
@@ -316,7 +320,7 @@ export function createAnswerDraftOrchestrator({
                 question,
                 plan,
                 evidence: selectedEvidence,
-                liveChatMessages: [],
+                liveChatMessages: planningLiveChatMessages,
               }),
             });
             answerText = truncateAnswerDraftText(rendered.answerText.trim());
@@ -421,13 +425,10 @@ function buildPlanningEvidence(
   question: string,
   context: DocumentRetrievalContextResult,
 ): EvidencePlanningDocument[] {
-  const normalizedQuestion = question.trim();
-  const liveChatEvidence = (context.liveChatMessages ?? [])
-    .filter(({ text }) => {
-      const normalizedText = text.trim();
-      return normalizedText !== normalizedQuestion && !normalizedText.endsWith(normalizedQuestion);
-    })
-    .slice(-MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES)
+  const liveChatEvidence = selectPlanningLiveChatMessages(
+    question,
+    context.liveChatMessages ?? [],
+  )
     .map((message, index) => ({
       citationRef: `C${index + 1}`,
       source: `live_chat:${index + 1}`,
@@ -471,6 +472,19 @@ function buildPlanningEvidence(
     ...documentEvidence,
     ...actionEvidence,
   ];
+}
+
+function selectPlanningLiveChatMessages(
+  question: string,
+  liveChatMessages: LiveChatMessage[],
+): LiveChatMessage[] {
+  const normalizedQuestion = question.trim();
+  return liveChatMessages
+    .filter(({ text }) => {
+      const normalizedText = text.trim();
+      return normalizedText !== normalizedQuestion && !normalizedText.endsWith(normalizedQuestion);
+    })
+    .slice(-MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES);
 }
 
 function selectEvidenceForPlan(
