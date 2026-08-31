@@ -82,6 +82,37 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
     expect(result.answerText).not.toMatch(/[A-Za-z]{4,}(?:\s+[A-Za-z]{4,}){2,}/u);
   });
 
+  it("does not expose the English conjecture policy term in a Chinese partial answer", async () => {
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText:
+        "缺乏更早的具体讨论记录。基于当前证据，以下结论是一个 conjecture：我们之前讨论过算法工程师的职责。",
+      evidenceState: "partial",
+      confidence: "low",
+    })) };
+
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "还记得我们之前讨论的关于算法工程师的内容吗？",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "partial",
+        premises: [{ citationRef: "C1", statement: "这个群用于跨群知识验收。" }],
+        proposedAnswer: "我们之前讨论过算法工程师的职责。",
+        missingInformation: ["更早的具体讨论记录"],
+        confidence: "low",
+      },
+      evidence: [{
+        citationRef: "C1",
+        source: "live_chat:1",
+        text: "这个群用于跨群知识验收。",
+      }],
+      liveChatMessages: [{ speaker: "奇怪", text: "这个群用于跨群知识验收。" }],
+    });
+
+    expect(result).toMatchObject({ evidenceState: "partial", confidence: "low" });
+    expect(result.answerText).toContain("推测");
+    expect(result.answerText).not.toMatch(/\bconjecture\b/iu);
+  });
+
   it("accepts a partial answer only when state and confidence echo the plan", async () => {
     const client = {
       complete: vi.fn(async (_messages: readonly OpenAICompatibleChatMessage[]) => JSON.stringify({

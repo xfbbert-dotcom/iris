@@ -99,12 +99,13 @@ export function createOpenAICompatibleGroundedAnswerRenderer({
         { role: "system", content: GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT },
         { role: "user", content: JSON.stringify(normalized) },
       ];
-      return parseRenderResult(
+      const rendered = parseRenderResult(
         await client.complete(messages, {
           responseFormat: createGroundedAnswerResponseFormat(normalized.plan),
         }),
         normalized.plan,
       );
+      return localizeChinesePartialPolicyTerms(normalized.question, rendered);
     },
   };
 }
@@ -223,6 +224,24 @@ function parseRenderResult(content: string, plan: EvidencePlan): GroundedAnswerR
     throw new Error("grounded answer confidence does not match evidence plan");
   }
   return { answerText, evidenceState, confidence };
+}
+
+function localizeChinesePartialPolicyTerms(
+  question: string,
+  result: GroundedAnswerRenderResult,
+): GroundedAnswerRenderResult {
+  if (result.evidenceState !== "partial" || !/\p{Script=Han}/u.test(question)) {
+    return result;
+  }
+
+  const answerText = result.answerText
+    .replace(/[ \t]*\bconjecture\b[ \t]*/giu, "推测")
+    .replace(/\blow[ \t]+confidence\b/giu, "低置信度")
+    .replace(/\bmedium[ \t]+confidence\b/giu, "中等置信度")
+    .replace(/\bhigh[ \t]+confidence\b/giu, "高置信度")
+    .replace(/[ \t]*\bconfidence\b[ \t]*/giu, "置信度");
+
+  return answerText === result.answerText ? result : { ...result, answerText };
 }
 
 function readEvidenceState(value: unknown): EvidenceState {
