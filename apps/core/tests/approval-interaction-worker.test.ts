@@ -759,7 +759,7 @@ describe("ApprovalInteractionWorker", () => {
     expect(processFeedback).not.toHaveBeenCalled();
   });
 
-  it("acknowledges a required action review with the generic review message", async () => {
+  it("acknowledges a required action review without replacing the actionable approval card", async () => {
     const harness = createHarness({
       job: actionJob(),
       actionApprovalWorker: {
@@ -777,9 +777,7 @@ describe("ApprovalInteractionWorker", () => {
     }]);
     expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
     expect(harness.queue.handleFailure).not.toHaveBeenCalled();
-    const cardJson = harness.cardClient.updateCard.mock.calls[0]?.[0]?.cardJson as string;
-    expect(cardJson).toContain("请先打开完整正文审阅页并完成审阅");
-    expect(cardJson).not.toMatch(/proposal-1|ou_owner|role|存在/iu);
+    expect(harness.cardClient.updateCard).not.toHaveBeenCalled();
   });
 
   it.each([

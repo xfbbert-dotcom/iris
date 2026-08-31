@@ -368,13 +368,6 @@ async function processActionApprovalJob(
       "membership_unavailable" | "repository_unavailable" | "internal_error"
     >);
   }
-  if (result.code === "review_required") {
-    await attemptBoundedCardUpdate(
-      input.cardClient,
-      input.job.messageId,
-      () => renderStatusCard("review_required"),
-    );
-  }
   const ackFailure = await acknowledge(input, result.code !== "immutable_intent_conflict");
   if (ackFailure !== undefined) return ackFailure;
   return {
