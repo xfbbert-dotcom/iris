@@ -9,8 +9,20 @@ all later review, approval, and Wiki publication gates unchanged.
 
 - Recognizes only explicit knowledge-draft or knowledge-base archival commands after a real Iris
   mention; ordinary knowledge-base questions remain on the normal answer path.
-- Generates from at most the latest 20 nonblank messages from the same group and no documents,
-  memories, other groups, or model background knowledge.
+- Discussion-backed drafts generate from at most the latest 20 nonblank messages from the same
+  group and no documents, memories, other groups, or model background knowledge.
+- A document-specific command such as `把这篇文章写入知识库` uses the replied Feishu message as
+  the exact target. When the member says `上面这篇文章` without replying, Iris accepts only one
+  group-visible document shared during the preceding ten minutes; multiple or missing candidates
+  fail closed and ask the member to reply to the document message.
+- Document-backed drafts copy the complete latest successful snapshot without a model call. The
+  source must be evidenced in the same group, synchronized, enabled for knowledge drafts, and pass
+  a live Feishu permission probe. An `unknown` local permission fact is promoted to `readable` only
+  with a compare-and-swap against the exact source revision observed before the probe, so a
+  concurrent denial or policy change cannot be overwritten.
+- Draft creation and card presentation validate document-source evidence under a shared row lock;
+  a concurrent permission, sync, or knowledge-draft policy change either waits for the valid
+  transaction or wins first and produces the bounded `document_unavailable` result without a card.
 - Requires current-group context access, draft, card, and action-approval runtime gates plus exactly
   one enabled medium-risk publication policy for the source group before invoking the model.
 - Records the requesting Feishu user as reviewer and the selected publication policy as an
@@ -32,9 +44,11 @@ all later review, approval, and Wiki publication gates unchanged.
   rechecked after model generation and before persistence.
 - Missing requester identity, no recent group context, and missing or ambiguous publication policy
   all stop before durable creation.
-- Only a positive creation/archive intent is accepted. Informational questions and negated requests
-  stay on the ordinary answer path, while explicit polite requests such as "can you create" remain
-  actionable.
+- Missing, ambiguous, stale, disabled, unsynchronized, oversized, or live-permission-denied document
+  targets stop before draft creation and never fall through to an ordinary model answer.
+- Only a positive creation/archive intent is accepted. Chinese and English informational questions
+  and negated requests stay on the ordinary answer path, while explicit polite requests such as
+  "can you create" remain actionable.
 - Only a real Feishu `open_id` can become the designated reviewer; union/user ID fallbacks are
   rejected for governed draft creation.
 - Provider capacity, provider unavailability/timeout, and invalid model envelopes return bounded

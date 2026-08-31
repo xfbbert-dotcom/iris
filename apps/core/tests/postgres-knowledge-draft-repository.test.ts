@@ -14,6 +14,7 @@ import {
   KnowledgeDraftOperationConflictError,
   KnowledgeDraftVersionConflictError,
   createPostgresKnowledgeDraftRepository,
+  type PostgresKnowledgeDraftDataSource,
 } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 import type { KnowledgeDraftStatusCounts } from "../src/knowledge-governance/knowledge-draft-repository.js";
 import {
@@ -74,6 +75,18 @@ describe("knowledge draft migration contract", () => {
 });
 
 describe("PostgresKnowledgeDraftRepository semantic conflict replay", () => {
+  it("takes a shared row lock while validating document-source evidence", async () => {
+    const fixture = semanticConflictDraftDataSource();
+    const repository = createPostgresKnowledgeDraftRepository({ dataSource: fixture.dataSource });
+
+    await repository.createDraft(semanticConflictCreateInput(
+      new Date("2026-08-13T04:00:00.000Z"),
+    ));
+
+    expect(fixture.queries.find((sql) => sql.includes("FROM document_sources")))
+      .toMatch(/FOR SHARE OF source/iu);
+  });
+
   it("creates the exact immutable managed update target inside conflict draft creation", async () => {
     const fixture = semanticConflictDraftDataSource();
     const repository = createPostgresKnowledgeDraftRepository({ dataSource: fixture.dataSource });
@@ -720,6 +733,127 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
       [id("draft-main")],
     )).rejects.toThrow(/append-only/iu);
   });
+
+  it("serializes document-source policy changes with draft creation in both lock orderings", async () => {
+    const createRaceSourceId = id("draft-document-create-race");
+    const updateRaceSourceId = id("draft-document-update-race");
+    for (const sourceId of [createRaceSourceId, updateRaceSourceId]) {
+      await pool.query(
+        `INSERT INTO document_sources (
+          id, source_type, source_uri, title, origin_group_id, origin_message_id,
+          permission_state, sync_state, can_use_for_answering,
+          can_use_for_knowledge_drafts, created_at, updated_at
+        ) VALUES ($1, 'group_visible_document', $2, 'Race document', $3, $4,
+          'readable', 'synced', TRUE, TRUE, $5, $5)`,
+        [sourceId, `https://example.com/docs/${sourceId}`, groupId, messageId, documentUpdatedAt],
+      );
+      await pool.query(
+        `INSERT INTO document_source_evidence (
+          document_source_id, kind, source_uri, group_id, message_id,
+          observed_at, created_at
+        ) VALUES ($1, 'group_message', $2, $3, $4, $5, $5)`,
+        [sourceId, `https://example.com/docs/${sourceId}`, groupId, messageId, documentUpdatedAt],
+      );
+    }
+
+    const validationLocked = deferred<void>();
+    const releaseCreation = deferred<void>();
+    let creationPid: number | undefined;
+    const coordinatedDataSource = {
+      query: pool.query.bind(pool),
+      connect: async () => {
+        const client = await pool.connect();
+        creationPid = await backendPid(client);
+        return {
+          release: () => client.release(),
+          query: async <T extends pg.QueryResultRow>(sql: string, params?: unknown[]) => {
+            const result = await client.query<T>(sql, params);
+            if (sql.includes("FROM document_sources source") && sql.includes("FOR SHARE OF source")) {
+              validationLocked.resolve();
+              await releaseCreation.promise;
+            }
+            return result;
+          },
+        };
+      },
+    } as unknown as PostgresKnowledgeDraftDataSource;
+    const creation = createPostgresKnowledgeDraftRepository({
+      dataSource: coordinatedDataSource,
+    }).createDraft(documentCreateInput("create-lock-wins", createRaceSourceId));
+    await validationLocked.promise;
+
+    const waitingUpdater = await pool.connect();
+    try {
+      await waitingUpdater.query("BEGIN");
+      const updaterPid = await backendPid(waitingUpdater);
+      const update = waitingUpdater.query(
+        `UPDATE document_sources
+         SET can_use_for_knowledge_drafts = FALSE, updated_at = $2
+         WHERE id = $1`,
+        [createRaceSourceId, new Date(documentUpdatedAt.getTime() + 1_000)],
+      );
+      await waitUntilBlocked(pool, updaterPid, creationPid!);
+      releaseCreation.resolve();
+      await expect(creation).resolves.toMatchObject({ outcome: "applied" });
+      await update;
+      await waitingUpdater.query("COMMIT");
+    } finally {
+      releaseCreation.resolve();
+      await waitingUpdater.query("ROLLBACK").catch(() => undefined);
+      waitingUpdater.release();
+    }
+    await expect(createPostgresKnowledgeDraftRepository({ dataSource: pool }).getDraft(
+      id("draft-create-lock-wins"),
+    )).resolves.toMatchObject({
+      currentRevision: {
+        evidenceState: { status: "invalidated", reason: "document_draft_use_disabled" },
+      },
+    });
+
+    const winningUpdater = await pool.connect();
+    try {
+      await winningUpdater.query("BEGIN");
+      const updaterPid = await backendPid(winningUpdater);
+      await winningUpdater.query(
+        `UPDATE document_sources
+         SET can_use_for_knowledge_drafts = FALSE, updated_at = $2
+         WHERE id = $1`,
+        [updateRaceSourceId, new Date(documentUpdatedAt.getTime() + 1_000)],
+      );
+
+      const validationStarted = deferred<void>();
+      let validationPid: number | undefined;
+      const blockedDataSource = {
+        query: pool.query.bind(pool),
+        connect: async () => {
+          const client = await pool.connect();
+          validationPid = await backendPid(client);
+          return {
+            release: () => client.release(),
+            query: async <T extends pg.QueryResultRow>(sql: string, params?: unknown[]) => {
+              if (sql.includes("FROM document_sources source") && sql.includes("FOR SHARE OF source")) {
+                validationStarted.resolve();
+              }
+              return client.query<T>(sql, params);
+            },
+          };
+        },
+      } as unknown as PostgresKnowledgeDraftDataSource;
+      const blockedCreation = createPostgresKnowledgeDraftRepository({
+        dataSource: blockedDataSource,
+      }).createDraft(documentCreateInput("update-lock-wins", updateRaceSourceId));
+      await validationStarted.promise;
+      await waitUntilBlocked(pool, validationPid!, updaterPid);
+      await winningUpdater.query("COMMIT");
+      await expect(blockedCreation).rejects.toMatchObject({
+        name: KnowledgeDraftEvidenceError.name,
+        reason: "document_draft_use_disabled",
+      });
+    } finally {
+      await winningUpdater.query("ROLLBACK").catch(() => undefined);
+      winningUpdater.release();
+    }
+  }, 15_000);
 });
 
 function groupCreateInput(draftKey: string, operationKey: string) {
@@ -756,6 +890,27 @@ function groupRevision() {
   };
 }
 
+function documentCreateInput(key: string, sourceId: string) {
+  return {
+    id: id(`draft-${key}`),
+    operationKey: id(`create-${key}`),
+    originKind: "user_requested" as const,
+    createdBy: "iris",
+    at,
+    revision: {
+      sourceGroupId: groupId,
+      title: "Document draft",
+      content: "Current document content.",
+      riskLevel: "medium" as const,
+      evidence: [{
+        type: "document_source" as const,
+        id: sourceId,
+        expectedUpdatedAt: documentUpdatedAt,
+      }],
+    },
+  };
+}
+
 function id(value: string): string {
   return `${value}-${suffix}`;
 }
@@ -788,6 +943,7 @@ function semanticConflictCreateInput(atValue: Date) {
 }
 
 function semanticConflictDraftDataSource() {
+  const queries: string[] = [];
   const attestations: Date[] = [];
   let updateTarget: Record<string, unknown> | undefined;
   let created = false;
@@ -796,6 +952,7 @@ function semanticConflictDraftDataSource() {
   const createdAt = new Date("2026-08-13T04:00:00.000Z");
   const sourceUpdatedAt = new Date("2026-08-13T03:00:00.000Z");
   const query = async (sql: string, params: unknown[] = []): Promise<{ rows: any[] }> => {
+    queries.push(sql);
     if (/^(BEGIN|COMMIT|ROLLBACK)$/u.test(sql) || sql.includes("pg_advisory_xact_lock")) {
       return { rows: [] };
     }
@@ -962,6 +1119,7 @@ function semanticConflictDraftDataSource() {
   };
   const client = { query, release() {} };
   return {
+    queries,
     attestations,
     useLegacyFingerprint(input: ReturnType<typeof semanticConflictCreateInput>) {
       operationFingerprint = createHash("sha256")
@@ -983,4 +1141,36 @@ function semanticConflictDraftDataSource() {
       async connect() { return client; },
     },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function backendPid(queryable: {
+  query<T>(sql: string): Promise<{ rows: T[] }>;
+}): Promise<number> {
+  const result = await queryable.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+  return result.rows[0]!.pid;
+}
+
+async function waitUntilBlocked(
+  pool: pg.Pool,
+  blockedPid: number,
+  blockerPid: number,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const result = await pool.query<{ blocked: boolean }>(
+      "SELECT $2::int = ANY(pg_blocking_pids($1::int)) AS blocked",
+      [blockedPid, blockerPid],
+    );
+    if (result.rows[0]?.blocked) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`backend ${blockedPid} was not blocked by ${blockerPid}`);
 }

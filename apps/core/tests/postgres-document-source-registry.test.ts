@@ -90,6 +90,7 @@ function createFakePool(options: {
   sourceRow?: TestSourceRow;
   evidenceRows?: TestEvidenceRow[];
   failOnSql?: (normalizedSql: string) => Error | undefined;
+  stalePermissionUpdate?: boolean;
 } = {}) {
   const sourceRow = options.sourceRow ?? makeSourceRow();
   const evidenceRows = options.evidenceRows ?? [makeEvidenceRow()];
@@ -124,6 +125,9 @@ function createFakePool(options: {
       normalized.startsWith("update document_sources") &&
       normalized.includes("returning *")
     ) {
+      if (options.stalePermissionUpdate === true && normalized.includes("updated_at = $3")) {
+        return { rows: [] };
+      }
       return { rows: [sourceRow] };
     }
 
@@ -678,6 +682,44 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       "can_use_for_knowledge_drafts = case when $2 = 'denied' then false else can_use_for_knowledge_drafts end",
     );
     expect(update?.values).toEqual(["source-1", "denied", now]);
+  });
+
+  it("marks permission readable only while the observed source revision is current", async () => {
+    const now = new Date("2026-07-01T04:02:00.000Z");
+    const expectedUpdatedAt = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, { now: () => now });
+
+    await registry.markPermissionStateIfCurrent({
+      id: "source-1",
+      permissionState: "readable",
+      expectedUpdatedAt,
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return normalized.startsWith("update document_sources") &&
+        normalized.includes("where id = $1 and updated_at = $3");
+    });
+    expect(update).toBeDefined();
+    expect(update?.values).toEqual([
+      "source-1",
+      "readable",
+      expectedUpdatedAt,
+      now,
+    ]);
+  });
+
+  it("does not overwrite a document source that changed during live permission checking", async () => {
+    const fake = createFakePool({ stalePermissionUpdate: true });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await expect(registry.markPermissionStateIfCurrent({
+      id: "source-1",
+      permissionState: "readable",
+      expectedUpdatedAt: new Date("2026-07-01T04:00:00.000Z"),
+    })).resolves.toBeUndefined();
+    expect(fake.queries.map((query) => classifyQuery(query.sql))).toContain("update source");
   });
 
   it("setKnowledgeDraftsEnabled preserves denied sources and passes enabled as $2", async () => {

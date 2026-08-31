@@ -30,6 +30,10 @@ import {
   type DocumentFragmentRepository,
   type Queryable,
 } from "../documents/document-fragment-repository.js";
+import {
+  createDocumentSnapshotRepository,
+  type DocumentSnapshotRepository,
+} from "../documents/document-snapshot-repository.js";
 import type { DocumentSourceGroupGrantRepository } from
   "../documents/document-source-group-grant.js";
 import {
@@ -150,7 +154,13 @@ export type AnswerDraftRuntimeDependencies = {
     & Partial<Pick<DocumentFragmentRepository, "listFragmentsForSnapshot">>;
   createDocumentSourceRegistry?: (dependencies: {
     queryable: Queryable;
-  }) => Pick<AsyncDocumentSourceRegistry, "findSourceById">;
+  }) => Pick<AsyncDocumentSourceRegistry, "findSourceById"> & Partial<Pick<
+    AsyncDocumentSourceRegistry,
+    "listSourcesByGroupId" | "markPermissionStateIfCurrent"
+  >>;
+  createDocumentSnapshotRepository?: (dependencies: {
+    queryable: Queryable;
+  }) => Pick<DocumentSnapshotRepository, "findLatestSnapshotForSource">;
   createDocumentSourceGroupGrantRepository?: (dependencies: {
     dataSource: PostgresDocumentSourceGroupGrantDataSource;
   }) => Pick<DocumentSourceGroupGrantRepository, "validateExact">;
@@ -262,6 +272,8 @@ export function createAnswerDraftRuntime({
     createPostgresDocumentSourceGroupGrantRepository;
   const createConversationMessages =
     dependencies.createConversationMessageRepository ?? createPostgresConversationMessageRepository;
+  const createSnapshots =
+    dependencies.createDocumentSnapshotRepository ?? createDocumentSnapshotRepository;
   const createLiveChatContext =
     dependencies.createLiveChatContextProvider ?? createLiveChatContextProvider;
   const createChatClient =
@@ -317,6 +329,7 @@ export function createAnswerDraftRuntime({
     runtimeConfig.permissionMode === "source-policy"
       ? createSources({ queryable: pool })
       : undefined;
+  const documentSnapshots = createSnapshots({ queryable: pool });
   const crossGroupGrantValidator =
     runtimeConfig.permissionMode === "source-policy" &&
     isPostgresDocumentSourceGroupGrantDataSource(pool)
@@ -482,6 +495,14 @@ export function createAnswerDraftRuntime({
       canReadGroupContext: (groupId) => (
         runtimeController?.canReadGroupContext?.(groupId) === true
       ),
+      canReadDocuments: () => runtimeController?.canReadDocuments() === true,
+      ...(isChatDraftDocumentSourceRegistry(sourceRegistry) && livePermissionChecker !== undefined
+        ? {
+            documentSources: sourceRegistry,
+            snapshots: documentSnapshots,
+            permissionChecker: livePermissionChecker,
+          }
+        : {}),
     }),
     chatFormalTaskDraftGenerator: createChatFormalTaskDraftGenerator({
       repository: conversationMessages,
@@ -531,6 +552,20 @@ function createPermissionDecisionObservationHandler({
       metadata: { turnId: executionId },
     });
   };
+}
+
+function isChatDraftDocumentSourceRegistry(
+  value: Pick<AsyncDocumentSourceRegistry, "findSourceById"> & Partial<Pick<
+    AsyncDocumentSourceRegistry,
+    "listSourcesByGroupId" | "markPermissionStateIfCurrent"
+  >> | undefined,
+): value is Pick<
+    AsyncDocumentSourceRegistry,
+    "findSourceById" | "listSourcesByGroupId" | "markPermissionStateIfCurrent"
+> {
+  return value !== undefined &&
+    typeof value.listSourcesByGroupId === "function" &&
+    typeof value.markPermissionStateIfCurrent === "function";
 }
 
 function permissionDecisionEvent(outcome: PermissionGuardDecision["outcome"]): {

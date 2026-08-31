@@ -406,6 +406,58 @@ describe("FeishuMentionAnswerResponder", () => {
   });
 
   it.each([
+    {
+      text: "@_user_1 把上面这篇文章保存到知识库中",
+      replyToMessageId: undefined,
+      expectedSource: { type: "document" },
+    },
+    {
+      text: "@_user_1 把这篇文章写入知识库",
+      replyToMessageId: "om_shared_document",
+      expectedSource: { type: "document", referenceMessageId: "om_shared_document" },
+    },
+  ])("routes a document publication request through the governed draft command: $text", async ({
+    text,
+    replyToMessageId,
+    expectedSource,
+  }) => {
+    const knowledgeDraftCommand = {
+      execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => ({
+        status: "created",
+        draftId: "draft-document",
+        presentationId: "presentation-document",
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-document" })) };
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: `om_document_${replyToMessageId ?? "recent"}`,
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text,
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      ...(replyToMessageId === undefined ? {} : { replyToMessageId }),
+      observedAt: new Date("2026-08-31T05:39:38.563Z"),
+    } as Parameters<typeof responder.maybeRespond>[0]);
+
+    expect(knowledgeDraftCommand.execute).toHaveBeenCalledWith(expect.objectContaining({
+      chatId: "oc_pilot",
+      requesterOpenId: "ou_owner",
+      requestText: text.replace("@_user_1 ", ""),
+      source: expectedSource,
+    }));
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
+  it.each([
     "@_user_1 \u80fd\u5e2e\u6211\u521b\u5efa\u4e00\u4efd\u77e5\u8bc6\u8349\u7a3f\u5417\uff1f",
     "@_user_1 Can you create a knowledge draft from this discussion?",
   ])("treats a polite knowledge-draft request as an explicit command: %s", async (text) => {
@@ -476,6 +528,11 @@ describe("FeishuMentionAnswerResponder", () => {
     "@_user_1 \u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u9700\u8981\u4ec0\u4e48\u6d41\u7a0b\uff1f",
     "@_user_1 \u4e0d\u8981\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f",
     "@_user_1 \u522b\u628a\u8fd9\u6bb5\u8ba8\u8bba\u6574\u7406\u5230\u77e5\u8bc6\u5e93",
+    "@_user_1 不要把这篇文章保存到知识库",
+    "@_user_1 别把这份文档写入知识库",
+    "@_user_1 把这篇文章保存到知识库需要什么流程？",
+    "@_user_1 How do I save this document to the knowledge base?",
+    "@_user_1 What is the process to archive this article to the knowledge base?",
   ])("does not persist a draft for a question or negated command: %s", async (text) => {
     const answerDraftOrchestrator = {
       generateDraft: vi.fn(async () => ({

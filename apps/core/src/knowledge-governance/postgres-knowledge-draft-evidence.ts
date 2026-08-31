@@ -125,20 +125,21 @@ async function findInvalidReference(
   const result = await queryable.query<DocumentStateRow>(
     `
     SELECT
-      source_type,
-      permission_state,
-      sync_state,
-      can_use_for_knowledge_drafts,
-      updated_at,
+      source.source_type,
+      source.permission_state,
+      source.sync_state,
+      source.can_use_for_knowledge_drafts,
+      source.updated_at,
       EXISTS (
         SELECT 1
         FROM document_source_evidence evidence
-        WHERE evidence.document_source_id = document_sources.id
+        WHERE evidence.document_source_id = source.id
           AND evidence.kind = 'group_message'
           AND evidence.group_id = $2
       ) AS exact_group_evidence
-    FROM document_sources
-    WHERE id = $1
+    FROM document_sources source
+    WHERE source.id = $1
+    FOR SHARE OF source
     `,
     [evidence.id, sourceGroupId ?? null],
   );

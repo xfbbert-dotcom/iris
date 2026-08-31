@@ -463,6 +463,8 @@ describe("FeishuMessageEventProcessor", () => {
             },
             message: {
               message_id: "message-1",
+              parent_id: "message-shared-document",
+              root_id: "message-shared-document",
               chat_id: "chat-1",
               message_type: "text",
               content: "{\"text\":\"@_user_1 帮我总结\"}",
@@ -485,6 +487,7 @@ describe("FeishuMessageEventProcessor", () => {
       chatId: "chat-1",
       senderId: "open-1",
       senderOpenId: "open-1",
+      replyToMessageId: "message-shared-document",
       text: "@_user_1 帮我总结",
       mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
       observedAt: new Date("2026-07-01T17:00:00.000Z"),

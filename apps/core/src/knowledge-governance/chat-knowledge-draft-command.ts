@@ -6,19 +6,27 @@ import type {
 } from "../action-approvals/action-proposal-repository.js";
 import {
   presentKnowledgeDraft as defaultPresentKnowledgeDraft,
+  KnowledgeDraftPresentationServiceError,
   type KnowledgeDraftPresentationRuntime,
 } from "../knowledge-cards/knowledge-draft-presentation-service.js";
 import type { ActionApprovalRuntime } from "../runtime/action-approval-runtime.js";
 import type { KnowledgeDraftRuntime } from "../runtime/knowledge-draft-runtime.js";
 
 import type { ChatKnowledgeDraftGenerator } from "./chat-knowledge-draft-generator.js";
+import { KnowledgeDraftEvidenceError } from "./postgres-knowledge-draft-evidence.js";
 
 const POLICY_LIMIT = 100;
 
 export type ChatKnowledgeDraftCommandResult =
   | { status: "created"; draftId: string; presentationId: string }
   | { status: "already_created"; draftId: string; presentationId?: string }
-  | { status: "runtime_disabled" | "no_context" | "target_unavailable" };
+  | {
+      status:
+        | "runtime_disabled"
+        | "no_context"
+        | "target_unavailable"
+        | "document_unavailable";
+    };
 
 export type ChatKnowledgeDraftCommand = {
   execute(input: {
@@ -26,6 +34,7 @@ export type ChatKnowledgeDraftCommand = {
     chatId: string;
     requesterOpenId: string;
     requestText: string;
+    source?: { type: "document"; referenceMessageId?: string };
     observedAt: Date;
   }): Promise<ChatKnowledgeDraftCommandResult>;
 };
@@ -72,6 +81,11 @@ export function createChatKnowledgeDraftCommand(
         presentKnowledgeDraft,
         input,
         identity,
+      }).catch((error: unknown) => {
+        if (input.source?.type === "document" && isDocumentEvidenceUnavailable(error)) {
+          return { status: "document_unavailable" as const };
+        }
+        throw error;
       }).finally(() => {
         if (inFlight.get(identity.digest) === execution) inFlight.delete(identity.digest);
       });
@@ -79,6 +93,13 @@ export function createChatKnowledgeDraftCommand(
       return execution;
     },
   };
+}
+
+function isDocumentEvidenceUnavailable(error: unknown): boolean {
+  return error instanceof KnowledgeDraftEvidenceError || (
+    error instanceof KnowledgeDraftPresentationServiceError &&
+    error.code === "knowledge_draft_evidence_invalid"
+  );
 }
 
 async function executeOnce(input: {
@@ -120,11 +141,15 @@ async function executeOnce(input: {
 
   const generated = await dependencies.generator.generate({
     chatId,
-    requesterOpenId,
-    requestText,
-    observedAt,
+      requesterOpenId,
+      requestText,
+      ...(input.input.source === undefined ? {} : { source: input.input.source }),
+      observedAt,
   });
   if (generated.status === "no_context") return { status: "no_context" };
+  if (generated.status === "document_unavailable") {
+    return { status: "document_unavailable" };
+  }
 
   const confirmedTarget = await readCreationTarget(dependencies, chatId);
   if (confirmedTarget.status !== "available") return { status: confirmedTarget.status };
@@ -219,6 +244,7 @@ type NormalizedCommandInput = {
   chatId: string;
   requesterOpenId: string;
   requestText: string;
+  source?: { type: "document"; referenceMessageId?: string };
   observedAt: Date;
 };
 
@@ -230,11 +256,29 @@ type CommandIdentity = {
 };
 
 function normalizeInput(input: NormalizedCommandInput): NormalizedCommandInput {
+  if (input.source !== undefined && input.source.type !== "document") {
+    throw new Error("source.type is invalid");
+  }
   return {
     messageId: requireNonBlank(input.messageId, "messageId"),
     chatId: requireNonBlank(input.chatId, "chatId"),
     requesterOpenId: requireNonBlank(input.requesterOpenId, "requesterOpenId"),
     requestText: requireNonBlank(input.requestText, "requestText"),
+    ...(input.source === undefined
+      ? {}
+      : {
+          source: {
+            type: "document" as const,
+            ...(input.source.referenceMessageId === undefined
+              ? {}
+              : {
+                  referenceMessageId: requireNonBlank(
+                    input.source.referenceMessageId,
+                    "source.referenceMessageId",
+                  ),
+                }),
+          },
+        }),
     observedAt: requireDate(input.observedAt),
   };
 }

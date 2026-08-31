@@ -8,6 +8,10 @@ import type { PublicationTargetPolicy } from "../src/action-approvals/action-pro
 import type { KnowledgeDraft } from "../src/knowledge-governance/knowledge-draft-repository.js";
 import type { KnowledgeDraftPresentation } from "../src/knowledge-cards/knowledge-card-repository.js";
 import type { ChatKnowledgeDraftGenerator } from "../src/knowledge-governance/chat-knowledge-draft-generator.js";
+import { KnowledgeDraftEvidenceError } from
+  "../src/knowledge-governance/postgres-knowledge-draft-evidence.js";
+import { KnowledgeDraftPresentationServiceError } from
+  "../src/knowledge-cards/knowledge-draft-presentation-service.js";
 
 const observedAt = new Date("2026-08-02T03:00:00.000Z");
 
@@ -204,6 +208,29 @@ describe("chat knowledge draft command", () => {
     expect(harness.generator.generate).not.toHaveBeenCalled();
     expect(harness.present).not.toHaveBeenCalled();
   });
+
+  it("maps document evidence invalidated during creation to a bounded non-creation", async () => {
+    const harness = commandHarness();
+    vi.mocked(harness.draftRepository.createDraft).mockRejectedValue(
+      new KnowledgeDraftEvidenceError("document_draft_use_disabled"),
+    );
+
+    await expect(harness.command.execute(documentCommandInput())).resolves.toEqual({
+      status: "document_unavailable",
+    });
+    expect(harness.present).not.toHaveBeenCalled();
+  });
+
+  it("maps document evidence invalidated before presentation to a bounded non-creation", async () => {
+    const harness = commandHarness();
+    vi.mocked(harness.present).mockRejectedValue(
+      new KnowledgeDraftPresentationServiceError("knowledge_draft_evidence_invalid"),
+    );
+
+    await expect(harness.command.execute(documentCommandInput())).resolves.toEqual({
+      status: "document_unavailable",
+    });
+  });
 });
 
 function commandHarness(overrides: {
@@ -274,6 +301,15 @@ function commandInput() {
     requesterOpenId: "ou_owner",
     requestText: "把刚才讨论整理成知识草稿",
     observedAt,
+  };
+}
+
+function documentCommandInput() {
+  return {
+    ...commandInput(),
+    messageId: "om_document_command",
+    requestText: "把这篇文章写入知识库",
+    source: { type: "document" as const, referenceMessageId: "om_shared_document" },
   };
 }
 

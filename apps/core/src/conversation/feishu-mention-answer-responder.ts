@@ -32,6 +32,7 @@ export type FeishuMentionAnswerInput = {
   chatId: string;
   senderId?: string;
   senderOpenId?: string;
+  replyToMessageId?: string;
   text?: string;
   mentions: FeishuMessageMention[];
   observedAt?: Date;
@@ -108,6 +109,8 @@ const KNOWLEDGE_DRAFT_NO_CONTEXT =
   "\u6700\u8fd1\u6ca1\u6709\u53ef\u6574\u7406\u7684\u7fa4\u804a\u5185\u5bb9\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002";
 const KNOWLEDGE_DRAFT_TARGET_UNAVAILABLE =
   "\u5f53\u524d\u7fa4\u5c1a\u672a\u914d\u7f6e\u552f\u4e00\u7684\u77e5\u8bc6\u5e93\u53d1\u5e03\u4f4d\u7f6e\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002";
+const KNOWLEDGE_DRAFT_DOCUMENT_UNAVAILABLE =
+  "没有找到唯一且可读取的目标文档，未创建知识草稿。请回复该文档消息后再 @我。";
 const KNOWLEDGE_DRAFT_SENDER_REQUIRED =
   "\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u8bf7\u6c42\u4eba\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002";
 const KNOWLEDGE_DRAFT_MODEL_CAPACITY =
@@ -163,20 +166,27 @@ const knowledgeDraftIntentPatterns = [
   /\b(?:archive|capture|save)\b.{0,64}\bknowledge\s*base\b/iu,
 ] as const;
 const negatedKnowledgeDraftIntentPatterns = [
-  /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528|\u7981\u6b62|\u53d6\u6d88).{0,20}(?:\u521b\u5efa|\u751f\u6210|\u4ea7\u51fa|\u5236\u4f5c|\u51c6\u5907|\u6574\u7406|\u603b\u7ed3|\u5f52\u6863|\u6c89\u6dc0)/u,
+  /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528|\u7981\u6b62|\u53d6\u6d88).{0,20}(?:\u521b\u5efa|\u751f\u6210|\u4ea7\u51fa|\u5236\u4f5c|\u51c6\u5907|\u6574\u7406|\u603b\u7ed3|\u5f52\u6863|\u6c89\u6dc0|保存|写入|收录)/u,
   /\b(?:do\s+not|don't|dont|never)\b.{0,32}\b(?:create|make|prepare|generate|archive|capture|save)\b/iu,
 ] as const;
 const knowledgeDraftQuestionPatterns = [
   /^(?:\u5982\u4f55|\u600e\u4e48|\u600e\u6837|\u4e3a\u4ec0\u4e48|\u4f55\u65f6|\u54ea\u91cc|\u5728\u54ea).{0,64}(?:\u77e5\u8bc6\u8349\u7a3f|\u77e5\u8bc6\u5e93)/u,
   /(?:\u521b\u5efa|\u751f\u6210|\u4ea7\u51fa|\u5236\u4f5c|\u51c6\u5907|\u6574\u7406|\u603b\u7ed3).{0,16}\u77e5\u8bc6\u8349\u7a3f.{0,20}(?:\u9700\u8981\u4ec0\u4e48|\u600e\u4e48|\u5982\u4f55|\u4ec0\u4e48\u6d41\u7a0b|\u54ea\u4e9b\u6b65\u9aa4|\u6709\u4ec0\u4e48\u8981\u6c42)[\uff1f?]?$/u,
+  /(?:保存|写入|归档|沉淀|收录).{0,24}(?:飞书)?知识库.{0,24}(?:需要什么|怎么|如何|什么流程|哪些步骤|有什么要求)[？?]?$/u,
   /^(?:how|what|why|when|where)\b.{0,80}\bknowledge\s+draft\b/iu,
   /^(?:can|could|should|would)\s+i\b.{0,80}\bknowledge\s+draft\b/iu,
+  /^(?:how|what|why|when|where)\b.{0,80}\b(?:save|archive|capture)\b.{0,80}\b(?:article|document|doc)\b.{0,40}\bknowledge\s*base\b/iu,
 ] as const;
 const userSubmittedDocumentIntentPatterns = [
   /\b(?:add|submit|register|index)\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
   /\bread\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
   /(?:\u8bf7(?:\u4f60)?|\u5e2e\u6211|\u5e2e\u5fd9|\u9ebb\u70e6(?:\u4f60)?)\s*(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)?\u6587\u6863/u,
   /(?:^|\s)(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)\u6587\u6863(?:\s|$|[\uff0c\u3002\uff01\uff1f,.!?])/u,
+] as const;
+const documentKnowledgeDraftIntentPatterns = [
+  /(?:把|将)?(?:上面|上方|刚才|这|该|回复的)?(?:这|该)?(?:篇|份|个)?(?:文章|文档).{0,20}(?:保存|写入|归档|沉淀|收录).{0,12}(?:到|进|至|为)?(?:飞书)?知识库/u,
+  /(?:保存|写入|归档|沉淀|收录).{0,16}(?:上面|上方|刚才|这|该|回复的)?(?:这|该)?(?:篇|份|个)?(?:文章|文档).{0,12}(?:到|进|至|为)?(?:飞书)?知识库/u,
+  /\b(?:save|archive|capture)\b.{0,40}\b(?:this|the|replied)\s+(?:article|document|doc)\b.{0,40}\bknowledge\s*base\b/iu,
 ] as const;
 const meetingCalendarActionIntentPatterns = [
   /(?:预定|预订|预约|安排|创建|新建|发起|添加).{0,32}(?:会议(?!纪要|记录|材料|议程|摘要|总结)|日程|日历事件)/u,
@@ -286,7 +296,8 @@ export function createFeishuMentionAnswerResponder({
           replyDeduper.markHandled(input.messageId);
           return result;
         }
-        if (detectKnowledgeDraftCommand(fullQuestion)) {
+        const knowledgeDraftIntent = detectKnowledgeDraftCommand(fullQuestion);
+        if (knowledgeDraftIntent !== undefined) {
           let replyText: string;
           if (knowledgeDraftCommand === undefined) {
             replyText = KNOWLEDGE_DRAFT_RUNTIME_DISABLED;
@@ -299,6 +310,16 @@ export function createFeishuMentionAnswerResponder({
                 chatId: input.chatId,
                 requesterOpenId: normalizedSenderOpenId,
                 requestText: fullQuestion,
+                ...(knowledgeDraftIntent.sourceType === "document"
+                  ? {
+                      source: {
+                        type: "document" as const,
+                        ...(normalizeOptionalText(input.replyToMessageId) === undefined
+                          ? {}
+                          : { referenceMessageId: normalizeOptionalText(input.replyToMessageId) }),
+                      },
+                    }
+                  : {}),
                 observedAt: input.observedAt ?? new Date(),
               });
               replyText = knowledgeDraftReplyText(commandResult.status);
@@ -634,14 +655,21 @@ function detectUserSubmittedDocumentCommand({
   return { intent: true, sourceUri: documentLinkExtractor.extractLinks(text)[0]?.sourceUri };
 }
 
-function detectKnowledgeDraftCommand(text: string): boolean {
+function detectKnowledgeDraftCommand(
+  text: string,
+): { sourceType: "discussion" | "document" } | undefined {
   if (
     negatedKnowledgeDraftIntentPatterns.some((pattern) => pattern.test(text)) ||
     knowledgeDraftQuestionPatterns.some((pattern) => pattern.test(text))
   ) {
-    return false;
+    return undefined;
   }
-  return knowledgeDraftIntentPatterns.some((pattern) => pattern.test(text));
+  if (documentKnowledgeDraftIntentPatterns.some((pattern) => pattern.test(text))) {
+    return { sourceType: "document" };
+  }
+  return knowledgeDraftIntentPatterns.some((pattern) => pattern.test(text))
+    ? { sourceType: "discussion" }
+    : undefined;
 }
 
 function detectFormalTaskDraftCommand(text: string): boolean {
@@ -697,7 +725,13 @@ function formalTaskDraftReplyText(
 }
 
 function knowledgeDraftReplyText(
-  status: "created" | "already_created" | "runtime_disabled" | "no_context" | "target_unavailable",
+  status:
+    | "created"
+    | "already_created"
+    | "runtime_disabled"
+    | "no_context"
+    | "target_unavailable"
+    | "document_unavailable",
 ): string {
   switch (status) {
     case "created":
@@ -709,6 +743,8 @@ function knowledgeDraftReplyText(
       return KNOWLEDGE_DRAFT_NO_CONTEXT;
     case "target_unavailable":
       return KNOWLEDGE_DRAFT_TARGET_UNAVAILABLE;
+    case "document_unavailable":
+      return KNOWLEDGE_DRAFT_DOCUMENT_UNAVAILABLE;
   }
 }
 

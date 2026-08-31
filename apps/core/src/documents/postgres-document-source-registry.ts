@@ -30,6 +30,11 @@ export interface AsyncDocumentSourceRegistry {
     id: string,
     permissionState: DocumentPermissionState,
   ): Promise<DocumentSource>;
+  markPermissionStateIfCurrent(input: {
+    id: string;
+    permissionState: DocumentPermissionState;
+    expectedUpdatedAt: Date;
+  }): Promise<DocumentSource | undefined>;
   markSyncState(id: string, syncState: DocumentSyncState): Promise<DocumentSource>;
   setAnsweringEnabled(id: string, enabled: boolean): Promise<DocumentSource>;
   setKnowledgeDraftsEnabled(id: string, enabled: boolean): Promise<DocumentSource>;
@@ -223,6 +228,35 @@ where id = $1
 returning *
 `,
         values: [id, permissionState],
+      });
+    },
+
+    markPermissionStateIfCurrent(input) {
+      const id = requireNonBlank("id", input.id);
+      const expectedUpdatedAt = normalizeDocumentSourceDate(
+        "expectedUpdatedAt",
+        input.expectedUpdatedAt,
+      );
+      return withTransaction(pool, async (client) => {
+        const now = new Date(resolvedDependencies.now());
+        const result = await client.query<SourceRow>(
+          `
+update document_sources
+set
+  permission_state = $2,
+  can_use_for_answering = case when $2 = 'denied' then false else can_use_for_answering end,
+  can_use_for_knowledge_drafts = case
+    when $2 = 'denied' then false
+    else can_use_for_knowledge_drafts
+  end,
+  updated_at = $4
+where id = $1 and updated_at = $3
+returning *
+`,
+          [id, input.permissionState, expectedUpdatedAt, now],
+        );
+        const row = result.rows[0];
+        return row === undefined ? undefined : getExistingSourceById(client, row.id);
       });
     },
 

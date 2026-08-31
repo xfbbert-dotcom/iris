@@ -22,6 +22,7 @@ type RuntimeGate = {
 };
 type ParsedFeishuMessageEvent = Omit<UpsertConversationMessageInput, "mentions"> & {
   mentions: FeishuMessageMention[];
+  replyToMessageId?: string;
 };
 
 const MAX_FEISHU_IDENTIFIER_CHARS = 512;
@@ -181,6 +182,9 @@ function maybeRespondToMention(
     chatId: parsed.chatId,
     senderId: parsed.senderId,
     ...(parsed.senderOpenId === undefined ? {} : { senderOpenId: parsed.senderOpenId }),
+    ...(parsed.replyToMessageId === undefined
+      ? {}
+      : { replyToMessageId: parsed.replyToMessageId }),
     text: parsed.text,
     mentions: parsed.mentions,
     observedAt: parsed.sentAt,
@@ -261,6 +265,9 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
     ...(senderUnionId === undefined ? {} : { senderUnionId }),
     ...(senderUserId === undefined ? {} : { senderUserId }),
     messageType,
+    ...(readReplyToMessageId(message) === undefined
+      ? {}
+      : { replyToMessageId: readReplyToMessageId(message) }),
     text: truncateMessageText(readText(messageType, message.content)),
     mentions: readMentions(message.mentions),
     sentAt: readFeishuTimestamp(
@@ -269,6 +276,10 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
     ),
     rawEventIdempotencyKey: event.idempotencyKey,
   };
+}
+
+function readReplyToMessageId(message: Record<string, unknown>): string | undefined {
+  return readOptionalIdentifier(message.parent_id) ?? readOptionalIdentifier(message.root_id);
 }
 
 function readMentions(value: unknown): FeishuMessageMention[] {
