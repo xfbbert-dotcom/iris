@@ -155,6 +155,20 @@ describe("managed knowledge page exact remote identity lookup", () => {
 });
 
 describe("managed update admin metadata projection", () => {
+  it("qualifies target columns selected through the proposal join", async () => {
+    const query = vi.fn(async (_sql: string, _values?: readonly unknown[]) => ({ rows: [] }));
+    const repository = createPostgresManagedKnowledgePageRepository({
+      dataSource: { query } as never,
+    });
+
+    await expect(repository.getMetadataForProposal("proposal-publish")).resolves.toBeUndefined();
+
+    const sql = String(query.mock.calls[0]?.[0]).replaceAll(/\s+/gu, " ").trim();
+    expect(sql).toContain("SELECT target.id, target.draft_id, target.draft_revision");
+    expect(sql).toContain("target.target_policy_id, target.target_policy_version");
+    expect(sql).toContain("FROM knowledge_publication_update_targets target JOIN action_proposals proposal");
+  });
+
   it("binds metadata to the exact proposal target instead of a newer draft target", async () => {
     const at = new Date("2026-08-21T00:00:00.000Z");
     const oldTarget = managedTargetRow({ id: "target-old", expected_remote_revision_id: "11" });
