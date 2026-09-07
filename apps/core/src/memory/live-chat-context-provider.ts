@@ -2,9 +2,10 @@ import type { ConversationMessageRepository } from "../conversation/conversation
 import type { Queryable } from "../documents/document-fragment-repository.js";
 import type { FeishuChatHistoryReader } from "../feishu/feishu-chat-history-reader.js";
 import type { LiveChatMessage } from "./context-assembly.js";
+import { selectTopicAwareChatWindow } from "./topic-aware-chat-window.js";
 
 export type LiveChatContextProvider = {
-  loadRecentMessages(input: { chatId: string; limit?: number }): Promise<LiveChatMessage[]>;
+  loadRecentMessages(input: { chatId: string; limit?: number; question?: string }): Promise<LiveChatMessage[]>;
 };
 
 export function createLiveChatContextProvider({
@@ -53,10 +54,10 @@ export function createFeishuLiveChatContextProvider({
 
       const messages = (await reader.listRecentMessages({
         chatId: input.chatId,
-        limit: outputLimit,
+        limit: MAX_LIVE_CHAT_SCAN_LIMIT,
       }))
         .filter((message) => message.chatId === input.chatId)
-        .slice(0, outputLimit);
+        .slice(0, MAX_LIVE_CHAT_SCAN_LIMIT);
       if (messages.length === 0) {
         return [];
       }
@@ -69,10 +70,17 @@ export function createFeishuLiveChatContextProvider({
         [messages.map((message) => message.messageId)],
       );
       const deletedIds = new Set(result.rows.map((row) => row.provider_message_id));
-      return messages
+      const readableMessages = messages
         .filter((message) => !deletedIds.has(message.messageId))
         .reverse()
-        .map((message) => ({ speaker: message.senderId, text: message.text }));
+        .map((message) => ({
+          speaker: message.senderId,
+          text: message.text,
+          messageId: message.messageId,
+          ...(message.parentMessageId === undefined ? {} : { parentMessageId: message.parentMessageId }),
+          ...(message.rootMessageId === undefined ? {} : { rootMessageId: message.rootMessageId }),
+        }));
+      return selectTopicAwareChatWindow(readableMessages, input.question, outputLimit);
     },
   };
 }

@@ -10,9 +10,12 @@ that every recent Feishu message was received. A real pilot questionnaire posted
 was absent from the fact store but readable through Feishu's history API. Its callback loss cause
 could not be established from the retained logs.
 
-With Feishu source-policy integration configured, answer-time context now reads one newest page
-of 50 messages directly from the current chat and keeps at most 20 readable human text/post
-messages. This source is authoritative: a permission or API error must not fall back to stale
+With Feishu source-policy integration configured, answer-time context reads at most two newest
+pages of 50 messages directly from the current chat and keeps at most 20 readable human text/post
+messages. Bounded query-term matching reserves at most two slots for related content, including
+the same-response parent of a label such as “这是问卷”; remaining slots preserve newest context.
+Chronological order is retained. The same selection protects related content at the existing
+ten-message planning boundary. This source is authoritative: an API error must not fall back to stale
 database text. Feishu deleted messages and local deletion tombstones are excluded. Context and
 group-processing gates are checked before and after the asynchronous read. Explicit dependency
 injection still replaces the provider completely, and standalone conversation bypasses history.

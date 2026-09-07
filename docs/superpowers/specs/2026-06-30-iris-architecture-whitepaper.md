@@ -303,9 +303,11 @@ chat anchored after background documents.
 
 Live-chat history loading may scan more raw group events than it injects into the prompt because
 recent Feishu traffic can include images, stickers, blank text, or document-only messages. The
-configured Feishu source-policy runtime reads one newest page of 50 current-chat messages, filters
+configured Feishu source-policy runtime reads at most two newest pages of 50 current-chat messages, filters
 to readable human text/posts, applies local deletion tombstones, and injects at most 20 messages.
-This fresh source is authoritative; access failure must not fall back to stale persisted text.
+Query-term matching may reserve at most two slots for related content and a same-response reply
+parent, retaining chronology and the twenty-message prompt/ten-message planning limits. This fresh
+source is authoritative; access failure must not fall back to stale persisted text.
 Without the Feishu integration, the local provider scans up to three times the requested output
 window, capped at 100 raw rows. Both paths preserve the existing prompt budget and group boundary;
 the live read does not persist callbacks or authorize cross-group raw chat access.

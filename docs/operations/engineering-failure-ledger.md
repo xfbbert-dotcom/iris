@@ -555,6 +555,8 @@ delivery mistakes while implementing it.
   in the small embedding runner before evidence planning.
 - **Prevention rule:** Use a bounded, authoritative same-chat history read in the configured Feishu
   runtime; preserve deletion and runtime gates, and never synthesize receive events to repair QA.
+  Scan at most 100 raw messages; retain at most two related slots (including a same-response reply
+  parent) so short intervening traffic cannot wash the source out of the twenty/ten-message limits.
   Budget search-vector inputs separately from the actual answer evidence.
 - **Guard:** Reader and runtime regressions cover rich posts, missing local rows, scope, tombstones,
   access failure, and post-await disable. Embedding tests bound only EmbeddingGemma query bytes,

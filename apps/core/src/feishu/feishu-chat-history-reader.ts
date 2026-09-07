@@ -9,6 +9,8 @@ export type FeishuChatHistoryMessage = {
   senderId: string;
   text: string;
   sentAt: Date;
+  parentMessageId?: string;
+  rootMessageId?: string;
 };
 
 export type FeishuChatHistoryReader = {
@@ -34,7 +36,8 @@ export class FeishuChatHistoryError extends Error {
 const DEFAULT_HISTORY_TIMEOUT_MS = 10_000;
 const MAX_HISTORY_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_HISTORY_PAGE_ITEMS = 50;
-const MAX_HISTORY_MESSAGES = 20;
+const MAX_HISTORY_PAGES = 2;
+const MAX_HISTORY_MESSAGES = 100;
 const MAX_FEISHU_IDENTIFIER_CHARS = 512;
 
 export function createFeishuChatHistoryReader({
@@ -60,34 +63,49 @@ export function createFeishuChatHistoryReader({
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), safeTimeoutMs);
         try {
-          const response = await fetch(
-            `${baseUrl.replace(/\/+$/u, "")}/open-apis/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(chatId)}&page_size=${MAX_HISTORY_PAGE_ITEMS}&sort_type=ByCreateTimeDesc`,
-            {
-              method: "GET",
-              headers: { authorization: `Bearer ${tenantAccessToken}` },
-              signal: controller.signal,
-            },
-          );
-          if (!response.ok) throw new FeishuChatHistoryError();
-          const body = await readBoundedJsonResponse({
-            response,
-            invalidJsonErrorMessage: "Feishu chat history unavailable",
-            maxResponseBytes: MAX_HISTORY_RESPONSE_BYTES,
-            responseSizeErrorMessage: "Feishu chat history unavailable",
-          });
-
-          const messages = readHistoryPage(body)
-            .flatMap((item) => {
+          const messagesById = new Map<string, FeishuChatHistoryMessage>();
+          const seenPageTokens = new Set<string>();
+          let pageToken: string | undefined;
+          for (let pageIndex = 0; pageIndex < MAX_HISTORY_PAGES; pageIndex += 1) {
+            const cursorQuery = pageToken === undefined ? "" : `&page_token=${encodeURIComponent(pageToken)}`;
+            const response = await fetch(
+              `${baseUrl.replace(/\/+$/u, "")}/open-apis/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(chatId)}&page_size=${MAX_HISTORY_PAGE_ITEMS}&sort_type=ByCreateTimeDesc${cursorQuery}`,
+              {
+                method: "GET",
+                headers: { authorization: `Bearer ${tenantAccessToken}` },
+                signal: controller.signal,
+              },
+            );
+            if (!response.ok) throw new FeishuChatHistoryError();
+            const body = await readBoundedJsonResponse({
+              response,
+              invalidJsonErrorMessage: "Feishu chat history unavailable",
+              maxResponseBytes: MAX_HISTORY_RESPONSE_BYTES,
+              responseSizeErrorMessage: "Feishu chat history unavailable",
+            });
+            if (controller.signal.aborted) throw new FeishuChatHistoryError();
+            const page = readHistoryPage(body);
+            for (const item of page.items) {
               const message = readHistoryMessage(item, chatId);
-              return message === undefined ? [] : [message];
-            })
-            .sort((left, right) => right.sentAt.getTime() - left.sentAt.getTime());
-          const seen = new Set<string>();
-          return messages.filter((message) => {
-            if (seen.has(message.messageId)) return false;
-            seen.add(message.messageId);
-            return true;
-          }).slice(0, limit);
+              if (message === undefined) continue;
+              const previous = messagesById.get(message.messageId);
+              if (previous === undefined || previous.sentAt.getTime() < message.sentAt.getTime()) {
+                messagesById.set(message.messageId, message);
+              }
+            }
+
+            if (messagesById.size >= limit || !page.hasMore) break;
+            const nextPageToken = readIdentifier(page.pageToken);
+            if (nextPageToken === undefined || seenPageTokens.has(nextPageToken)) {
+              throw new FeishuChatHistoryError();
+            }
+            seenPageTokens.add(nextPageToken);
+            pageToken = nextPageToken;
+          }
+
+          return [...messagesById.values()]
+            .sort((left, right) => right.sentAt.getTime() - left.sentAt.getTime())
+            .slice(0, limit);
         } finally {
           clearTimeout(timeout);
         }
@@ -98,7 +116,7 @@ export function createFeishuChatHistoryReader({
   };
 }
 
-function readHistoryPage(body: unknown): unknown[] {
+function readHistoryPage(body: unknown): { items: unknown[]; hasMore: boolean; pageToken: unknown } {
   if (
     !isRecord(body) || body.code !== 0 || !isRecord(body.data) ||
     !Array.isArray(body.data.items) || body.data.items.length > MAX_HISTORY_PAGE_ITEMS ||
@@ -106,8 +124,7 @@ function readHistoryPage(body: unknown): unknown[] {
   ) {
     throw new FeishuChatHistoryError();
   }
-  // The newest page is the complete request budget, even when has_more is true.
-  return body.data.items;
+  return { items: body.data.items, hasMore: body.data.has_more, pageToken: body.data.page_token };
 }
 
 function readHistoryMessage(value: unknown, chatId: string): FeishuChatHistoryMessage | undefined {
@@ -124,7 +141,17 @@ function readHistoryMessage(value: unknown, chatId: string): FeishuChatHistoryMe
   if (messageId === undefined || senderId === undefined || sentAt === undefined || text === undefined) {
     return undefined;
   }
-  return { messageId, chatId, senderId, text, sentAt };
+  const parentMessageId = readIdentifier(value.parent_id);
+  const rootMessageId = readIdentifier(value.root_id);
+  return {
+    messageId,
+    chatId,
+    senderId,
+    text,
+    sentAt,
+    ...(parentMessageId === undefined ? {} : { parentMessageId }),
+    ...(rootMessageId === undefined ? {} : { rootMessageId }),
+  };
 }
 
 function readIdentifier(value: unknown): string | undefined {

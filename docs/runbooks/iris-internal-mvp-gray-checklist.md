@@ -31,6 +31,9 @@ Record non-blocking hardening as backlog instead of extending the gate.
    - A recent long rich-text questionnaire, even when its receive callback is missing locally,
      is recovered from the same group's live Feishu history and supports a factual follow-up.
      Verify via an internal draft with no manually injected source or synthetic callback.
+   - Repeat after more than twenty short follow-ups within the hundred-record scan budget. A label
+     such as “这是问卷” must retain its same-chat reply parent even if the original lacks that word;
+     verify actual planning evidence, not only the assembled context string.
    - Deleted/bot messages stay excluded; revoked history access fails closed without stale local
      fallback. The same question in another group must not expose that raw questionnaire.
    - The long-post draft completes without increasing the local embedding runner's OOM count.

@@ -246,6 +246,7 @@ describe("AnswerDraftOrchestrator", () => {
     expect(liveChatContextProvider.loadRecentMessages).toHaveBeenCalledWith({
       chatId: "oc_1",
       limit: 8,
+      question: COMPANY_CONTEXT_QUESTION,
     });
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
       queryText: COMPANY_CONTEXT_QUESTION,
@@ -816,6 +817,7 @@ describe("AnswerDraftOrchestrator", () => {
     expect(liveChatContextProvider.loadRecentMessages).toHaveBeenCalledWith({
       chatId: "oc_1",
       limit: 20,
+      question: COMPANY_CONTEXT_QUESTION,
     });
     expect(contextBuilder.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({ liveChatLimit: 20 }),

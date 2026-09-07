@@ -10,6 +10,56 @@ import {
 } from "../src/runtime/answer-draft-runtime.js";
 
 describe("answer drafts using fresh current-group history", () => {
+  it("keeps a questionnaire's linked original beyond 50 newer messages in bounded planner evidence", async () => {
+    const introduction = "使用方法：12个主问题，追问按回答选择。用户体验访谈需要了解使用频率和主要困难。";
+    const original = introduction + "访谈追问：上一次使用产品遇到了哪些困难？请描述具体经历。".repeat(100);
+    const harness = createHarness({ history: linkedQuestionnaireHistory(original) });
+
+    const result = await harness.generate({ question: "刚才发的问卷讲了什么？" });
+
+    const evidence = harness.planningInputs[0]!.evidence;
+    expect(evidence.some(({ text }) => text.startsWith(`ou_author: ${introduction}`))).toBe(true);
+    expect(evidence.map(({ text }) => text)).toContain("ou_author: 这是问卷");
+    expect(evidence).toHaveLength(10);
+    expect(result.promptContext.match(/<message /gu)).toHaveLength(20);
+    expect(result.promptContext.indexOf(introduction)).toBeGreaterThan(-1);
+    expect(result.promptContext.indexOf(introduction)).toBeLessThan(result.promptContext.indexOf("这是问卷"));
+    expect(result.promptContext.indexOf("这是问卷")).toBeLessThan(result.promptContext.indexOf("随手记录-60"));
+    expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 100 }]);
+    expect(harness.planningInputs[0]?.liveChatMessages.every((message) => Object.keys(message).sort().join() === "speaker,text")).toBe(true);
+  });
+
+  it("does not promote older sources through generic question words", async () => {
+    const harness = createHarness({
+      history: [
+        ...unrelatedHistory(),
+        historyMessage("om_old", "消息内容和资料情况都在这里。", { sentAt: new Date("2026-09-07T06:00:00Z") }),
+      ],
+    });
+
+    const result = await harness.generate({ question: "最近消息有什么情况？" });
+
+    expect(result.promptContext).not.toContain("消息内容和资料情况都在这里");
+    expect(result.promptContext).toContain("随手记录-41");
+    expect(result.promptContext).toContain("随手记录-60");
+  });
+
+  it.each(["deleted", "foreign"])("does not follow a questionnaire reply to a %s original", async (state) => {
+    const original = "不可使用的用户体验访谈正文";
+    const history = linkedQuestionnaireHistory(original);
+    if (state === "foreign") history.at(-1)!.chatId = "oc_other";
+    const harness = createHarness({
+      history,
+      tombstones: state === "deleted" ? ["om_original"] : [],
+    });
+
+    const result = await harness.generate({ question: "刚才发的问卷讲了什么？" });
+
+    expect(harness.planningInputs[0]!.evidence.map(({ text }) => text)).toContain("ou_author: 这是问卷");
+    expect(result.promptContext).not.toContain(original);
+    expect(harness.planningInputs[0]!.evidence.some(({ text }) => text.includes(original))).toBe(false);
+  });
+
   it("passes a recent questionnaire missed by callbacks into model evidence", async () => {
     const harness = createHarness({
       history: [historyMessage("om_questionnaire", "小叶你好！上次的新人问卷感觉怎么样呀")],
@@ -25,7 +75,7 @@ describe("answer drafts using fresh current-group history", () => {
       },
     ]);
     expect(result.promptContext).toContain("上次的新人问卷感觉怎么样呀");
-    expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 20 }]);
+    expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 100 }]);
   });
 
   it("uses the current authorized response without mixing in stale local history", async () => {
@@ -103,7 +153,7 @@ describe("answer drafts using fresh current-group history", () => {
 
     const result = await harness.generate();
 
-    expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 20 }]);
+    expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 100 }]);
     expect(result.promptContext).not.toContain("读取途中已停用的群消息");
     expect(harness.planningInputs[0]?.evidence).toEqual([]);
   });
@@ -152,8 +202,8 @@ describe("answer drafts using fresh current-group history", () => {
     expect(result.promptContext).not.toContain("问卷说明-02");
     expect(result.promptContext).toContain("问卷说明-03");
     expect(result.promptContext.indexOf("问卷说明-03")).toBeLessThan(result.promptContext.indexOf("问卷说明-22"));
-    expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 20 }]);
-    expect(harness.databaseQueries[0]?.values[0]).toHaveLength(20);
+    expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 100 }]);
+    expect(harness.databaseQueries[0]?.values[0]).toHaveLength(22);
   });
 
   it("keeps local history when no Feishu credentials are configured", async () => {
@@ -181,6 +231,27 @@ describe("answer drafts using fresh current-group history", () => {
     expect(harness.databaseQueries).toEqual([]);
   });
 });
+
+function unrelatedHistory(): FeishuChatHistoryMessage[] {
+  return Array.from({ length: 60 }, (_, index) => historyMessage(
+    `om_noise_${60 - index}`,
+    `随手记录-${String(60 - index).padStart(2, "0")}`,
+    { sentAt: new Date(Date.UTC(2026, 8, 7, 8, 60 - index)) },
+  ));
+}
+
+function linkedQuestionnaireHistory(original: string): FeishuChatHistoryMessage[] {
+  return [
+    historyMessage("om_question", "刚才发的问卷讲了什么？", { sentAt: new Date("2026-09-07T10:00:00Z") }),
+    ...unrelatedHistory(),
+    historyMessage("om_label", "这是问卷", {
+      parentMessageId: "om_original",
+      rootMessageId: "om_original",
+      sentAt: new Date("2026-09-07T06:01:00Z"),
+    }),
+    historyMessage("om_original", original, { sentAt: new Date("2026-09-07T06:00:00Z") }),
+  ];
+}
 
 function historyMessage(messageId: string, text: string, overrides: Partial<FeishuChatHistoryMessage> = {}): FeishuChatHistoryMessage {
   return {

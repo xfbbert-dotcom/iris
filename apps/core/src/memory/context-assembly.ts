@@ -12,6 +12,9 @@ export type BackgroundDocument = {
 export type LiveChatMessage = {
   speaker: string;
   text: string;
+  messageId?: string;
+  parentMessageId?: string;
+  rootMessageId?: string;
 };
 
 export type PromptGroupMemory = {

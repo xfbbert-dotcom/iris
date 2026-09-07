@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { classifyStandaloneConversation } from "./standalone-conversation.js";
+import { selectTopicAwareChatWindow } from "../memory/topic-aware-chat-window.js";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import {
@@ -84,7 +85,7 @@ export interface AnswerDraftOrchestrator {
 }
 
 type LiveChatContextProvider = {
-  loadRecentMessages(input: { chatId: string; limit?: number }): Promise<LiveChatMessage[]>;
+  loadRecentMessages(input: { chatId: string; limit?: number; question?: string }): Promise<LiveChatMessage[]>;
 };
 
 const MAX_ANSWER_DRAFT_TEXT_CHARS = 8000;
@@ -160,10 +161,12 @@ export function createAnswerDraftOrchestrator({
       : await liveChatContextProvider?.loadRecentMessages({
           chatId: input.chatId,
           limit: normalized.liveChatLimit,
+          question: normalized.question,
         }) ?? [];
     const liveChatMessages = selectLiveChatWindow(
       dedupeLiveChatMessages([...storedLiveChatMessages, ...input.liveChatMessages]),
       normalized.liveChatLimit,
+      normalized.question,
     );
 
     const supplementalQueryText = buildSupplementalRetrievalQueryText(
@@ -488,12 +491,12 @@ function selectPlanningLiveChatMessages(
   liveChatMessages: LiveChatMessage[],
 ): LiveChatMessage[] {
   const normalizedQuestion = question.trim();
-  return liveChatMessages
+  const priorMessages = liveChatMessages
     .filter(({ text }) => {
       const normalizedText = text.trim();
       return normalizedText !== normalizedQuestion && !normalizedText.endsWith(normalizedQuestion);
-    })
-    .slice(-MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES);
+    });
+  return selectTopicAwareChatWindow(priorMessages, question, MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES);
 }
 
 function selectEvidenceForPlan(
@@ -653,6 +656,9 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
     .map((message) => ({
       speaker: truncateWithMarker(message.speaker.trim(), MAX_LIVE_CHAT_SPEAKER_CHARS),
       text: truncateWithMarker(message.text.trim(), MAX_LIVE_CHAT_TEXT_CHARS),
+      ...(message.messageId === undefined ? {} : { messageId: message.messageId }),
+      ...(message.parentMessageId === undefined ? {} : { parentMessageId: message.parentMessageId }),
+      ...(message.rootMessageId === undefined ? {} : { rootMessageId: message.rootMessageId }),
     }))
     .filter((message) => message.speaker.length > 0 && message.text.length > 0);
 
@@ -670,13 +676,14 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
 function selectLiveChatWindow(
   messages: LiveChatMessage[],
   liveChatLimit: number | undefined,
+  question: string,
 ): LiveChatMessage[] {
   const limit = liveChatLimit ?? MAX_LIVE_CHAT_LIMIT;
   if (limit <= 0) {
     return [];
   }
 
-  return messages.slice(-limit);
+  return selectTopicAwareChatWindow(messages, question, limit);
 }
 
 function buildSupplementalRetrievalQueryText(

@@ -32,7 +32,7 @@ describe("FeishuChatHistoryReader", () => {
       fetch,
     });
 
-    await expect(reader.listRecentMessages({ chatId: "oc/group 1", limit: 20 })).resolves.toEqual([
+    await expect(reader.listRecentMessages({ chatId: "oc/group 1", limit: 1 })).resolves.toEqual([
       {
         messageId: "om-questionnaire",
         chatId: "oc/group 1",
@@ -95,19 +95,192 @@ describe("FeishuChatHistoryReader", () => {
     expect(result.map((item) => item.messageId)).toEqual(["om-newest", "om-middle"]);
   });
 
-  it("caps results at twenty and never follows a second page", async () => {
+  it("stops at the first page once the requested twenty readable messages are available", async () => {
     const fetch = vi.fn(async () => page(Array.from({ length: 50 }, (_, index) => message({
       message_id: `om-${index}`,
       create_time: String(1788750000000 + index),
     })), true));
     const reader = readerFor(fetch);
 
-    const result = await reader.listRecentMessages({ chatId: "oc-group", limit: 1000 });
+    const result = await reader.listRecentMessages({ chatId: "oc-group", limit: 20 });
 
     expect(result).toHaveLength(20);
     expect(result[0].messageId).toBe("om-49");
     expect(result[19].messageId).toBe("om-30");
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("recovers the original questionnaire on page two after fifty recent short messages", async () => {
+    const recent = Array.from({ length: 50 }, (_, index) => message({
+      message_id: `om-followup-${index}`,
+      create_time: String(1788750010000 + index),
+      body: { content: JSON.stringify({ text: "收到，谢谢" }) },
+    }));
+    const fetch = vi.fn(async (_url: string | URL | Request) => fetch.mock.calls.length === 1
+      ? page(recent, true, "older/page?=2")
+      : page([message({
+        message_id: "om-original-questionnaire",
+        msg_type: "post",
+        body: { content: JSON.stringify({
+          title: "场景调研问卷",
+          content: [[{ tag: "text", text: "请写出用户角色、使用时机和当前困难。" }]],
+        }) },
+      })]));
+    const reader = readerFor(fetch);
+
+    const result = await reader.listRecentMessages({ chatId: "oc-group", limit: 100 });
+
+    expect(result).toHaveLength(51);
+    expect(result[50]).toEqual({
+      messageId: "om-original-questionnaire",
+      chatId: "oc-group",
+      senderId: "ou-author",
+      text: "场景调研问卷 请写出用户角色、使用时机和当前困难。",
+      sentAt: new Date("2026-09-07T03:00:00.000Z"),
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenNthCalledWith(2,
+      "https://open.feishu.cn/open-apis/im/v1/messages?container_id_type=chat&container_id=oc-group&page_size=50&sort_type=ByCreateTimeDesc&page_token=older%2Fpage%3F%3D2",
+      expect.objectContaining({ method: "GET", headers: { authorization: "Bearer tenant-token" } }),
+    );
+  });
+
+  it("caps a large requested limit at one hundred messages across two pages", async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request) => {
+      const currentPage = fetch.mock.calls.length;
+      return page(Array.from({ length: 50 }, (_, index) => {
+        const messageIndex = (2 - currentPage) * 50 + index;
+        return message({ message_id: `om-${messageIndex}`, create_time: String(1788750000000 + messageIndex) });
+      }), true, `next-${currentPage}`);
+    });
+    const reader = readerFor(fetch);
+
+    const result = await reader.listRecentMessages({ chatId: "oc-group", limit: 1000 });
+
+    expect(result).toHaveLength(100);
+    expect(result[0].messageId).toBe("om-99");
+    expect(result[99].messageId).toBe("om-0");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("never requests a third page even when filtering leaves fewer than the requested messages", async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request) => {
+      const currentPage = fetch.mock.calls.length;
+      return page(Array.from({ length: 50 }, (_, index) => message({
+        message_id: `om-${currentPage}-${index}`,
+        ...(index === 0 ? {} : { sender: { id: "cli-bot", sender_type: "app", id_type: "app_id" } }),
+      })), true, `next-${currentPage}`);
+    });
+    const reader = readerFor(fetch);
+
+    const result = await reader.listRecentMessages({ chatId: "oc-group", limit: 100 });
+
+    expect(result.map((item) => item.messageId)).toEqual(["om-1-0", "om-2-0"]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps exact chat scope and deduplicates IDs across both pages", async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request) => fetch.mock.calls.length === 1
+      ? page([message({ message_id: "om-recent", create_time: "1788750001000" })], true)
+      : page([
+        message({ message_id: "om-recent", create_time: "1788750001000" }),
+        message({ message_id: "om-foreign", chat_id: "oc-other" }),
+        message({ message_id: "om-deleted", deleted: true }),
+        message({ message_id: "om-original" }),
+      ]));
+    const reader = readerFor(fetch);
+
+    const result = await reader.listRecentMessages({ chatId: "oc-group", limit: 3 });
+
+    expect(result.map((item) => item.messageId)).toEqual(["om-recent", "om-original"]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves validated reply bindings without inventing missing or malformed message IDs", async () => {
+    const reader = readerFor(async () => page([
+      message({
+        message_id: "om-questionnaire-label",
+        parent_id: "om-original",
+        root_id: "om-thread-root",
+        body: { content: JSON.stringify({ text: "这是问卷" }) },
+      }),
+      message({ message_id: "om-invalid-binding", parent_id: " om-other ", root_id: "m".repeat(513) }),
+      message({ message_id: "om-no-binding" }),
+    ]));
+
+    const result = await reader.listRecentMessages({ chatId: "oc-group", limit: 100 });
+
+    expect(result[0]).toMatchObject({
+      messageId: "om-questionnaire-label",
+      text: "这是问卷",
+      parentMessageId: "om-original",
+      rootMessageId: "om-thread-root",
+    });
+    for (const item of result.slice(1)) {
+      expect(item).not.toHaveProperty("parentMessageId");
+      expect(item).not.toHaveProperty("rootMessageId");
+    }
+  });
+
+  it.each([undefined, null, "", " ", 42, "p".repeat(513)])(
+    "fails closed before following a missing or malformed cursor: %s",
+    async (pageToken) => {
+      const fetch = vi.fn(async () => json({ code: 0, data: { items: [message()], has_more: true, page_token: pageToken } }));
+      const reader = readerFor(fetch);
+
+      await expect(reader.listRecentMessages({ chatId: "oc-group", limit: 100 })).rejects.toSatisfy(isHistoryUnavailable);
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("fails closed when Feishu repeats a pagination cursor", async () => {
+    const fetch = vi.fn(async () => page([message()], true, "repeated-cursor"));
+    const reader = readerFor(fetch);
+
+    await expect(reader.listRecentMessages({ chatId: "oc-group", limit: 100 })).rejects.toSatisfy(isHistoryUnavailable);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["authorization denial", () => json({ code: 99991672, msg: "private-content tenant-token" }, 403)],
+    ["malformed page", () => json({ code: 0, data: {} })],
+    ["oversized body", () => json({ code: 0, data: { items: [], has_more: false }, padding: "s".repeat(2 * 1024 * 1024) })],
+  ] as const)("discards the first page if page two fails with %s", async (_name, response) => {
+    const fetch = vi.fn(async () => fetch.mock.calls.length === 1 ? page([message()], true) : response());
+    const reader = readerFor(fetch);
+
+    await expect(reader.listRecentMessages({ chatId: "oc-group", limit: 100 })).rejects.toSatisfy(isHistoryUnavailable);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one overall timeout across both page requests", async () => {
+    vi.useFakeTimers();
+    try {
+      let secondSignal: AbortSignal | null | undefined;
+      const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        if (fetch.mock.calls.length === 1) {
+          return new Promise<Response>((resolve) => setTimeout(() => resolve(page([message()], true)), 60));
+        }
+        secondSignal = init?.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          secondSignal?.addEventListener("abort", () => reject(new Error("private-content tenant-token")), { once: true });
+        });
+      });
+      const reader = readerFor(fetch, 100);
+      const outcome = reader.listRecentMessages({ chatId: "oc-group", limit: 100 }).then(
+        (messages) => ({ messages, error: undefined }),
+        (error: unknown) => ({ messages: undefined, error }),
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(secondSignal?.aborted).toBe(true);
+      expect(isHistoryUnavailable((await outcome).error)).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
@@ -251,8 +424,8 @@ function message(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function page(items: unknown[], hasMore = false): Response {
-  return json({ code: 0, data: { items, has_more: hasMore, ...(hasMore ? { page_token: "do-not-follow" } : {}) } });
+function page(items: unknown[], hasMore = false, pageToken = "next-page"): Response {
+  return json({ code: 0, data: { items, has_more: hasMore, ...(hasMore ? { page_token: pageToken } : {}) } });
 }
 
 function json(body: unknown, status = 200): Response {
