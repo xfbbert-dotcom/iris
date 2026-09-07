@@ -20,6 +20,12 @@ database text. Feishu deleted messages and local deletion tombstones are exclude
 group-processing gates are checked before and after the asynchronous read. Explicit dependency
 injection still replaces the provider completely, and standalone conversation bypasses history.
 
+Selection alone does not communicate a reply's meaning to the model. Selected live-chat evidence
+also uses prompt-local relations such as `live_chat:2; reply_to:C1`, only when its parent/root is an
+earlier selected message. Missing, deleted, foreign, or out-of-window targets never receive a
+relation; raw Feishu IDs are not emitted in source prose. Distinct message identities retain their
+own reply linkage even when an author later repeats identical label text.
+
 This is a read-only, bounded context repair: no message persistence, synthetic callback, cross-group
 chat access, or knowledge publication. Existing prompt/evidence limits remain unchanged. It does
 not promise complete historical recall, attachment OCR, or arbitrary reply-chain traversal.

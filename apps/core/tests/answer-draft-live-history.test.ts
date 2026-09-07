@@ -20,6 +20,8 @@ describe("answer drafts using fresh current-group history", () => {
     const evidence = harness.planningInputs[0]!.evidence;
     expect(evidence.some(({ text }) => text.startsWith(`ou_author: ${introduction}`))).toBe(true);
     expect(evidence.map(({ text }) => text)).toContain("ou_author: 这是问卷");
+    expect(evidence[1]?.source).toBe("live_chat:2; reply_to:C1");
+    expect(JSON.stringify(evidence)).not.toContain("om_original");
     expect(evidence).toHaveLength(10);
     expect(result.promptContext.match(/<message /gu)).toHaveLength(20);
     expect(result.promptContext.indexOf(introduction)).toBeGreaterThan(-1);
@@ -27,6 +29,24 @@ describe("answer drafts using fresh current-group history", () => {
     expect(result.promptContext.indexOf("这是问卷")).toBeLessThan(result.promptContext.indexOf("随手记录-60"));
     expect(harness.historyRequests).toEqual([{ chatId: "oc_current", limit: 100 }]);
     expect(harness.planningInputs[0]?.liveChatMessages.every((message) => Object.keys(message).sort().join() === "speaker,text")).toBe(true);
+  });
+
+  it("preserves a linked label when a newer distinct message repeats the same text", async () => {
+    const original = "使用方法：12个主问题，追问按回答选择。用户体验访谈的具体内容。";
+    const history = linkedQuestionnaireHistory(original);
+    history.unshift(historyMessage("om_repeated_label", "这是问卷", {
+      sentAt: new Date("2026-09-07T10:01:00Z"),
+    }));
+    const harness = createHarness({ history });
+
+    await harness.generate({ question: "刚才发的问卷讲了什么？" });
+
+    const evidence = harness.planningInputs[0]!.evidence;
+    expect(evidence.map(({ text }) => text)).toContain(`ou_author: ${original}`);
+    expect(evidence.filter(({ text }) => text === "ou_author: 这是问卷")).toEqual([
+      expect.objectContaining({ source: "live_chat:2; reply_to:C1" }),
+      expect.objectContaining({ source: "live_chat:10" }),
+    ]);
   });
 
   it("does not promote older sources through generic question words", async () => {
@@ -58,6 +78,7 @@ describe("answer drafts using fresh current-group history", () => {
     expect(harness.planningInputs[0]!.evidence.map(({ text }) => text)).toContain("ou_author: 这是问卷");
     expect(result.promptContext).not.toContain(original);
     expect(harness.planningInputs[0]!.evidence.some(({ text }) => text.includes(original))).toBe(false);
+    expect(harness.planningInputs[0]!.evidence.every(({ source }) => !source.includes("reply_to:"))).toBe(true);
   });
 
   it("passes a recent questionnaire missed by callbacks into model evidence", async () => {

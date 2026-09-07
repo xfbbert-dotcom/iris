@@ -557,6 +557,8 @@ delivery mistakes while implementing it.
   runtime; preserve deletion and runtime gates, and never synthesize receive events to repair QA.
   Scan at most 100 raw messages; retain at most two related slots (including a same-response reply
   parent) so short intervening traffic cannot wash the source out of the twenty/ten-message limits.
+  Preserve prompt-local reply relations into model evidence, not only the context selector: the
+  real planner still denied a questionnaire until “这是问卷” was explicitly bound to its original.
   Budget search-vector inputs separately from the actual answer evidence.
 - **Guard:** Reader and runtime regressions cover rich posts, missing local rows, scope, tombstones,
   access failure, and post-await disable. Embedding tests bound only EmbeddingGemma query bytes,

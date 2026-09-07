@@ -437,18 +437,28 @@ function buildPlanningEvidence(
   question: string,
   context: DocumentRetrievalContextResult,
 ): EvidencePlanningDocument[] {
+  const priorLiveChatRefs = new Map<string, string>();
   const liveChatEvidence = selectPlanningLiveChatMessages(
     question,
     context.liveChatMessages ?? [],
   )
-    .map((message, index) => ({
-      citationRef: `C${index + 1}`,
-      source: `live_chat:${index + 1}`,
-      text: truncateWithMarker(
-        `${message.speaker.trim()}: ${message.text.trim()}`,
-        MAX_PLANNING_EVIDENCE_TEXT_CHARS,
-      ),
-    }));
+    .map((message, index) => {
+      const citationRef = `C${index + 1}`;
+      const replyTo = [message.parentMessageId, message.rootMessageId]
+        .flatMap((id) => id === undefined ? [] : [priorLiveChatRefs.get(id)])
+        .find((ref) => ref !== undefined);
+      if (message.messageId !== undefined) {
+        priorLiveChatRefs.set(message.messageId, citationRef);
+      }
+      return {
+        citationRef,
+        source: `live_chat:${index + 1}${replyTo === undefined ? "" : `; reply_to:${replyTo}`}`,
+        text: truncateWithMarker(
+          `${message.speaker.trim()}: ${message.text.trim()}`,
+          MAX_PLANNING_EVIDENCE_TEXT_CHARS,
+        ),
+      };
+    });
   const groupMemoryEvidence = context.usedGroupMemories.slice(0, 8).map((memory, index) => ({
     citationRef: `M${index + 1}`,
     source: `group_memory:${memory.id}`,
@@ -663,7 +673,9 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
     .filter((message) => message.speaker.length > 0 && message.text.length > 0);
 
   return normalizedMessages.reduceRight<LiveChatMessage[]>((deduplicated, message) => {
-    const key = `${message.speaker}\u0000${message.text}`;
+    const key = message.messageId === undefined
+      ? `text:${message.speaker}\u0000${message.text}`
+      : `id:${message.messageId}`;
     if (seen.has(key)) {
       return deduplicated;
     }
