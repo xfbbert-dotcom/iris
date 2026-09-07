@@ -98,10 +98,33 @@ rewrite stage requires separate pilot evidence before adoption.
 
 ## 4. End-to-End Architecture
 
-The application owns route classification before any planner call. Only an explicit transformation
-with a supplied payload or an explicit exact-output payload uses the existing direct-task path.
-Ambiguous requests and company-factual turns always use the evidence-bounded path; a model cannot
-authorize its own bypass.
+The application owns route classification before any planner call. An explicit transformation
+with a supplied payload, an explicit exact-output payload, or a recognized standalone conversation
+uses the direct-task path. Ambiguous requests and company-factual turns use the evidence-bounded
+path; a model cannot authorize its own bypass.
+
+### Standalone conversation correction — 2026-09-07
+
+The original two-way routing sent greetings such as `哈喽` through the company-fact planner,
+which produced an irrelevant missing-evidence answer. Standalone greetings, thanks, identity
+questions, and explicit generic work-drafting requests now have a deterministic full-input route.
+Examples include `在吗？`, `你是谁？`, `帮我想几个访谈问题`, and
+`帮我设计一份用户访谈提纲`. The existing answer model responds naturally in the user's language;
+generic suggestions are not asserted as recorded company decisions.
+
+This route loads no stored chat, company documents, memories, threads, or action items, including
+during pre-send permission inspection. It uses the same empty context and citation-free result
+contract as literal direct tasks. Mention/runtime gates and the normal reply delivery service
+continue to apply. It does not enable unsolicited messages, external actions, or knowledge writes.
+
+Classification must match the whole standalone request. Greeting prefixes followed by factual
+questions, references to previous chat or private material, and ambiguous follow-ups retain the
+evidence path. `你好，我们上季度营收多少？` is therefore company-factual. Literal transformations
+are checked first so `只回复：哈喽` keeps its exact-output behavior.
+
+The standalone route covers explicit self-contained conversational intents, not unrestricted
+general-purpose chat or arbitrary contextual follow-ups. Future expansion must retain the same
+company-fact and source-visibility boundary.
 
 The company-factual flow is:
 
@@ -123,8 +146,8 @@ current question
 The existing runtime gates, source scoping, Feishu permission checker, prompt-injection boundary,
 answer-reply delivery service, and pilot controls remain in force.
 
-The planner never classifies direct tasks. The direct-task route is a narrow, deterministic
-application decision for safe literal transformations with a supplied delimiter payload,
+The planner never classifies direct tasks. In addition to the standalone conversation route above,
+the direct-task route is a narrow, deterministic application decision for safe literal transformations with a supplied delimiter payload,
 content operations that explicitly name the literal object before the delimiter (for example,
 “Please summarize this text: ...” or “请整理以下文本：...”), and exact-output requests. A bare
 imperative such as “总结 Iris 当前年收入”, “Please summarize: Iris current annual revenue”, or

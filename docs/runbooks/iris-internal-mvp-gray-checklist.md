@@ -28,6 +28,12 @@ Record non-blocking hardening as backlog instead of extending the gate.
    - Two or more users talk in the same Feishu group.
    - A later `@Iris` question can use earlier group context.
    - A control group cannot read the pilot group's context.
+   - Standalone `@Iris 哈喽`, `@Iris 谢谢`, and `@Iris 你是谁？` receive natural same-language
+     responses without a company-evidence refusal or document citation.
+   - `@Iris 帮我想几个访谈问题` offers generic suggestions; it does not claim to know the
+     company's previous interviews or decisions. `@Iris 你好，我们上季度营收多少？` must still
+     require authorized company evidence.
+   - Repeat the standalone test in a disabled group: no response or model call is permitted.
 
 2. Non-mention learning
    - Ordinary non-`@Iris` discussion is ingested asynchronously.
@@ -79,6 +85,10 @@ Record non-blocking hardening as backlog instead of extending the gate.
     - Queues drain or remain safely retryable after re-enable.
 
 ## Current Status - 2026-07-29
+
+The status below is historical acceptance evidence. The standalone-conversation checks added on
+2026-09-07 were missing from that acceptance and are a separate regression gate; prior success
+does not establish that every everyday conversational intent is supported.
 
 - Loops 1 and 2 have now passed a real Feishu semantic gray run. The ordered six-message replay
   produced one current-group thread through create, promote, resolve, and reopen transitions plus

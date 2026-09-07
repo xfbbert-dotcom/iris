@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { classifyStandaloneConversation } from "./standalone-conversation.js";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import {
@@ -69,7 +70,8 @@ export type AnswerDraftPermissionInspectionResult = {
 
 type DirectTaskRoute =
   | { kind: "literal_output"; payload: string }
-  | { kind: "model_transform" };
+  | { kind: "model_transform" }
+  | { kind: "conversation" };
 
 export interface AnswerDraftOrchestrator {
   generateDraft(input: AnswerDraftInput): Promise<AnswerDraftResult>;
@@ -385,6 +387,13 @@ const EXPLICIT_LITERAL_OBJECT_INSTRUCTION_PATTERNS = [
 ];
 
 function classifyDirectTask(question: string): DirectTaskRoute | undefined {
+  return classifyLiteralTask(question)
+    ?? (classifyStandaloneConversation(question) === undefined
+      ? undefined
+      : { kind: "conversation" });
+}
+
+function classifyLiteralTask(question: string): DirectTaskRoute | undefined {
   const normalized = question.trim();
   const delimiterIndex = normalized.search(/[:：]/u);
   if (delimiterIndex <= 0) {
