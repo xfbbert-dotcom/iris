@@ -28,6 +28,12 @@ Record non-blocking hardening as backlog instead of extending the gate.
    - Two or more users talk in the same Feishu group.
    - A later `@Iris` question can use earlier group context.
    - A control group cannot read the pilot group's context.
+   - A recent long rich-text questionnaire, even when its receive callback is missing locally,
+     is recovered from the same group's live Feishu history and supports a factual follow-up.
+     Verify via an internal draft with no manually injected source or synthetic callback.
+   - Deleted/bot messages stay excluded; revoked history access fails closed without stale local
+     fallback. The same question in another group must not expose that raw questionnaire.
+   - The long-post draft completes without increasing the local embedding runner's OOM count.
    - Standalone `@Iris 哈喽`, `@Iris 谢谢`, and `@Iris 你是谁？` receive natural same-language
      responses without a company-evidence refusal or document citation.
    - `@Iris 帮我想几个访谈问题` offers generic suggestions; it does not claim to know the

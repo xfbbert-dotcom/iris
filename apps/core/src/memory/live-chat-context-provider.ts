@@ -1,4 +1,6 @@
 import type { ConversationMessageRepository } from "../conversation/conversation-message-repository.js";
+import type { Queryable } from "../documents/document-fragment-repository.js";
+import type { FeishuChatHistoryReader } from "../feishu/feishu-chat-history-reader.js";
 import type { LiveChatMessage } from "./context-assembly.js";
 
 export type LiveChatContextProvider = {
@@ -31,6 +33,46 @@ export function createLiveChatContextProvider({
           text: message.text!.trim(),
         }))
         .slice(-outputLimit);
+    },
+  };
+}
+
+export function createFeishuLiveChatContextProvider({
+  reader,
+  queryable,
+}: {
+  reader: FeishuChatHistoryReader;
+  queryable: Queryable;
+}): LiveChatContextProvider {
+  return {
+    async loadRecentMessages(input) {
+      const outputLimit = sanitizeLimit(input.limit);
+      if (outputLimit <= 0) {
+        return [];
+      }
+
+      const messages = (await reader.listRecentMessages({
+        chatId: input.chatId,
+        limit: outputLimit,
+      }))
+        .filter((message) => message.chatId === input.chatId)
+        .slice(0, outputLimit);
+      if (messages.length === 0) {
+        return [];
+      }
+
+      // Tombstones outlive local rows, including messages whose receive callback was missed.
+      const result = await queryable.query<{ provider_message_id: string }>(
+        `SELECT provider_message_id
+         FROM conversation_message_deletion_tombstones
+         WHERE provider = 'feishu' AND provider_message_id = ANY($1::text[])`,
+        [messages.map((message) => message.messageId)],
+      );
+      const deletedIds = new Set(result.rows.map((row) => row.provider_message_id));
+      return messages
+        .filter((message) => !deletedIds.has(message.messageId))
+        .reverse()
+        .map((message) => ({ speaker: message.senderId, text: message.text }));
     },
   };
 }

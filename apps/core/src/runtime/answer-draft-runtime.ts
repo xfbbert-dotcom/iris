@@ -71,6 +71,12 @@ import {
   type FeishuTenantAccessTokenProviderDependencies,
 } from "../feishu/feishu-tenant-access-token-provider.js";
 import {
+  createFeishuChatHistoryReader,
+  type FeishuChatHistoryReader,
+  type FeishuChatHistoryReaderDependencies,
+} from "../feishu/feishu-chat-history-reader.js";
+import {
+  createFeishuLiveChatContextProvider,
   createLiveChatContextProvider,
   type LiveChatContextProvider,
 } from "../memory/live-chat-context-provider.js";
@@ -193,6 +199,9 @@ export type AnswerDraftRuntimeDependencies = {
   createFeishuDocumentPermissionChecker?: (
     dependencies: FeishuDocumentPermissionCheckerDependencies,
   ) => FeishuDocumentPermissionChecker;
+  createFeishuChatHistoryReader?: (
+    dependencies: FeishuChatHistoryReaderDependencies,
+  ) => FeishuChatHistoryReader;
   createGroupMemoryRepository?: (dependencies: {
     dataSource: PostgresGroupMemoryDataSource;
   }) => GroupMemoryRepository;
@@ -274,8 +283,6 @@ export function createAnswerDraftRuntime({
     dependencies.createConversationMessageRepository ?? createPostgresConversationMessageRepository;
   const createSnapshots =
     dependencies.createDocumentSnapshotRepository ?? createDocumentSnapshotRepository;
-  const createLiveChatContext =
-    dependencies.createLiveChatContextProvider ?? createLiveChatContextProvider;
   const createChatClient =
     dependencies.createChatCompletionsClient ??
     ((config: ModelProviderConfig) => createOpenAICompatibleChatCompletionsClient({ config }));
@@ -299,14 +306,18 @@ export function createAnswerDraftRuntime({
   const createConflictAnswerProvider =
     dependencies.createKnowledgeConflictAnswerProvider ?? createKnowledgeConflictAnswerProvider;
 
-  const livePermissionChecker =
+  const feishuAnswerSources =
     runtimeConfig.permissionMode === "source-policy"
-      ? createOptionalLivePermissionChecker({
+      ? createOptionalFeishuAnswerSources({
           env,
           createTokenProvider,
           createLivePermissionChecker,
+          createHistoryReader: dependencies.createLiveChatContextProvider === undefined
+            ? dependencies.createFeishuChatHistoryReader ?? createFeishuChatHistoryReader
+            : undefined,
         })
       : undefined;
+  const livePermissionChecker = feishuAnswerSources?.permissionChecker;
   const pool = createPool(readDatabaseConfig(env));
   const groupMemoryRepository = isPostgresGroupMemoryDataSource(pool)
     ? createMemories({ dataSource: pool })
@@ -349,8 +360,15 @@ export function createAnswerDraftRuntime({
       : undefined);
   const conversationMessages = createConversationMessages({ queryable: pool });
   const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({
-    delegate: createLiveChatContext({ repository: conversationMessages }),
+    delegate: dependencies.createLiveChatContextProvider?.({ repository: conversationMessages })
+      ?? (feishuAnswerSources?.historyReader === undefined
+        ? createLiveChatContextProvider({ repository: conversationMessages })
+        : createFeishuLiveChatContextProvider({
+            reader: feishuAnswerSources.historyReader,
+            queryable: pool,
+          })),
     runtimeController,
+    gateGroupProcessing: feishuAnswerSources?.historyReader !== undefined,
   });
   const chatClient = createChatClient(modelConfig);
   const model = dependencies.createModelProvider?.(modelConfig) ??
@@ -690,20 +708,25 @@ function createRuntimeGatedGroupMemoryContextProvider({
 function createRuntimeGatedLiveChatContextProvider({
   delegate,
   runtimeController,
+  gateGroupProcessing,
 }: {
   delegate: LiveChatContextProvider;
   runtimeController?: RuntimeRetrievalGate;
+  gateGroupProcessing: boolean;
 }): LiveChatContextProvider {
+  function canRead(chatId: string): boolean {
+    return (runtimeController?.canReadGroupContext?.(chatId) ?? true)
+      && (!gateGroupProcessing || (runtimeController?.canProcessGroupMessage?.(chatId) ?? true));
+  }
   return {
     async loadRecentMessages(input) {
-      if (
-        runtimeController?.canReadGroupContext !== undefined &&
-        !runtimeController.canReadGroupContext(input.chatId)
-      ) {
+      const chatId = normalizeCurrentGroupId(input.chatId);
+      if (chatId === undefined || !canRead(chatId)) {
         return [];
       }
 
-      return delegate.loadRecentMessages(input);
+      const messages = await delegate.loadRecentMessages({ ...input, chatId });
+      return canRead(chatId) ? messages : [];
     },
   };
 }
@@ -786,10 +809,11 @@ function requiresFeishuLivePermission(source: DocumentSource): boolean {
   );
 }
 
-function createOptionalLivePermissionChecker({
+function createOptionalFeishuAnswerSources({
   env,
   createTokenProvider,
   createLivePermissionChecker,
+  createHistoryReader,
 }: {
   env: EnvLike;
   createTokenProvider: (
@@ -798,7 +822,12 @@ function createOptionalLivePermissionChecker({
   createLivePermissionChecker: (
     dependencies: FeishuDocumentPermissionCheckerDependencies,
   ) => FeishuDocumentPermissionChecker;
-}): FeishuDocumentPermissionChecker | undefined {
+  createHistoryReader: ((dependencies: FeishuChatHistoryReaderDependencies) => FeishuChatHistoryReader)
+    | undefined;
+}): {
+  permissionChecker: FeishuDocumentPermissionChecker;
+  historyReader?: FeishuChatHistoryReader;
+} | undefined {
   const feishuConfig = readOptionalFeishuOpenApiConfig(env);
   if (feishuConfig === undefined) {
     return undefined;
@@ -811,11 +840,17 @@ function createOptionalLivePermissionChecker({
     timeoutMs: feishuConfig.documentFetchTimeoutMs,
   });
 
-  return createLivePermissionChecker({
+  const sourceDependencies = {
     baseUrl: feishuConfig.baseUrl,
     tokenProvider,
     timeoutMs: feishuConfig.documentFetchTimeoutMs,
-  });
+  };
+  return {
+    permissionChecker: createLivePermissionChecker(sourceDependencies),
+    ...(createHistoryReader === undefined
+      ? {}
+      : { historyReader: createHistoryReader(sourceDependencies) }),
+  };
 }
 
 function canUseSourceByRuntimeCapabilities(

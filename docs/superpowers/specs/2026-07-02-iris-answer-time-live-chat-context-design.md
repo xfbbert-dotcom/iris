@@ -3,6 +3,34 @@
 Date: 2026-07-02
 Status: Phase 2V design
 
+## Production correction — 2026-09-07
+
+The original persisted-message design below remains the local/development fallback, not proof
+that every recent Feishu message was received. A real pilot questionnaire posted during a rollout
+was absent from the fact store but readable through Feishu's history API. Its callback loss cause
+could not be established from the retained logs.
+
+With Feishu source-policy integration configured, answer-time context now reads one newest page
+of 50 messages directly from the current chat and keeps at most 20 readable human text/post
+messages. This source is authoritative: a permission or API error must not fall back to stale
+database text. Feishu deleted messages and local deletion tombstones are excluded. Context and
+group-processing gates are checked before and after the asynchronous read. Explicit dependency
+injection still replaces the provider completely, and standalone conversation bypasses history.
+
+This is a read-only, bounded context repair: no message persistence, synthetic callback, cross-group
+chat access, or knowledge publication. Existing prompt/evidence limits remain unchanged. It does
+not promise complete historical recall, attachment OCR, or arbitrary reply-chain traversal.
+
+Long recent posts also exposed the small production embedding runner's memory limit. Only
+EmbeddingGemma search inputs are capped at 512 UTF-8 bytes including the query prefix; full answer
+evidence and stored document vectors retain their existing contracts, so no reindex is required.
+
+Exit gates: recover a missed rich post in the same chat, exclude it in a different chat, exclude
+deleted/bot/unreadable messages, fail closed on access loss, retain standalone/no-chat behavior,
+and answer the actual pilot questionnaire through an internal draft without sending a Feishu
+message or increasing the embedding runner's OOM count. Callback acknowledgement durability is a
+separate backlog item, not claimed fixed by this bounded recovery.
+
 ## Goal
 
 Phase 2V connects the Feishu message fact store to answer drafting. When Iris prepares an answer for a Feishu group, the TypeScript Core App should fetch the current group's most recent persisted messages and inject them into the prompt as the live chat context anchor.

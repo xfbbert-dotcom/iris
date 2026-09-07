@@ -546,6 +546,23 @@ delivery mistakes while implementing it.
 
 ## Test Architecture
 
+### Do not equate callback storage with complete recent conversation
+
+- **Failure:** A same-group follow-up could not find a questionnaire posted during maintenance;
+  the Feishu history API returned the original rich post, but no local message or tombstone existed.
+- **Root cause:** Answer context relied exclusively on received callback rows. Retained logs did
+  not prove why this specific callback was missing. Supplying the long post also exposed OOM kills
+  in the small embedding runner before evidence planning.
+- **Prevention rule:** Use a bounded, authoritative same-chat history read in the configured Feishu
+  runtime; preserve deletion and runtime gates, and never synthesize receive events to repair QA.
+  Budget search-vector inputs separately from the actual answer evidence.
+- **Guard:** Reader and runtime regressions cover rich posts, missing local rows, scope, tombstones,
+  access failure, and post-await disable. Embedding tests bound only EmbeddingGemma query bytes,
+  preserving source text and document vectors.
+- **Exit condition:** The real same-group questionnaire produces a grounded Chinese internal draft,
+  cross-group raw context remains absent, OOM counts do not increase, and exact-SHA release checks
+  pass. Durable callback acknowledgement and deeper reply-chain recovery remain separate backlog.
+
 ### Verify every cross-CTE column dependency in migration SQL
 
 - **Failure:** The local-embedding rollout rebuilt every vector successfully, then its coverage

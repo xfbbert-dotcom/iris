@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 
 const EMBEDDING_GEMMA_MODEL_PREFIX = "embeddinggemma:";
+const EMBEDDING_GEMMA_QUERY_MAX_BYTES = 512;
 
 export function createDocumentEmbeddingProvider({
   model,
@@ -26,8 +27,24 @@ export function createQueryEmbeddingProvider({
   return createFormattedEmbeddingProvider({
     model,
     delegate,
-    format: (text) => `task: search result | query: ${text}`,
+    // Bound only search vectors for the small local runner, not answer evidence
+    // or stored document vectors (which would require reindexing).
+    format: (text) => truncateUtf8(
+      `task: search result | query: ${text}`,
+      EMBEDDING_GEMMA_QUERY_MAX_BYTES,
+    ),
   });
+}
+
+function truncateUtf8(text: string, maxBytes: number): string {
+  let bytes = 0;
+  let result = "";
+  for (const character of text) {
+    bytes += Buffer.byteLength(character, "utf8");
+    if (bytes > maxBytes) break;
+    result += character;
+  }
+  return result;
 }
 
 function createFormattedEmbeddingProvider({

@@ -303,9 +303,16 @@ chat anchored after background documents.
 
 Live-chat history loading may scan more raw group events than it injects into the prompt because
 recent Feishu traffic can include images, stickers, blank text, or document-only messages. The
-current v1 Core implementation scans up to three times the requested live-chat output window, capped
-at 100 raw messages, then filters to non-blank text and injects at most the latest 20 useful text
-messages. This backfill improves answer continuity without increasing the prompt's live-chat budget.
+configured Feishu source-policy runtime reads one newest page of 50 current-chat messages, filters
+to readable human text/posts, applies local deletion tombstones, and injects at most 20 messages.
+This fresh source is authoritative; access failure must not fall back to stale persisted text.
+Without the Feishu integration, the local provider scans up to three times the requested output
+window, capped at 100 raw rows. Both paths preserve the existing prompt budget and group boundary;
+the live read does not persist callbacks or authorize cross-group raw chat access.
+
+EmbeddingGemma query vectors have a separate 512-byte UTF-8 input budget, including their search
+prefix, to fit the small local runner. This does not truncate answer evidence or change stored
+document vector formatting, dimensions, or indexing.
 
 Retrieval is not attribution. A document fragment entering the authorized prompt window does not
 by itself prove that the answer used that fragment. Each background fragment therefore carries a
