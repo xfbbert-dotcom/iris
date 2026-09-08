@@ -5,6 +5,7 @@ import { selectTopicAwareChatWindow } from "../src/memory/topic-aware-chat-windo
 type TestMessage = {
   text: string;
   messageId: string;
+  speaker?: string;
   parentMessageId?: string;
   rootMessageId?: string;
   role?: "user" | "assistant";
@@ -190,6 +191,59 @@ describe("selectTopicAwareChatWindow", () => {
       "new-label",
       "current-question",
     ]);
+  });
+
+  it("keeps an unlinked long source near its short same-speaker label through 20 and 10 message windows", () => {
+    const inheritedTerms = { selectionTopicTerms: ["问卷"] };
+    const longOldSource = `旧版正文只讨论两个具体片段和付费意愿。${"补充细节。".repeat(120)}`;
+    const longNewSource = `新版正文先了解预期，再追问退出时刻。${"补充细节。".repeat(120)}`;
+    const messages: TestMessage[] = [
+      message("old-source", longOldSource, { ...inheritedTerms, speaker: "ou-author" }),
+      message("old-label", "这是旧问卷", {
+        ...inheritedTerms,
+        parentMessageId: "old-source",
+        rootMessageId: "old-source",
+        speaker: "ou-author",
+      }),
+      message("unrelated-source", "团队下周的日程草案", { speaker: "ou-other" }),
+      message("unrelated-label", "访谈安排讨论", {
+        parentMessageId: "unrelated-source",
+        speaker: "ou-other",
+      }),
+      message("new-source", `[2026-09-08 18:16 北京时间] ${longNewSource}`, {
+        ...inheritedTerms,
+        speaker: "ou-author",
+      }),
+      message("new-introduction", "@Iris 这是新的", { ...inheritedTerms, speaker: "ou-author" }),
+      message("new-label", "[2026-09-08 18:16 北京时间] 这是新的问卷，昨天那个是旧的", {
+        ...inheritedTerms,
+        speaker: "ou-author",
+      }),
+      ...Array.from({ length: 15 }, (_, index) =>
+        message(`noise-${index + 1}`, `Unrelated status ${index + 1}`, inheritedTerms),
+      ),
+      message("current-question", "那你觉得哪版更适合访谈，为什么？", inheritedTerms),
+    ];
+
+    const providerWindow = selectTopicAwareChatWindow(
+      messages,
+      "那你觉得哪版更适合访谈，为什么？",
+      20,
+    );
+    const planningWindow = selectTopicAwareChatWindow(
+      providerWindow,
+      "那你觉得哪版更适合访谈，为什么？",
+      10,
+    );
+
+    expect(providerWindow.map(({ messageId }) => messageId)).toEqual(expect.arrayContaining([
+      "old-source", "old-label", "new-source", "new-label",
+    ]));
+    expect(planningWindow.map(({ messageId }) => messageId)).toEqual(expect.arrayContaining([
+      "old-source", "old-label", "new-source", "new-label",
+    ]));
+    expect(planningWindow.map(({ messageId }) => messageId)).not.toContain("unrelated-source");
+    expect(planningWindow.find(({ messageId }) => messageId === "new-label")).not.toHaveProperty("parentMessageId");
   });
 
   it("keeps a single linked source before its label within a two-slot limit", () => {

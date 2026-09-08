@@ -3,6 +3,7 @@ import { isReferentialFollowup } from "./followup-historical-chat-query.js";
 
 type ChatTopicMessage = {
   text: string;
+  speaker?: string;
   messageId?: string;
   parentMessageId?: string;
   rootMessageId?: string;
@@ -25,6 +26,10 @@ type TopicBundle = {
 const MAX_TOPIC_BUNDLES = 2;
 const MAX_TOPIC_SLOTS = 4;
 const MAX_SELECTION_TOPIC_TERMS = 24;
+const MAX_IMPLICIT_SOURCE_DISTANCE = 3;
+const MIN_IMPLICIT_SOURCE_CHARS = 500;
+const MAX_IMPLICIT_LABEL_CHARS = 200;
+const IMPLICIT_SOURCE_LABEL = /^(?:\[[^\]\r\n]{1,64}\]\s*)?(?:这是|这份|这篇|这版)/u;
 const GENERIC_TERMS = new Set([
   "消息", "内容", "资料", "情况", "相关", "当前", "现在", "最近", "之前", "上次", "刚才",
   "知道", "查看", "找到", "帮助", "一下", "介绍", "事情", "问题", "信息", "记录",
@@ -69,7 +74,8 @@ export function selectTopicAwareChatWindow<T extends ChatTopicMessage>(
     const score = currentScore + inheritedScore;
     if (score === 0) return;
 
-    const source = resolveFreshSource(messages, messageIndexes, message, index);
+    const source = resolveFreshSource(messages, messageIndexes, message, index)
+      ?? resolveNearbyLongSource(messages, message, index);
     const sourceIndex = source?.index ?? index;
     const sourceMessage = messages[sourceIndex]!;
     const identity = source?.identity ?? sourceMessage.messageId ?? `index:${sourceIndex}`;
@@ -173,4 +179,30 @@ function collectSelectionTopicTerms(messages: readonly ChatTopicMessage[]): stri
     }
   }
   return terms;
+}
+
+function resolveNearbyLongSource(
+  messages: readonly ChatTopicMessage[],
+  label: ChatTopicMessage,
+  labelIndex: number,
+): { identity: string; index: number } | undefined {
+  const labelText = label.text.trim();
+  if (
+    label.parentMessageId !== undefined || label.rootMessageId !== undefined
+    || labelText.length > MAX_IMPLICIT_LABEL_CHARS || !IMPLICIT_SOURCE_LABEL.test(labelText)
+  ) return undefined;
+
+  const earliestIndex = Math.max(0, labelIndex - MAX_IMPLICIT_SOURCE_DISTANCE);
+  for (let index = labelIndex - 1; index >= earliestIndex; index -= 1) {
+    const source = messages[index]!;
+    if (
+      source.role === "assistant" || source.text.trim().length < MIN_IMPLICIT_SOURCE_CHARS
+      || (
+        label.speaker !== undefined && source.speaker !== undefined
+        && label.speaker !== source.speaker
+      )
+    ) continue;
+    return { identity: source.messageId ?? `index:${index}`, index };
+  }
+  return undefined;
 }
