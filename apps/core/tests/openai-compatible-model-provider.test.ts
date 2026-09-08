@@ -5,6 +5,26 @@ import { assemblePromptContext } from "../src/memory/context-assembly.js";
 import { createOpenAICompatibleModelProvider } from "../src/model/openai-compatible-model-provider.js";
 
 describe("OpenAICompatibleModelProvider", () => {
+  it("accepts a fully populated escaped context without losing retained source sections", async () => {
+    const quoted = (length: number, suffix = "") => '"'.repeat(length - suffix.length) + suffix;
+    const promptContext = assemblePromptContext({
+      backgroundDocuments: Array.from({ length: 12 }, (_, index) => ({ source: quoted(512), text: quoted(1200), citationRef: `D${index + 1}` })),
+      groupMemories: Array.from({ length: 8 }, () => ({ id: quoted(512), scope: "group", category: "summary", content: quoted(600), evidenceMessageIds: [quoted(1024)] })),
+      discussionThreads: Array.from({ length: 6 }, () => ({ id: quoted(512), status: "open", summary: quoted(1200, "THREAD_END"), evidenceMessageIds: [quoted(1024)] })),
+      actionItems: Array.from({ length: 6 }, () => ({ id: quoted(512), threadId: quoted(512), status: "open", description: quoted(1200, "ACTION_END"), ownerRef: quoted(512), dueAt: new Date("2026-09-08T00:00:00Z"), evidenceMessageIds: [quoted(1024)] })),
+      liveChatMessages: Array.from({ length: 20 }, () => ({ speaker: quoted(256), text: quoted(1200, "LIVE_END"), role: "assistant" })),
+    });
+    const provider = createOpenAICompatibleModelProvider({ config: config(), client: { async complete(messages) {
+      const sentContext = messages[1]!.content;
+      expect(sentContext.match(/<document /gu)).toHaveLength(12);
+      expect(sentContext.match(/<memory /gu)).toHaveLength(8);
+      expect(sentContext.match(/THREAD_END/gu)).toHaveLength(6);
+      expect(sentContext.match(/ACTION_END/gu)).toHaveLength(6);
+      expect(sentContext.match(/LIVE_END/gu)).toHaveLength(20);
+      return "已根据完整保留的上下文回答。";
+    } } });
+    await expect(provider.generateAnswerDraft({ question: "整理现有材料", promptContext })).resolves.toEqual({ answerText: "已根据完整保留的上下文回答。" });
+  });
   it("accepts fully escaped authorized live text within the 24k raw analysis budget", async () => {
     const promptContext = assemblePromptContext({ backgroundDocuments: [], liveChatMessages: Array.from({ length: 3 }, () => ({ speaker: "Alice", text: '"'.repeat(7990) + "末段" })) });
     const provider = createOpenAICompatibleModelProvider({ config: config(), client: { async complete(messages) {
@@ -840,9 +860,9 @@ describe("OpenAICompatibleModelProvider", () => {
     await expect(
       provider.generateAnswerDraft({
         question: "Q",
-        promptContext: "C".repeat(180_001),
+        promptContext: "C".repeat(452_353),
       }),
-    ).rejects.toThrow("model promptContext must be at most 180000 characters");
+    ).rejects.toThrow("model promptContext must be at most 452352 characters");
     expect(fetch).not.toHaveBeenCalled();
   });
 

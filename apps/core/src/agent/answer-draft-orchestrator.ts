@@ -94,6 +94,7 @@ const MAX_ANSWER_DRAFT_QUESTION_CHARS = 4000;
 const MAX_REQUEST_LIVE_CHAT_MESSAGES = 50;
 const MAX_LIVE_CHAT_SPEAKER_CHARS = 256;
 const MAX_LIVE_CHAT_LIMIT = 20;
+const MAX_SELECTION_TOPIC_TERMS = 24;
 const MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES = 5;
 const MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES = 10;
 const MAX_PLANNING_GROUP_MEMORY_TEXT_CHARS = 600;
@@ -670,6 +671,10 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
       speaker: truncateWithMarker(message.speaker.trim(), MAX_LIVE_CHAT_SPEAKER_CHARS),
       text: truncateLiveAnalysisText(message.text),
       ...(message.role === undefined ? {} : { role: message.role }),
+      ...(message.selectionTopicTerms === undefined ? {} : {
+        selectionTopicTerms: message.selectionTopicTerms.slice(0, MAX_SELECTION_TOPIC_TERMS),
+      }),
+      ...(message.underlyingDocumentSources === undefined ? {} : { underlyingDocumentSources: message.underlyingDocumentSources.map(source => ({ ...source })) }),
       ...(message.messageId === undefined ? {} : { messageId: message.messageId }),
       ...(message.parentMessageId === undefined ? {} : { parentMessageId: message.parentMessageId }),
       ...(message.rootMessageId === undefined ? {} : { rootMessageId: message.rootMessageId }),

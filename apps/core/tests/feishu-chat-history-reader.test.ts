@@ -6,6 +6,18 @@ import {
 } from "../src/feishu/feishu-chat-history-reader.js";
 
 describe("FeishuChatHistoryReader", () => {
+  it("reads only exact configured Iris app replies when explicitly requested, never as human evidence", async () => {
+    const own = message({ message_id: "om-own", sender: { id: "cli-iris", sender_type: "app", id_type: "app_id" }, body: { content: JSON.stringify({ text: "hello" }) } });
+    const fetch = vi.fn(async () => page([own]));
+    const reader = createFeishuChatHistoryReader({ baseUrl: "https://open.feishu.cn", tokenProvider: { getTenantAccessToken: async () => "token" }, assistantAppId: "cli-iris", fetch });
+    expect(await reader.readMessagesByIds!({ chatId: "oc-group", messageIds: ["om-own"], sender: "assistant" })).toEqual([
+      expect.objectContaining({ messageId: "om-own", role: "assistant", text: "hello" }),
+    ]);
+    expect(await reader.readMessagesByIds!({ chatId: "oc-group", messageIds: ["om-own"] })).toEqual([]);
+    fetch.mockImplementation(async () => page([message({ ...own, sender: { id: "cli-other", sender_type: "app", id_type: "app_id" } })]));
+    expect(await reader.readMessagesByIds!({ chatId: "oc-group", messageIds: ["om-own"], sender: "assistant" })).toEqual([]);
+  });
+
   it("recovers a missing questionnaire post from the original Feishu history contract", async () => {
     const fetch = vi.fn(async () => page([
       message({

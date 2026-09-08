@@ -1,5 +1,6 @@
 import type { ModelProvider } from "../agent/answer-draft-orchestrator.js";
 import type { ModelProviderConfig } from "../config/env.js";
+import { MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS } from "../memory/context-assembly.js";
 import {
   createOpenAICompatibleChatCompletionsClient,
   type OpenAICompatibleChatCompletionsClient,
@@ -7,8 +8,7 @@ import {
 } from "./openai-compatible-chat-completions-client.js";
 
 const MAX_MODEL_QUESTION_CHARS = 4000;
-// XML escaping can expand the bounded 24k live-text budget by up to six times.
-const MAX_MODEL_PROMPT_CONTEXT_CHARS = 180_000;
+const MAX_MODEL_PROMPT_CONTEXT_CHARS = MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS;
 const MAX_MODEL_CITATION_REFS = 12;
 const CITATION_BLOCK_OPEN = "<iris_citations>";
 const CITATION_BLOCK_CLOSE = "</iris_citations>";

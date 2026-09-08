@@ -10,6 +10,20 @@ import {
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
 
 describe("OpenAICompatibleGroundedAnswerRenderer", () => {
+  it("instructs the renderer to preserve useful comparison detail and justify recommendations", async () => {
+    let systemPrompt = "";
+    const renderer = createOpenAICompatibleGroundedAnswerRenderer({ client: { async complete(messages) {
+      systemPrompt = messages[0]!.content;
+      return JSON.stringify({ answerText: "已有材料只说明一个方案的实现方式，另一个方案的实现约束仍不明确。", evidenceState: "partial", confidence: "medium" });
+    } } });
+    const result = await renderer.render({ ...groundedRenderInput(partialPlan()), question: "比较两个方案，说明你的改进建议为什么适用。" });
+    expect(systemPrompt).toContain("Preserve the requested level of detail");
+    expect(systemPrompt).toContain("meaningful differences and paired source examples");
+    expect(systemPrompt).toContain("Explain why each recommendation follows from the cited premises");
+    expect(systemPrompt).toContain("Keep recommendations visibly distinct from source facts and company decisions");
+    expect(result.evidenceState).toBe("partial");
+    expect(result.confidence).toBe("medium");
+  });
   it("renders a useful specific source gap instead of a generic knowledge-base refusal", async () => {
     const renderer = createOpenAICompatibleGroundedAnswerRenderer({ client: { async complete() {
       return JSON.stringify({ answerText: "我还没有读到旧版问卷原文。请补充旧版后，我可以逐题对比。", evidenceState: "none", confidence: "low" });

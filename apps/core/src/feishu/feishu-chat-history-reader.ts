@@ -2,6 +2,7 @@ import type { FeishuTenantAccessTokenProvider } from "./feishu-tenant-access-tok
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readFeishuMessageText } from "./feishu-message-text.js";
+import type { AssistantDocumentSourceBinding } from "../memory/context-assembly.js";
 
 export type FeishuChatHistoryMessage = {
   messageId: string;
@@ -11,6 +12,8 @@ export type FeishuChatHistoryMessage = {
   sentAt: Date;
   parentMessageId?: string;
   rootMessageId?: string;
+  role?: "assistant";
+  underlyingDocumentSources?: AssistantDocumentSourceBinding[];
 };
 
 export type FeishuChatHistoryReader = {
@@ -19,7 +22,7 @@ export type FeishuChatHistoryReader = {
     limit: number;
     timeRange?: { start: Date; end: Date };
   }): Promise<FeishuChatHistoryMessage[]>;
-  readMessagesByIds?(input: { chatId: string; messageIds: string[] }): Promise<FeishuChatHistoryMessage[]>;
+  readMessagesByIds?(input: { chatId: string; messageIds: string[]; sender?: "assistant" }): Promise<FeishuChatHistoryMessage[]>;
 };
 
 export type FeishuChatHistoryReaderDependencies = {
@@ -27,6 +30,7 @@ export type FeishuChatHistoryReaderDependencies = {
   tokenProvider: FeishuTenantAccessTokenProvider;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  assistantAppId?: string;
 };
 
 export class FeishuChatHistoryError extends Error {
@@ -54,6 +58,7 @@ export function createFeishuChatHistoryReader({
   tokenProvider,
   fetch = globalThis.fetch,
   timeoutMs = DEFAULT_HISTORY_TIMEOUT_MS,
+  assistantAppId,
 }: FeishuChatHistoryReaderDependencies): FeishuChatHistoryReader {
   const safeTimeoutMs = readPositiveSafeInteger(timeoutMs, "Feishu chat history timeoutMs");
 
@@ -132,6 +137,8 @@ export function createFeishuChatHistoryReader({
       try {
         const chatId = readIdentifier(input.chatId);
         if (chatId === undefined || !Array.isArray(input.messageIds)) throw new FeishuChatHistoryError();
+        const ownAppId = input.sender === "assistant" ? readIdentifier(assistantAppId) : undefined;
+        if (input.sender === "assistant" && ownAppId === undefined) return [];
         const messageIds = [...new Set(input.messageIds.slice(0, MAX_MESSAGE_IDS).flatMap((value) => {
           const id = readIdentifier(value);
           return id === undefined ? [] : [id];
@@ -163,7 +170,7 @@ export function createFeishuChatHistoryReader({
                   responseSizeErrorMessage: "Feishu chat history unavailable",
                 });
                 if (controller.signal.aborted) throw new FeishuChatHistoryError();
-                return readSingleHistoryMessage(body, chatId, messageId);
+                return readSingleHistoryMessage(body, chatId, messageId, ownAppId);
               }),
             );
             if (controller.signal.aborted) throw new FeishuChatHistoryError();
@@ -195,7 +202,7 @@ function readTimeRange(value: unknown): { startMs: number; endMs: number } | und
   return { startMs, endMs };
 }
 
-function readSingleHistoryMessage(body: unknown, chatId: string, messageId: string): FeishuChatHistoryMessage | undefined {
+function readSingleHistoryMessage(body: unknown, chatId: string, messageId: string, ownAppId?: string): FeishuChatHistoryMessage | undefined {
   if (!isRecord(body) || body.code !== 0 || !isRecord(body.data) ||
     !Array.isArray(body.data.items) || body.data.items.length > 1) {
     throw new FeishuChatHistoryError();
@@ -203,7 +210,7 @@ function readSingleHistoryMessage(body: unknown, chatId: string, messageId: stri
   if (body.data.items.length === 0) return undefined;
   const item = body.data.items[0];
   if (!isRecord(item) || item.message_id !== messageId) throw new FeishuChatHistoryError();
-  return readHistoryMessage(item, chatId);
+  return readHistoryMessage(item, chatId, ownAppId);
 }
 
 function readHistoryPage(body: unknown): { items: unknown[]; hasMore: boolean; pageToken: unknown } {
@@ -217,12 +224,14 @@ function readHistoryPage(body: unknown): { items: unknown[]; hasMore: boolean; p
   return { items: body.data.items, hasMore: body.data.has_more, pageToken: body.data.page_token };
 }
 
-function readHistoryMessage(value: unknown, chatId: string): FeishuChatHistoryMessage | undefined {
+function readHistoryMessage(value: unknown, chatId: string, ownAppId?: string): FeishuChatHistoryMessage | undefined {
   if (
     !isRecord(value) || value.chat_id !== chatId || value.deleted !== false ||
-    !isRecord(value.sender) || value.sender.sender_type !== "user" ||
+    !isRecord(value.sender) ||
     !isRecord(value.body) || typeof value.msg_type !== "string"
   ) return undefined;
+  if (ownAppId === undefined ? value.sender.sender_type !== "user"
+    : value.sender.sender_type !== "app" || value.sender.id !== ownAppId) return undefined;
 
   const messageId = readIdentifier(value.message_id);
   const senderId = readIdentifier(value.sender.id);
@@ -239,6 +248,7 @@ function readHistoryMessage(value: unknown, chatId: string): FeishuChatHistoryMe
     senderId,
     text,
     sentAt,
+    ...(ownAppId === undefined ? {} : { role: "assistant" as const }),
     ...(parentMessageId === undefined ? {} : { parentMessageId }),
     ...(rootMessageId === undefined ? {} : { rootMessageId }),
   };

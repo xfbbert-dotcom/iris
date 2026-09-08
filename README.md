@@ -73,6 +73,10 @@ disabled.
 
 ## Local Development
 
+The bounded conversation/analysis repair and its acceptance boundaries are documented in
+[Continuous dialogue](docs/development/iris-continuous-dialogue.md). Code and local test results
+alone are not proof that a production pilot has been upgraded.
+
 Install TypeScript dependencies:
 
 ```powershell

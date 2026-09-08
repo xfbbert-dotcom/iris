@@ -57,7 +57,7 @@ export function resolveHistoricalChatQuery(
   return {
     start: new Date(startMs),
     end: new Date(startMs + DAY_MS),
-    terms: extractTopicTerms(topicText),
+    terms: extractHistoricalChatTopicTerms(topicText),
   };
 }
 
@@ -111,7 +111,7 @@ function compareCalendarDates(left: CalendarDate, right: CalendarDate): number {
   return left.year - right.year || left.month - right.month || left.day - right.day;
 }
 
-function extractTopicTerms(value: string): string[] {
+export function extractHistoricalChatTopicTerms(value: string): string[] {
   let topicText = value.toLowerCase();
   for (const noise of TOPIC_NOISE) topicText = topicText.replace(noise, " ");
 

@@ -9,6 +9,20 @@ import type {
 } from "../src/model/openai-compatible-chat-completions-client.js";
 
 describe("OpenAICompatibleEvidencePlanner", () => {
+  it("requests substantive source-supported comparison dimensions from the planner", async () => {
+    let systemPrompt = "";
+    const planner = createOpenAICompatibleEvidencePlanner({ client: { async complete(messages) {
+      systemPrompt = messages[0]!.content;
+      expect(JSON.parse(messages[1]!.content).question).toBe("比较两个方案的主要变化，并说明各自适用的情况。");
+      return validExplicitPlanJson();
+    } } });
+    const result = await planner.plan({ ...planningInput(["D1", "D2"]), question: "比较两个方案的主要变化，并说明各自适用的情况。" });
+    expect(systemPrompt).toContain("concrete source-supported differences");
+    expect(systemPrompt).toContain("normally 2-4 meaningful dimensions");
+    expect(systemPrompt).toContain("concise example from each compared source");
+    expect(systemPrompt).toContain("Do not invent changes or fill in a missing version");
+    expect(result.premises).toEqual([{ citationRef: "D1", statement: "Explicit premise" }]);
+  });
   it("returns a validated partial plan using only allowed references", async () => {
     const client = { complete: vi.fn(async (_messages: readonly OpenAICompatibleChatMessage[]) => JSON.stringify({
       taskMode: "company_fact",

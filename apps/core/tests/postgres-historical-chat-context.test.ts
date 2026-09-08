@@ -3,11 +3,50 @@ import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { createFeishuLiveChatContextProvider } from "../src/memory/live-chat-context-provider.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
+import { createAssistantConversationContextProvider } from "../src/memory/assistant-conversation-context.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const databaseTests = databaseUrl ? describe : describe.skip;
 
 databaseTests("dated history candidate SQL with Postgres", () => {
+  it("selects only recent sent same-chat assistant identities from the real delivery ledger", async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const db = await pool.connect();
+    const group = `oc-continuity-${randomUUID()}`;
+    const before = new Date("2026-09-08T12:00:00Z");
+    try {
+      await runMigrations({ client: db, migrationsDir: defaultMigrationsDir() });
+      await db.query("BEGIN");
+      for (const [suffix, chat, state, sentAt] of [
+        ["own", group, "sent", "2026-09-08T11:00:00Z"],
+        ["foreign", `${group}-other`, "sent", "2026-09-08T11:30:00Z"],
+        ["future", group, "sent", "2026-09-08T13:00:00Z"],
+        ["expired", group, "sent", "2026-09-06T13:00:00Z"],
+        ["prepared", group, "prepared", "2026-09-08T11:59:00Z"],
+      ]) {
+        await db.query(`INSERT INTO answer_reply_deliveries
+          (id,provider,incoming_message_id,chat_id,reply_uuid,safe_notice_uuid,state,prepared_reply_text,
+           rendered_reply_fingerprint,semantic_fingerprint,reply_message_id,created_at,updated_at,sent_at)
+          VALUES ($1,'feishu',$1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$9,$9)`,
+        [`${group}-${suffix}`, chat, randomUUID(), randomUUID(), state, state === "prepared" ? "CACHED NEVER READ" : null,
+          "a".repeat(64), `om-${suffix}`, sentAt]);
+      }
+      const reads: string[][] = [];
+      const provider = createAssistantConversationContextProvider({ queryable: db,
+        verifier: { verify: async () => [] },
+        reader: { listRecentMessages: async () => [], readMessagesByIds: async ({ messageIds, sender }) => {
+          expect(sender).toBe("assistant"); reads.push(messageIds);
+          return messageIds.map(messageId => ({ messageId, chatId: group, senderId: "cli-iris", role: "assistant" as const,
+            text: "Fresh generic draft", sentAt: new Date("2026-09-08T11:00:00Z") }));
+        } },
+      });
+      expect(await provider.loadRecentReplies({ chatId: group, before })).toEqual([
+        expect.objectContaining({ messageId: "om-own", role: "assistant", text: "Fresh generic draft" }),
+      ]);
+      expect(reads).toEqual([["om-own"]]);
+    } finally { await db.query("ROLLBACK"); db.release(); await pool.end(); }
+  });
+
   it("selects only the dated same-chat topic identity, excluding tombstones and using a fresh body", async () => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const db = await pool.connect();

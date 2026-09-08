@@ -112,19 +112,20 @@ export function createDocumentRetrievalContextBuilder({
         askerId: input.askerId,
       });
       if (fragmentLimit === 0) {
+        const liveChatMessages = filterAssistantSourceCoverage(input.liveChatMessages, []);
         return {
           promptContext: assemblePromptContext({
             backgroundDocuments: [],
             groupMemories: usedGroupMemories,
             discussionThreads: conversationState.threads,
             actionItems: conversationState.actions,
-            liveChatMessages: input.liveChatMessages,
+            liveChatMessages,
             liveChatLimit: input.liveChatLimit,
           }),
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
-          liveChatMessages: cloneLiveChatMessages(input.liveChatMessages),
+          liveChatMessages: cloneLiveChatMessages(liveChatMessages),
           usedGroupMemories: clonePromptGroupMemories(usedGroupMemories),
           usedDiscussionThreads: clonePromptDiscussionThreads(conversationState.threads),
           usedActionItems: clonePromptActionItems(conversationState.actions),
@@ -197,6 +198,7 @@ export function createDocumentRetrievalContextBuilder({
             }),
       });
       const deniedDocumentIdSet = new Set(permissionGuardResult.deniedDocumentIds);
+      const liveChatMessages = filterAssistantSourceCoverage(input.liveChatMessages, allowedFragments);
 
       return {
         promptContext: assemblePromptContext({
@@ -208,7 +210,7 @@ export function createDocumentRetrievalContextBuilder({
           groupMemories: usedGroupMemories,
           discussionThreads: conversationState.threads,
           actionItems: conversationState.actions,
-          liveChatMessages: input.liveChatMessages,
+          liveChatMessages,
           liveChatLimit: input.liveChatLimit,
         }),
         allowedFragments,
@@ -216,7 +218,7 @@ export function createDocumentRetrievalContextBuilder({
           deniedDocumentIdSet.has(documentSourceId),
         ),
         retrievedFragmentCount: retrievedFragments.length,
-        liveChatMessages: cloneLiveChatMessages(input.liveChatMessages),
+        liveChatMessages: cloneLiveChatMessages(liveChatMessages),
         usedGroupMemories: clonePromptGroupMemories(usedGroupMemories),
         usedDiscussionThreads: clonePromptDiscussionThreads(conversationState.threads),
         usedActionItems: clonePromptActionItems(conversationState.actions),
@@ -455,7 +457,30 @@ async function embedQueries(
 }
 
 function cloneLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {
-  return messages.map((message) => ({ ...message }));
+  return messages.map((message) => ({ ...message,
+    ...(message.underlyingDocumentSources === undefined ? {} : { underlyingDocumentSources: message.underlyingDocumentSources.map(source => ({ ...source })) }),
+  }));
+}
+
+// Receipt traces are generated from all current allowed fragments, including uncited ones.
+// Require exact coverage before exposing a derived assistant draft so its next receipt retains
+// the original permissions and snapshot/grant checks without inventing a factual fragment.
+function filterAssistantSourceCoverage(
+  messages: LiveChatMessage[],
+  allowedFragments: RetrievedDocumentFragment[],
+): LiveChatMessage[] {
+  return messages.filter(message => {
+    if (message.role !== "assistant" || message.underlyingDocumentSources === undefined) return true;
+    const sources = message.underlyingDocumentSources;
+    return sources.length <= 2000 && sources.every(source => allowedFragments.some(fragment => (
+      fragment.documentSourceId === source.documentSourceId
+      && fragment.documentSnapshotId === source.documentSnapshotId
+      && fragment.crossGroupGrantId === source.crossGroupGrantId
+      && fragment.crossGroupGrantVersion === source.crossGroupGrantVersion
+      && fragment.crossGroupGrantorGroupId === source.crossGroupGrantorGroupId
+      && fragment.crossGroupGranteeGroupId === source.crossGroupGranteeGroupId
+    )));
+  });
 }
 
 function sanitizeFragmentLimit(value: number | undefined): number {

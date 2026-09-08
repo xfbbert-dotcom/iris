@@ -81,6 +81,7 @@ import {
   type LiveChatContextProvider,
 } from "../memory/live-chat-context-provider.js";
 import { assertSupportedRuntimeEmbeddingDimension } from "../model/embedding-profile-id.js";
+import { createAssistantConversationContextProvider } from "../memory/assistant-conversation-context.js";
 import { createQueryEmbeddingProvider } from "../model/embedding-input-format.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
@@ -359,6 +360,13 @@ export function createAnswerDraftRuntime({
         })
       : undefined);
   const conversationMessages = createConversationMessages({ queryable: pool });
+  const answerSourcePermissionVerifier = runtimeConfig.permissionMode === "source-policy"
+    ? createAnswerSourcePermissionVerifier({
+        canReadDocument: createCanReadDocument({ permissionMode: runtimeConfig.permissionMode,
+          sourceRegistry, runtimeController, livePermissionChecker }),
+        managedSourceQueryable: pool,
+      })
+    : createUnavailableAnswerSourcePermissionVerifier();
   const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({
     delegate: dependencies.createLiveChatContextProvider?.({ repository: conversationMessages })
       ?? (feishuAnswerSources?.historyReader === undefined
@@ -366,6 +374,10 @@ export function createAnswerDraftRuntime({
         : createFeishuLiveChatContextProvider({
             reader: feishuAnswerSources.historyReader,
             queryable: pool,
+            assistantReplies: createAssistantConversationContextProvider({ queryable: pool,
+              reader: feishuAnswerSources.historyReader, verifier: answerSourcePermissionVerifier,
+              ...(crossGroupGrantValidator === undefined ? {} : { grants: crossGroupGrantValidator }),
+            }),
           })),
     runtimeController,
     gateGroupProcessing: feishuAnswerSources?.historyReader !== undefined,
@@ -491,18 +503,6 @@ export function createAnswerDraftRuntime({
       });
     },
   };
-
-  const answerSourcePermissionVerifier = runtimeConfig.permissionMode === "source-policy"
-    ? createAnswerSourcePermissionVerifier({
-        canReadDocument: createCanReadDocument({
-          permissionMode: runtimeConfig.permissionMode,
-          sourceRegistry,
-          runtimeController,
-          livePermissionChecker,
-        }),
-        managedSourceQueryable: pool,
-      })
-    : createUnavailableAnswerSourcePermissionVerifier();
 
   return {
     answerDraftOrchestrator,
@@ -849,7 +849,7 @@ function createOptionalFeishuAnswerSources({
     permissionChecker: createLivePermissionChecker(sourceDependencies),
     ...(createHistoryReader === undefined
       ? {}
-      : { historyReader: createHistoryReader(sourceDependencies) }),
+      : { historyReader: createHistoryReader({ ...sourceDependencies, assistantAppId: feishuConfig.appId }) }),
   };
 }
 

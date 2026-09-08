@@ -1,4 +1,4 @@
-import { boundLiveAnalysisItems } from "./live-analysis-text.js";
+import { boundLiveAnalysisItems, MAX_LIVE_ANALYSIS_TOTAL_CHARS } from "./live-analysis-text.js";
 import type {
   GroupMemoryCategory,
   GroupMemoryScope,
@@ -10,10 +10,21 @@ export type BackgroundDocument = {
   text: string;
 };
 
+export type AssistantDocumentSourceBinding = {
+  documentSourceId: string;
+  documentSnapshotId: string;
+  crossGroupGrantId?: string;
+  crossGroupGrantVersion?: number;
+  crossGroupGrantorGroupId?: string;
+  crossGroupGranteeGroupId?: string;
+};
+
 export type LiveChatMessage = {
   speaker: string;
   text: string;
   role?: "user" | "assistant";
+  selectionTopicTerms?: string[];
+  underlyingDocumentSources?: AssistantDocumentSourceBinding[];
   messageId?: string;
   parentMessageId?: string;
   rootMessageId?: string;
@@ -73,6 +84,26 @@ const MAX_ACTION_OWNER_ATTRIBUTE_CHARS = 512;
 const MAX_ACTION_DUE_ATTRIBUTE_CHARS = 64;
 const MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS = 256;
 const TRUNCATION_MARKER = " ... [truncated]";
+
+// Bound the encoded transport independently from the raw source budgets. Documents,
+// memories and speaker attributes are already capped after escaping. State fields and
+// live bodies are capped before escaping, which expands one quote to six characters.
+// 512 characters per item (and for section framing) conservatively covers XML markup,
+// citation refs, role/scope/category labels and separators without clipping any source.
+const MAX_XML_ESCAPE_EXPANSION = 6;
+const MAX_XML_ITEM_MARKUP_CHARS = 512;
+export const MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS = MAX_XML_ITEM_MARKUP_CHARS
+  + MAX_BACKGROUND_DOCUMENT_LIMIT * (MAX_BACKGROUND_DOCUMENT_SOURCE_ATTRIBUTE_CHARS
+    + MAX_BACKGROUND_DOCUMENT_TEXT_CHARS + MAX_XML_ITEM_MARKUP_CHARS)
+  + MAX_GROUP_MEMORY_LIMIT * (MAX_GROUP_MEMORY_ID_ATTRIBUTE_CHARS
+    + MAX_GROUP_MEMORY_EVIDENCE_ATTRIBUTE_CHARS + MAX_GROUP_MEMORY_TEXT_CHARS + MAX_XML_ITEM_MARKUP_CHARS)
+  + MAX_DISCUSSION_THREAD_LIMIT * ((MAX_STATE_ID_ATTRIBUTE_CHARS + MAX_STATE_STATUS_ATTRIBUTE_CHARS
+    + MAX_STATE_EVIDENCE_ATTRIBUTE_CHARS + MAX_THREAD_SUMMARY_CHARS) * MAX_XML_ESCAPE_EXPANSION + MAX_XML_ITEM_MARKUP_CHARS)
+  + MAX_ACTION_ITEM_LIMIT * ((2 * MAX_STATE_ID_ATTRIBUTE_CHARS + MAX_STATE_STATUS_ATTRIBUTE_CHARS
+    + MAX_STATE_EVIDENCE_ATTRIBUTE_CHARS + MAX_ACTION_DESCRIPTION_CHARS
+    + MAX_ACTION_OWNER_ATTRIBUTE_CHARS + MAX_ACTION_DUE_ATTRIBUTE_CHARS) * MAX_XML_ESCAPE_EXPANSION + MAX_XML_ITEM_MARKUP_CHARS)
+  + MAX_LIVE_CHAT_LIMIT * (MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS + MAX_XML_ITEM_MARKUP_CHARS)
+  + MAX_LIVE_ANALYSIS_TOTAL_CHARS * MAX_XML_ESCAPE_EXPANSION;
 
 export function assemblePromptContext(input: PromptContextInput): string {
   const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);

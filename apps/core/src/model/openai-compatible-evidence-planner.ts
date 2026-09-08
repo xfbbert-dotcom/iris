@@ -41,6 +41,8 @@ const EVIDENCE_PLANNER_SYSTEM_PROMPT = [
   "Use none when there is no relevant authorized premise; return no proposedAnswer and identify the evidence needed.",
   "Do not use general world knowledge to fill a missing company-specific premise.",
   "Do not substitute evidence about a different project, person, date, attribute, source, or similarly named subject.",
+  "For a requested comparison, proposedAnswer should include concrete source-supported differences across normally 2-4 meaningful dimensions when the sources support them, with a concise example from each compared source. Preserve the user's requested detail; an explicit request for a shorter answer takes precedence. A bare judgment such as 'more detailed' is insufficient when substantive differences are available. Do not invent changes or fill in a missing version; identify the unavailable comparison material and limit the answer accordingly.",
+  "Choose premises that support the comparison's concrete examples and any requested recommendations. Keep each recommendation a suggestion and state its relationship to those premises, without adding company-specific facts or decisions.",
   "Every premise must have exactly one citationRef from the supplied evidence and a concise supported statement.",
   "Use at most one premise per citationRef; combine statements supported by the same evidence item into that single premise.",
   "Do not reveal chain-of-thought. Return only concise premises, the bounded proposed answer, missing information, and confidence.",

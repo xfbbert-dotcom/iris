@@ -8,6 +8,7 @@ type TestMessage = {
   parentMessageId?: string;
   rootMessageId?: string;
   role?: "user" | "assistant";
+  selectionTopicTerms?: string[];
 };
 
 describe("selectTopicAwareChatWindow", () => {
@@ -133,6 +134,62 @@ describe("selectTopicAwareChatWindow", () => {
     const selected = selectTopicAwareChatWindow(messages, "Compare Aurora rollout assumptions", 1);
 
     expect(selected.map(({ messageId }) => messageId)).toEqual(["relevant-human"]);
+  });
+
+  it("uses a fresh human root when a human label's direct parent is assistant output", () => {
+    const messages: TestMessage[] = [
+      message("human-root", "Supplied source body", { role: "user" }),
+      message("assistant-parent", "Iris summary", {
+        parentMessageId: "human-root",
+        rootMessageId: "human-root",
+        role: "assistant",
+      }),
+      message("human-label", "Aurora rollout assumptions", {
+        parentMessageId: "assistant-parent",
+        rootMessageId: "human-root",
+        role: "user",
+      }),
+      message("noise", "Latest unrelated context", { role: "user" }),
+    ];
+
+    const selected = selectTopicAwareChatWindow(messages, "Compare Aurora rollout assumptions", 2);
+
+    expect(selected.map(({ messageId }) => messageId)).toEqual(["human-root", "human-label"]);
+  });
+
+  it("prioritizes inherited source terms for an actual referential follow-up", () => {
+    const inheritedTerms = { selectionTopicTerms: ["问卷"] };
+    const messages: TestMessage[] = [
+      message("old-source", "旧版正文只讨论两个具体片段和付费意愿。", inheritedTerms),
+      message("old-label", "这是旧问卷", {
+        ...inheritedTerms,
+        parentMessageId: "old-source",
+        rootMessageId: "old-source",
+      }),
+      message("unrelated-source", "团队下周的日程草案"),
+      message("unrelated-label", "访谈安排讨论", { parentMessageId: "unrelated-source" }),
+      ...Array.from({ length: 13 }, (_, index) =>
+        message(`noise-${index + 1}`, `Unrelated status ${index + 1}`),
+      ),
+      message("new-source", "新版正文先了解预期，再追问退出时刻。"),
+      message("new-label", "这是新的问卷，昨天那个是旧的"),
+      message("current-question", "那你觉得哪版更适合访谈，为什么？"),
+    ];
+
+    const selected = selectTopicAwareChatWindow(messages, "那你觉得哪版更适合访谈，为什么？", 10);
+
+    expect(selected.map(({ messageId }) => messageId)).toEqual([
+      "old-source",
+      "old-label",
+      "noise-9",
+      "noise-10",
+      "noise-11",
+      "noise-12",
+      "noise-13",
+      "new-source",
+      "new-label",
+      "current-question",
+    ]);
   });
 
   it("keeps a single linked source before its label within a two-slot limit", () => {
