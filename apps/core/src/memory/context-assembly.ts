@@ -1,3 +1,4 @@
+import { boundLiveAnalysisItems } from "./live-analysis-text.js";
 import type {
   GroupMemoryCategory,
   GroupMemoryScope,
@@ -12,6 +13,7 @@ export type BackgroundDocument = {
 export type LiveChatMessage = {
   speaker: string;
   text: string;
+  role?: "user" | "assistant";
   messageId?: string;
   parentMessageId?: string;
   rootMessageId?: string;
@@ -70,7 +72,6 @@ const MAX_ACTION_DESCRIPTION_CHARS = 1200;
 const MAX_ACTION_OWNER_ATTRIBUTE_CHARS = 512;
 const MAX_ACTION_DUE_ATTRIBUTE_CHARS = 64;
 const MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS = 256;
-const MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS = 2000;
 const TRUNCATION_MARKER = " ... [truncated]";
 
 export function assemblePromptContext(input: PromptContextInput): string {
@@ -118,7 +119,7 @@ export function assemblePromptContext(input: PromptContextInput): string {
     "</action_items>",
     "",
     "<live_chat_context>",
-    ...liveMessages.map(formatLiveChatMessage),
+    ...boundLiveAnalysisItems(liveMessages).map(formatLiveChatMessage),
     "</live_chat_context>"
   ].join("\n");
 }
@@ -177,7 +178,7 @@ function formatLiveChatMessage(message: LiveChatMessage): string {
   return `<message speaker="${formatXmlAttribute(
     message.speaker,
     MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS,
-  )}">${formatXmlText(message.text, MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS)}</message>`;
+  )}"${message.role === "assistant" ? ' role="assistant"' : ""}>${escapeXml(message.text)}</message>`;
 }
 
 function formatXmlText(value: string, maxChars: number): string {

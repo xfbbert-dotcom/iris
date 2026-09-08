@@ -387,7 +387,7 @@ function createHarness(options: {
           return JSON.stringify({
             taskMode: "company_fact",
             evidenceState: evidence === undefined ? "none" : "explicit",
-            premises: evidence === undefined ? [] : [{ citationRef: evidence.citationRef, statement: evidence.text }],
+            premises: evidence === undefined ? [] : [{ citationRef: evidence.citationRef, statement: evidence.text.slice(0, 1200) }],
             proposedAnswer: evidence === undefined ? null : evidence.text,
             missingInformation: evidence === undefined ? ["当前群相关消息"] : [],
             confidence: evidence === undefined ? "low" : "high",

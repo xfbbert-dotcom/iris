@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { classifyStandaloneConversation } from "./standalone-conversation.js";
 import { selectTopicAwareChatWindow } from "../memory/topic-aware-chat-window.js";
+import { boundLiveAnalysisItems, truncateLiveAnalysisText } from "../memory/live-analysis-text.js";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import {
@@ -92,7 +93,6 @@ const MAX_ANSWER_DRAFT_TEXT_CHARS = 8000;
 const MAX_ANSWER_DRAFT_QUESTION_CHARS = 4000;
 const MAX_REQUEST_LIVE_CHAT_MESSAGES = 50;
 const MAX_LIVE_CHAT_SPEAKER_CHARS = 256;
-const MAX_LIVE_CHAT_TEXT_CHARS = 2000;
 const MAX_LIVE_CHAT_LIMIT = 20;
 const MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES = 5;
 const MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES = 10;
@@ -295,9 +295,6 @@ export function createAnswerDraftOrchestrator({
                 liveChatMessages: planningLiveChatMessages,
               }),
             });
-            if (plan.taskMode !== "company_fact") {
-              throw new Error("company-fact evidence planner returned an invalid task mode");
-            }
             if (conflictPlan === undefined && plan.evidenceState === "conflict") {
               throw new Error("evidence planner cannot originate a conflict state");
             }
@@ -315,19 +312,27 @@ export function createAnswerDraftOrchestrator({
               documentCitationRefsForEvidencePlan(plan),
               context.allowedFragments.length,
             );
-            const rendered = await runObservedProviderRequest({
+            const rendered = await runObservedProviderRequest<GenerateAnswerDraftResult>({
               observer: agentExecutionObserver,
               providerObservation,
               executionId,
               stageKey: "renderer",
               stage: "answer_rendering",
-              request: () => renderer.render({
+              request: () => plan.taskMode === "direct_task"
+                ? model.generateAnswerDraft({ question, promptContext: context.promptContext })
+                : renderer.render({
                 question,
                 plan,
                 evidence: selectedEvidence,
                 liveChatMessages: planningLiveChatMessages,
               }),
             });
+            if (plan.taskMode === "direct_task") {
+              citedSourceRefs = normalizeCitedSourceRefs(
+                rendered.citedSourceRefs,
+                context.allowedFragments.length,
+              );
+            }
             answerText = truncateAnswerDraftText(rendered.answerText.trim());
           }
           if (answerText.length === 0) {
@@ -442,6 +447,7 @@ function buildPlanningEvidence(
     question,
     context.liveChatMessages ?? [],
   )
+    .filter((message) => message.role !== "assistant")
     .map((message, index) => {
       const citationRef = `C${index + 1}`;
       const replyTo = [message.parentMessageId, message.rootMessageId]
@@ -453,10 +459,7 @@ function buildPlanningEvidence(
       return {
         citationRef,
         source: `live_chat:${index + 1}${replyTo === undefined ? "" : `; reply_to:${replyTo}`}`,
-        text: truncateWithMarker(
-          `${message.speaker.trim()}: ${message.text.trim()}`,
-          MAX_PLANNING_EVIDENCE_TEXT_CHARS,
-        ),
+        text: truncateLiveAnalysisText(`${message.speaker.trim()}: ${message.text}`),
       };
     });
   const groupMemoryEvidence = context.usedGroupMemories.slice(0, 8).map((memory, index) => ({
@@ -506,7 +509,7 @@ function selectPlanningLiveChatMessages(
       const normalizedText = text.trim();
       return normalizedText !== normalizedQuestion && !normalizedText.endsWith(normalizedQuestion);
     });
-  return selectTopicAwareChatWindow(priorMessages, question, MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES);
+  return boundLiveAnalysisItems(selectTopicAwareChatWindow(priorMessages, question, MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES));
 }
 
 function selectEvidenceForPlan(
@@ -665,7 +668,8 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
   const normalizedMessages = messages
     .map((message) => ({
       speaker: truncateWithMarker(message.speaker.trim(), MAX_LIVE_CHAT_SPEAKER_CHARS),
-      text: truncateWithMarker(message.text.trim(), MAX_LIVE_CHAT_TEXT_CHARS),
+      text: truncateLiveAnalysisText(message.text),
+      ...(message.role === undefined ? {} : { role: message.role }),
       ...(message.messageId === undefined ? {} : { messageId: message.messageId }),
       ...(message.parentMessageId === undefined ? {} : { parentMessageId: message.parentMessageId }),
       ...(message.rootMessageId === undefined ? {} : { rootMessageId: message.rootMessageId }),

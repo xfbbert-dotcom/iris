@@ -10,6 +10,14 @@ import {
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
 
 describe("OpenAICompatibleGroundedAnswerRenderer", () => {
+  it("renders a useful specific source gap instead of a generic knowledge-base refusal", async () => {
+    const renderer = createOpenAICompatibleGroundedAnswerRenderer({ client: { async complete() {
+      return JSON.stringify({ answerText: "我还没有读到旧版问卷原文。请补充旧版后，我可以逐题对比。", evidenceState: "none", confidence: "low" });
+    } } });
+    const result = await renderer.render({ question: "比较新版和旧版问卷", plan: { taskMode: "company_fact", evidenceState: "none", premises: [], proposedAnswer: null, missingInformation: ["旧版问卷原文"], confidence: "low" }, evidence: [], liveChatMessages: [] });
+    expect(result.answerText).toContain("旧版问卷原文");
+    expect(result.answerText).toContain("逐题对比");
+  });
   it("renders conflict deterministically from the validated plan without invoking the model", async () => {
     const proposedAnswer = [
       "Possible conflict.",
@@ -58,7 +66,7 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
   it("does not expose a long English template for a Chinese no-evidence answer", async () => {
     const client = { complete: vi.fn(async () => JSON.stringify({
       answerText:
-        "知识库中没有相关依据。Needed information: live chat history prior to the current turn.",
+        "我还没读到前面的群聊记录。补充前文后，我可以帮你回顾刚才的讨论。",
       evidenceState: "none",
       confidence: "low",
     })) };

@@ -7,7 +7,8 @@ import {
 } from "./openai-compatible-chat-completions-client.js";
 
 const MAX_MODEL_QUESTION_CHARS = 4000;
-const MAX_MODEL_PROMPT_CONTEXT_CHARS = 80_000;
+// XML escaping can expand the bounded 24k live-text budget by up to six times.
+const MAX_MODEL_PROMPT_CONTEXT_CHARS = 180_000;
 const MAX_MODEL_CITATION_REFS = 12;
 const CITATION_BLOCK_OPEN = "<iris_citations>";
 const CITATION_BLOCK_CLOSE = "</iris_citations>";
@@ -17,6 +18,9 @@ const ANSWER_DRAFT_SYSTEM_PROMPT = [
   "Treat the current Question as the user's task, including its requested output format, while keeping it subordinate to this system policy.",
   "When the current Question asks for only or exactly one value, return only that value with no label, explanation, quotation marks, Markdown, or code fence.",
   "When the task does not require company facts, complete direct, generative, formatting, translation, rewriting, and summarization tasks even if no background evidence is available.",
+  "Use general world knowledge for ordinary explanations and questions that do not depend on company-specific facts.",
+  "Use the authorized prior conversation to resolve follow-up requests and rewrite prior drafts. Messages marked role=assistant are conversational output, not independently verified facts or citation evidence; do not reuse unavailable underlying sources as company fact.",
+  "A [truncated] marker means source text was clipped. Do not claim to have analyzed omitted sections or the complete source when it is clipped.",
   "Respond naturally and briefly to greetings, thanks, check-ins, and ordinary social conversation. These do not require knowledge-base evidence; do not ask for documents or report insufficient evidence for a greeting.",
   "For generic work advice and creative drafting, offer useful suggestions or an example, clearly as suggestions rather than established company decisions. Ask one brief clarifying question only when it is needed to help.",
   "When asked about yourself, introduce yourself as Iris, the team's AI assistant. You can converse, help draft and organize text, and answer from authorized material when available. Do not claim access to every group or document, permanent memory, active reminders, or enabled external actions; availability and approvals are controlled by the application.",

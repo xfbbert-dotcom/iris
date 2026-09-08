@@ -455,7 +455,7 @@ describe("AnswerDraftOrchestrator", () => {
     expect(reasoning.renderer.render).not.toHaveBeenCalled();
   });
 
-  it("does not let a planner direct-task result bypass company-fact evidence controls", async () => {
+  it("executes the planner's semantic direct-task choice through the normal model", async () => {
     const model: ModelProvider = {
       generateAnswerDraft: vi.fn(async () => ({ answerText: "Unbounded company answer" })),
     };
@@ -507,9 +507,9 @@ describe("AnswerDraftOrchestrator", () => {
       await expect(orchestrator.generateDraft({
         question,
         liveChatMessages: [],
-      })).rejects.toThrow("company-fact evidence planner returned an invalid task mode");
+      })).resolves.toMatchObject({ answerText: "Unbounded company answer" });
     }
-    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).toHaveBeenCalledTimes(10);
     expect(renderer.render).not.toHaveBeenCalled();
   });
 
@@ -1191,7 +1191,7 @@ describe("AnswerDraftOrchestrator", () => {
       liveChatMessages: [
         {
           speaker: `${"S".repeat(400)} trailing speaker detail`,
-          text: `${"T".repeat(2500)} trailing message detail`,
+          text: `${"T".repeat(8500)} trailing message detail`,
         },
       ],
     });
@@ -1199,7 +1199,7 @@ describe("AnswerDraftOrchestrator", () => {
     expect(observedLiveChatMessages?.[0]?.speaker.length).toBeLessThanOrEqual(256);
     expect(observedLiveChatMessages?.[0]?.speaker).toContain("[truncated]");
     expect(observedLiveChatMessages?.[0]?.speaker).not.toContain("trailing speaker detail");
-    expect(observedLiveChatMessages?.[0]?.text.length).toBeLessThanOrEqual(2000);
+    expect(observedLiveChatMessages?.[0]?.text.length).toBeLessThanOrEqual(8000);
     expect(observedLiveChatMessages?.[0]?.text).toContain("[truncated]");
     expect(observedLiveChatMessages?.[0]?.text).not.toContain("trailing message detail");
   });

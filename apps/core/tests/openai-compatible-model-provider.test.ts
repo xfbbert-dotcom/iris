@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
+import { assemblePromptContext } from "../src/memory/context-assembly.js";
 import { createOpenAICompatibleModelProvider } from "../src/model/openai-compatible-model-provider.js";
 
 describe("OpenAICompatibleModelProvider", () => {
+  it("accepts fully escaped authorized live text within the 24k raw analysis budget", async () => {
+    const promptContext = assemblePromptContext({ backgroundDocuments: [], liveChatMessages: Array.from({ length: 3 }, () => ({ speaker: "Alice", text: '"'.repeat(7990) + "末段" })) });
+    const provider = createOpenAICompatibleModelProvider({ config: config(), client: { async complete(messages) {
+      expect(messages[1]!.content.match(/末段/gu)).toHaveLength(3);
+      return "已根据原文改写。";
+    } } });
+    await expect(provider.generateAnswerDraft({ question: "改写前文", promptContext })).resolves.toEqual({ answerText: "已根据原文改写。" });
+  });
   it("sends a chat completions request and returns trimmed answer text", async () => {
     const fetch = vi.fn(async () =>
       jsonResponse({
@@ -831,9 +840,9 @@ describe("OpenAICompatibleModelProvider", () => {
     await expect(
       provider.generateAnswerDraft({
         question: "Q",
-        promptContext: "C".repeat(80_001),
+        promptContext: "C".repeat(180_001),
       }),
-    ).rejects.toThrow("model promptContext must be at most 80000 characters");
+    ).rejects.toThrow("model promptContext must be at most 180000 characters");
     expect(fetch).not.toHaveBeenCalled();
   });
 

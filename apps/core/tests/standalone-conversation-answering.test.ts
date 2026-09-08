@@ -33,12 +33,16 @@ function modelWithAnswer(answer: string) {
 
 function companyReasoning() {
   const client = {
-    complete: vi.fn(async () => JSON.stringify({
+    complete: vi.fn().mockResolvedValueOnce(JSON.stringify({
       taskMode: "company_fact",
       evidenceState: "none",
       premises: [],
       proposedAnswer: null,
       missingInformation: ["The requested company fact has no authorized evidence."],
+      confidence: "low",
+    })).mockResolvedValueOnce(JSON.stringify({
+      answerText: "现有可用资料不足以确认；请补充与问题直接相关的原始记录。",
+      evidenceState: "none",
       confidence: "low",
     })),
   };
@@ -118,7 +122,7 @@ describe("Standalone conversation answering", () => {
     expect(result.citedSourceRefs).toBeUndefined();
     expect(client.complete).not.toHaveBeenCalled();
     expect(contextBuilder.buildContext).toHaveBeenCalledOnce();
-    expect(reasoning.client.complete).toHaveBeenCalledOnce();
+    expect(reasoning.client.complete).toHaveBeenCalledTimes(2);
   });
 
   it("preserves exact literal output without a model call", async () => {

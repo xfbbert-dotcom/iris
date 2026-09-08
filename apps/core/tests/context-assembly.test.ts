@@ -258,7 +258,7 @@ describe("assemblePromptContext", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],
       liveChatMessages: [
-        { speaker: "Alice", text: `${"L".repeat(2100)} trailing live context` }
+        { speaker: "Alice", text: `${"L".repeat(8100)} trailing live context` }
       ]
     });
     const formattedMessage = context.match(
@@ -266,16 +266,16 @@ describe("assemblePromptContext", () => {
     )?.groups?.text;
 
     expect(formattedMessage).toBeDefined();
-    expect(formattedMessage!.length).toBeLessThanOrEqual(2000);
+    expect(formattedMessage!.length).toBeLessThanOrEqual(8000);
     expect(formattedMessage).toContain("[truncated]");
     expect(formattedMessage).not.toContain("trailing live context");
   });
 
-  it("bounds escaped live chat message text after XML escaping", () => {
+  it("bounds raw live chat text while preserving XML escaping", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],
       liveChatMessages: [
-        { speaker: "Alice", text: `${"&".repeat(2500)} trailing live context` }
+        { speaker: "Alice", text: `${"&".repeat(8500)} trailing live context` }
       ]
     });
     const formattedMessage = context.match(
@@ -283,7 +283,7 @@ describe("assemblePromptContext", () => {
     )?.groups?.text;
 
     expect(formattedMessage).toBeDefined();
-    expect(formattedMessage!.length).toBeLessThanOrEqual(2000);
+    expect(formattedMessage!.replaceAll("&amp;", "&").length).toBeLessThanOrEqual(8000);
     expect(formattedMessage).toContain("[truncated]");
     expect(formattedMessage).not.toContain("trailing live context");
   });
