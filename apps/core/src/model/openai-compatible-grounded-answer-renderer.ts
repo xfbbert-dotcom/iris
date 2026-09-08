@@ -21,6 +21,7 @@ const MAX_RENDERER_LIVE_CHAT_MESSAGES = 20;
 const MAX_RENDERER_SPEAKER_CHARS = 256;
 const MAX_RENDERED_ANSWER_CHARS = 8000;
 const RENDER_RESULT_FIELDS = new Set(["answerText", "evidenceState", "confidence"]);
+const PROTECTED_ANSWER_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]*`|https?:\/\/\S+/gu;
 
 const GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT = [
   "You are Iris, rendering a validated evidence plan for an internal work chat.",
@@ -106,7 +107,7 @@ export function createOpenAICompatibleGroundedAnswerRenderer({
           throw new Error("grounded answer language does not match the question");
         }
       }
-      return localizeChinesePartialPolicyTerms(normalized.question, rendered);
+      return localizeChineseUncertaintyPolicyTerms(normalized.question, rendered);
     },
   };
 }
@@ -228,22 +229,43 @@ function parseRenderResult(content: string, plan: EvidencePlan): GroundedAnswerR
   return { answerText, evidenceState, confidence };
 }
 
-function localizeChinesePartialPolicyTerms(
+function localizeChineseUncertaintyPolicyTerms(
   question: string,
   result: GroundedAnswerRenderResult,
 ): GroundedAnswerRenderResult {
-  if (result.evidenceState !== "partial" || !expectsChineseAnswer(question)) {
+  if (
+    (result.evidenceState !== "partial" && result.evidenceState !== "none")
+    || !expectsChineseAnswer(question)
+  ) {
     return result;
   }
 
-  const answerText = result.answerText
+  const answerText = transformUnprotectedAnswerText(result.answerText, (text) => text
     .replace(/[ \t]*\bconjecture\b[ \t]*/giu, "推测")
+    .replace(/\bconfidence\b([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\blow\b/giu, "置信度$1低")
+    .replace(/\bconfidence\b([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bmedium\b/giu, "置信度$1中等")
+    .replace(/\bconfidence\b([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bhigh\b/giu, "置信度$1高")
     .replace(/\blow[ \t]+confidence\b/giu, "低置信度")
     .replace(/\bmedium[ \t]+confidence\b/giu, "中等置信度")
     .replace(/\bhigh[ \t]+confidence\b/giu, "高置信度")
-    .replace(/[ \t]*\bconfidence\b[ \t]*/giu, "置信度");
+    .replace(/[ \t]*\bconfidence\b[ \t]*/giu, "置信度"));
 
   return answerText === result.answerText ? result : { ...result, answerText };
+}
+
+function transformUnprotectedAnswerText(
+  answer: string,
+  transform: (text: string) => string,
+): string {
+  let cursor = 0;
+  let transformed = "";
+  for (const protectedSpan of answer.matchAll(PROTECTED_ANSWER_SPAN_PATTERN)) {
+    const index = protectedSpan.index;
+    transformed += transform(answer.slice(cursor, index));
+    transformed += protectedSpan[0];
+    cursor = index + protectedSpan[0].length;
+  }
+  return transformed + transform(answer.slice(cursor));
 }
 
 function expectsChineseAnswer(question: string): boolean {
@@ -259,7 +281,7 @@ function expectsChineseAnswer(question: string): boolean {
 
 function isPredominantlyEnglishProse(answer: string): boolean {
   // Code, identifiers and URLs may legitimately contain Latin text inside a Chinese answer.
-  const prose = answer.replace(/```[\s\S]*?```|`[^`\n]*`|https?:\/\/\S+/gu, "");
+  const prose = answer.replace(PROTECTED_ANSWER_SPAN_PATTERN, "");
   const hanChars = prose.match(/\p{Script=Han}/gu)?.length ?? 0;
   const latinWords = prose.match(/[A-Za-z]{2,}/gu) ?? [];
   const latinChars = latinWords.join("").length;

@@ -169,7 +169,7 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
   it("does not expose the English conjecture policy term in a Chinese partial answer", async () => {
     const client = { complete: vi.fn(async () => JSON.stringify({
       answerText:
-        "缺乏更早的具体讨论记录。基于当前证据，以下结论是一个 conjecture：我们之前讨论过算法工程师的职责。",
+        "缺乏更早的具体讨论记录。基于当前证据，以下结论是一个 conjecture：我们之前讨论过算法工程师的职责，confidence评级为low。",
       evidenceState: "partial",
       confidence: "low",
     })) };
@@ -194,7 +194,99 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
 
     expect(result).toMatchObject({ evidenceState: "partial", confidence: "low" });
     expect(result.answerText).toContain("推测");
-    expect(result.answerText).not.toMatch(/\bconjecture\b/iu);
+    expect(result.answerText).toContain("置信度评级为低");
+    expect(result.answerText).not.toMatch(/\b(?:conjecture|confidence|low)\b/iu);
+  });
+
+  it("localizes mixed English uncertainty policy terms in a Chinese none answer", async () => {
+    const answerText =
+      "资料中只有本群新版问卷，没有第三版问卷。若给出具体题目差异只能是 conjecture，confidence评级为low。";
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText,
+      evidenceState: "none",
+      confidence: "low",
+    })) };
+
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "请对比本群新版问卷和未提供的第三版问卷的具体题目差异。",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "none",
+        premises: [],
+        proposedAnswer: null,
+        missingInformation: ["未提供的第三版问卷原文"],
+        confidence: "low",
+      },
+      evidence: [],
+      liveChatMessages: [],
+    });
+
+    expect(result).toMatchObject({ evidenceState: "none", confidence: "low" });
+    expect(result.answerText).toContain("推测");
+    expect(result.answerText).toContain("置信度评级为低");
+    expect(result.answerText).not.toMatch(/\b(?:conjecture|confidence|low)\b/iu);
+  });
+
+  it("preserves URLs and code while localizing none-state uncertainty prose", async () => {
+    const answerText = [
+      "资料不足，具体差异只能是 conjecture，confidence评级为low。",
+      "保留 `confidence=low` 和 https://docs.example/conjecture?confidence=low",
+      "```text",
+      "conjecture; confidence评级为low",
+      "```",
+    ].join("\n");
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText,
+      evidenceState: "none",
+      confidence: "low",
+    })) };
+
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "请对比本群新版问卷和未提供的第三版问卷。",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "none",
+        premises: [],
+        proposedAnswer: null,
+        missingInformation: ["未提供的第三版问卷原文"],
+        confidence: "low",
+      },
+      evidence: [],
+      liveChatMessages: [],
+    });
+
+    expect(result.answerText).toBe([
+      "资料不足，具体差异只能是推测，置信度评级为低。",
+      "保留 `confidence=low` 和 https://docs.example/conjecture?confidence=low",
+      "```text",
+      "conjecture; confidence评级为low",
+      "```",
+    ].join("\n"));
+  });
+
+  it("preserves uncertainty terms for a none answer explicitly requested in English", async () => {
+    const answerText = "A comparison would be conjecture; confidence is low.";
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText,
+      evidenceState: "none",
+      confidence: "low",
+    })) };
+
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "请用英语回答：对比本群新版问卷和未提供的第三版问卷。",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "none",
+        premises: [],
+        proposedAnswer: null,
+        missingInformation: ["未提供的第三版问卷原文"],
+        confidence: "low",
+      },
+      evidence: [],
+      liveChatMessages: [],
+    });
+
+    expect(result.answerText).toBe(answerText);
   });
 
   it("accepts a partial answer only when state and confidence echo the plan", async () => {
