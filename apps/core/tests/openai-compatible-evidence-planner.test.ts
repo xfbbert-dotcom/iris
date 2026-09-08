@@ -31,6 +31,10 @@ describe("OpenAICompatibleEvidencePlanner", () => {
     expect(systemPrompt).toContain("normally 2-4 meaningful dimensions");
     expect(systemPrompt).toContain("concise example from each compared source");
     expect(systemPrompt).toContain("Do not invent changes or fill in a missing version");
+    expect(systemPrompt).toContain("ordinary task-fit criteria");
+    expect(systemPrompt).toContain("clearly labeled recommendation or conditional recommendation");
+    expect(systemPrompt).toContain("does not by itself make advice impossible");
+    expect(systemPrompt).toContain("Keep cited premises limited to source-stated facts");
     expect(result.premises).toEqual([{ citationRef: "D1", statement: "Explicit premise" }]);
   });
   it("returns a validated partial plan using only allowed references", async () => {

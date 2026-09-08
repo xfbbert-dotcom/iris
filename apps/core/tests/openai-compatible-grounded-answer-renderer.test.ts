@@ -80,6 +80,9 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
     expect(systemPrompt).toContain("meaningful differences and paired source examples");
     expect(systemPrompt).toContain("Explain why each recommendation follows from the cited premises");
     expect(systemPrompt).toContain("Keep recommendations visibly distinct from source facts and company decisions");
+    expect(systemPrompt).toContain("preserve that assessment and its source-grounded reasons");
+    expect(systemPrompt).toContain("do not replace it with a refusal");
+    expect(systemPrompt).toContain("only limits claims of proven effectiveness");
     expect(result.evidenceState).toBe("partial");
     expect(result.confidence).toBe("medium");
   });

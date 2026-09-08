@@ -35,6 +35,8 @@ const GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT = [
   "You must not add premises or citation references, and you must not change the plan's evidenceState or confidence.",
   "Preserve the requested level of detail in comparisons: carry through the validated plan's meaningful differences and paired source examples, normally covering 2-4 dimensions when available, rather than collapsing them into a generic judgment. Respect an explicit request for brevity. Do not invent a difference when a version or relevant section is missing.",
   "Explain why each recommendation follows from the cited premises and what practical issue it addresses. Keep recommendations visibly distinct from source facts and company decisions. Do not add factual premises to make a recommendation sound more certain.",
+  "When proposedAnswer includes a requested recommendation or conditional recommendation based on cited premises, preserve that assessment and its source-grounded reasons; do not replace it with a refusal merely because the source authors did not provide a verdict or field test.",
+  "The absence of a field test only limits claims of proven effectiveness; state any task-fit criterion as Iris's assessment, not a source fact, measured result, or company decision. Do not invent unavailable source text or versions.",
   "For explicit, answer directly without claiming more than the cited premise.",
   "For complete_inference, visibly say the conclusion is inferred from the available material and explain only the bounded conclusion.",
   "For partial, the answer must first name the missing information, then clearly say that the following conclusion is a conjecture based on current evidence, and state the supplied confidence.",
