@@ -3,6 +3,32 @@
 Date: 2026-07-02
 Status: Phase 2V design
 
+## Dated same-chat recall — 2026-09-08
+
+Recent context alone does not implement historical recall: the pilot's questionnaire was outside
+the newest 100 messages the next day, although the original was still readable and had entered the
+fact store. Explicit single-day questions now resolve yesterday/today/the day before yesterday or
+a calendar date in Asia/Shanghai, and request that day's Feishu history instead of today's newest
+traffic. For a concrete topic, a parameterized, same-chat/date-scoped Postgres query selects up to
+eight candidate **message IDs only**. Their current bodies are re-read through Feishu before use.
+An omitted/denied/deleted ID lookup supersedes the same ID in the earlier history-list result.
+
+The date-scoped two-page/100-message read remains a bounded complement for messages missed by
+callbacks. Up to eight matching reply parent/root identities may be read once (no recursive chain),
+with exact current-chat, day, human-sender, deletion and final local-tombstone checks. Stored bodies
+never become fallback evidence. Historical messages carry their source time in Beijing time; the
+existing 20-message prompt and 10-message planning limits and `reply_to:Cn` relationships remain.
+Group gates are still checked before/after asynchronous loading. No callback backfill, new memory
+extraction authorization, cross-group sharing, or knowledge write is introduced.
+
+Acceptance: the real next-day questionnaire question must reach the real model with the original
+source beyond the recent window, answer in Chinese, and exclude that source in another group.
+Candidate SQL must exclude other groups/days/deletions in a real Postgres test. A denial during
+revalidation must not resurrect an earlier list body. Undated recent chat, greetings and disabled
+group controls remain unchanged. This is bounded dated recall, not complete archival search;
+ambiguous/multi-day dates, semantic-only matching without a topic label, and source messages absent
+from both the fact store and bounded day scan remain follow-up scope.
+
 ## Production correction — 2026-09-07
 
 The original persisted-message design below remains the local/development fallback, not proof

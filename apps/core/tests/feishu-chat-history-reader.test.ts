@@ -400,6 +400,200 @@ describe("FeishuChatHistoryReader", () => {
       vi.useRealTimers();
     }
   });
+
+  it("requests the explicit date range in seconds and enforces inclusive start and exclusive end locally", async () => {
+    const fetch = vi.fn(async () => page([
+      message({ message_id: "om-before", create_time: "1788710400122" }),
+      message({ message_id: "om-at-start", create_time: "1788710400123" }),
+      message({ message_id: "om-before-end", create_time: "1788796800455" }),
+      message({ message_id: "om-at-end", create_time: "1788796800456" }),
+    ]));
+    const reader = readerFor(fetch);
+
+    const result = await reader.listRecentMessages({
+      chatId: "oc-group", limit: 100,
+      timeRange: { start: new Date("2026-09-06T16:00:00.123Z"), end: new Date("2026-09-07T16:00:00.456Z") },
+    });
+
+    expect(result.map((item) => item.messageId)).toEqual(["om-before-end", "om-at-start"]);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/im/v1/messages?container_id_type=chat&container_id=oc-group&page_size=50&sort_type=ByCreateTimeDesc&start_time=1788710400&end_time=1788796801",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("keeps the same date bounds while following the second bounded page", async () => {
+    const fetch = vi.fn(async () => fetch.mock.calls.length === 1
+      ? page([message({ message_id: "om-after", create_time: "1788796800000" })], true)
+      : page([message({ message_id: "om-original" })]));
+    const reader = readerFor(fetch);
+
+    const result = await reader.listRecentMessages({
+      chatId: "oc-group", limit: 1,
+      timeRange: { start: new Date("2026-09-06T16:00:00Z"), end: new Date("2026-09-07T16:00:00Z") },
+    });
+
+    expect(result.map((item) => item.messageId)).toEqual(["om-original"]);
+    expect(fetch).toHaveBeenNthCalledWith(2,
+      "https://open.feishu.cn/open-apis/im/v1/messages?container_id_type=chat&container_id=oc-group&page_size=50&sort_type=ByCreateTimeDesc&start_time=1788710400&end_time=1788796800&page_token=next-page",
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    ["invalid start", new Date(Number.NaN), new Date("2026-09-08T00:00:00Z")],
+    ["invalid end", new Date("2026-09-07T00:00:00Z"), new Date(Number.NaN)],
+    ["reversed bounds", new Date("2026-09-08T00:00:00Z"), new Date("2026-09-07T00:00:00Z")],
+    ["empty interval", new Date("2026-09-07T00:00:00Z"), new Date("2026-09-07T00:00:00Z")],
+    ["negative timestamp", new Date(-1000), new Date(1000)],
+    ["more than thirty-one days", new Date("2026-08-07T00:00:00Z"), new Date("2026-09-07T00:00:00.001Z")],
+  ] as const)("rejects %s before any authorization or history request", async (_name, start, end) => {
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const fetch = vi.fn();
+    const reader = createFeishuChatHistoryReader({ baseUrl: "https://open.feishu.cn", tokenProvider, fetch });
+
+    await expect(reader.listRecentMessages({ chatId: "oc-group", limit: 100, timeRange: { start, end } })).rejects.toSatisfy(isHistoryUnavailable);
+    expect(tokenProvider.getTenantAccessToken).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts exactly thirty-one days without widening the requested range", async () => {
+    const reader = readerFor(async () => page([message()]));
+
+    const result = await reader.listRecentMessages({
+      chatId: "oc-group", limit: 100,
+      timeRange: { start: new Date("2026-08-08T03:00:00Z"), end: new Date("2026-09-08T03:00:00Z") },
+    });
+
+    expect(result.map((item) => item.messageId)).toEqual(["om-message"]);
+  });
+
+  it("validates a candidate ID against the live single-message response and preserves reply metadata", async () => {
+    const fetch = vi.fn(async () => json({ code: 0, data: { items: [message({
+      message_id: "om/original?1", parent_id: "om-parent", root_id: "om-root", msg_type: "post",
+      body: { content: JSON.stringify({ title: "调研", content: [[{ tag: "text", text: "原始问题正文" }]] }) },
+    })] } }));
+    const reader = readerFor(fetch);
+
+    const result = await reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: ["om/original?1"] });
+
+    expect(result).toEqual([{
+      messageId: "om/original?1", chatId: "oc-group", senderId: "ou-author",
+      text: "调研 原始问题正文", sentAt: new Date("2026-09-07T03:00:00Z"),
+      parentMessageId: "om-parent", rootMessageId: "om-root",
+    }]);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/im/v1/messages/om%2Foriginal%3F1",
+      expect.objectContaining({ method: "GET", headers: { authorization: "Bearer tenant-token" }, signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("deduplicates candidate IDs and bounds all single-message requests to eight", async () => {
+    const fetch = vi.fn(async (url: string | URL | Request) => json({ code: 0, data: { items: [message({ message_id: decodeURIComponent(String(url).split("/").at(-1)!) })] } }));
+    const reader = readerFor(fetch);
+
+    const result = await reader.readMessagesByIds?.({
+      chatId: "oc-group", messageIds: ["om-0", "om-0", ...Array.from({ length: 12 }, (_, index) => `om-${index + 1}`)],
+    });
+
+    expect(result?.[0].messageId).toBe("om-0");
+    expect(new Set(result?.map((item) => item.messageId)).size).toBe(result?.length);
+    expect(result?.length).toBeLessThanOrEqual(8);
+    expect(fetch.mock.calls.length).toBeLessThanOrEqual(8);
+    expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/om-0"))).toHaveLength(1);
+  });
+
+  it("skips unreadable, deleted, bot, and foreign-chat candidate messages", async () => {
+    const rows = [
+      message({ message_id: "om-valid" }),
+      message({ message_id: "om-foreign", chat_id: "oc-other" }),
+      message({ message_id: "om-deleted", deleted: true }),
+      message({ message_id: "om-bot", sender: { id: "cli-bot", sender_type: "app" } }),
+      message({ message_id: "om-unreadable", body: { content: "not-json" } }),
+    ];
+    const fetch = vi.fn(async (url: string | URL | Request) => json({ code: 0, data: { items: [rows.find((row) => String(url).endsWith(`/${row.message_id}`))] } }));
+    const reader = readerFor(fetch);
+
+    const result = await reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: rows.map((row) => row.message_id as string) });
+
+    expect(result?.map((item) => item.messageId)).toEqual(["om-valid"]);
+  });
+
+  it.each([401, 403, 404])("omits a denied or missing candidate with HTTP %s", async (status) => {
+    const reader = readerFor(async () => json({ code: 999, msg: "private-content tenant-token" }, status));
+
+    await expect(reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: ["om-missing"] })).resolves.toEqual([]);
+  });
+
+  it("omits a missing candidate when the live API returns an empty items array", async () => {
+    const reader = readerFor(async () => json({ code: 0, data: { items: [] } }));
+
+    await expect(reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: ["om-missing"] })).resolves.toEqual([]);
+  });
+
+  it("makes no requests for empty or invalid bounded candidate IDs", async () => {
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const fetch = vi.fn();
+    const reader = createFeishuChatHistoryReader({ baseUrl: "https://open.feishu.cn", tokenProvider, fetch });
+
+    await expect(reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: ["", " om-other ", "m".repeat(513)] })).resolves.toEqual([]);
+    await expect(reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: [] })).resolves.toEqual([]);
+    expect(tokenProvider.getTenantAccessToken).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["HTTP 429", () => json({}, 429)],
+    ["HTTP 500", () => json({}, 500)],
+    ["unknown API error", () => json({ code: 230000, msg: "private-content tenant-token" })],
+    ["invalid JSON", () => new Response("private-content tenant-token")],
+    ["missing data", () => json({ code: 0 })],
+    ["missing items", () => json({ code: 0, data: {} })],
+    ["wrong message ID", () => json({ code: 0, data: { items: [message({ message_id: "om-different" })] } })],
+    ["multiple rows", () => json({ code: 0, data: { items: [message(), message()] } })],
+    ["malformed row", () => json({ code: 0, data: { items: [null] } })],
+    ["oversized body", () => json({ code: 0, data: { items: [message()] }, padding: "s".repeat(2 * 1024 * 1024) })],
+  ] as const)("fails closed for single-message %s", async (_name, response) => {
+    const reader = readerFor(async () => response());
+
+    await expect(reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: ["om-message"] })).rejects.toSatisfy(isHistoryUnavailable);
+  });
+
+  it("bounds single-message concurrency and shares the timeout across the whole batch", async () => {
+    vi.useFakeTimers();
+    try {
+      let active = 0;
+      let peak = 0;
+      const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        return new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            active -= 1;
+            resolve(json({ code: 0, data: { items: [message({ message_id: String(url).split("/").at(-1) })] } }));
+          }, 60);
+          init?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            active -= 1;
+            reject(new Error("private-content tenant-token"));
+          }, { once: true });
+        });
+      });
+      const reader = readerFor(fetch, 100);
+      const outcome = reader.readMessagesByIds?.({ chatId: "oc-group", messageIds: Array.from({ length: 8 }, (_, index) => `om-${index}`) })
+        .then((messages) => ({ messages, error: undefined }), (error: unknown) => ({ messages: undefined, error }));
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(peak).toBeGreaterThan(0);
+      expect(peak).toBeLessThanOrEqual(2);
+      expect(fetch.mock.calls.length).toBeLessThanOrEqual(4);
+      expect(isHistoryUnavailable((await outcome)?.error)).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 function readerFor(fetch: typeof globalThis.fetch, timeoutMs?: number) {

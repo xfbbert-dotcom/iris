@@ -312,6 +312,14 @@ Without the Feishu integration, the local provider scans up to three times the r
 window, capped at 100 raw rows. Both paths preserve the existing prompt budget and group boundary;
 the live read does not persist callbacks or authorize cross-group raw chat access.
 
+Explicit single-day historical questions use an Asia/Shanghai date-scoped live read. Same-chat,
+same-date topic matching in the fact store can additionally locate at most eight message IDs;
+only fresh Feishu bodies, never cached message text, enter evidence. A bounded one-hop read may
+resolve up to eight topic-linked parents/roots in that same chat and date. A denied/deleted exact
+lookup supersedes earlier list content, final tombstones still apply, and prompt/planning budgets
+remain unchanged. This dated recall is distinct from both the latest-message anchor and governed
+cross-group document retrieval.
+
 EmbeddingGemma query vectors have a separate 512-byte UTF-8 input budget, including their search
 prefix, to fit the small local runner. This does not truncate answer evidence or change stored
 document vector formatting, dimensions, or indexing.

@@ -14,7 +14,12 @@ export type FeishuChatHistoryMessage = {
 };
 
 export type FeishuChatHistoryReader = {
-  listRecentMessages(input: { chatId: string; limit: number }): Promise<FeishuChatHistoryMessage[]>;
+  listRecentMessages(input: {
+    chatId: string;
+    limit: number;
+    timeRange?: { start: Date; end: Date };
+  }): Promise<FeishuChatHistoryMessage[]>;
+  readMessagesByIds?(input: { chatId: string; messageIds: string[] }): Promise<FeishuChatHistoryMessage[]>;
 };
 
 export type FeishuChatHistoryReaderDependencies = {
@@ -39,6 +44,10 @@ const MAX_HISTORY_PAGE_ITEMS = 50;
 const MAX_HISTORY_PAGES = 2;
 const MAX_HISTORY_MESSAGES = 100;
 const MAX_FEISHU_IDENTIFIER_CHARS = 512;
+const MAX_HISTORY_TIME_RANGE_MS = 31 * 24 * 60 * 60 * 1000;
+const MAX_MESSAGE_IDS = 8;
+const MAX_MESSAGE_REQUEST_CONCURRENCY = 2;
+const MAX_SINGLE_MESSAGE_RESPONSE_BYTES = 256 * 1024;
 
 export function createFeishuChatHistoryReader({
   baseUrl,
@@ -58,6 +67,9 @@ export function createFeishuChatHistoryReader({
       try {
         const chatId = readIdentifier(input.chatId);
         if (chatId === undefined) throw new FeishuChatHistoryError();
+        const timeRange = readTimeRange(input.timeRange);
+        const timeQuery = timeRange === undefined ? ""
+          : `&start_time=${Math.floor(timeRange.startMs / 1000)}&end_time=${Math.ceil(timeRange.endMs / 1000)}`;
 
         const tenantAccessToken = await tokenProvider.getTenantAccessToken();
         const controller = new AbortController();
@@ -69,7 +81,7 @@ export function createFeishuChatHistoryReader({
           for (let pageIndex = 0; pageIndex < MAX_HISTORY_PAGES; pageIndex += 1) {
             const cursorQuery = pageToken === undefined ? "" : `&page_token=${encodeURIComponent(pageToken)}`;
             const response = await fetch(
-              `${baseUrl.replace(/\/+$/u, "")}/open-apis/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(chatId)}&page_size=${MAX_HISTORY_PAGE_ITEMS}&sort_type=ByCreateTimeDesc${cursorQuery}`,
+              `${baseUrl.replace(/\/+$/u, "")}/open-apis/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(chatId)}&page_size=${MAX_HISTORY_PAGE_ITEMS}&sort_type=ByCreateTimeDesc${timeQuery}${cursorQuery}`,
               {
                 method: "GET",
                 headers: { authorization: `Bearer ${tenantAccessToken}` },
@@ -88,6 +100,9 @@ export function createFeishuChatHistoryReader({
             for (const item of page.items) {
               const message = readHistoryMessage(item, chatId);
               if (message === undefined) continue;
+              if (timeRange !== undefined && (
+                message.sentAt.getTime() < timeRange.startMs || message.sentAt.getTime() >= timeRange.endMs
+              )) continue;
               const previous = messagesById.get(message.messageId);
               if (previous === undefined || previous.sentAt.getTime() < message.sentAt.getTime()) {
                 messagesById.set(message.messageId, message);
@@ -113,7 +128,82 @@ export function createFeishuChatHistoryReader({
         throw new FeishuChatHistoryError();
       }
     },
+    async readMessagesByIds(input) {
+      try {
+        const chatId = readIdentifier(input.chatId);
+        if (chatId === undefined || !Array.isArray(input.messageIds)) throw new FeishuChatHistoryError();
+        const messageIds = [...new Set(input.messageIds.slice(0, MAX_MESSAGE_IDS).flatMap((value) => {
+          const id = readIdentifier(value);
+          return id === undefined ? [] : [id];
+        }))];
+        if (messageIds.length === 0) return [];
+
+        const tenantAccessToken = await tokenProvider.getTenantAccessToken();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), safeTimeoutMs);
+        try {
+          const messages: FeishuChatHistoryMessage[] = [];
+          for (let offset = 0; offset < messageIds.length; offset += MAX_MESSAGE_REQUEST_CONCURRENCY) {
+            if (controller.signal.aborted) throw new FeishuChatHistoryError();
+            const batch = await Promise.all(
+              messageIds.slice(offset, offset + MAX_MESSAGE_REQUEST_CONCURRENCY).map(async (messageId) => {
+                const response = await fetch(
+                  `${baseUrl.replace(/\/+$/u, "")}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+                  { method: "GET", headers: { authorization: `Bearer ${tenantAccessToken}` }, signal: controller.signal },
+                );
+                if ([401, 403, 404].includes(response.status)) {
+                  await response.body?.cancel().catch(() => undefined);
+                  return undefined;
+                }
+                if (!response.ok) throw new FeishuChatHistoryError();
+                const body = await readBoundedJsonResponse({
+                  response,
+                  invalidJsonErrorMessage: "Feishu chat history unavailable",
+                  maxResponseBytes: MAX_SINGLE_MESSAGE_RESPONSE_BYTES,
+                  responseSizeErrorMessage: "Feishu chat history unavailable",
+                });
+                if (controller.signal.aborted) throw new FeishuChatHistoryError();
+                return readSingleHistoryMessage(body, chatId, messageId);
+              }),
+            );
+            if (controller.signal.aborted) throw new FeishuChatHistoryError();
+            messages.push(...batch.flatMap((message) => message === undefined ? [] : [message]));
+          }
+          return messages.sort((left, right) => right.sentAt.getTime() - left.sentAt.getTime());
+        } finally {
+          clearTimeout(timeout);
+          controller.abort();
+        }
+      } catch {
+        throw new FeishuChatHistoryError();
+      }
+    },
   };
+}
+
+function readTimeRange(value: unknown): { startMs: number; endMs: number } | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !(value.start instanceof Date) || !(value.end instanceof Date)) {
+    throw new FeishuChatHistoryError();
+  }
+  const startMs = value.start.getTime();
+  const endMs = value.end.getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs <= 0 ||
+    startMs >= endMs || endMs - startMs > MAX_HISTORY_TIME_RANGE_MS) {
+    throw new FeishuChatHistoryError();
+  }
+  return { startMs, endMs };
+}
+
+function readSingleHistoryMessage(body: unknown, chatId: string, messageId: string): FeishuChatHistoryMessage | undefined {
+  if (!isRecord(body) || body.code !== 0 || !isRecord(body.data) ||
+    !Array.isArray(body.data.items) || body.data.items.length > 1) {
+    throw new FeishuChatHistoryError();
+  }
+  if (body.data.items.length === 0) return undefined;
+  const item = body.data.items[0];
+  if (!isRecord(item) || item.message_id !== messageId) throw new FeishuChatHistoryError();
+  return readHistoryMessage(item, chatId);
 }
 
 function readHistoryPage(body: unknown): { items: unknown[]; hasMore: boolean; pageToken: unknown } {
