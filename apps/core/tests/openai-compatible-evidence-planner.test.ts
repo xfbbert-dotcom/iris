@@ -35,6 +35,10 @@ describe("OpenAICompatibleEvidencePlanner", () => {
     expect(systemPrompt).toContain("clearly labeled recommendation or conditional recommendation");
     expect(systemPrompt).toContain("does not by itself make advice impossible");
     expect(systemPrompt).toContain("Keep cited premises limited to source-stated facts");
+    expect(systemPrompt).toContain("evidenceState measures whether the supplied alternatives");
+    expect(systemPrompt).toContain("use complete_inference with medium confidence");
+    expect(systemPrompt).toContain("officially chosen, intended, or proven effective");
+    expect(systemPrompt).toContain("retain partial or none and do not invent it");
     expect(result.premises).toEqual([{ citationRef: "D1", statement: "Explicit premise" }]);
   });
   it("returns a validated partial plan using only allowed references", async () => {
