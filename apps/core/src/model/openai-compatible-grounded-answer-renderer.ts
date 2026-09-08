@@ -259,8 +259,10 @@ function isPredominantlyEnglishProse(answer: string): boolean {
   // Code, identifiers and URLs may legitimately contain Latin text inside a Chinese answer.
   const prose = answer.replace(/```[\s\S]*?```|`[^`\n]*`|https?:\/\/\S+/gu, "");
   const hanChars = prose.match(/\p{Script=Han}/gu)?.length ?? 0;
-  const latinChars = (prose.match(/[A-Za-z]{2,}/gu) ?? []).join("").length;
-  return latinChars >= 40 && latinChars > hanChars * 2;
+  const latinWords = prose.match(/[A-Za-z]{2,}/gu) ?? [];
+  const latinChars = latinWords.join("").length;
+  return (latinChars >= 40 && latinChars > hanChars * 2)
+    || (hanChars === 0 && latinWords.length >= 4 && latinWords.some(word => /[a-z]/u.test(word)));
 }
 
 function readEvidenceState(value: unknown): EvidenceState {

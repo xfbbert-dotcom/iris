@@ -10,6 +10,14 @@ import {
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
 
 describe("OpenAICompatibleGroundedAnswerRenderer", () => {
+  it("repairs short ordinary English prose for a Chinese question", async () => {
+    const client = { complete: vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ answerText: "Use the old version for interviews.", evidenceState: "partial", confidence: "medium" }))
+      .mockResolvedValueOnce(JSON.stringify({ answerText: "目前证据不完整；建议先用旧版开展访谈，这只是中等置信度的推测。", evidenceState: "partial", confidence: "medium" })) };
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({ ...groundedRenderInput(partialPlan()), question: "哪一版适合用于访谈？" });
+    expect(result.answerText).toContain("建议先用旧版");
+    expect(client.complete).toHaveBeenCalledTimes(2);
+  });
   it("repairs predominantly English prose once for a Chinese question using the same evidence plan", async () => {
     const plan = partialPlan();
     const observed: Array<readonly OpenAICompatibleChatMessage[]> = [];
