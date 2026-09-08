@@ -397,6 +397,9 @@ function createHarness(options: {
       createModelProvider: () => ({
         async generateAnswerDraft() { return { answerText: "你好" }; },
       }),
+      createRequestContextRouter: () => ({
+        async classify() { return "contextual"; },
+      }),
       ...options.dependencies,
     },
   })!;

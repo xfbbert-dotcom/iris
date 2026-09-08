@@ -66,7 +66,7 @@ describe("Standalone conversation answering", () => {
     question,
     expectedAnswer,
   ) => {
-    const { model, client } = modelWithAnswer(`${expectedAnswer}\n<iris_citations>["D1"]</iris_citations>`);
+    const { model, client } = modelWithAnswer(expectedAnswer);
     const reasoning = companyReasoning();
     const contextBuilder = {
       buildContext: vi.fn(async () => {

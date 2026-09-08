@@ -5,6 +5,7 @@ import {
   resolveAnswerDraftExecutionId,
   type AnswerDraftInput,
   type AnswerDraftOrchestrator,
+  type ModelProvider,
 } from "../agent/answer-draft-orchestrator.js";
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import type { AuditLog } from "../audit/audit-log.js";
@@ -97,6 +98,10 @@ import {
   createOpenAICompatibleGroundedAnswerRenderer,
   type GroundedAnswerRenderer,
 } from "../model/openai-compatible-grounded-answer-renderer.js";
+import {
+  createOpenAICompatibleRequestContextRouter,
+  type RequestContextRouter,
+} from "../model/openai-compatible-request-context-router.js";
 import type { GroupMemoryRepository } from "../memory/group-memory-repository.js";
 import {
   createAnswerSourcePermissionVerifier,
@@ -177,9 +182,7 @@ export type AnswerDraftRuntimeDependencies = {
   createLiveChatContextProvider?: (dependencies: {
     repository: Pick<ConversationMessageRepository, "listRecentByChat">;
   }) => LiveChatContextProvider;
-  createModelProvider?: (config: ModelProviderConfig) => {
-    generateAnswerDraft(input: { question: string; promptContext: string }): Promise<{ answerText: string }>;
-  };
+  createModelProvider?: (config: ModelProviderConfig) => ModelProvider;
   createChatCompletionsClient?: (
     config: ModelProviderConfig,
   ) => OpenAICompatibleChatCompletionsClient;
@@ -189,6 +192,9 @@ export type AnswerDraftRuntimeDependencies = {
   createGroundedAnswerRenderer?: (dependencies: {
     client: OpenAICompatibleChatCompletionsClient;
   }) => GroundedAnswerRenderer;
+  createRequestContextRouter?: (dependencies: {
+    client: OpenAICompatibleChatCompletionsClient;
+  }) => RequestContextRouter;
   createEmbeddingProfileRepository?: (dependencies: { queryable: Queryable }) => Pick<
     EmbeddingProfileRepository,
     "getStaticDevelopmentProfile" | "findOrCreateProfile" | "getProfileById"
@@ -391,6 +397,9 @@ export function createAnswerDraftRuntime({
   const renderer = (
     dependencies.createGroundedAnswerRenderer ?? createOpenAICompatibleGroundedAnswerRenderer
   )({ client: chatClient });
+  const requestContextRouter = (
+    dependencies.createRequestContextRouter ?? createOpenAICompatibleRequestContextRouter
+  )({ client: chatClient });
   const permissionMode = runtimeConfig.permissionMode;
   const modelProvider = modelConfig.provider;
   const modelId = modelConfig.model;
@@ -474,6 +483,7 @@ export function createAnswerDraftRuntime({
         renderer,
         knowledgeConflictAnswerProvider,
         liveChatContextProvider,
+        requestContextRouter,
         agentExecutionObserver,
         provider: modelProvider,
         modelId,

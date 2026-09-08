@@ -24,6 +24,10 @@ import type {
 import type { EvidencePlanner } from "../model/openai-compatible-evidence-planner.js";
 import type { GroundedAnswerRenderer } from "../model/openai-compatible-grounded-answer-renderer.js";
 import type {
+  RequestContextRoute,
+  RequestContextRouter,
+} from "../model/openai-compatible-request-context-router.js";
+import type {
   KnowledgeConflictAnswerProvider,
   KnowledgeConflictAnswerValidationInput,
   KnowledgeConflictAnswerValidationResult,
@@ -114,6 +118,7 @@ export function createAnswerDraftOrchestrator({
   renderer,
   knowledgeConflictAnswerProvider,
   liveChatContextProvider,
+  requestContextRouter,
   agentExecutionObserver,
   provider,
   modelId,
@@ -125,6 +130,7 @@ export function createAnswerDraftOrchestrator({
   renderer: GroundedAnswerRenderer;
   knowledgeConflictAnswerProvider?: KnowledgeConflictAnswerProvider;
   liveChatContextProvider?: LiveChatContextProvider;
+  requestContextRouter?: RequestContextRouter;
   agentExecutionObserver?: AgentExecutionObserver;
   provider?: string;
   modelId?: string;
@@ -185,6 +191,16 @@ export function createAnswerDraftOrchestrator({
     });
   }
 
+  async function resolveContextRoute(
+    question: string,
+    directTaskRoute: DirectTaskRoute | undefined,
+  ): Promise<RequestContextRoute> {
+    if (directTaskRoute !== undefined) {
+      return "standalone";
+    }
+    return requestContextRouter?.classify({ question }) ?? "contextual";
+  }
+
   return {
     async validateKnowledgeConflictForSend(input) {
       if (knowledgeConflictAnswerProvider?.validateForSend === undefined) {
@@ -195,7 +211,9 @@ export function createAnswerDraftOrchestrator({
 
     async inspectPromptPermissions(input) {
       const normalized = normalizeInput(input);
-      if (classifyDirectTask(normalized.question) !== undefined) {
+      const directTaskRoute = classifyDirectTask(normalized.question);
+      const contextRoute = await resolveContextRoute(normalized.question, directTaskRoute);
+      if (contextRoute === "standalone") {
         return { blockedDocumentSourceIds: [] };
       }
       const context = await buildContext(input, normalized);
@@ -222,7 +240,8 @@ export function createAnswerDraftOrchestrator({
       });
 
       try {
-        const context = directTaskRoute === undefined
+        const contextRoute = await resolveContextRoute(question, directTaskRoute);
+        const context = contextRoute === "contextual"
           ? await buildContext(input, normalized)
           : createDirectTaskContext();
 
@@ -238,7 +257,7 @@ export function createAnswerDraftOrchestrator({
         let conflictPlan: Awaited<ReturnType<
           KnowledgeConflictAnswerProvider["findConflictPlan"]
         >>;
-        if (directTaskRoute === undefined && input.chatId !== undefined) {
+        if (contextRoute === "contextual" && input.chatId !== undefined) {
           try {
             conflictPlan = await knowledgeConflictAnswerProvider?.findConflictPlan({
               groupId: input.chatId,
@@ -260,9 +279,9 @@ export function createAnswerDraftOrchestrator({
             ...(provider === undefined ? {} : { provider }),
             ...(modelId === undefined ? {} : { modelId }),
           };
-          if (directTaskRoute !== undefined) {
+          if (contextRoute === "standalone") {
             reasoningMetadata = { taskMode: "direct_task" };
-            if (directTaskRoute.kind === "literal_output") {
+            if (directTaskRoute?.kind === "literal_output") {
               answerText = truncateAnswerDraftText(directTaskRoute.payload);
             } else {
               const modelResult = await runObservedProviderRequest({
@@ -274,6 +293,7 @@ export function createAnswerDraftOrchestrator({
                 request: () => model.generateAnswerDraft({
                   question,
                   promptContext: DIRECT_TASK_PROMPT_CONTEXT,
+                  contextMode: "standalone",
                 }),
               });
               answerText = truncateAnswerDraftText(modelResult.answerText.trim());
@@ -356,6 +376,7 @@ export function createAnswerDraftOrchestrator({
           outcome: "success",
           operationKey: createTurnOperationKey(executionId, "completed"),
           metadata: {
+            requestContextRoute: contextRoute,
             retrievedFragmentCount: result.retrievedFragmentCount,
             allowedFragmentCount: result.allowedFragments.length,
             deniedDocumentCount: result.deniedDocumentIds.length,

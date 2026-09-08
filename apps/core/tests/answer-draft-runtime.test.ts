@@ -26,6 +26,9 @@ function createAnswerDraftRuntime(input: RuntimeInput = {}) {
     ...input,
     dependencies: {
       ...createCompanyFactReasoningRuntimeDependencies(),
+      createRequestContextRouter: () => ({
+        async classify() { return "contextual"; },
+      }),
       ...input.dependencies,
     },
   });
@@ -165,6 +168,9 @@ describe("createAnswerDraftRuntime", () => {
         })),
         createEvidencePlanner: vi.fn(() => reasoning.planner),
         createGroundedAnswerRenderer: vi.fn(() => reasoning.renderer),
+        createRequestContextRouter: vi.fn(() => ({
+          async classify() { return "contextual" as const; },
+        })),
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(async () => profile()),
           findOrCreateProfile: vi.fn(),

@@ -54,6 +54,7 @@ describe("AnswerDraftOrchestrator", () => {
       question: DIRECT_SUMMARY_QUESTION,
       promptContext:
         "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+      contextMode: "standalone",
     });
     expect(result).toEqual({
       answerText: "Draft answer.",
@@ -1361,6 +1362,7 @@ describe("AnswerDraftOrchestrator", () => {
         outcome: "success",
         operationKey: "turn:om_message_1:completed",
         metadata: {
+          requestContextRoute: "standalone",
           retrievedFragmentCount: 0,
           allowedFragmentCount: 0,
           deniedDocumentCount: 0,
