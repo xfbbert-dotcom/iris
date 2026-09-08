@@ -5,6 +5,73 @@ import { assemblePromptContext } from "../src/memory/context-assembly.js";
 import { createOpenAICompatibleModelProvider } from "../src/model/openai-compatible-model-provider.js";
 
 describe("OpenAICompatibleModelProvider", () => {
+  it("structurally excludes context from standalone requests and preserves common policy", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: "先吃点温热的东西吧。" } }] }),
+    );
+    const provider = createOpenAICompatibleModelProvider({ config: config(), fetch });
+
+    await expect(provider.generateAnswerDraft({
+      question: "我肚子好饿",
+      promptContext: "DIARY_SENTINEL",
+      contextMode: "standalone",
+    })).resolves.toEqual({ answerText: "先吃点温热的东西吧。" });
+
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages.at(-1)).toEqual({ role: "user", content: "Question:\n我肚子好饿" });
+    expect(String(init.body)).not.toContain("DIARY_SENTINEL");
+    expect(body.messages[0]?.content).toContain("Iris, a company AI assistant");
+    expect(body.messages[0]?.content).toContain("substantive feedback about tone");
+    expect(body.messages[0]?.content).toContain("Question or reference Context includes a diary, story, roleplay");
+    expect(body.messages[0]?.content).toContain("not Iris's experience or the user's personal history");
+    expect(body.messages[0]?.content).toContain(
+      "Ground company-specific factual claims only in authorized evidence",
+    );
+    expect(body.messages[0]?.content).toContain(
+      "When required company evidence is absent, say what is unavailable instead of guessing",
+    );
+    expect(body.messages[0]?.content).not.toContain("iris_citations");
+  });
+
+  it("rejects impossible document references from standalone answers", async () => {
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch: vi.fn(async () => jsonResponse({
+        choices: [{ message: { content: '去吃饭吧。\n<iris_citations>["D1"]</iris_citations>' } }],
+      })),
+    });
+
+    await expect(provider.generateAnswerDraft({
+      question: "我肚子好饿",
+      promptContext: "DIARY_SENTINEL",
+      contextMode: "standalone",
+    })).rejects.toThrow("standalone model response included a document reference");
+  });
+
+  it("places authorized context before the exact current question by default", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: "Contextual answer." } }] }),
+    );
+    const provider = createOpenAICompatibleModelProvider({ config: config(), fetch });
+
+    await provider.generateAnswerDraft({
+      question: "What changed?",
+      promptContext: "AUTHORIZED_CONTEXT",
+    });
+
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages.slice(1)).toEqual([
+      { role: "user", content: "Context:\nAUTHORIZED_CONTEXT" },
+      { role: "user", content: "Question:\nWhat changed?" },
+    ]);
+  });
+
   it("accepts a fully populated escaped context without losing retained source sections", async () => {
     const quoted = (length: number, suffix = "") => '"'.repeat(length - suffix.length) + suffix;
     const promptContext = assemblePromptContext({
@@ -74,8 +141,11 @@ describe("OpenAICompatibleModelProvider", () => {
         expect.objectContaining({ role: "system" }),
         {
           role: "user",
-          content:
-            "Question:\nWhat changed?\n\nContext:\n<live_chat_context></live_chat_context>",
+          content: "Context:\n<live_chat_context></live_chat_context>",
+        },
+        {
+          role: "user",
+          content: "Question:\nWhat changed?",
         },
       ],
     });
@@ -102,8 +172,11 @@ describe("OpenAICompatibleModelProvider", () => {
       expect.objectContaining({ role: "system" }),
       {
         role: "user",
-        content:
-          'Question:\nQuestion\n\nContext:\n<document citation_ref="D1">Fact</document>',
+        content: 'Context:\n<document citation_ref="D1">Fact</document>',
+      },
+      {
+        role: "user",
+        content: "Question:\nQuestion",
       },
     ]);
   });

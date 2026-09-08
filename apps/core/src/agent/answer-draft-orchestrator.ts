@@ -32,6 +32,7 @@ import type {
 export type GenerateAnswerDraftInput = {
   question: string;
   promptContext: string;
+  contextMode?: "standalone";
 };
 
 export type GenerateAnswerDraftResult = {
