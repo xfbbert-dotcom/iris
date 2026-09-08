@@ -87,6 +87,54 @@ describe("selectTopicAwareChatWindow", () => {
     expect(selected.map(({ messageId }) => messageId)).toEqual(["human-source"]);
   });
 
+  it("keeps bundles with distinct direct parents even when their labels share a root", () => {
+    const messages: TestMessage[] = [
+      message("common-root", "General discussion thread"),
+      message("old-source", "First supplied set of operating details", {
+        parentMessageId: "common-root",
+        rootMessageId: "common-root",
+      }),
+      message("old-label", "Aurora rollout assumptions", {
+        parentMessageId: "old-source",
+        rootMessageId: "common-root",
+      }),
+      message("new-source", "Second supplied set of operating details", {
+        parentMessageId: "common-root",
+        rootMessageId: "common-root",
+      }),
+      message("new-label", "Aurora rollout assumptions", {
+        parentMessageId: "new-source",
+        rootMessageId: "common-root",
+      }),
+      message("noise", "Latest unrelated context"),
+    ];
+
+    const selected = selectTopicAwareChatWindow(messages, "Compare Aurora rollout assumptions", 4);
+
+    expect(selected.map(({ messageId }) => messageId)).toEqual([
+      "old-source",
+      "old-label",
+      "new-source",
+      "new-label",
+    ]);
+  });
+
+  it("does not promote an assistant label by attaching it to unrelated human content", () => {
+    const messages: TestMessage[] = [
+      message("unrelated-human", "Supplied notes about a different subject", { role: "user" }),
+      message("assistant-label", "Aurora rollout assumptions comparison", {
+        parentMessageId: "unrelated-human",
+        role: "assistant",
+      }),
+      message("relevant-human", "Aurora source material", { role: "user" }),
+      message("noise", "Latest unrelated context", { role: "user" }),
+    ];
+
+    const selected = selectTopicAwareChatWindow(messages, "Compare Aurora rollout assumptions", 1);
+
+    expect(selected.map(({ messageId }) => messageId)).toEqual(["relevant-human"]);
+  });
+
   it("keeps a single linked source before its label within a two-slot limit", () => {
     const messages = [
       message("source", "Detailed supplied material without the conversational topic label."),

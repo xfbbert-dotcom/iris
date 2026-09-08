@@ -53,12 +53,13 @@ export function selectTopicAwareChatWindow<T extends ChatTopicMessage>(
   });
   const bundles = new Map<string, TopicBundle>();
   messages.forEach((message, index) => {
+    if (message.role === "assistant") return;
     const text = message.text.trim().toLowerCase();
     if (text === normalizedQuestion || text.endsWith(normalizedQuestion)) return;
     const score = terms.filter((term) => text.includes(term)).length;
     if (score === 0) return;
 
-    const source = resolveFreshSource(messages, messageIndexes, message, index);
+    const source = resolveFreshSource(messageIndexes, message, index);
     const sourceIndex = source?.index ?? index;
     const sourceMessage = messages[sourceIndex]!;
     const identity = source?.identity ?? sourceMessage.messageId ?? `index:${sourceIndex}`;
@@ -111,13 +112,12 @@ export function selectTopicAwareChatWindow<T extends ChatTopicMessage>(
   return messages.filter((_message, index) => selected.has(index));
 }
 
-function resolveFreshSource<T extends ChatTopicMessage>(
-  messages: readonly T[],
+function resolveFreshSource(
   messageIndexes: ReadonlyMap<string, readonly number[]>,
-  message: T,
+  message: ChatTopicMessage,
   messageIndex: number,
 ): { identity: string; index: number } | undefined {
-  const references = [message.rootMessageId, message.parentMessageId]
+  const references = [message.parentMessageId, message.rootMessageId]
     .filter((identity): identity is string => identity !== undefined);
   const resolved = references.flatMap((identity) => {
     const indexes = messageIndexes.get(identity) ?? [];
@@ -130,5 +130,5 @@ function resolveFreshSource<T extends ChatTopicMessage>(
     }
     return index === undefined ? [] : [{ identity, index }];
   });
-  return resolved.find(({ index }) => messages[index]?.role !== "assistant") ?? resolved[0];
+  return resolved[0];
 }
