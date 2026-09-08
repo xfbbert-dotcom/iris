@@ -5,9 +5,21 @@ type ChatTopicMessage = {
   messageId?: string;
   parentMessageId?: string;
   rootMessageId?: string;
+  role?: "user" | "assistant";
 };
 
-const MAX_TOPIC_SLOTS = 2;
+type TopicBundle = {
+  identity: string;
+  sourceIndex: number;
+  labelIndex?: number;
+  labelScore: number;
+  score: number;
+  latestMatchIndex: number;
+  hasHumanSource: boolean;
+};
+
+const MAX_TOPIC_BUNDLES = 2;
+const MAX_TOPIC_SLOTS = 4;
 const GENERIC_TERMS = new Set([
   "消息", "内容", "资料", "情况", "相关", "当前", "现在", "最近", "之前", "上次", "刚才",
   "知道", "查看", "找到", "帮助", "一下", "介绍", "事情", "问题", "信息", "记录",
@@ -32,34 +44,91 @@ export function selectTopicAwareChatWindow<T extends ChatTopicMessage>(
   ));
   if (terms.length === 0) return messages.slice(-limit);
 
-  const messageIndexes = new Map<string, number>();
+  const messageIndexes = new Map<string, number[]>();
   messages.forEach((message, index) => {
-    if (message.messageId !== undefined) messageIndexes.set(message.messageId, index);
+    if (message.messageId === undefined) return;
+    const indexes = messageIndexes.get(message.messageId) ?? [];
+    indexes.push(index);
+    messageIndexes.set(message.messageId, indexes);
   });
-  const candidates = messages.flatMap((message, index) => {
+  const bundles = new Map<string, TopicBundle>();
+  messages.forEach((message, index) => {
     const text = message.text.trim().toLowerCase();
-    if (text === normalizedQuestion || text.endsWith(normalizedQuestion)) return [];
+    if (text === normalizedQuestion || text.endsWith(normalizedQuestion)) return;
     const score = terms.filter((term) => text.includes(term)).length;
-    if (score === 0) return [];
-    const parentIndex = [message.parentMessageId, message.rootMessageId]
-      .flatMap((id) => id === undefined ? [] : [messageIndexes.get(id)])
-      .find((candidate): candidate is number => candidate !== undefined && candidate < index);
-    return [{ index, score, parentIndex }];
-  }).sort((left, right) => (
-    Number(right.parentIndex !== undefined) - Number(left.parentIndex !== undefined)
+    if (score === 0) return;
+
+    const source = resolveFreshSource(messages, messageIndexes, message, index);
+    const sourceIndex = source?.index ?? index;
+    const sourceMessage = messages[sourceIndex]!;
+    const identity = source?.identity ?? sourceMessage.messageId ?? `index:${sourceIndex}`;
+    const existing = bundles.get(identity);
+    if (existing === undefined) {
+      bundles.set(identity, {
+        identity,
+        sourceIndex,
+        ...(sourceIndex === index ? {} : { labelIndex: index }),
+        labelScore: sourceIndex === index ? 0 : score,
+        score,
+        latestMatchIndex: index,
+        hasHumanSource: sourceMessage.role !== "assistant",
+      });
+      return;
+    }
+
+    existing.score = Math.max(existing.score, score);
+    existing.latestMatchIndex = Math.max(existing.latestMatchIndex, index);
+    if (
+      sourceIndex !== index
+      && (score > existing.labelScore || (score === existing.labelScore && index > (existing.labelIndex ?? -1)))
+    ) {
+      existing.labelIndex = index;
+      existing.labelScore = score;
+    }
+  });
+
+  const rankedBundles = [...bundles.values()].sort((left, right) => (
+    Number(right.hasHumanSource) - Number(left.hasHumanSource)
+    || Number(right.labelIndex !== undefined) - Number(left.labelIndex !== undefined)
     || right.score - left.score
-    || right.index - left.index
+    || right.latestMatchIndex - left.latestMatchIndex
+    || right.sourceIndex - left.sourceIndex
+    || left.identity.localeCompare(right.identity)
   ));
 
   const selected = new Set<number>();
   const topicLimit = Math.min(MAX_TOPIC_SLOTS, limit);
-  for (const candidate of candidates) {
+  for (const bundle of rankedBundles.slice(0, MAX_TOPIC_BUNDLES)) {
     if (selected.size >= topicLimit) break;
-    if (candidate.parentIndex !== undefined) selected.add(candidate.parentIndex);
-    if (selected.size < topicLimit) selected.add(candidate.index);
+    selected.add(bundle.sourceIndex);
+    if (selected.size < topicLimit && bundle.labelIndex !== undefined) {
+      selected.add(bundle.labelIndex);
+    }
   }
   for (let index = messages.length - 1; index >= 0 && selected.size < limit; index -= 1) {
     selected.add(index);
   }
   return messages.filter((_message, index) => selected.has(index));
+}
+
+function resolveFreshSource<T extends ChatTopicMessage>(
+  messages: readonly T[],
+  messageIndexes: ReadonlyMap<string, readonly number[]>,
+  message: T,
+  messageIndex: number,
+): { identity: string; index: number } | undefined {
+  const references = [message.rootMessageId, message.parentMessageId]
+    .filter((identity): identity is string => identity !== undefined);
+  const resolved = references.flatMap((identity) => {
+    const indexes = messageIndexes.get(identity) ?? [];
+    let index: number | undefined;
+    for (let cursor = indexes.length - 1; cursor >= 0; cursor -= 1) {
+      if (indexes[cursor]! < messageIndex) {
+        index = indexes[cursor];
+        break;
+      }
+    }
+    return index === undefined ? [] : [{ identity, index }];
+  });
+  return resolved.find(({ index }) => messages[index]?.role !== "assistant") ?? resolved[0];
 }
