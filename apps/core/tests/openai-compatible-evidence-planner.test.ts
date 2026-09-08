@@ -9,6 +9,16 @@ import type {
 } from "../src/model/openai-compatible-chat-completions-client.js";
 
 describe("OpenAICompatibleEvidencePlanner", () => {
+  it("keeps user-readable plan fields in the current question's requested language", async () => {
+    let systemPrompt = "";
+    await createOpenAICompatibleEvidencePlanner({ client: { async complete(messages) {
+      systemPrompt = messages[0]!.content;
+      return validExplicitPlanJson();
+    } } }).plan(planningInput(["D1"]));
+    expect(systemPrompt).toContain("Write all user-readable fields");
+    expect(systemPrompt).toContain("premise statements, proposedAnswer, and missingInformation");
+    expect(systemPrompt).toContain("same language as the current question unless it explicitly requests another output language");
+  });
   it("requests substantive source-supported comparison dimensions from the planner", async () => {
     let systemPrompt = "";
     const planner = createOpenAICompatibleEvidencePlanner({ client: { async complete(messages) {

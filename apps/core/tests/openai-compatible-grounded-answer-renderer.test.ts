@@ -10,6 +10,57 @@ import {
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
 
 describe("OpenAICompatibleGroundedAnswerRenderer", () => {
+  it("repairs predominantly English prose once for a Chinese question using the same evidence plan", async () => {
+    const plan = partialPlan();
+    const observed: Array<readonly OpenAICompatibleChatMessage[]> = [];
+    const client = { complete: vi.fn(async (messages: readonly OpenAICompatibleChatMessage[]) => {
+      observed.push(messages);
+      return JSON.stringify({ answerText: observed.length === 1
+        ? "The earlier source describes experience and preferences, but the exact selection algorithm remains unavailable. This is a conjecture with medium confidence."
+        : "现有资料尚未说明具体选择算法。根据已有证据，我推测目标可能随状态和经验形成，置信度中等。", evidenceState: "partial", confidence: "medium" });
+    }) };
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render(groundedRenderInput(plan));
+    expect(result.answerText).toContain("具体选择算法");
+    expect(result.answerText).not.toContain("The earlier source");
+    expect(client.complete).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(observed[1]![1]!.content).plan).toEqual(plan);
+    expect(JSON.parse(observed[1]![1]!.content).evidence).toEqual(groundedRenderInput(plan).evidence);
+    expect(result).toMatchObject({ evidenceState: "partial", confidence: "medium" });
+  });
+
+  it("fails closed after one language repair if the response remains predominantly English", async () => {
+    const client = { complete: vi.fn(async () => JSON.stringify({ answerText: "The exact selection algorithm is unavailable. The available evidence supports only a tentative explanation based on accumulated experience.", evidenceState: "partial", confidence: "medium" })) };
+    await expect(createOpenAICompatibleGroundedAnswerRenderer({ client }).render(groundedRenderInput(partialPlan())))
+      .rejects.toThrow("grounded answer language does not match the question");
+    expect(client.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat a prohibition on English as permission to answer in English", async () => {
+    const client = { complete: vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ answerText: "The exact selection algorithm is unavailable. Current evidence only supports a tentative explanation based on experience.", evidenceState: "partial", confidence: "medium" }))
+      .mockResolvedValueOnce(JSON.stringify({ answerText: "目前缺少具体选择算法；基于已有证据，我推测经验会影响目标，置信度中等。", evidenceState: "partial", confidence: "medium" })) };
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({ ...groundedRenderInput(partialPlan()), question: "不要用英文回答，Quello 如何产生目标？" });
+    expect(result.answerText).toContain("具体选择算法");
+    expect(client.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["请用英语回答：Quello 如何产生目标？", "Quello 如何产生目标？Please answer in English.", "把现有说明翻译成英文。"]) (
+    "preserves an explicit English output request: %s", async question => {
+      const answerText = "The exact algorithm is missing. This is a conjecture based on experience, with medium confidence.";
+      const client = { complete: vi.fn(async () => JSON.stringify({ answerText, evidenceState: "partial", confidence: "medium" })) };
+      const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({ ...groundedRenderInput(partialPlan()), question });
+      expect(result.answerText).toBe(answerText);
+      expect(client.complete).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("rejects a language repair that changes the validated plan's confidence", async () => {
+    const client = { complete: vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ answerText: "The exact selection algorithm remains missing, so the conclusion must remain a tentative explanation based on the available experience records.", evidenceState: "partial", confidence: "medium" }))
+      .mockResolvedValueOnce(JSON.stringify({ answerText: "这是确定的结论。", evidenceState: "partial", confidence: "high" })) };
+    await expect(createOpenAICompatibleGroundedAnswerRenderer({ client }).render(groundedRenderInput(partialPlan())))
+      .rejects.toThrow("grounded answer confidence does not match evidence plan");
+  });
   it("instructs the renderer to preserve useful comparison detail and justify recommendations", async () => {
     let systemPrompt = "";
     const renderer = createOpenAICompatibleGroundedAnswerRenderer({ client: { async complete(messages) {
