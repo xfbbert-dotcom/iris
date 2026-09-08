@@ -10,6 +10,8 @@
 
 **Spec:** docs/superpowers/specs/2026-09-08-iris-continuous-dialogue-design.md
 
+**Completion checkpoint:** Tasks1–4 implemented and reviewed; c4f83ee7 deployed 2026-09-08 with exact-SHA CI, encrypted paired backup, actual-source internal model acceptance, restored public edge and unchanged permissions. The detailed checklist below is the original execution template; results and nonblocking limitations are recorded in docs/development/iris-continuous-dialogue.md and local acceptance evidence.
+
 ## Global Constraints
 
 - Current group only for raw messages; no cross-group raw-chat grant or capability expansion.

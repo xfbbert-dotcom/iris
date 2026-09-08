@@ -1,6 +1,6 @@
 # Iris continuous dialogue and grounded analysis
 
-Date: 2026-09-08. Status: user approved direction; implementation acceptance pending.
+Date: 2026-09-08. Status: implemented and deployed as c4f83ee7 on 2026-09-08; bounded acceptance passed. See docs/development/iris-continuous-dialogue.md for release evidence and remaining nonblocking wording limitations.
 
 ## Approved outcome
 
