@@ -59,14 +59,14 @@ export function createOpenAICompatibleRequestContextRouter({ client }: {
 }
 
 function requireBoundedQuestion(value: string): string {
-  const normalized = value.trim();
-  if (normalized.length === 0) {
-    throw new Error("request context router question must not be blank");
-  }
-  if (normalized.length > MAX_ROUTER_QUESTION_CHARS) {
+  if (value.length > MAX_ROUTER_QUESTION_CHARS) {
     throw new Error(
       `request context router question must be at most ${MAX_ROUTER_QUESTION_CHARS} characters`,
     );
+  }
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new Error("request context router question must not be blank");
   }
   return normalized;
 }

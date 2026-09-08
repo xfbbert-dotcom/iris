@@ -81,10 +81,19 @@ describe("OpenAICompatibleRequestContextRouter", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("accepts a question containing exactly 4000 raw characters", async () => {
+    const fetch = vi.fn(async () => modelResponse('{"route":"standalone"}'));
+
+    await expect(routerWithFetch(fetch).classify({ question: "q".repeat(4000) }))
+      .resolves.toBe("standalone");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["", "request context router question must not be blank"],
     [" \n\t ", "request context router question must not be blank"],
     ["q".repeat(4001), "request context router question must be at most 4000 characters"],
+    ["q".repeat(4000) + "\n", "request context router question must be at most 4000 characters"],
   ])("rejects invalid question input before transport", async (question, message) => {
     const fetch = vi.fn();
 
