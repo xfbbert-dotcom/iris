@@ -10,6 +10,81 @@ import type { RawEvent } from "../src/events/raw-event-queue.js";
 import { createMemoryExtractionPlanner } from "../src/memory-extraction/memory-extraction-planner.js";
 
 describe("FeishuMessageEventProcessor", () => {
+  it("can retry ordinary work after the guard fails to commit its deferred operation", async () => {
+    const { responder, generateDraft } = ordinaryResponderFixture();
+    let failCommit = true;
+    const guard: ConversationMessageReplayGuard = { async runUnlessDeleted({ effect }) {
+      const value = await effect();
+      if (failCommit && typeof value === "object" && value !== null && "status" in value && value.status === "deferred") {
+        failCommit = false;
+        throw new Error("simulated guard commit failure");
+      }
+      return { status: "active", value };
+    } };
+    const processor = createFeishuMessageEventProcessor({ messageReplayGuard: guard, mentionAnswerResponder: responder,
+      messages: { upsertMessage: async input => ({ ...input, id: `feishu:${input.providerMessageId}`, createdAt: new Date() }) } });
+    const event = ordinaryMentionEvent();
+    await expect(processor.process(event)).rejects.toThrow("simulated guard commit failure");
+    expect(generateDraft).not.toHaveBeenCalled();
+    await processor.process(event);
+    expect(generateDraft).toHaveBeenCalledOnce();
+  });
+
+  it("runs only one generation when two deferred operations for the same message execute concurrently", async () => {
+    const { responder, generateDraft } = ordinaryResponderFixture();
+    const input = { messageId: "incoming", chatId: "group", senderId: "human", text: "@iris explain this discussion",
+      mentions: [{ key: "@iris", openId: "ou_iris" }] };
+    const [first, second] = await Promise.all([responder.prepareResponse!(input), responder.prepareResponse!(input)]);
+    expect(first.status).toBe("deferred"); expect(second.status).toBe("deferred");
+    if (first.status !== "deferred" || second.status !== "deferred") throw new Error("ordinary work must be deferred");
+    const results = await Promise.all([first.respond(effect => effect()), second.respond(effect => effect())]);
+    expect(generateDraft).toHaveBeenCalledOnce();
+    expect(results).toContainEqual({ status: "skipped", reason: "duplicate_message" });
+  });
+
+  it.each(["ordinary", "blank fallback", "blank mention"])("keeps only legacy %s effects inside the incoming replay lock", async (kind) => {
+    let lockHeld = false;
+    const observed: string[] = [];
+    const guard: ConversationMessageReplayGuard = {
+      async runUnlessDeleted({ effect }) {
+        expect(lockHeld).toBe(false);
+        lockHeld = true;
+        try { return { status: "active", value: await effect() }; }
+        finally { lockHeld = false; }
+      },
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris", answerDraftOrchestrator: { generateDraft: vi.fn() },
+      answerReplyDeliveryService: { respond: async () => {
+        observed.push(`receipt:${lockHeld}`);
+        if (kind === "blank fallback") {
+          // Exercise the real responder's fallback classifier through prepareAnswer below instead.
+          throw new Error("unexpected receipt call");
+        }
+        return { replyMessageId: "reply" };
+      } },
+      replier: { replyText: async () => { observed.push(`legacy:${lockHeld}`); return {}; } },
+    });
+    const actualResponder = kind !== "blank fallback" ? responder : createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator: { generateDraft: async () => { observed.push(`model:${lockHeld}`); throw new Error("model answer draft must not be blank"); } },
+      answerReplyDeliveryService: { respond: async input => { await input.prepareAnswer(); return {}; } },
+      replier: { replyText: async () => { observed.push(`legacy:${lockHeld}`); return {}; } },
+    });
+    const processor = createFeishuMessageEventProcessor({
+      messageReplayGuard: guard, mentionAnswerResponder: actualResponder,
+      messages: { upsertMessage: async input => ({ ...input, id: `feishu:${input.providerMessageId}`, createdAt: new Date() }) },
+    });
+    await processor.process(rawEventFixture({ rawBody: { event: {
+      sender: { sender_id: { open_id: "ou_human" } },
+      message: { message_id: "incoming", chat_id: "group", message_type: "text",
+        content: JSON.stringify({ text: kind === "blank mention" ? "@iris" : "@iris explain this discussion" }),
+        mentions: [{ key: "@iris", id: { open_id: "ou_iris" } }] },
+    } } }));
+    expect(observed).toEqual(kind === "ordinary" ? ["receipt:false"]
+      : kind === "blank fallback" ? ["model:false", "legacy:true"] : ["legacy:true"]);
+  });
+
   it("persists text Feishu message events", async () => {
     const messages = {
       upsertMessage: vi.fn(async (input) => ({
@@ -1389,6 +1464,22 @@ const allowActiveMessages: ConversationMessageReplayGuard = {
     return { status: "active", value: await effect() };
   },
 };
+
+function ordinaryResponderFixture() {
+  const generateDraft = vi.fn(async () => ({ answerText: "answer", promptContext: "", allowedFragments: [], deniedDocumentIds: [],
+    retrievedFragmentCount: 0, usedGroupMemories: [] }));
+  const responder = createFeishuMentionAnswerResponder({ botOpenId: "ou_iris", answerDraftOrchestrator: { generateDraft },
+    answerReplyDeliveryService: { respond: async input => { await input.prepareAnswer(); return {}; } },
+    replier: { replyText: async () => ({}) } });
+  return { responder, generateDraft };
+}
+
+function ordinaryMentionEvent() {
+  return rawEventFixture({ rawBody: { event: { sender: { sender_id: { open_id: "human" } }, message: {
+    message_id: "incoming", chat_id: "group", message_type: "text", content: JSON.stringify({ text: "@iris explain this discussion" }),
+    mentions: [{ key: "@iris", id: { open_id: "ou_iris" } }],
+  } } } });
+}
 
 function createFeishuMessageEventProcessor(
   input: Omit<Parameters<typeof createFeishuMessageEventProcessorWithReplayGuard>[0], "messageReplayGuard"> & {

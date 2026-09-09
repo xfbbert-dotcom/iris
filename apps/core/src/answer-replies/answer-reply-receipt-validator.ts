@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MAX_SHARED_CHAT_SOURCE_BINDINGS, normalizeSharedChatSourceBinding, type SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import {
@@ -71,6 +72,7 @@ export function createAnswerReplySemanticFingerprint(input: {
   renderedReplyFingerprint: string;
   knowledgeConflictCandidateId?: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
+  sharedChatSources?: readonly SharedChatSourceBinding[];
 }): string {
   return fingerprint({
     provider: input.provider,
@@ -78,6 +80,10 @@ export function createAnswerReplySemanticFingerprint(input: {
     chatId: input.chatId,
     renderedReplyFingerprint: input.renderedReplyFingerprint,
     knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
+    ...(input.sharedChatSources === undefined ? {} : { sharedChatSources: input.sharedChatSources.map(source => ({
+      scopeId: source.scopeId, scopeVersion: source.scopeVersion, sourceChatId: source.sourceChatId,
+      destinationChatId: source.destinationChatId, messageId: source.messageId, contentHash: source.contentHash,
+    })) }),
     sourceTraces: input.sourceTraces.map((trace) => ({
       promptRank: trace.promptRank,
       citationRank: trace.citationRank,
@@ -142,6 +148,7 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
   }
 
   const typedDelivery = delivery as AnswerReplyDelivery;
+  requireChatSourceContract(value.chatSources, typedDelivery);
   if (
     typedDelivery.id !== createAnswerReplyDeliveryId(
       typedDelivery.provider,
@@ -214,6 +221,17 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
   requireFingerprintContract(receipt);
   requireLedgerContract(receipt);
   return receipt;
+}
+
+function requireChatSourceContract(value: unknown, delivery: AnswerReplyDelivery): void {
+  if (value === undefined && delivery.chatProvenanceVersion === undefined) return;
+  if (delivery.chatProvenanceVersion !== 1 || !Array.isArray(value) || value.length > MAX_SHARED_CHAT_SOURCE_BINDINGS) throw new Error();
+  const seen = new Set<string>();
+  for (const source of value) {
+    const normalized = normalizeSharedChatSourceBinding(source);
+    if (normalized.destinationChatId !== delivery.chatId || seen.has(normalized.messageId)) throw new Error();
+    seen.add(normalized.messageId);
+  }
 }
 
 function requireDeliveryContract(delivery: AnswerReplyDelivery): void {
@@ -309,6 +327,7 @@ function requireFingerprintContract(receipt: AnswerReplyReceipt): void {
       renderedReplyFingerprint: delivery.renderedReplyFingerprint,
       knowledgeConflictCandidateId: delivery.knowledgeConflictCandidateId,
       sourceTraces: sources,
+      sharedChatSources: receipt.chatSources,
     }) !== delivery.semanticFingerprint
   ) {
     throw new Error();
@@ -360,14 +379,14 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
       (documentSourceId) => authoritativeDocumentSourceIdSet.has(documentSourceId),
     );
     const validDocumentSourceIds = event.eventType === "permission_blocked"
-      ? event.documentSourceIds.length >= 1
+      ? (event.documentSourceIds.length >= 1 || (receipt.chatSources?.length ?? 0) > 0)
         && (
           externalDocumentSourceIds.length === 0
             ? isTraceOrderedSubset(event.documentSourceIds, authoritativeDocumentSourceIds)
             : traceDocumentSourceIds.length === 0
         )
       : event.eventType === "reconciliation_required"
-        ? event.documentSourceIds.length >= 1
+        ? (event.documentSourceIds.length >= 1 || (receipt.chatSources?.length ?? 0) > 0)
           && externalDocumentSourceIds.length === 0
           && isTraceOrderedSubset(event.documentSourceIds, authoritativeDocumentSourceIds)
         : arraysEqual(event.documentSourceIds, authoritativeDocumentSourceIds);

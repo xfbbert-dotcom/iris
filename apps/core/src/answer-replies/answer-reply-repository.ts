@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
+import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 
 export type AnswerReplyDeliveryState =
   | "prepared"
@@ -24,6 +25,7 @@ export type AnswerReplyDelivery = {
   renderedReplyFingerprint: string;
   semanticFingerprint: string;
   knowledgeConflictCandidateId?: string;
+  chatProvenanceVersion?: 1;
   replyMessageId?: string;
   safeNoticeMessageId?: string;
   attemptCount: number;
@@ -67,6 +69,7 @@ export type AnswerReplyDeliveryEvent = {
 export type AnswerReplyReceipt = {
   delivery: AnswerReplyDelivery;
   sources: AnswerReplySourceTrace[];
+  chatSources?: SharedChatSourceBinding[];
   events: AnswerReplyDeliveryEvent[];
 };
 
@@ -78,6 +81,7 @@ export type PrepareAnswerReplyInput = {
   safeNoticeUuid: string;
   renderedText: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
+  sharedChatSources?: readonly SharedChatSourceBinding[];
   blockedDocumentSourceIds?: readonly string[];
   knowledgeConflictCandidateId?: string;
   at: Date;

@@ -1421,9 +1421,11 @@ type Harness = ReturnType<typeof createHarness>;
 function createHarness({
   verifierResults = [],
   replyResults = [{ replyMessageId: "reply-default" }],
+  sharedChatVerifier,
 }: {
   verifierResults?: Array<AnswerSourcePermissionDecision[] | Error>;
   replyResults?: Array<{ replyMessageId?: string } | Error>;
+  sharedChatVerifier?: import("../src/shared-chat/working-chat-scope.js").SharedChatSourceVerifier;
 } = {}) {
   const repository = new RecordingAnswerReplyRepository();
   const queuedVerifierResults = [...verifierResults];
@@ -1455,11 +1457,32 @@ function createHarness({
     repository,
     verifier,
     replier,
+    sharedChatVerifier,
     now: () => new Date(transitionAt.getTime()),
   });
 
   return { repository, verifier, replier, service };
 }
+
+describe("shared chat permission at answer dispatch", () => {
+  const sharedSource = { scopeId: "pilot-working-chat", scopeVersion: 1, sourceChatId: "oc_source",
+    destinationChatId: "oc_1", messageId: "original", contentHash: "a".repeat(64) };
+  it.each([true, false])("blocks a prepared chat-only answer after revocation or missing verifier (provided=%s)", async provided => {
+    const harness = createHarness(provided ? { sharedChatVerifier: { async verify() { return false; } } } : {});
+    harness.repository.receipt = receipt({}, [], [sharedSource]);
+    await harness.service.respond(request(async () => { throw new Error("must reuse receipt"); }));
+    expectOnlySafeNoticeWasSent(harness);
+    expect(harness.repository.receipt?.delivery.attemptCount).toBe(0);
+    expect(harness.repository.receipt?.delivery.state).toBe("permission_blocked");
+  });
+  it("retains all shared sources in a new prepared receipt and sends a verified answer", async () => {
+    const harness = createHarness({ sharedChatVerifier: { async verify() { return true; } } });
+    await harness.service.respond(request(async () => preparedAnswer({ sourceTraces: [], sharedChatSources: [sharedSource] })));
+    expect(harness.repository.receipt?.chatSources).toEqual([sharedSource]);
+    expect(harness.repository.receipt?.delivery.chatProvenanceVersion).toBe(1);
+    expect(harness.repository.receipt?.delivery.state).toBe("sent");
+  });
+});
 
 function request(
   prepareAnswer: AnswerReplyDeliveryRequest["prepareAnswer"],
@@ -1529,6 +1552,7 @@ function sourceTrace(
 function receipt(
   deliveryOverrides: Partial<AnswerReplyReceipt["delivery"]> = {},
   sourceTraces: AnswerReplySourceTraceInput[] = [sourceTrace()],
+  chatSources?: import("../src/shared-chat/working-chat-scope.js").SharedChatSourceBinding[],
 ): AnswerReplyReceipt {
   const provider = deliveryOverrides.provider ?? "feishu";
   const receiptIncomingMessageId = deliveryOverrides.incomingMessageId ?? incomingMessageId;
@@ -1545,9 +1569,11 @@ function receipt(
       renderedReplyFingerprint,
       knowledgeConflictCandidateId: deliveryOverrides.knowledgeConflictCandidateId,
       sourceTraces,
+      sharedChatSources: chatSources,
     });
   return {
     delivery: {
+      ...(chatSources === undefined ? {} : { chatProvenanceVersion: 1 as const }),
       id: deliveryId,
       provider,
       incomingMessageId: receiptIncomingMessageId,
@@ -1572,6 +1598,7 @@ function receipt(
       id: createAnswerReplySourceTraceId(deliveryId, index + 1),
       deliveryId,
     })),
+    ...(chatSources === undefined ? {} : { chatSources }),
     events: [{
       id: createAnswerReplyEventId(deliveryId, 1),
       deliveryId,
@@ -1871,7 +1898,7 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
         knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
         createdAt: input.at,
         updatedAt: input.at,
-      }, [...input.sourceTraces]);
+      }, [...input.sourceTraces], input.sharedChatSources === undefined ? undefined : [...input.sharedChatSources]);
       if ((input.blockedDocumentSourceIds?.length ?? 0) > 0) {
         current = blockedReceipt(
           current,

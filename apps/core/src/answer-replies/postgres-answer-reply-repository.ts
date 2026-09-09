@@ -1,4 +1,6 @@
 import { normalizeFeishuDocumentSourceUri } from "../documents/feishu-document-body-fetcher.js";
+import { lockSharedChatSources } from "../shared-chat/postgres-working-chat-scope-repository.js";
+import { MAX_SHARED_CHAT_SOURCE_BINDINGS, normalizeSharedChatSourceBinding, WorkingChatScopeStaleError, type SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 import {
   KnowledgeConflictNotFoundError,
   KnowledgeConflictStaleEvidenceError,
@@ -51,7 +53,7 @@ export type PostgresAnswerReplyDataSource = AnswerReplyQueryable & {
 const DELIVERY_COLUMNS = `
   id, provider, incoming_message_id, chat_id, reply_uuid, safe_notice_uuid,
   state, prepared_reply_text, rendered_reply_fingerprint, semantic_fingerprint,
-  knowledge_conflict_candidate_id,
+  knowledge_conflict_candidate_id, chat_provenance_version,
   reply_message_id, safe_notice_message_id, attempt_count,
   safe_notice_attempt_count, version, created_at, updated_at,
   last_send_started_at, sent_at, permission_blocked_at,
@@ -94,6 +96,7 @@ type DeliveryRow = {
   rendered_reply_fingerprint: unknown;
   semantic_fingerprint: unknown;
   knowledge_conflict_candidate_id: unknown;
+  chat_provenance_version?: unknown;
   reply_message_id: unknown;
   safe_notice_message_id: unknown;
   attempt_count: unknown;
@@ -154,6 +157,7 @@ type NormalizedPrepareInput = {
   safeNoticeUuid: string;
   renderedText: string;
   sourceTraces: AnswerReplySourceTraceInput[];
+  sharedChatSources?: SharedChatSourceBinding[];
   blockedDocumentSourceIds: string[];
   at: Date;
   deliveryId: string;
@@ -212,6 +216,7 @@ export function createPostgresAnswerReplyRepository(input: {
     async prepare(prepareInput) {
       const normalized = normalizePrepareInput(prepareInput);
       return withTransaction(dataSource, async (client) => {
+        await lockSharedChatSources(client, normalized.sharedChatSources ?? [], normalized.chatId, [normalized.incomingMessageId]);
         await acquireAdvisoryLock(
           client,
           `${normalized.provider}:${normalized.incomingMessageId}`,
@@ -293,13 +298,13 @@ export function createPostgresAnswerReplyRepository(input: {
              id, provider, incoming_message_id, chat_id, reply_uuid,
              safe_notice_uuid, state, prepared_reply_text,
              rendered_reply_fingerprint, semantic_fingerprint,
-             knowledge_conflict_candidate_id,
+             knowledge_conflict_candidate_id, chat_provenance_version,
              reply_message_id, safe_notice_message_id, attempt_count,
              safe_notice_attempt_count, version, created_at, updated_at,
              last_send_started_at, sent_at, permission_blocked_at,
              reconciliation_required_at, safe_notice_sent_at
            ) VALUES (
-             $1, $2, $3, $4, $5, $6, 'prepared', $7, $8, $9, $10,
+             $1, $2, $3, $4, $5, $6, 'prepared', $7, $8, $9, $10, $12,
              NULL, NULL, 0, 0, 1, $11, $11, NULL, NULL, NULL, NULL, NULL
            )`,
           [
@@ -314,6 +319,7 @@ export function createPostgresAnswerReplyRepository(input: {
             normalized.semanticFingerprint,
             normalized.knowledgeConflictCandidateId ?? null,
             normalized.at,
+            normalized.sharedChatSources === undefined ? null : 1,
           ],
         );
 
@@ -334,6 +340,12 @@ export function createPostgresAnswerReplyRepository(input: {
 
         for (const trace of normalized.sourceTraces) {
           await insertSourceTrace(client, normalized.deliveryId, trace);
+        }
+        for (const [index, source] of (normalized.sharedChatSources ?? []).entries()) {
+          await client.query(`INSERT INTO answer_reply_chat_source_traces
+            (delivery_id,trace_index,scope_id,scope_version,source_chat_id,destination_chat_id,message_id,content_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [normalized.deliveryId,index,source.scopeId,source.scopeVersion,
+              source.sourceChatId,source.destinationChatId,source.messageId,source.contentHash]);
         }
         await insertEvent(client, {
           deliveryId: normalized.deliveryId,
@@ -365,6 +377,11 @@ export function createPostgresAnswerReplyRepository(input: {
     async beginAnswerSend(transitionInput) {
       const normalized = normalizeTransitionInput(transitionInput);
       return withTransaction(dataSource, async (client) => {
+        const chatSources = await loadChatSources(client, normalized.deliveryId);
+        const initial = await client.query<DeliveryRow>(`SELECT ${DELIVERY_COLUMNS} FROM answer_reply_deliveries WHERE id = $1`, [normalized.deliveryId]);
+        if (initial.rows.length !== 1) throw new AnswerReplyNotFoundError();
+        const initialDelivery = mapDelivery(initial.rows[0]!);
+        await lockSharedChatSources(client, chatSources, initialDelivery.chatId, [initialDelivery.incomingMessageId]);
         await acquireAdvisoryLock(client, normalized.deliveryId);
         const prelockedSources = await loadSources(client, normalized.deliveryId);
         await acquireManagedKnowledgeSourceLocks(
@@ -382,6 +399,8 @@ export function createPostgresAnswerReplyRepository(input: {
               errorKind: "transition",
             });
         const { delivery, sources } = await lockDeliveryInTransaction(client, normalized);
+        if (chatSources.some(source => source.destinationChatId !== delivery.chatId)
+          || !sameChatSources(chatSources, await loadChatSources(client, delivery.id))) throw new WorkingChatScopeStaleError();
         requireSameSourceGrantBindings(prelockedSources, sources, delivery.chatId);
         if ((delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)) {
           throw new AnswerReplyTransitionError();
@@ -457,8 +476,12 @@ export function createPostgresAnswerReplyRepository(input: {
       const normalized = normalizeTransitionInput(transitionInput);
       const requestedDocumentSourceIds = requireDocumentSourceIds(
         transitionInput.documentSourceIds,
+        true,
       );
       return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
+        if (requestedDocumentSourceIds.length === 0 && (await loadChatSources(client, delivery.id)).length === 0) {
+          throw new AnswerReplyTransitionError();
+        }
         if (delivery.state !== "prepared" && delivery.state !== "sending") {
           throw new AnswerReplyTransitionError();
         }
@@ -563,7 +586,7 @@ export function createPostgresAnswerReplyRepository(input: {
           at: normalized.at,
         });
         return loadReceiptById(client, delivery.id);
-      });
+      }, true);
     },
 
     async completeSafeNoticeSend(transitionInput) {
@@ -644,8 +667,15 @@ async function withLockedDelivery<T>(
     delivery: AnswerReplyDelivery,
     sources: AnswerReplySourceTrace[],
   ) => Promise<T>,
+  lockIncomingMessage = false,
 ): Promise<T> {
   return withTransaction(dataSource, async (client) => {
+    if (lockIncomingMessage) {
+      const initial = await client.query<DeliveryRow>(`SELECT ${DELIVERY_COLUMNS} FROM answer_reply_deliveries WHERE id = $1`, [input.deliveryId]);
+      if (initial.rows.length !== 1) throw new AnswerReplyNotFoundError();
+      const delivery = mapDelivery(initial.rows[0]!);
+      await lockSharedChatSources(client, [], delivery.chatId, [delivery.incomingMessageId]);
+    }
     await acquireAdvisoryLock(client, input.deliveryId);
     const { delivery, sources } = await lockDeliveryInTransaction(client, input);
     return operation(client, delivery, sources);
@@ -691,10 +721,11 @@ async function loadReceipt(
   queryable: AnswerReplyQueryable,
   delivery: AnswerReplyDelivery,
 ): Promise<AnswerReplyReceipt> {
-  const [sources, events, binding] = await Promise.all([
+  const [sources, events, binding, chatSources] = await Promise.all([
     loadSources(queryable, delivery.id),
     loadEvents(queryable, delivery.id),
     loadKnowledgeConflictBinding(queryable, delivery.id),
+    loadChatSources(queryable, delivery.id),
   ]);
   if (
     (delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)
@@ -704,7 +735,26 @@ async function loadReceipt(
       || requireDatabaseInteger(binding.candidate_version, 1) < 1
     ))
   ) throw new Error("answer reply knowledge conflict binding is invalid");
-  return requireValidAnswerReplyReceipt({ delivery, sources, events });
+  if (delivery.chatProvenanceVersion === undefined && chatSources.length > 0) throw new Error("chat provenance marker missing");
+  return requireValidAnswerReplyReceipt({ delivery, sources, events,
+    ...(delivery.chatProvenanceVersion === undefined ? {} : { chatSources }) });
+}
+
+async function loadChatSources(queryable: AnswerReplyQueryable, deliveryId: string): Promise<SharedChatSourceBinding[]> {
+  const result = await queryable.query<Record<string, unknown>>(`SELECT delivery_id,trace_index,scope_id,scope_version,
+    source_chat_id,destination_chat_id,message_id,content_hash FROM answer_reply_chat_source_traces
+    WHERE delivery_id = $1 ORDER BY trace_index ASC LIMIT 1001`, [deliveryId]);
+  if (result.rows.length > MAX_SHARED_CHAT_SOURCE_BINDINGS) throw new Error("too many chat sources");
+  return result.rows.map((row, index) => {
+    if (row.delivery_id !== deliveryId || row.trace_index !== index) throw new Error("invalid chat source identity");
+    return normalizeSharedChatSourceBinding({ scopeId: row.scope_id as string,
+      scopeVersion: requireDatabaseInteger(row.scope_version, 1), sourceChatId: row.source_chat_id as string,
+      destinationChatId: row.destination_chat_id as string, messageId: row.message_id as string, contentHash: row.content_hash as string });
+  });
+}
+
+function sameChatSources(left: readonly SharedChatSourceBinding[], right: readonly SharedChatSourceBinding[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 async function loadKnowledgeConflictBinding(
@@ -1169,6 +1219,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     input.knowledgeConflictCandidateId,
   );
   const sourceTraces = normalizeSourceTraces(input.sourceTraces);
+  const sharedChatSources = input.sharedChatSources === undefined ? undefined : normalizeChatSources(input.sharedChatSources, chatId);
   const blockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
     input.blockedDocumentSourceIds,
     sourceTraces,
@@ -1182,6 +1233,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     renderedReplyFingerprint,
     knowledgeConflictCandidateId,
     sourceTraces,
+    ...(sharedChatSources === undefined ? {} : { sharedChatSources }),
   });
   return {
     provider,
@@ -1192,12 +1244,26 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     renderedText,
     ...(knowledgeConflictCandidateId === undefined ? {} : { knowledgeConflictCandidateId }),
     sourceTraces,
+    ...(sharedChatSources === undefined ? {} : { sharedChatSources }),
     blockedDocumentSourceIds,
     at,
     deliveryId: createAnswerReplyDeliveryId(provider, incomingMessageId),
     renderedReplyFingerprint,
     semanticFingerprint,
   };
+}
+
+function normalizeChatSources(value: readonly SharedChatSourceBinding[], chatId: string): SharedChatSourceBinding[] {
+  if (!Array.isArray(value) || value.length > MAX_SHARED_CHAT_SOURCE_BINDINGS) throw new WorkingChatScopeStaleError();
+  const seen = new Set<string>();
+  const sources: SharedChatSourceBinding[] = [];
+  for (const raw of value) {
+    const source = normalizeSharedChatSourceBinding(raw);
+    if (source.destinationChatId !== chatId || seen.has(source.messageId)) throw new WorkingChatScopeStaleError();
+    seen.add(source.messageId);
+    sources.push(source);
+  }
+  return sources;
 }
 
 function normalizePreflightBlockedDocumentSourceIds(
@@ -1410,6 +1476,9 @@ function mapDelivery(row: DeliveryRow): AnswerReplyDelivery {
     replyUuid: requireDatabaseBoundedString(row.reply_uuid, 50),
     safeNoticeUuid: requireDatabaseBoundedString(row.safe_notice_uuid, 50),
     state,
+    ...(row.chat_provenance_version === null || row.chat_provenance_version === undefined ? {} : {
+      chatProvenanceVersion: requireDatabaseInteger(row.chat_provenance_version, 1, 1) as 1,
+    }),
     ...(row.prepared_reply_text === null
       ? {}
       : {
@@ -1774,6 +1843,7 @@ function requireDatabaseDocumentSourceIds(
 
 function isContentFreeDomainError(error: unknown): boolean {
   return error instanceof AnswerReplyPreparationConflictError
+    || error instanceof WorkingChatScopeStaleError
     || error instanceof AnswerReplyVersionConflictError
     || error instanceof AnswerReplyGrantStaleError
     || error instanceof AnswerReplyTransitionError

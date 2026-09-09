@@ -29,6 +29,8 @@ import {
 import { createPostgresManagedKnowledgePageRepository } from
   "../src/action-approvals/postgres-managed-knowledge-page-repository.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
+import { createPostgresWorkingChatScopeRepository } from "../src/shared-chat/postgres-working-chat-scope-repository.js";
+import { WorkingChatScopeStaleError } from "../src/shared-chat/working-chat-scope.js";
 import { insertManagedKnowledgePageFixture } from
   "./managed-knowledge-page-postgres-fixture.js";
 
@@ -354,6 +356,7 @@ describe("answer reply cross-group grant boundary", () => {
     const query = async (sql: string, values?: unknown[]) => {
       const normalized = sql.replaceAll(/\s+/gu, " ").trim();
       statements.push({ sql: normalized, values });
+      if (normalized.includes("FROM answer_reply_deliveries") && !normalized.includes("FOR UPDATE")) return { rows: [deliveryRow({ id: deliveryId, incoming_message_id: incomingMessageId })] };
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
         || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
       if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
@@ -400,6 +403,7 @@ describe("answer reply cross-group grant boundary", () => {
     const lockedGrantIds: string[] = [];
     const query = async (sql: string, values?: unknown[]) => {
       const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (normalized.includes("FROM conversation_message_deletion_tombstones")) return { rows: [] };
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
         || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
       if (normalized.includes("FROM document_sources") && normalized.includes("FOR KEY SHARE")) {
@@ -454,6 +458,7 @@ describe("answer reply cross-group grant boundary", () => {
     let deliveryLocked = false;
     const query = async (sql: string) => {
       const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (normalized.includes("FROM answer_reply_deliveries") && !normalized.includes("FOR UPDATE")) return { rows: [deliveryRow({ id: deliveryId, incoming_message_id: incomingMessageId })] };
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
         || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
       if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
@@ -499,6 +504,7 @@ describe("answer reply cross-group grant boundary", () => {
     let deliveryLocked = false;
     const query = async (sql: string) => {
       const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (normalized.includes("FROM answer_reply_deliveries") && !normalized.includes("FOR UPDATE")) return { rows: [deliveryRow({ id: deliveryId, incoming_message_id: incomingMessageId })] };
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
         || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
       if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
@@ -538,6 +544,7 @@ describe("answer reply cross-group grant boundary", () => {
     let deliveryLocked = false;
     const query = async (sql: string) => {
       const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (normalized.includes("FROM answer_reply_deliveries") && !normalized.includes("FOR UPDATE")) return { rows: [deliveryRow({ id: deliveryId, incoming_message_id: incomingMessageId })] };
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
         || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
       if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
@@ -681,6 +688,53 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
         "ALTER TABLE answer_reply_source_traces DROP CONSTRAINT answer_reply_test_atomic_reject",
       );
     }
+  });
+
+  it("persists exact shared-chat provenance and blocks a revoked prepared chat-only answer", async () => {
+    const scopes = createPostgresWorkingChatScopeRepository({ dataSource: pool! });
+    const current = await scopes.get();
+    const scope = await scopes.replace({ expectedVersion: current?.version ?? 0, state: "active",
+      groups: [{ chatId: "group-chat-source", name: "Source" }, { chatId: "group-chat-target", name: "Target" }],
+      updatedBy: "test", at: new Date() });
+    await pool!.query(`UPDATE runtime_control_state SET desired_global_enabled = true, disabled_group_ids = '{}',
+      capabilities = capabilities || '{"readGroupContext":true,"replyWhenMentioned":true}'::jsonb`);
+    const repo = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("shared-chat-revoked", { chatId: "group-chat-target", sourceTraces: [], sharedChatSources: [{
+      scopeId: scope.id, scopeVersion: scope.version, sourceChatId: "group-chat-source", destinationChatId: "group-chat-target",
+      messageId: "chat-original", contentHash: "a".repeat(64),
+    }] });
+    const prepared = await repo.prepare(input);
+    expect(prepared.receipt.chatSources).toEqual(input.sharedChatSources);
+    expect(prepared.receipt.delivery.chatProvenanceVersion).toBe(1);
+    const restarted = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    expect((await restarted.findByIncomingMessage(input))?.chatSources).toEqual(input.sharedChatSources);
+    await scopes.replace({ expectedVersion: scope.version, state: "revoked", groups: scope.groups, updatedBy: "test", at: new Date() });
+    await expect(repo.beginAnswerSend({ deliveryId: prepared.receipt.delivery.id, expectedVersion: 1, at: new Date() }))
+      .rejects.toBeInstanceOf(WorkingChatScopeStaleError);
+    const blocked = await repo.blockForPermission({ deliveryId: prepared.receipt.delivery.id, expectedVersion: 1, documentSourceIds: [], at: new Date() });
+    expect(blocked.delivery.state).toBe("permission_blocked");
+    expect(blocked.delivery.attemptCount).toBe(0);
+    expect(blocked.chatSources).toEqual(input.sharedChatSources);
+  });
+
+  it("incoming tombstones prevent prepare and prevent sending already prepared replies", async () => {
+    const repo = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const first = prepareInput("deleted-before-prepare", { sourceTraces: [], sharedChatSources: [] });
+    await pool!.query(`INSERT INTO conversation_message_deletion_tombstones (provider,provider_message_id,conversation_message_id,chat_id)
+      VALUES ('feishu',$1,$2,$3)`, [first.incomingMessageId, `feishu:${first.incomingMessageId}`, first.chatId]);
+    await expect(repo.prepare(first)).rejects.toThrow();
+    const second = prepareInput("deleted-before-send", { sourceTraces: [], sharedChatSources: [] });
+    const prepared = await repo.prepare(second);
+    await pool!.query(`INSERT INTO conversation_message_deletion_tombstones (provider,provider_message_id,conversation_message_id,chat_id)
+      VALUES ('feishu',$1,$2,$3)`, [second.incomingMessageId, `feishu:${second.incomingMessageId}`, second.chatId]);
+    await expect(repo.beginAnswerSend({ deliveryId: prepared.receipt.delivery.id, expectedVersion: 1, at: new Date() })).rejects.toThrow();
+    expect((await repo.findByIncomingMessage(second))?.delivery.attemptCount).toBe(0);
+    const noticeInput = prepareInput("deleted-before-notice", { sourceTraces: [], sharedChatSources: [], blockedDocumentSourceIds: ["blocked-doc"] });
+    const notice = await repo.prepare(noticeInput);
+    await pool!.query(`INSERT INTO conversation_message_deletion_tombstones (provider,provider_message_id,conversation_message_id,chat_id)
+      VALUES ('feishu',$1,$2,$3)`, [noticeInput.incomingMessageId, `feishu:${noticeInput.incomingMessageId}`, noticeInput.chatId]);
+    await expect(repo.beginSafeNoticeSend({ deliveryId: notice.receipt.delivery.id, expectedVersion: notice.receipt.delivery.version, at: new Date() })).rejects.toThrow();
+    expect((await repo.findByIncomingMessage(noticeInput))?.delivery.safeNoticeAttemptCount).toBe(0);
   });
 
   it("atomically prepares a permission-blocked receipt for a denied prompt candidate", async () => {

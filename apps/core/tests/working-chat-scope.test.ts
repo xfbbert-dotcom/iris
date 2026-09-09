@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { lockSharedChatSources } from "../src/shared-chat/postgres-working-chat-scope-repository.js";
+import { runtimeCapabilityNames } from "../src/admin/runtime-control-state-repository.js";
 import {
   hashSharedChatText,
   normalizeSharedChatSourceBinding,
@@ -12,6 +14,26 @@ const binding = { scopeId: "pilot-working-chat", scopeVersion: 1, sourceChatId: 
   destinationChatId: "group-b", messageId: "message-1", contentHash: "a".repeat(64) };
 
 describe("working chat scope contracts", () => {
+  it("takes scope, runtime, then the deduplicated sorted union of source and incoming locks", async () => {
+    const steps: string[] = [];
+    const queryable = { async query<T extends Record<string, unknown>>(sql: string, values?: unknown[]) {
+      let rows: Record<string, unknown>[] = [];
+      if (sql.includes("pg_advisory_xact_lock")) steps.push(String(values?.[0]));
+      if (sql.includes("FROM working_chat_scopes")) rows = [{ id: "pilot-working-chat", version: 1, state: "active", groups, updated_at: at, updated_by: "test" }];
+      if (sql.includes("FROM runtime_control_state")) {
+        steps.push("runtime");
+        rows = [{ revision: 1, desired_global_enabled: true, disabled_group_ids: [], updated_at: at, updated_by: "test",
+          capabilities: Object.fromEntries(runtimeCapabilityNames.map(name => [name, true])) }];
+      }
+      if (sql.includes("FROM conversation_message_deletion_tombstones")) {
+        expect(values).toEqual([["a-incoming", "z-source"]]); steps.push("tombstones");
+      }
+      return { rows: rows as T[] };
+    } };
+    await lockSharedChatSources(queryable, [{ ...binding, messageId: "z-source" }, { ...binding, messageId: "z-source" }], "group-b", ["a-incoming"]);
+    expect(steps).toEqual(["iris:working-chat-scope:pilot-working-chat", "runtime", "iris:conversation-message:feishu:a-incoming",
+      "iris:conversation-message:feishu:z-source", "tombstones"]);
+  });
   it("normalizes metadata deterministically without retaining mutable caller values", () => {
     const input = { ...replacement, groups: [{ chatId: " group-b ", name: " B " }, groups[0]!],
       updatedBy: " operator ", at: new Date(at) };

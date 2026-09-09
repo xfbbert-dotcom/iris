@@ -24,6 +24,40 @@ const firstSendAt = new Date("2026-08-02T02:01:00.000Z");
 const transitionAt = new Date("2026-08-02T02:02:00.000Z");
 
 describe("AnswerReplyReceiptValidator", () => {
+  it("distinguishes verified-empty new provenance from legacy absence and binds every source field", () => {
+    const receipt = preparedReceipt();
+    const base = { provider: receipt.delivery.provider, incomingMessageId, chatId,
+      renderedReplyFingerprint: receipt.delivery.renderedReplyFingerprint, sourceTraces: receipt.sources };
+    const legacy = createAnswerReplySemanticFingerprint(base);
+    const empty = createAnswerReplySemanticFingerprint({ ...base, sharedChatSources: [] });
+    const source = { scopeId: "pilot-working-chat", scopeVersion: 1, sourceChatId: "external", destinationChatId: chatId,
+      messageId: "original", contentHash: "a".repeat(64) };
+    const traced = createAnswerReplySemanticFingerprint({ ...base, sharedChatSources: [source] });
+    expect(new Set([legacy, empty, traced]).size).toBe(3);
+    for (const changed of [{ scopeVersion: 2 }, { sourceChatId: "different" }, { messageId: "other" }, { contentHash: "b".repeat(64) }]) {
+      expect(createAnswerReplySemanticFingerprint({ ...base, sharedChatSources: [{ ...source, ...changed }] })).not.toBe(traced);
+    }
+    receipt.delivery.chatProvenanceVersion = 1;
+    receipt.chatSources = [source];
+    receipt.delivery.semanticFingerprint = traced;
+    expect(requireValidAnswerReplyReceipt(receipt)).toBe(receipt);
+  });
+
+  it.each(["missing marker", "missing array", "duplicate", "wrong destination", "changed version"])("rejects %s in persisted shared provenance", kind => {
+    const receipt = preparedReceipt();
+    receipt.delivery.chatProvenanceVersion = 1;
+    receipt.chatSources = [{ scopeId: "pilot-working-chat", scopeVersion: 1, sourceChatId: "external", destinationChatId: chatId,
+      messageId: "original", contentHash: "a".repeat(64) }];
+    receipt.delivery.semanticFingerprint = createAnswerReplySemanticFingerprint({ provider: "feishu", incomingMessageId, chatId,
+      renderedReplyFingerprint: receipt.delivery.renderedReplyFingerprint, sourceTraces: receipt.sources, sharedChatSources: receipt.chatSources });
+    if (kind === "missing marker") delete receipt.delivery.chatProvenanceVersion;
+    if (kind === "missing array") delete receipt.chatSources;
+    if (kind === "duplicate") receipt.chatSources!.push({ ...receipt.chatSources![0]! });
+    if (kind === "wrong destination") receipt.chatSources![0]!.destinationChatId = "other";
+    if (kind === "changed version") receipt.chatSources![0]!.scopeVersion = 2;
+    expect(() => requireValidAnswerReplyReceipt(receipt)).toThrow("answer reply receipt invalid");
+  });
+
   it("binds the exact cross-group grant facts into semantic identity", () => {
     const renderedReplyFingerprint = createAnswerReplyRenderedFingerprint(renderedText);
     const base = {

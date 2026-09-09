@@ -13,7 +13,9 @@ function setup(traces = [source], outcome = "allowed") {
       expect(params?.[0]).toBe("oc-group");
       return { rows: [delivery] };
     }
-    return { rows: traces };
+    if (sql.includes("FROM answer_reply_source_traces")) return { rows: traces };
+    expect(sql).toContain("FROM answer_reply_chat_source_traces");
+    return { rows: [] };
   });
   const reader = { listRecentMessages: async () => [], readMessagesByIds: vi.fn(async () => [ownReply]) };
   const verifier = { verify: vi.fn(async () => traces.length === 0 ? [] : [{ documentSourceId: "source", outcome }]) };
@@ -59,7 +61,12 @@ describe("own sent-answer conversational continuity", () => {
       return [{ documentSourceId: "source", outcome: "allowed" as const }];
     });
     const provider = createAssistantConversationContextProvider({
-      queryable: { query: async (sql: string) => ({ rows: sql.includes("FROM answer_reply_deliveries") ? [delivery] : [first, second] }) } as never,
+      queryable: { query: async (sql: string) => {
+        if (sql.includes("FROM answer_reply_deliveries")) return { rows: [delivery] };
+        if (sql.includes("FROM answer_reply_source_traces")) return { rows: [first, second] };
+        expect(sql).toContain("FROM answer_reply_chat_source_traces");
+        return { rows: [] };
+      } } as never,
       grants: { validateExact: async () => true }, verifier: { verify },
       reader: { listRecentMessages: async () => [], readMessagesByIds: async () => [ownReply] },
     });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import { ConversationEvidenceDeletionConflictError } from "../src/conversation-state/conversation-state-evidence-deletion.js";
 import {
   createPostgresConversationStateInspectionStore,
   type ConversationStateInspectionStore,
@@ -9,6 +10,17 @@ import {
 const authorization = { authorization: "Bearer operator-secret" };
 
 describe("conversation state operator API", () => {
+  it("returns an explicit conflict while an associated answer is in flight", async () => {
+    const store = createStore();
+    store.deleteMessageEvidence.mockRejectedValue(new ConversationEvidenceDeletionConflictError());
+    const app = await createApp(store);
+    const response = await app.inject({ method: "DELETE",
+      url: "/internal/conversation-state/groups/group-a/messages/message-a/evidence",
+      headers: { ...authorization, "x-iris-operator": "privacy-reviewer" } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ ok: false, error: "conversation_evidence_deletion_conflict" });
+    await app.close();
+  });
   it("requires the configured bearer token for all five routes", async () => {
     const store = createStore();
     const app = await createApp(store);

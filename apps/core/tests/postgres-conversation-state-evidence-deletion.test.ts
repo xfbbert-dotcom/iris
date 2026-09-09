@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ConversationEvidenceDeletionConflictError, deleteConversationMessageEvidence } from "../src/conversation-state/conversation-state-evidence-deletion.js";
 
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +15,24 @@ import { createPostgresMemoryExtractionRepository } from "../src/memory-extracti
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
+
+describe("conversation evidence deletion send conflict", () => {
+  it("rolls back without tombstone or physical deletion if an associated answer is in flight", async () => {
+    const statements: string[] = [];
+    const query = async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("FROM conversation_messages")) return { rows: [{ id: "feishu:message", provider: "feishu", provider_message_id: "message" }] };
+      if (sql.includes("FROM answer_reply_deliveries")) return { rows: [{ id: "delivery" }] };
+      return { rows: [] };
+    };
+    await expect(deleteConversationMessageEvidence({
+      dataSource: { query, connect: async () => ({ query, release() {} }) } as never,
+      groupId: "group", messageId: "feishu:message", operatorHint: "test",
+    })).rejects.toBeInstanceOf(ConversationEvidenceDeletionConflictError);
+    expect(statements).toContain("ROLLBACK");
+    expect(statements.some(sql => /INSERT INTO conversation_message_deletion_tombstones|DELETE FROM conversation_messages/u.test(sql))).toBe(false);
+  });
+});
 
 runIfDatabase("physical conversation evidence deletion with Postgres", () => {
   let pool: pg.Pool;

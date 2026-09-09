@@ -884,6 +884,7 @@ describe("FeishuMentionAnswerResponder", () => {
       .resolves.toEqual({ status: "current", permissionAttestedAt: preparedAt });
     expect(validateKnowledgeConflictForSend).toHaveBeenCalledWith(validationInput);
     expect(preparedAnswer).toEqual({
+      sharedChatSources: [],
       renderedText:
         "Grounded answer.\n\n" +
         "Iris \u53c2\u8003\u8d44\u6599\uff1a\n" +
@@ -1116,6 +1117,7 @@ describe("FeishuMentionAnswerResponder", () => {
     });
 
     expect(preparedAnswer).toEqual({
+      sharedChatSources: [],
       renderedText: "Source-free answer.",
       sourceTraces: [],
       preparedAt,

@@ -5,6 +5,7 @@ import type {
 import type { RawEvent } from "../events/raw-event-queue.js";
 import type {
   FeishuMentionAnswerResponder,
+  FeishuMentionAnswerResult,
   FeishuMessageMention,
 } from "./feishu-mention-answer-responder.js";
 import type {
@@ -40,7 +41,7 @@ export function createFeishuMessageEventProcessor({
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
   groupVisibleDocumentRegistrar?: Pick<GroupVisibleDocumentRegistrar, "registerDiscoveredLinks">;
-  mentionAnswerResponder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
+  mentionAnswerResponder?: FeishuMentionAnswerResponder;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   runtimeController?: RuntimeGate;
   messageReplayGuard: ConversationMessageReplayGuard;
@@ -61,10 +62,7 @@ export function createFeishuMessageEventProcessor({
         runtimeController !== undefined &&
         !runtimeController.canReadGroupContext(parsed.chatId)
       ) {
-        await messageReplayGuard.runUnlessDeleted({
-          identity: parsed,
-          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
-        });
+        await respondToMention(parsed, mentionAnswerResponder, messageReplayGuard);
         return;
       }
 
@@ -100,10 +98,7 @@ export function createFeishuMessageEventProcessor({
 
       let mentionResponseError: unknown;
       try {
-        const mentionResult = await messageReplayGuard.runUnlessDeleted({
-          identity: parsed,
-          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
-        });
+        const mentionResult = await respondToMention(parsed, mentionAnswerResponder, messageReplayGuard);
         if (mentionResult.status === "active") {
           logMentionAnswerResult(parsed, mentionResult.value);
         }
@@ -171,11 +166,12 @@ export function createFeishuMessageEventProcessor({
   };
 }
 
-function maybeRespondToMention(
+async function respondToMention(
   parsed: ParsedFeishuMessageEvent,
-  mentionAnswerResponder: Pick<FeishuMentionAnswerResponder, "maybeRespond"> | undefined,
-): Promise<unknown> {
-  return mentionAnswerResponder?.maybeRespond({
+  responder: FeishuMentionAnswerResponder | undefined,
+  guard: ConversationMessageReplayGuard,
+) {
+  const input = {
     messageId: parsed.providerMessageId,
     chatId: parsed.chatId,
     senderId: parsed.senderId,
@@ -186,7 +182,16 @@ function maybeRespondToMention(
     text: parsed.text,
     mentions: parsed.mentions,
     observedAt: parsed.sentAt,
-  }) ?? Promise.resolve(undefined);
+  };
+  const prepared = await guard.runUnlessDeleted({ identity: parsed, effect: () =>
+    responder?.prepareResponse?.(input) ?? responder?.maybeRespond(input) ?? Promise.resolve(undefined),
+  });
+  if (prepared.status === "deleted" || prepared.value?.status !== "deferred") return prepared;
+  const value = await prepared.value.respond(async (effect): Promise<FeishuMentionAnswerResult> => {
+    const legacy = await guard.runUnlessDeleted({ identity: parsed, effect });
+    return legacy.status === "deleted" ? { status: "skipped", reason: "deleted_message" } : legacy.value;
+  });
+  return { status: "active" as const, value };
 }
 
 function logMentionAnswerResult(parsed: ParsedFeishuMessageEvent, result: unknown): void {

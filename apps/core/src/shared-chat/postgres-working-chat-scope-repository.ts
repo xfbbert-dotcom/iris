@@ -13,7 +13,7 @@ import {
 } from "./working-chat-scope.js";
 
 export type WorkingChatScopeQueryable = {
-  query<T = unknown>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>;
+  query<T extends Record<string, unknown> = Record<string, unknown>>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>;
 };
 export type WorkingChatScopeTransactionClient = WorkingChatScopeQueryable & { release(): void };
 export type WorkingChatScopeDataSource = WorkingChatScopeQueryable & {
@@ -80,9 +80,17 @@ export async function lockSharedChatSources(
   queryable: WorkingChatScopeQueryable,
   bindings: readonly SharedChatSourceBinding[],
   destinationChatId: string,
+  additionalMessageIds: readonly string[] = [],
 ): Promise<void> {
   if (!Array.isArray(bindings) || bindings.length > MAX_SHARED_CHAT_SOURCE_BINDINGS) throw new WorkingChatScopeStaleError();
-  if (bindings.length === 0) return;
+  if (!Array.isArray(additionalMessageIds) || additionalMessageIds.length > 1
+    || additionalMessageIds.some(id => typeof id !== "string" || id.trim() !== id || id.length < 1 || id.length > 505)) {
+    throw new WorkingChatScopeStaleError();
+  }
+  if (bindings.length === 0) {
+    await lockMessagesAndCheckTombstones(queryable, additionalMessageIds);
+    return;
+  }
   const normalized: SharedChatSourceBinding[] = [];
   const identities = new Map<string, string>();
   for (const value of bindings) {
@@ -116,7 +124,12 @@ export async function lockSharedChatSources(
       || normalized.some(binding => policy.disabledGroupIds.includes(binding.sourceChatId))) throw new WorkingChatScopeStaleError();
   } catch { throw new WorkingChatScopeStaleError(); }
 
-  const messageIds = [...identities.keys()].sort();
+  await lockMessagesAndCheckTombstones(queryable, [...identities.keys(), ...additionalMessageIds]);
+}
+
+async function lockMessagesAndCheckTombstones(queryable: WorkingChatScopeQueryable, values: readonly string[]): Promise<void> {
+  const messageIds = [...new Set(values)].sort();
+  if (messageIds.length === 0) return;
   for (const messageId of messageIds) {
     await lockConversationMessageIngestScope({ queryable, conversationMessageId: `feishu:${messageId}` });
   }

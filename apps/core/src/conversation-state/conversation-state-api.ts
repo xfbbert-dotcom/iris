@@ -17,6 +17,7 @@ import { readDatabaseConfig, type DatabaseEnv } from "../database/database-confi
 import { createPostgresPool } from "../database/postgres.js";
 import {
   deleteConversationMessageEvidence,
+  ConversationEvidenceDeletionConflictError,
   type ConversationMessageEvidenceDeletionResult,
 } from "./conversation-state-evidence-deletion.js";
 import type { PostgresConversationStateDataSource } from "./postgres-conversation-state-repository.js";
@@ -189,7 +190,10 @@ export function registerConversationStateApi(
           return reply.code(404).send({ ok: false, error: "conversation_message_not_found" });
         }
         return { ok: true, ...result };
-      } catch {
+      } catch (error) {
+        if (error instanceof ConversationEvidenceDeletionConflictError) {
+          return reply.code(409).send({ ok: false, error: "conversation_evidence_deletion_conflict" });
+        }
         return reply.code(500).send({
           ok: false,
           error: "conversation_evidence_deletion_failed",

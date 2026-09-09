@@ -11,6 +11,13 @@ import {
 const MAX_IDENTIFIER_CHARS = 512;
 const REDACTED_CONTENT = "[evidence deleted]";
 
+export class ConversationEvidenceDeletionConflictError extends Error {
+  constructor() {
+    super("conversation evidence deletion conflicts with an in-flight answer");
+    this.name = "ConversationEvidenceDeletionConflictError";
+  }
+}
+
 export type ConversationMessageEvidenceDeletionResult =
   | { status: "not_found" }
   | {
@@ -79,6 +86,21 @@ export async function deleteConversationMessageEvidence(input: {
       "provider message id",
       message.rows[0]!.provider_message_id,
     );
+    // The sender locks these same identities before its delivery row. A committed send
+    // boundary wins explicitly; otherwise this tombstone prevents prepare/begin-send.
+    const inFlight = await client.query<IdRow>(
+      `SELECT delivery.id FROM answer_reply_deliveries delivery
+       WHERE (
+         (delivery.provider = $1 AND delivery.incoming_message_id = $2 AND delivery.chat_id = $3)
+         OR EXISTS (SELECT 1 FROM answer_reply_chat_source_traces trace
+           WHERE trace.delivery_id = delivery.id AND trace.source_chat_id = $3 AND trace.message_id = $2)
+       ) AND (delivery.state IN ('sending', 'reconciliation_required')
+         OR (delivery.provider = $1 AND delivery.incoming_message_id = $2 AND delivery.chat_id = $3
+           AND delivery.safe_notice_attempt_count > 0 AND delivery.safe_notice_sent_at IS NULL))
+       ORDER BY delivery.id FOR UPDATE OF delivery`,
+      [provider, providerMessageId, groupId],
+    );
+    if (inFlight.rows.length > 0) throw new ConversationEvidenceDeletionConflictError();
     const insertedTombstone = await client.query(
       `
       INSERT INTO conversation_message_deletion_tombstones (

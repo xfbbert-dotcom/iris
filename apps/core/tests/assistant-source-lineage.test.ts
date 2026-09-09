@@ -78,3 +78,37 @@ describe("assistant source lineage through fresh provider, orchestration and pro
     expect(result.answerText).toBe("已改写旧回复");
   });
 });
+
+describe("shared chat provenance on assistant reuse", () => {
+  const source = { scopeId: "pilot-working-chat", scopeVersion: 1, sourceChatId: "other", destinationChatId: "current",
+    messageId: "original", contentHash: "a".repeat(64) };
+  const before = new Date("2026-09-09T12:00:00Z");
+  function sharedProvider(input: { legacy?: boolean; allowed?: boolean; noVerifier?: boolean; sources?: typeof source[] } = {}) {
+    const sources = input.sources ?? [source];
+    const provider = createAssistantConversationContextProvider({
+      queryable: { async query<T>(sql: string) { return { rows: (sql.includes("FROM answer_reply_deliveries")
+        ? [{ delivery_id: "delivery", reply_message_id: "own", chat_provenance_version: input.legacy ? null : 1 }]
+        : sql.includes("FROM answer_reply_chat_source_traces") ? sources.map((binding, trace_index) => ({ delivery_id: "delivery", trace_index,
+          scope_id: binding.scopeId, scope_version: binding.scopeVersion, source_chat_id: binding.sourceChatId,
+          destination_chat_id: binding.destinationChatId, message_id: binding.messageId, content_hash: binding.contentHash })) : []) as T[] }; } },
+      reader: { async listRecentMessages() { return []; }, async readMessagesByIds() { return [{ messageId: "own", chatId: "current",
+        role: "assistant" as const, senderId: "iris", text: "Shared derived draft", sentAt: new Date("2026-09-09T11:00:00Z") }]; } },
+      verifier: { async verify() { return []; } }, requireChatProvenance: true,
+      ...(input.noVerifier ? {} : { sharedChatVerifier: { async verify() { return input.allowed !== false; } } }),
+    });
+    return provider;
+  }
+  it("preserves original external bindings through two successive assistant rewrites", async () => {
+    const first = await sharedProvider().loadRecentReplies({ chatId: "current", before });
+    expect(first[0]?.underlyingChatSources).toEqual([source]);
+    const second = await sharedProvider({ sources: first[0]?.underlyingChatSources }).loadRecentReplies({ chatId: "current", before });
+    expect(second[0]?.underlyingChatSources).toEqual([source]);
+  });
+  it.each([{ allowed: false }, { noVerifier: true }, { legacy: true }])("omits unverifiable or legacy sourced answers: %j", async input => {
+    expect(await sharedProvider(input).loadRecentReplies({ chatId: "current", before })).toEqual([]);
+  });
+  it("retains known-empty new provenance without relabeling old unknown provenance", async () => {
+    expect(await sharedProvider({ sources: [] }).loadRecentReplies({ chatId: "current", before })).toHaveLength(1);
+    expect(await sharedProvider({ sources: [], legacy: true }).loadRecentReplies({ chatId: "current", before })).toEqual([]);
+  });
+});

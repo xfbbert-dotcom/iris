@@ -42,11 +42,17 @@ export type FeishuMentionAnswerResult =
   | { status: "replied"; replyMessageId?: string }
   | {
       status: "skipped";
-      reason: "not_mentioned" | "runtime_disabled" | "self_message" | "duplicate_message";
+      reason: "not_mentioned" | "runtime_disabled" | "self_message" | "duplicate_message" | "deleted_message";
     };
+
+export type DeferredMentionAnswer = {
+  status: "deferred";
+  respond(runLegacyEffect: (effect: () => Promise<FeishuMentionAnswerResult>) => Promise<FeishuMentionAnswerResult>): Promise<FeishuMentionAnswerResult>;
+};
 
 export type FeishuMentionAnswerResponder = {
   maybeRespond(input: FeishuMentionAnswerInput): Promise<FeishuMentionAnswerResult>;
+  prepareResponse?(input: FeishuMentionAnswerInput): Promise<FeishuMentionAnswerResult | DeferredMentionAnswer>;
 };
 
 export type FeishuMentionAnswerResponderDependencies = {
@@ -221,6 +227,13 @@ export function createFeishuMentionAnswerResponder({
 
   return {
     async maybeRespond(input) {
+      const response = await prepareResponse(input);
+      return response.status === "deferred" ? response.respond(effect => effect()) : response;
+    },
+    prepareResponse,
+  };
+
+  async function prepareResponse(input: FeishuMentionAnswerInput): Promise<FeishuMentionAnswerResult | DeferredMentionAnswer> {
       const botMentionKeys = collectBotMentionKeys(input.mentions, normalizedBotOpenId);
       if (botMentionKeys.length === 0) {
         return { status: "skipped", reason: "not_mentioned" };
@@ -447,104 +460,121 @@ export function createFeishuMentionAnswerResponder({
           return result;
         }
 
-        const answerDraftInput = {
-          executionId: input.messageId,
-          question,
-          chatId: input.chatId,
-          ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
-          liveChatMessages: [{
-            speaker: normalizedSenderId ?? "unknown",
-            text: question,
-          }],
-        };
-        try {
-          const validateKnowledgeConflictForSend =
-            answerDraftOrchestrator.validateKnowledgeConflictForSend;
-          const result = toRepliedResult(
-            await answerReplyDeliveryService.respond({
-              provider: "feishu",
-              incomingMessageId: input.messageId,
-              chatId: input.chatId,
-              replyUuid,
-              safeNoticeUuid: createAnswerReplySafeNoticeUuid(input.messageId),
-              ...(validateKnowledgeConflictForSend === undefined
-                ? {}
-                : {
-                    validateKnowledgeConflictForSend: (validationInput) =>
-                      validateKnowledgeConflictForSend(validationInput),
+        // Ordinary receipt-backed answers must run after the incoming replay transaction commits.
+        // Legacy command/clarification branches above retain their existing guarded execution.
+        // The guard can still fail to commit; only claim generation when the callback executes.
+        replyDeduper.release(input.messageId);
+        return {
+          status: "deferred",
+          async respond(runLegacyEffect) {
+            if (!replyDeduper.tryClaim(input.messageId)) {
+              return { status: "skipped", reason: "duplicate_message" };
+            }
+            try {
+              const answerDraftInput = {
+                executionId: input.messageId,
+                question,
+                chatId: input.chatId,
+                ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
+                liveChatMessages: [{
+                  speaker: normalizedSenderId ?? "unknown",
+                  text: question,
+                }],
+              };
+              try {
+                const validateKnowledgeConflictForSend =
+                  answerDraftOrchestrator.validateKnowledgeConflictForSend;
+                const result = toRepliedResult(
+                  await answerReplyDeliveryService.respond({
+                    provider: "feishu",
+                    incomingMessageId: input.messageId,
+                    chatId: input.chatId,
+                    replyUuid,
+                    safeNoticeUuid: createAnswerReplySafeNoticeUuid(input.messageId),
+                    ...(validateKnowledgeConflictForSend === undefined
+                      ? {}
+                      : {
+                          validateKnowledgeConflictForSend: (validationInput) =>
+                            validateKnowledgeConflictForSend(validationInput),
+                        }),
+                    inspectPromptPermissions: async () => {
+                      if (answerDraftOrchestrator.inspectPromptPermissions === undefined) {
+                        throw new Error("answer prompt permission inspection is unavailable");
+                      }
+                      return {
+                        ...await answerDraftOrchestrator.inspectPromptPermissions(answerDraftInput),
+                        checkedAt: now(),
+                      };
+                    },
+                    prepareAnswer: async () => {
+                      let answer: Awaited<ReturnType<AnswerDraftOrchestrator["generateDraft"]>>;
+                      try {
+                        answer = await answerDraftOrchestrator.generateDraft(answerDraftInput);
+                      } catch (error) {
+                        if (isBlankModelAnswerError(error)) {
+                          throw new ModelAnswerFallbackSignal("blank");
+                        }
+                        if (isModelProviderCapacityError(error)) {
+                          throw new ModelAnswerFallbackSignal("capacity");
+                        }
+                        throw error;
+                      }
+                      const preparedAt = now();
+                      const deliveryEvidence = selectDeliveryEvidence(answer);
+                      return {
+                        sharedChatSources: answer.sharedChatSources ?? [],
+                        ...renderAnswerWithSourceCitations({
+                          answerText: answer.answerText,
+                          citedSourceRefs: deliveryEvidence.citedSourceRefs,
+                          allowedFragments: deliveryEvidence.allowedFragments,
+                          initialPermissionCheckedAt: preparedAt,
+                        }),
+                        ...(answer.deniedDocumentIds.length === 0
+                          ? {}
+                          : { blockedDocumentSourceIds: [...answer.deniedDocumentIds] }),
+                        ...(answer.knowledgeConflictCandidateId === undefined
+                          ? {}
+                          : {
+                              knowledgeConflictCandidateId:
+                                answer.knowledgeConflictCandidateId,
+                            }),
+                        preparedAt,
+                      };
+                    },
                   }),
-              inspectPromptPermissions: async () => {
-                if (answerDraftOrchestrator.inspectPromptPermissions === undefined) {
-                  throw new Error("answer prompt permission inspection is unavailable");
-                }
-                return {
-                  ...await answerDraftOrchestrator.inspectPromptPermissions(answerDraftInput),
-                  checkedAt: now(),
-                };
-              },
-              prepareAnswer: async () => {
-                let answer: Awaited<ReturnType<AnswerDraftOrchestrator["generateDraft"]>>;
-                try {
-                  answer = await answerDraftOrchestrator.generateDraft(answerDraftInput);
-                } catch (error) {
-                  if (isBlankModelAnswerError(error)) {
-                    throw new ModelAnswerFallbackSignal("blank");
-                  }
-                  if (isModelProviderCapacityError(error)) {
-                    throw new ModelAnswerFallbackSignal("capacity");
-                  }
+                );
+                replyDeduper.markHandled(input.messageId);
+                return result;
+              } catch (error) {
+                if (!(error instanceof ModelAnswerFallbackSignal)) {
                   throw error;
                 }
-                const preparedAt = now();
-                const deliveryEvidence = selectDeliveryEvidence(answer);
-                return {
-                  ...renderAnswerWithSourceCitations({
-                    answerText: answer.answerText,
-                    citedSourceRefs: deliveryEvidence.citedSourceRefs,
-                    allowedFragments: deliveryEvidence.allowedFragments,
-                    initialPermissionCheckedAt: preparedAt,
-                  }),
-                  ...(answer.deniedDocumentIds.length === 0
-                    ? {}
-                    : { blockedDocumentSourceIds: [...answer.deniedDocumentIds] }),
-                  ...(answer.knowledgeConflictCandidateId === undefined
-                    ? {}
-                    : {
-                        knowledgeConflictCandidateId:
-                          answer.knowledgeConflictCandidateId,
-                      }),
-                  preparedAt,
-                };
-              },
-            }),
-          );
-          replyDeduper.markHandled(input.messageId);
-          return result;
-        } catch (error) {
-          if (!(error instanceof ModelAnswerFallbackSignal)) {
-            throw error;
-          }
-          const fallbackText = error.kind === "blank"
-            ? BLANK_MODEL_ANSWER_FALLBACK
-            : MODEL_CAPACITY_FALLBACK;
+                const fallbackText = error.kind === "blank"
+                  ? BLANK_MODEL_ANSWER_FALLBACK
+                  : MODEL_CAPACITY_FALLBACK;
 
-          const result = toRepliedResult(
-            await replier.replyText({
-              messageId: input.messageId,
-              text: fallbackText,
-              replyInThread: true,
-              uuid: replyUuid,
-            }),
-          );
-          replyDeduper.markHandled(input.messageId);
-          return result;
-        }
+                const result = await runLegacyEffect(async () => toRepliedResult(
+                  await replier.replyText({
+                    messageId: input.messageId,
+                    text: fallbackText,
+                    replyInThread: true,
+                    uuid: replyUuid,
+                  }),
+                ));
+                replyDeduper.markHandled(input.messageId);
+                return result;
+              }
+            } catch (error) {
+              replyDeduper.release(input.messageId);
+              throw error;
+            }
+          },
+        };
       } catch (error) {
         replyDeduper.release(input.messageId);
         throw error;
       }
-    },
-  };
+  }
 }
 
 function selectDeliveryEvidence(answer: {

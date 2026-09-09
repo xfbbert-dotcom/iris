@@ -3,6 +3,7 @@ import type { Queryable } from "../documents/document-fragment-repository.js";
 import type { DocumentSourceGroupGrantRepository } from "../documents/document-source-group-grant.js";
 import type { FeishuChatHistoryMessage, FeishuChatHistoryReader } from "../feishu/feishu-chat-history-reader.js";
 import type { AssistantDocumentSourceBinding } from "./context-assembly.js";
+import { normalizeSharedChatSourceBinding, type SharedChatSourceBinding, type SharedChatSourceVerifier } from "../shared-chat/working-chat-scope.js";
 
 export type AssistantConversationContextProvider = {
   loadRecentReplies(input: { chatId: string; before: Date }): Promise<FeishuChatHistoryMessage[]>;
@@ -22,17 +23,19 @@ const MAX_REPLIES = 2;
 const MAX_SOURCE_TRACES = 2000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function createAssistantConversationContextProvider({ queryable, reader, verifier, grants }: {
+export function createAssistantConversationContextProvider({ queryable, reader, verifier, grants, sharedChatVerifier, requireChatProvenance = false }: {
   queryable: Queryable;
   reader: FeishuChatHistoryReader;
   verifier: AnswerSourcePermissionVerifier;
   grants?: Pick<DocumentSourceGroupGrantRepository, "validateExact">;
+  sharedChatVerifier?: SharedChatSourceVerifier;
+  requireChatProvenance?: boolean;
 }): AssistantConversationContextProvider {
   return { async loadRecentReplies({ chatId, before }) {
     if (reader.readMessagesByIds === undefined) return [];
     const after = new Date(before.getTime() - DAY_MS);
-    const deliveries = (await queryable.query<{ delivery_id: string; reply_message_id: string }>(
-      `SELECT id AS delivery_id, reply_message_id FROM answer_reply_deliveries
+    const deliveries = (await queryable.query<{ delivery_id: string; reply_message_id: string; chat_provenance_version?: number | null }>(
+      `SELECT id AS delivery_id, reply_message_id, chat_provenance_version FROM answer_reply_deliveries
        WHERE provider = 'feishu' AND chat_id = $1 AND state = 'sent'
          AND reply_message_id IS NOT NULL AND sent_at >= $2 AND sent_at < $3
        ORDER BY sent_at DESC, id DESC LIMIT 2`, [chatId, after, before],
@@ -45,12 +48,33 @@ export function createAssistantConversationContextProvider({ queryable, reader, 
        ORDER BY delivery_id ASC, prompt_rank ASC LIMIT 2001`, [deliveries.map(row => row.delivery_id)],
     )).rows;
     if (traces.length > MAX_SOURCE_TRACES) return [];
+    const chatTraces = (await queryable.query<Record<string, unknown>>(
+      `SELECT delivery_id, trace_index, scope_id, scope_version, source_chat_id, destination_chat_id, message_id, content_hash
+       FROM answer_reply_chat_source_traces WHERE delivery_id = ANY($1::text[])
+       ORDER BY delivery_id ASC, trace_index ASC LIMIT 2001`, [deliveries.map(row => row.delivery_id)],
+    )).rows;
+    if (chatTraces.length > MAX_SOURCE_TRACES) return [];
     const allowedIds: string[] = [];
     const sourceBindingsByMessage = new Map<string, AssistantDocumentSourceBinding[]>();
+    const chatBindingsByMessage = new Map<string, SharedChatSourceBinding[]>();
     for (const delivery of deliveries) {
+      if (requireChatProvenance && delivery.chat_provenance_version !== 1) continue;
+      const rawChatSources = chatTraces.filter(source => source.delivery_id === delivery.delivery_id);
+      if (rawChatSources.length > 0 && delivery.chat_provenance_version !== 1) continue;
+      let chatSources: SharedChatSourceBinding[];
+      try {
+        chatSources = rawChatSources.map((source, index) => {
+          if (source.trace_index !== index || source.destination_chat_id !== chatId) throw new Error("invalid chat source trace");
+          return normalizeSharedChatSourceBinding({ scopeId: source.scope_id as string, scopeVersion: Number(source.scope_version),
+            sourceChatId: source.source_chat_id as string, destinationChatId: source.destination_chat_id as string,
+            messageId: source.message_id as string, contentHash: source.content_hash as string });
+        });
+        if (chatSources.length > 0 && await sharedChatVerifier?.verify({ chatId, sources: chatSources }) !== true) continue;
+      } catch { continue; }
       const sources = traces.filter(source => source.delivery_id === delivery.delivery_id);
       if (await canReuseSources({ chatId, sources, verifier, grants })) {
         allowedIds.push(delivery.reply_message_id);
+        chatBindingsByMessage.set(delivery.reply_message_id, chatSources);
         sourceBindingsByMessage.set(delivery.reply_message_id, sources.map(source => ({
           documentSourceId: source.document_source_id,
           documentSnapshotId: source.document_snapshot_id,
@@ -69,7 +93,9 @@ export function createAssistantConversationContextProvider({ queryable, reader, 
       && message.role === "assistant" && message.sentAt >= after && message.sentAt < before).slice(0, MAX_REPLIES)
       .map(message => {
         const sources = sourceBindingsByMessage.get(message.messageId)!;
-        return { ...message, ...(sources.length === 0 ? {} : { underlyingDocumentSources: sources }) };
+        const chatSources = chatBindingsByMessage.get(message.messageId)!;
+        return { ...message, ...(sources.length === 0 ? {} : { underlyingDocumentSources: sources }),
+          ...(chatSources.length === 0 ? {} : { underlyingChatSources: chatSources.map(source => ({ ...source })) }) };
       });
   } };
 }

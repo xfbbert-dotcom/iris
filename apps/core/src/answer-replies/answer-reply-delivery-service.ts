@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { WorkingChatScopeStaleError, type SharedChatSourceBinding, type SharedChatSourceVerifier } from "../shared-chat/working-chat-scope.js";
 
 import type { FeishuMessageReplier } from "../feishu/feishu-message-replier.js";
 import type {
@@ -51,6 +52,7 @@ export type AnswerReplyDeliveryRequest = {
   prepareAnswer(): Promise<{
     renderedText: string;
     sourceTraces: AnswerReplySourceTraceInput[];
+    sharedChatSources?: SharedChatSourceBinding[];
     blockedDocumentSourceIds?: readonly string[];
     knowledgeConflictCandidateId?: string;
     preparedAt: Date;
@@ -64,6 +66,7 @@ export interface AnswerReplyDeliveryService {
 type AnswerReplyDeliveryServiceDependencies = {
   repository: AnswerReplyRepository;
   verifier: AnswerSourcePermissionVerifier;
+  sharedChatVerifier?: SharedChatSourceVerifier;
   replier: Pick<FeishuMessageReplier, "replyText">;
   now?: () => Date;
 };
@@ -79,6 +82,7 @@ const PERMISSION_OUTCOMES = new Set<AnswerSourcePermissionDecision["outcome"]>([
 export function createAnswerReplyDeliveryService({
   repository,
   verifier,
+  sharedChatVerifier,
   replier,
   now = () => new Date(),
 }: AnswerReplyDeliveryServiceDependencies): AnswerReplyDeliveryService {
@@ -201,6 +205,7 @@ export function createAnswerReplyDeliveryService({
     const prepared: PreparedAnswer = {
       renderedText: receipt.delivery.preparedReplyText,
       sourceTraces: toPreparedSourceTraceInputs(receipt),
+      ...(receipt.chatSources === undefined ? {} : { sharedChatSources: receipt.chatSources.map(source => ({ ...source })) }),
       blockedDocumentSourceIds,
       ...(receipt.delivery.knowledgeConflictCandidateId === undefined
         ? {}
@@ -218,6 +223,7 @@ export function createAnswerReplyDeliveryService({
       safeNoticeUuid: input.safeNoticeUuid,
       renderedText: prepared.renderedText,
       sourceTraces: prepared.sourceTraces,
+      ...(prepared.sharedChatSources === undefined ? {} : { sharedChatSources: prepared.sharedChatSources }),
       blockedDocumentSourceIds,
       ...(prepared.knowledgeConflictCandidateId === undefined
         ? {}
@@ -257,6 +263,7 @@ export function createAnswerReplyDeliveryService({
       safeNoticeUuid: input.safeNoticeUuid,
       renderedText: prepared.renderedText,
       sourceTraces: prepared.sourceTraces,
+      ...(prepared.sharedChatSources === undefined ? {} : { sharedChatSources: prepared.sharedChatSources }),
       ...(blockedDocumentSourceIds.length === 0 ? {} : { blockedDocumentSourceIds }),
       ...(prepared.knowledgeConflictCandidateId === undefined
         ? {}
@@ -284,6 +291,13 @@ export function createAnswerReplyDeliveryService({
       return blockPreparedAnswer(receipt, blockedDocumentSourceIds);
     }
 
+    if ((receipt.chatSources?.length ?? 0) > 0) {
+      let allowed = false;
+      try { allowed = await sharedChatVerifier?.verify({ chatId: receipt.delivery.chatId, sources: receipt.chatSources! }) === true; }
+      catch { /* Permission proof is fail closed. */ }
+      if (!allowed) return blockPreparedAnswer(receipt, []);
+    }
+
     if (receipt.delivery.knowledgeConflictCandidateId !== undefined) {
       const validation = await safelyValidateKnowledgeConflictForSend(input, receipt);
       if (validation.status !== "current") {
@@ -307,6 +321,9 @@ export function createAnswerReplyDeliveryService({
         beginAt,
       );
     } catch (error) {
+      if (error instanceof WorkingChatScopeStaleError && (receipt.chatSources?.length ?? 0) > 0) {
+        return blockPreparedAnswer(receipt, []);
+      }
       if (error instanceof AnswerReplyGrantStaleError) {
         if (documentSourceIds.length === 0) throw contractError();
         return blockPreparedAnswer(receipt, documentSourceIds);
@@ -499,6 +516,7 @@ function requirePreparedReceipt(
     renderedReplyFingerprint,
     knowledgeConflictCandidateId: prepared.knowledgeConflictCandidateId,
     sourceTraces: prepared.sourceTraces,
+    sharedChatSources: prepared.sharedChatSources,
   });
   const blockedDocumentSourceIds = prepared.blockedDocumentSourceIds ?? [];
   const permissionEvent = receipt.events.find(
@@ -543,6 +561,7 @@ function requirePreparedReceipt(
       && receipt.delivery.preparedReplyText !== prepared.renderedText
     )
     || !arePreparedSourceFactsEqual(receipt.sources, prepared.sourceTraces)
+    || !areChatSourcesEqual(receipt.chatSources, prepared.sharedChatSources)
     || !blockedReceiptMatches
     || (outcome === "applied" && !appliedReceiptMatches)
   ) {
@@ -622,6 +641,16 @@ function toPreparedSourceTraceInputs(
     crossGroupGrantorGroupId: source.crossGroupGrantorGroupId,
     crossGroupGranteeGroupId: source.crossGroupGranteeGroupId,
   }));
+}
+
+function areChatSourcesEqual(left: readonly SharedChatSourceBinding[] | undefined, right: readonly SharedChatSourceBinding[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.length === right.length && left.every((source, index) => {
+    const other = right[index];
+    return other !== undefined && source.scopeId === other.scopeId && source.scopeVersion === other.scopeVersion
+      && source.sourceChatId === other.sourceChatId && source.destinationChatId === other.destinationChatId
+      && source.messageId === other.messageId && source.contentHash === other.contentHash;
+  });
 }
 
 function arePreparedSourceFactsEqual(
@@ -853,6 +882,8 @@ function requireTransitionReceipt(
     || receipt.delivery.semanticFingerprint !== prior.delivery.semanticFingerprint
     || !isSameDate(receipt.delivery.createdAt, prior.delivery.createdAt)
     || !areSourceFactsEqual(receipt.sources, prior.sources)
+    || receipt.delivery.chatProvenanceVersion !== prior.delivery.chatProvenanceVersion
+    || !areChatSourcesEqual(receipt.chatSources, prior.chatSources)
     || receipt.events.length !== prior.events.length + 1
     || !prior.events.every((event, index) => areEventsEqual(receipt.events[index], event))
   ) {
