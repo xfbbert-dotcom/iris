@@ -660,16 +660,31 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   initially protect literal spans. Model outputs were stochastic; the coverage gap was deterministic.
   A later 2026-09-09 shared-chat recap exposed another deterministic gap: Chinese `置信度` followed
   by an English enum (`置信度为medium`) did not match the English-only `confidence` prefix.
+  Fix `ff9fab2a` covered that forward order, but the next real-model run still emitted
+  `medium 的置信度`: separate forward/reverse rules did not share a complete bounded expression grammar.
 - **Prevention rule:** Normalize only Chinese display prose for the affected states. Preserve
   structured evidence/confidence data, explicitly requested English, URLs, inline code and fenced code.
 - **Guard:** [Renderer regression tests](../../apps/core/tests/openai-compatible-grounded-answer-renderer.test.ts)
-  include `none`/`partial`, Chinese/English confidence prefixes, English overrides and protected spans.
+  include `none`/`partial`, both Chinese/English label/value orders, English overrides and protected spans.
   The shared-chat acceptance now rejects the actual mixed-language output automatically. Check real negative answers as well;
   do not change evidence sufficiency merely to produce fluent wording.
 - **Exit condition:** The 22 focused renderer cases and required real-model language controls pass.
   Fix `748b8404`; [dated production evidence](../development/iris-continuous-dialogue.md).
   Those 22 cases are historical, not sufficient evidence for the newly observed enum gap; its
   RED/GREEN regression and new release gate are tracked in [shared-chat acceptance](../development/iris-shared-working-chat.md).
+  The bounded two-order fix is `d475c5d1`; local renderer185/Core4486 and independent review pass,
+  while its new exact-SHA CI and production real-model gate remain separate pending evidence.
+
+### Preserve the reference date when restating older messages
+
+- **Failure:** A 2026-09-09 questionnaire comparison correctly paired the two originals but reused a
+  2026-09-08 message's “today/yesterday” labels without making the reference date clear.
+- **Prevention rule:** Prefer original absolute dates or explicitly attribute relative wording to
+  the source message. Correct source identity and content do not prove correct temporal phrasing.
+- **Guard / exit:** Record the specific answer and source timestamps; a future focused regression
+  should verify the reference date. This is P2 for the observed content-comparison question, not a
+  reason to broaden permissions or indefinitely harden retrieval. It remains unresolved in
+  [shared-chat follow-ups](../development/iris-shared-working-chat.md#非阻塞迁移影响).
 
 ## Test Architecture
 

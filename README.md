@@ -30,9 +30,9 @@ The internal MVP acceptance checklist lives at:
 ## Current Product State
 
 The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
-has reviewed release `4a9f852d` with passing local regression and exact-SHA CI, including PostgreSQL.
-Migration `0058` and the candidate images are deployed, but the first real-model acceptance failed
-on a mixed-language confidence label. Shared scope was revoked at version 2; base Q&A was restored
+has reviewed releases `4a9f852d` and `9d5a5545` with passing exact-SHA CI, including PostgreSQL.
+Migration `0058` and `9d5a5545` images are deployed, but both real-model acceptance runs failed
+on different mixed-language confidence word orders. Shared scope was revoked at version 4; base Q&A was restored at runtime revision 3384
 with public health green and unchanged action gates. The presentation fix and another acceptance
 run are required before shared-chat availability can be claimed. This separates cross-group lookup
 from formal Wiki publication; other groups and external-action gates remain outside that approval.
