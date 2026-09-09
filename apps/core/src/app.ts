@@ -94,6 +94,8 @@ import {
   renderAdminConsoleScript,
 } from "./admin-console/admin-console-assets.js";
 import { registerGroupMemoryApi } from "./memory/group-memory-api.js";
+import { registerWorkingChatScopeApi } from "./shared-chat/working-chat-scope-api.js";
+import type { WorkingChatScopeRepository, SharedChatSourceVerifier } from "./shared-chat/working-chat-scope.js";
 import type { GroupMemoryService } from "./memory/group-memory-service.js";
 import {
   createConversationStateInspectionRuntime,
@@ -174,6 +176,7 @@ type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
+  sharedChatVerifier?: SharedChatSourceVerifier;
   memoryExtractionPlanner?: MemoryExtractionRuntime["planner"];
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
   formalTaskDraftCommand?: Pick<ChatFormalTaskDraftCommand, "execute">;
@@ -221,6 +224,7 @@ export type BuildAppDependencies = {
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
   groupMemoryService?: GroupMemoryService;
+  workingChatScopes?: WorkingChatScopeRepository;
   conversationStateInspectionStore?: ConversationStateInspectionStore;
   createConversationStateInspectionRuntime?: () => ConversationStateInspectionRuntime | undefined;
   proactiveSignalRepository?: ProactiveSignalRepository;
@@ -637,6 +641,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       ...(memoryExtractionRuntime === undefined
         ? {}
         : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
+      ...(answerDraftRuntime?.sharedChatVerifier === undefined
+        ? {}
+        : { sharedChatVerifier: answerDraftRuntime.sharedChatVerifier }),
       ...(chatKnowledgeDraftCommand === undefined
         ? {}
         : { knowledgeDraftCommand: chatKnowledgeDraftCommand }),
@@ -749,6 +756,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   }
   registerGroupMemoryApi(app, groupMemoryService, {
     authenticationConfigured: internalApiToken !== undefined,
+  });
+  registerWorkingChatScopeApi(app, dependencies.workingChatScopes ?? answerDraftRuntime?.workingChatScopes, {
+    authenticationConfigured: internalApiToken !== undefined, now,
   });
   registerConversationStateApi(
     app,

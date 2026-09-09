@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import type pg from "pg";
+import type { SharedChatSourceVerifier } from "../shared-chat/working-chat-scope.js";
 
 import {
   readEventWorkerRuntimeConfig,
@@ -158,6 +159,7 @@ export async function createEventWorkerRuntime({
   runtimeController,
   answerDraftOrchestrator,
   answerSourcePermissionVerifier,
+  sharedChatVerifier,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
   formalTaskDraftCommand,
@@ -168,6 +170,7 @@ export async function createEventWorkerRuntime({
   runtimeController?: RuntimeGate;
   answerDraftOrchestrator?: MentionAnswerDraftOrchestrator;
   answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
+  sharedChatVerifier?: SharedChatSourceVerifier;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
   formalTaskDraftCommand?: Pick<ChatFormalTaskDraftCommand, "execute">;
@@ -185,6 +188,7 @@ export async function createEventWorkerRuntime({
     runtimeController,
     answerDraftOrchestrator,
     answerSourcePermissionVerifier,
+    sharedChatVerifier,
     memoryExtractionPlanner,
     knowledgeDraftCommand,
     formalTaskDraftCommand,
@@ -199,6 +203,7 @@ async function createEnabledEventWorkerRuntime({
   runtimeController,
   answerDraftOrchestrator,
   answerSourcePermissionVerifier,
+  sharedChatVerifier,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
   formalTaskDraftCommand,
@@ -210,6 +215,7 @@ async function createEnabledEventWorkerRuntime({
   runtimeController: RuntimeGate | undefined;
   answerDraftOrchestrator: MentionAnswerDraftOrchestrator | undefined;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
+  sharedChatVerifier: SharedChatSourceVerifier | undefined;
   memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   formalTaskDraftCommand: Pick<ChatFormalTaskDraftCommand, "execute"> | undefined;
@@ -288,6 +294,7 @@ async function createEnabledEventWorkerRuntime({
       answerDraftOrchestrator,
       answerSourcePermissionVerifier:
         answerSourcePermissionVerifier ?? createUnavailableAnswerSourcePermissionVerifier(),
+      sharedChatVerifier,
       knowledgeDraftCommand,
       formalTaskDraftCommand,
       runtimeController,
@@ -408,6 +415,7 @@ function createOptionalMentionAnswerResponder({
   env,
   answerDraftOrchestrator,
   answerSourcePermissionVerifier,
+  sharedChatVerifier,
   knowledgeDraftCommand,
   formalTaskDraftCommand,
   runtimeController,
@@ -423,6 +431,7 @@ function createOptionalMentionAnswerResponder({
   env: EnvLike;
   answerDraftOrchestrator: MentionAnswerDraftOrchestrator | undefined;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
+  sharedChatVerifier: SharedChatSourceVerifier | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   formalTaskDraftCommand: Pick<ChatFormalTaskDraftCommand, "execute"> | undefined;
   runtimeController: RuntimeGate | undefined;
@@ -465,6 +474,7 @@ function createOptionalMentionAnswerResponder({
   const answerReplyDeliveryService = createAnswerReplyService({
     repository: answerReplyRepository,
     verifier: answerSourcePermissionVerifier,
+    ...(sharedChatVerifier === undefined ? {} : { sharedChatVerifier }),
     replier,
     now,
   });

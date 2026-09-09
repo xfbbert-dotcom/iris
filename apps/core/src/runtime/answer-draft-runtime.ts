@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { createPostgresWorkingChatScopeRepository, type WorkingChatScopeDataSource } from "../shared-chat/postgres-working-chat-scope-repository.js";
+import { createSharedChatSourceVerifier } from "../shared-chat/shared-chat-source-verifier.js";
+import type { WorkingChatScopeRepository, SharedChatSourceVerifier } from "../shared-chat/working-chat-scope.js";
+import { createFeishuBotChatAccessChecker, type FeishuBotChatAccessChecker } from "../feishu/feishu-bot-chat-access-checker.js";
 
 import {
   createAnswerDraftOrchestrator,
@@ -145,6 +149,8 @@ import {
 } from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
 
 export type AnswerDraftRuntime = {
+  workingChatScopes?: WorkingChatScopeRepository;
+  sharedChatVerifier?: SharedChatSourceVerifier;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
     & Partial<Pick<
       AnswerDraftOrchestrator,
@@ -158,6 +164,8 @@ export type AnswerDraftRuntime = {
 };
 
 export type AnswerDraftRuntimeDependencies = {
+  createWorkingChatScopeRepository?: typeof createPostgresWorkingChatScopeRepository;
+  createFeishuBotChatAccessChecker?: typeof createFeishuBotChatAccessChecker;
   createPostgresPool?: (config: DatabaseConfig) => Queryable & { end(): Promise<void> };
   createDocumentFragmentRepository?: (dependencies: {
     queryable: Queryable;
@@ -241,6 +249,7 @@ type RuntimeRetrievalGate = {
   canRetrieveKnowledgeBase(): boolean;
   canReadGroupContext?(groupId: string): boolean;
   canProcessGroupMessage?(groupId: string): boolean;
+  canReplyWhenMentioned?(groupId: string): boolean;
 };
 
 type RuntimeEmbedding = {
@@ -319,6 +328,7 @@ export function createAnswerDraftRuntime({
           env,
           createTokenProvider,
           createLivePermissionChecker,
+          createBotAccessChecker: dependencies.createFeishuBotChatAccessChecker ?? createFeishuBotChatAccessChecker,
           createHistoryReader: dependencies.createLiveChatContextProvider === undefined
             ? dependencies.createFeishuChatHistoryReader ?? createFeishuChatHistoryReader
             : undefined,
@@ -366,6 +376,19 @@ export function createAnswerDraftRuntime({
         })
       : undefined);
   const conversationMessages = createConversationMessages({ queryable: pool });
+  const workingChatScopes = runtimeConfig.permissionMode === "source-policy"
+    && isWorkingChatScopeDataSource(pool)
+    ? (dependencies.createWorkingChatScopeRepository ?? createPostgresWorkingChatScopeRepository)({ dataSource: pool })
+    : undefined;
+  const sharedChatRuntimeGate = {
+    canReadGroupContext: (chatId: string) => runtimeController?.canReadGroupContext?.(chatId) === true
+      && (runtimeController.canProcessGroupMessage?.(chatId) ?? true),
+    canReplyWhenMentioned: (chatId: string) => runtimeController?.canReplyWhenMentioned?.(chatId) === true,
+  };
+  const sharedChatVerifier = workingChatScopes !== undefined && feishuAnswerSources?.historyReader !== undefined
+    ? createSharedChatSourceVerifier({ scopes: workingChatScopes, reader: feishuAnswerSources.historyReader,
+        botAccessChecker: feishuAnswerSources.botAccessChecker, runtimeController: sharedChatRuntimeGate })
+    : undefined;
   const answerSourcePermissionVerifier = runtimeConfig.permissionMode === "source-policy"
     ? createAnswerSourcePermissionVerifier({
         canReadDocument: createCanReadDocument({ permissionMode: runtimeConfig.permissionMode,
@@ -380,8 +403,14 @@ export function createAnswerDraftRuntime({
         : createFeishuLiveChatContextProvider({
             reader: feishuAnswerSources.historyReader,
             queryable: pool,
+            ...(workingChatScopes === undefined || sharedChatVerifier === undefined ? {} : {
+              sharedChatScopes: workingChatScopes, sharedChatVerifier,
+              canReadChat: async (chatId: string) => sharedChatRuntimeGate.canReadGroupContext(chatId)
+                && await feishuAnswerSources.botAccessChecker.canAccessChat({ chatId }),
+            }),
             assistantReplies: createAssistantConversationContextProvider({ queryable: pool,
               reader: feishuAnswerSources.historyReader, verifier: answerSourcePermissionVerifier,
+              ...(sharedChatVerifier === undefined ? {} : { sharedChatVerifier, requireChatProvenance: true }),
               ...(crossGroupGrantValidator === undefined ? {} : { grants: crossGroupGrantValidator }),
             }),
           })),
@@ -517,6 +546,8 @@ export function createAnswerDraftRuntime({
   return {
     answerDraftOrchestrator,
     answerSourcePermissionVerifier,
+    ...(workingChatScopes === undefined ? {} : { workingChatScopes }),
+    ...(sharedChatVerifier === undefined ? {} : { sharedChatVerifier }),
     chatKnowledgeDraftGenerator: createChatKnowledgeDraftGenerator({
       repository: conversationMessages,
       model,
@@ -672,6 +703,10 @@ function isPostgresDocumentSourceGroupGrantDataSource(
   return "connect" in value && typeof value.connect === "function";
 }
 
+function isWorkingChatScopeDataSource(value: Queryable): value is Queryable & WorkingChatScopeDataSource {
+  return "connect" in value && typeof value.connect === "function";
+}
+
 function createRuntimeGatedConversationStateContextProvider({
   delegate,
   runtimeController,
@@ -824,6 +859,7 @@ function createOptionalFeishuAnswerSources({
   createTokenProvider,
   createLivePermissionChecker,
   createHistoryReader,
+  createBotAccessChecker,
 }: {
   env: EnvLike;
   createTokenProvider: (
@@ -834,8 +870,10 @@ function createOptionalFeishuAnswerSources({
   ) => FeishuDocumentPermissionChecker;
   createHistoryReader: ((dependencies: FeishuChatHistoryReaderDependencies) => FeishuChatHistoryReader)
     | undefined;
+  createBotAccessChecker: typeof createFeishuBotChatAccessChecker;
 }): {
   permissionChecker: FeishuDocumentPermissionChecker;
+  botAccessChecker: FeishuBotChatAccessChecker;
   historyReader?: FeishuChatHistoryReader;
 } | undefined {
   const feishuConfig = readOptionalFeishuOpenApiConfig(env);
@@ -857,6 +895,7 @@ function createOptionalFeishuAnswerSources({
   };
   return {
     permissionChecker: createLivePermissionChecker(sourceDependencies),
+    botAccessChecker: createBotAccessChecker(sourceDependencies),
     ...(createHistoryReader === undefined
       ? {}
       : { historyReader: createHistoryReader({ ...sourceDependencies, assistantAppId: feishuConfig.appId }) }),

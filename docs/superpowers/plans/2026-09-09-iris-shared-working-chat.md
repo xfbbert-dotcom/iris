@@ -56,7 +56,7 @@ export type SharedChatSourceVerifier = {
 };
 ```
 
-Use singleton scope ID `pilot-working-chat`; version 0 means absent only. Table `working_chat_scopes` has id/version/state/groups jsonb/updated_at/updated_by. Export reusable transaction helper `lockSharedChatSources(queryable, bindings, destinationChatId)` which checks exact scope, durable runtime and tombstones under locks and throws `WorkingChatScopeStaleError`. Use existing `lockConversationMessageIngestScope` for message locking. Stable lock order: scope, runtime, sorted message identities; caller acquires delivery last. Scope replace shares scope lock and rejects related `sending` / `reconciliation_required` deliveries.
+Use singleton scope ID `pilot-working-chat`; version 0 means absent only. Table `working_chat_scopes` has id/version/state/groups jsonb/updated_at/updated_by. Export reusable transaction helper `lockSharedChatSources(queryable, bindings, destinationChatId, additionalMessageIds?)` which checks exact scope, durable runtime and tombstones under locks and throws `WorkingChatScopeStaleError`. Use existing `lockConversationMessageIngestScope` for message locking. Stable lock order: scope, runtime, one sorted deduplicated set of source and incoming message identities; caller acquires delivery last. Scope replace shares scope lock and rejects related `sending` / `reconciliation_required` deliveries.
 
 Migration also reserves `answer_reply_chat_source_traces(delivery_id, trace_index, scope_id, scope_version, source_chat_id, destination_chat_id, message_id, content_hash)` with delivery FK and unique delivery/trace index, no text body. Add `chat_provenance_version smallint` nullable to answer deliveries, leaving legacy rows distinguishable. Task 3 writes/reads these tables; Task 1 must not edit existing answer repository.
 
@@ -122,8 +122,12 @@ expect(messages.filter(m=>m.sourceChatId==="group-a").every(m=>m.sharedChatSourc
 - Modify: `apps/core/src/memory/assistant-conversation-context.ts`
 - Modify: `apps/core/src/conversation/feishu-mention-answer-responder.ts`
 - Modify: `apps/core/src/conversation-state/conversation-state-evidence-deletion.ts`
+- Modify: `apps/core/src/conversation-state/conversation-state-api.ts` (typed in-flight deletion conflict409)
+- Modify: `apps/core/src/conversation/feishu-message-event-processor.ts`, `apps/core/src/conversation/conversation-message-replay-guard.ts` (ordinary receipt-backed response must not hold outer incoming ingest transaction while awaiting generation; legacy direct-command paths retain their prior guard)
 - Create: `apps/core/tests/shared-chat-source-verifier.test.ts`
+- Create: `apps/core/tests/postgres-shared-chat-answer-concurrency.test.ts` (real dual-group reciprocal-source lock regression, no Redis prerequisite)
 - Extend: `apps/core/tests/assistant-source-lineage.test.ts`, answer-reply delivery/receipt/Postgres suites, `apps/core/tests/postgres-conversation-state-evidence-deletion.test.ts`
+- Extend: event processor/replay tests for dual-group simultaneous questions and deletion before prepare/send. Independent review found the old outer guard can form an application-level wait cycle with the new cross-source locks; resolve before activation.
 
 **Interfaces:**
 
@@ -157,6 +161,7 @@ expect(sentTexts).not.toContain("original protected answer");
 - Modify: `apps/core/src/runtime/answer-draft-runtime.ts`
 - Modify: `apps/core/src/runtime/event-worker-runtime.ts`
 - Modify: `apps/core/src/app.ts`
+- Modify: `.github/workflows/ci.yml` (explicitly include new Postgres suites and deletion races in the database-enabled step)
 - Create: `apps/core/tests/working-chat-scope-api.test.ts`
 - Extend: `apps/core/tests/answer-draft-runtime.test.ts`, `apps/core/tests/intent-before-retrieval.test.ts`
 - Update: whitepaper, failure ledger, coverage baseline, README and `docs/development/current-handoff.md`
@@ -170,7 +175,7 @@ Register protected GET/PUT `/internal/working-chat-scope`. PUT requires expected
 
 ```ts
 expect((await app.inject({method:"PUT",url:"/internal/working-chat-scope",payload:{}})).statusCode).toBe(401);
-const draft=await runtime.orchestrator.generateDraft({question:"测试准备群的问卷重点是什么？",groupId:oldGroupId});
+const draft=await runtime.answerDraftOrchestrator.generateDraft({question:"测试准备群的问卷重点是什么？",chatId:oldGroupId,liveChatMessages:[]});
 expect(draft.sharedChatSources?.some(s=>s.sourceChatId===testGroupId)).toBe(true);
 ```
 

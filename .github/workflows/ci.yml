@@ -64,6 +64,10 @@ jobs:
           npm --workspace apps/core test -- postgres-answer-reply-repository.test.ts
           npm --workspace apps/core test -- postgres-group-memory-repository.test.ts
           npm --workspace apps/core test -- postgres-historical-chat-context.test.ts
+          npm --workspace apps/core test -- postgres-working-chat-scope.test.ts
+          npm --workspace apps/core test -- postgres-shared-working-chat-context.test.ts
+          npm --workspace apps/core test -- postgres-shared-chat-answer-concurrency.test.ts
+          npm --workspace apps/core test -- postgres-conversation-state-evidence-deletion.test.ts
           npm --workspace apps/core test -- agent-execution-ledger.test.ts
           npm --workspace apps/core test -- postgres-formal-task-repository.test.ts
           npm --workspace apps/core test -- postgres-formal-task-card-repository.test.ts

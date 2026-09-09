@@ -217,6 +217,7 @@ describe("createEventWorkerRuntime", () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const answerReplyRepository = fakeAnswerReplyRepository();
     const answerReplyDeliveryService = { respond: vi.fn() };
+    const sharedChatVerifier = { verify: vi.fn(async () => true) };
     let deliveryServiceVerifier: AnswerSourcePermissionVerifier | undefined;
     const now = () => new Date("2026-08-02T06:07:08.000Z");
     const redisClient = {
@@ -322,6 +323,7 @@ describe("createEventWorkerRuntime", () => {
       dependencies,
       runtimeController,
       answerDraftOrchestrator,
+      sharedChatVerifier,
       knowledgeDraftCommand,
       formalTaskDraftCommand,
       now,
@@ -352,6 +354,7 @@ describe("createEventWorkerRuntime", () => {
       repository: answerReplyRepository,
       replier,
       verifier: expect.any(Object),
+      sharedChatVerifier,
       now,
     });
     await expect(deliveryServiceVerifier?.verify({
