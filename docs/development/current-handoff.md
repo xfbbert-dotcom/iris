@@ -7,7 +7,7 @@
 用户已确认现有三个试点群共享普通工作讨论，无需逐消息写知识库。正在按
 [共享工作群聊设计](../superpowers/specs/2026-09-09-iris-shared-working-chat-design.md)与
 [实施计划](../superpowers/plans/2026-09-09-iris-shared-working-chat.md)落实；新能力尚未部署/开启。
-最新进度、四处文档处置和实际验收见[专项记录](iris-shared-working-chat.md)。这取代下面
+代码已推进至`a138c5a1`，本机全量通过；真实PG/发布门禁尚未完成。最新进度、四处文档处置和实际验收见[专项记录](iris-shared-working-chat.md)。这取代下面
 “下一步仅原范围反馈”的工作排序，但不改写此前版本的隔离与验收事实。
 
 ## 先确认从哪里继续

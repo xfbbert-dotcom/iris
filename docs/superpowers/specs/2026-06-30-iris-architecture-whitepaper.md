@@ -341,6 +341,12 @@ participating group can ask about them. Bot membership alone never defines the s
 Scope membership is versioned, defaults absent/closed, and is rechecked with source/destination
 runtime controls, fresh source access and deletion facts. Keep source group/time attribution and
 global context budgets; do not relabel another group's proposal as a confirmed company decision.
+All external messages exposed to the model, including uncited labels and dependencies inherited
+through Iris rewrites, retain their original scope version and body hash in the answer receipt.
+Ordinary receipt-backed generation must release its outer incoming-message transaction before
+model or remote-source awaits. Prepare/send then lock scope, runtime, the sorted union of source
+and incoming message identities, and delivery; deletion and scope changes respect that boundary.
+Legacy direct-command protection is not silently removed by this ordinary-answer change.
 This is an approved architecture extension, not a statement that it is already deployed.
 
 Explicit single-day historical questions use an Asia/Shanghai date-scoped live read. Same-chat,

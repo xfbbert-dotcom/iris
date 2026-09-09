@@ -34,6 +34,22 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   write; outside C remains isolated; revoke/delete/changed-text and rewrite-chain gates pass. This
   entry records design intent, not a claim that those gates have already passed or been deployed.
 
+### Check the outer message transaction when adding cross-source send locks
+
+- **Discovered risk:** The existing processor held its incoming-message replay transaction while
+  awaiting the whole answer. Two groups asking simultaneously and citing one another can hold
+  different incoming locks while a new shared-scope send waits on both; application-level waits
+  can hide the complete cycle from PostgreSQL's deadlock detector.
+- **Prevention rule:** Ordinary receipt-backed generation runs outside that outer transaction.
+  Prepare/send recheck the incoming tombstone together with external sources using one sorted
+  lock set. Legacy commands and fallback effects keep their prior deletion protection. Deferring
+  work must not strand an in-memory dedupe claim if the outer commit fails.
+- **Finite gate:** Real processor/responder/receipt reciprocal-group concurrency, revoke-vs-send,
+  and source/incoming-delete-vs-send tests must pass on PostgreSQL. Unit tests or skipped database
+  cases do not prove the lock boundary. Implementation and actual gate status are recorded in
+  [the shared-chat record](../development/iris-shared-working-chat.md); no production incident or
+  completed database validation is inferred from this design review finding.
+
 ### Do not confuse hardening with product completion
 
 - **Failure:** Work continued through increasingly narrow robustness checks while whitepaper core

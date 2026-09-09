@@ -30,7 +30,8 @@ The internal MVP acceptance checklist lives at:
 ## Current Product State
 
 The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
-is in implementation. It separates ordinary cross-group discussion lookup from formal Wiki
+has committed code and passing local regression tests; database and release gates are in progress.
+It separates ordinary cross-group discussion lookup from formal Wiki
 publication. It is not yet deployed or activated; other groups and external-action gates remain
 outside that approval. Consult the linked status before claiming it is available.
 
