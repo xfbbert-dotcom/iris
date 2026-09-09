@@ -245,9 +245,9 @@ function localizeChineseUncertaintyPolicyTerms(
 
   const answerText = transformUnprotectedAnswerText(result.answerText, (text) => text
     .replace(/[ \t]*\bconjecture\b[ \t]*/giu, "推测")
-    .replace(/\bconfidence\b([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\blow\b/giu, "置信度$1低")
-    .replace(/\bconfidence\b([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bmedium\b/giu, "置信度$1中等")
-    .replace(/\bconfidence\b([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bhigh\b/giu, "置信度$1高")
+    .replace(/(?:\bconfidence\b|置信度)([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\blow\b/giu, "置信度$1低")
+    .replace(/(?:\bconfidence\b|置信度)([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bmedium\b/giu, "置信度$1中等")
+    .replace(/(?:\bconfidence\b|置信度)([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bhigh\b/giu, "置信度$1高")
     .replace(/\blow[ \t]+confidence\b/giu, "低置信度")
     .replace(/\bmedium[ \t]+confidence\b/giu, "中等置信度")
     .replace(/\bhigh[ \t]+confidence\b/giu, "高置信度")

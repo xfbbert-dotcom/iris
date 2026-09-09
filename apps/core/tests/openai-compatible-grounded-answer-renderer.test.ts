@@ -198,6 +198,59 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
     expect(result.answerText).not.toMatch(/\b(?:conjecture|confidence|low)\b/iu);
   });
 
+  it.each([
+    { policy: "置信度为medium", visible: "置信度为中等", confidence: "medium" },
+    { policy: "置信度等级为low", visible: "置信度等级为低", confidence: "low" },
+    { policy: "置信度评级：HIGH", visible: "置信度评级：高", confidence: "high" },
+  ] as const)("localizes Chinese-prefixed confidence prose: $policy", async ({ policy, visible, confidence }) => {
+    const prose = "缺少其他群的完整记录。根据当前证据，以下仅是工作讨论概况的推测，";
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText: `${prose}${policy}。`, evidenceState: "partial", confidence,
+    })) };
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      ...groundedRenderInput({ ...partialPlan(), confidence }), question: "其他群最近聊了什么？",
+    });
+    expect(result).toEqual({ answerText: `${prose}${visible}。`, evidenceState: "partial", confidence });
+    expect(client.complete).toHaveBeenCalledOnce();
+  });
+
+  it("localizes Chinese-prefixed confidence in a none-state answer without changing its state", async () => {
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText: "缺少可用的讨论记录，置信度等级为low。", evidenceState: "none", confidence: "low",
+    })) };
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "其他群最近聊了什么？",
+      plan: { taskMode: "company_fact", evidenceState: "none", premises: [], proposedAnswer: null,
+        missingInformation: ["可用的讨论记录"], confidence: "low" }, evidence: [], liveChatMessages: [],
+    });
+    expect(result).toEqual({ answerText: "缺少可用的讨论记录，置信度等级为低。", evidenceState: "none", confidence: "low" });
+  });
+
+  it("preserves literal code and URLs around Chinese-prefixed confidence prose", async () => {
+    const literals = [
+      "原文字面片段 `置信度为medium`。",
+      "https://docs.example/置信度为medium?level=high",
+      "```text", "置信度等级为low", "```",
+      "独立术语 medium、low、high 不作为置信度评级改写。",
+    ].join("\n");
+    const client = { complete: vi.fn(async () => JSON.stringify({
+      answerText: `资料不足；这是推测，置信度为medium。\n${literals}`, evidenceState: "partial", confidence: "medium",
+    })) };
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render(groundedRenderInput(partialPlan()));
+    expect(result).toEqual({ answerText: `资料不足；这是推测，置信度为中等。\n${literals}`,
+      evidenceState: "partial", confidence: "medium" });
+  });
+
+  it("preserves Chinese-prefixed confidence excerpts when English output is explicitly requested", async () => {
+    const answerText = "The available excerpt says 置信度为medium; the broader discussion remains unavailable.";
+    const client = { complete: vi.fn(async () => JSON.stringify({ answerText, evidenceState: "partial", confidence: "medium" })) };
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      ...groundedRenderInput(partialPlan()), question: "请用英语回答：其他群最近聊了什么？",
+    });
+    expect(result).toEqual({ answerText, evidenceState: "partial", confidence: "medium" });
+    expect(client.complete).toHaveBeenCalledOnce();
+  });
+
   it("localizes mixed English uncertainty policy terms in a Chinese none answer", async () => {
     const answerText =
       "资料中只有本群新版问卷，没有第三版问卷。若给出具体题目差异只能是 conjecture，confidence评级为low。";
