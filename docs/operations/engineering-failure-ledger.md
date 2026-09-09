@@ -7,6 +7,12 @@ automated guard.
 The architecture whitepaper remains authoritative. This ledger explains how to avoid repeating
 delivery mistakes while implementing it.
 
+Every bug fix must review this ledger alongside the whitepaper, requirement baseline and repository
+entry, following [the four-place closure gate](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#112-mandatory-bug-fix-documentation-closure).
+Amend an existing entry when its lesson already applies; record `reviewed-unchanged` with a reason
+in the fix record when no new reusable rule is needed. Latest evidence and worktree entry:
+[current handoff](../development/current-handoff.md).
+
 ## Product Delivery
 
 ### Do not confuse hardening with product completion
@@ -481,7 +487,7 @@ delivery mistakes while implementing it.
 - **Root cause:** The answer prompt correctly retained the latest 20 chat messages, but the document
   retrieval query also concatenated all 20. An older exact document title therefore ranked its
   revoked source inside the prompt window and triggered the intentionally strict preflight block.
-- **Prevention rule:** Keep the 20-message live-chat anchor in the model prompt, but build document
+- **Prevention rule:** For contextual requests, keep the bounded 20-message live-chat anchor in the model prompt, but build document
   retrieval queries from only the latest five messages that represent the current topic. Do not
   fix this class of false block by weakening denied-source handling or the final permission guard.
 - **Guard:** An orchestrator regression proves the stale sixth message is absent from retrieval
@@ -536,13 +542,75 @@ delivery mistakes while implementing it.
 - **Prevention rule:** Parse the first delimiter, match the complete instruction against a strict
   allowlist, and classify before chat loading, retrieval, permission inspection, or context
   assembly. Return exact-output payloads literally without a model request. Treat meta-format and
-  previous/attached/above-context requests as company-factual.
+  previous/attached/above-context requests as contextual, not as standalone. The contextual planner
+  may still select an authorized direct transformation; context dependency is not synonymous with
+  a company-fact question. This distinction supersedes the older company-factual-only wording.
 - **Guard:** Orchestrator regressions make context builders throw for direct tasks, prove canonical
   empty metadata and zero citations, prove exact-output uses no provider, and send adversarial
-  wrappers through the company-factual planner. Runtime retrieval tests use company-factual
+  wrappers through contextual classification and the appropriate evidence planner. Runtime retrieval tests use company-factual
   questions rather than direct transformations.
 - **Exit condition:** Focused orchestration/runtime suites, full verification, independent review,
   and PR CI pass on the same commit before merge.
+
+### Decide ordinary conversational intent before retrieval
+
+- **Failure:** A personal hunger remark retrieved and copied a diary example with a knowledge-base
+  citation; substantive tone feedback could receive only laughter. A natural-looking replay still
+  exposed unrelated background material, so apparent fluency did not prove the boundary worked.
+- **Root cause:** Narrow phrase shortcuts left ordinary conversation dependent on retrieval-first
+  planning. Even a semantic direct-task answer could see background documents that redefined the
+  task. The observed original turn does not identify every failed model stage.
+- **Prevention rule:** A question-only semantic context-need decision precedes history, memory and
+  document loading. Standalone generation defensively rejects reference context and document
+  citations; state/emotion/tone feedback need no company evidence. Contextual rewriting, analysis
+  and explicit document lookup retain source traces and current permission checks.
+- **Guard:** [Router tests](../../apps/core/tests/openai-compatible-request-context-router.test.ts),
+  [provider tests](../../apps/core/tests/openai-compatible-model-provider.test.ts) and
+  [runtime/orchestrator tests](../../apps/core/tests/intent-before-retrieval.test.ts) exercise actual
+  boundaries, zero context-provider calls, empty provenance and contextual controls. Repeat hunger
+  and tone requests against the real model, alongside explicit diary lookup and revoked/foreign sources.
+- **Exit condition:** The bounded ordinary/contextual matrix and deployed internal-draft gate pass
+  for the same application commit; no new permission or external-action capability is enabled.
+  Fixes: `32ac1915`, `2ba91b2f`, `ae828488`; deployed within `748b8404`.
+  [Dated acceptance and limits](../development/iris-continuous-dialogue.md).
+
+### Separate source-grounded advice from proof of an outcome
+
+- **Failure:** Both questionnaire originals were available, but Iris refused to recommend a version
+  because there was no author verdict or field-test result. Structural HTTP assertions passed while
+  manual answer review rejected the release; diagnostics later showed inconsistent evidence-state choices.
+- **Root cause:** Planning and rendering blurred source facts, Iris's task-fit assessment and proof
+  of empirical effectiveness. The original failed HTTP plan was not captured, so its first failing
+  stage remains unproven rather than retrospectively assigned.
+- **Prevention rule:** Assess sufficiency for the question asked. Available alternatives and source
+  facts may support a conditional recommendation without an author conclusion; official decisions,
+  author intention and proven outcomes still require their own evidence. Preserve validated advice
+  with its premises, without inventing missing versions or effectiveness data.
+- **Guard:** [Planner tests](../../apps/core/tests/openai-compatible-evidence-planner.test.ts)
+  and [renderer tests](../../apps/core/tests/openai-compatible-grounded-answer-renderer.test.ts)
+  check the contract. Real-model acceptance separately requires both originals, two concrete or
+  conditional recommendations with source-specific reasons, and negative missing-evidence controls.
+  A prompt assertion, zero HTTP errors or retrieved text alone is not a semantic pass. A correctly
+  bounded answer such as “暂无授权证据” must not fail solely because a test omitted that synonym;
+  preserve the failed output and verify an assertion correction still rejects unsupported claims.
+- **Exit condition:** Required real-answer checks pass on the deployed immutable application, with
+  rollback/rejected runs retained. Fixes `7a640154` and `627eeba0` are included in `748b8404`.
+  The supplemental missing-third-version label confusion remains P2, not silently counted as passed.
+  [Release and follow-ups](../development/iris-continuous-dialogue.md).
+
+### Localize policy prose without rewriting evidence or literals
+
+- **Failure:** An uncertain Chinese answer exposed internal conjecture/confidence words. A first
+  normalization attempt could also rewrite those words inside URLs and code.
+- **Root cause:** The display normalizer excluded the `none` state, and prose replacement did not
+  initially protect literal spans. Model outputs were stochastic; the coverage gap was deterministic.
+- **Prevention rule:** Normalize only Chinese display prose for the affected states. Preserve
+  structured evidence/confidence data, explicitly requested English, URLs, inline code and fenced code.
+- **Guard:** [Renderer regression tests](../../apps/core/tests/openai-compatible-grounded-answer-renderer.test.ts)
+  include `none`/`partial`, English overrides and protected spans. Check real negative answers as well;
+  do not change evidence sufficiency merely to produce fluent wording.
+- **Exit condition:** The 22 focused renderer cases and required real-model language controls pass.
+  Fix `748b8404`; [dated production evidence](../development/iris-continuous-dialogue.md).
 
 ## Test Architecture
 
@@ -555,11 +623,15 @@ delivery mistakes while implementing it.
   in the small embedding runner before evidence planning.
 - **Prevention rule:** Use a bounded, authoritative same-chat history read in the configured Feishu
   runtime; preserve deletion and runtime gates, and never synthesize receive events to repair QA.
-  Scan at most 100 raw messages; retain at most two related slots (including a same-response reply
-  parent) so short intervening traffic cannot wash the source out of the twenty/ten-message limits.
+  Scan at most 100 raw messages; protect at most two source/reply-label bundles at each selection
+  boundary so short intervening traffic cannot wash either version out of the twenty/ten-message
+  limits. This extends the earlier two-individual-slot rule for single-source questions.
   Preserve prompt-local reply relations into model evidence, not only the context selector: the
   real planner still denied a questionnaire until “这是问卷” was explicitly bound to its original.
-  Budget search-vector inputs separately from the actual answer evidence.
+  Budget search-vector inputs separately from the actual answer evidence. Date-anchored follow-ups
+  discover same-chat IDs, then read current Feishu bodies within fixed budgets; they do not authorize
+  cross-group raw chat or promise complete archives. See the
+  [bounded-history and comparison contract](../development/iris-continuous-dialogue.md).
 - **Guard:** Reader and runtime regressions cover rich posts, missing local rows, scope, tombstones,
   access failure, and post-await disable. Embedding tests bound only EmbeddingGemma query bytes,
   preserving source text and document vectors.

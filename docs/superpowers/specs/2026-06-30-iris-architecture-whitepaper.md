@@ -271,7 +271,25 @@ Iris memory is divided into:
 
 ### 5.5 Answer Retrieval Order
 
-When answering, Iris should search in this order:
+Retrieval is conditional, not the default prerequisite for every utterance. Before loading
+history, documents, memories or embeddings, Core determines whether the current request needs
+context. The semantic routing decision sees only the current question; retrieved content must
+not redefine a personal remark as a knowledge lookup. Exact-literal and bounded greeting shortcuts
+remain ahead of this decision.
+
+Self-contained conversation includes personal states, emotion, tone feedback, ordinary explanations
+and generic drafting. Its model boundary excludes company context even if a caller supplies it;
+it returns no source fragments or document citations. A diary narrator's experience is neither
+Iris's experience nor evidence of the user's situation. Tone feedback calls for a substantive
+adjustment, not only laughter. Invalid routing output or provider failure is a bounded generation
+failure, not permission to silently fall back to retrieval.
+
+Requests about prior messages, actual group/company materials, version comparisons or an earlier
+draft retain the contextual evidence and permission pipeline. Routing never grants access or
+weakens deletion, document-snapshot, grant-version or send-time checks. An uncited fragment exposed
+to the model must still retain its permission trace.
+
+For contextual requests, Iris should search in this order:
 
 1. current group-chat context;
 2. current group's long-term memory;
@@ -305,8 +323,8 @@ Live-chat history loading may scan more raw group events than it injects into th
 recent Feishu traffic can include images, stickers, blank text, or document-only messages. The
 configured Feishu source-policy runtime reads at most two newest pages of 50 current-chat messages, filters
 to readable human text/posts, applies local deletion tombstones, and injects at most 20 messages.
-Query-term matching may reserve at most two slots for related content and a same-response reply
-parent, retaining chronology and the twenty-message prompt/ten-message planning limits. This fresh
+Topic matching protects at most two source-and-reply-label bundles at each selection boundary,
+retaining chronology and the twenty-message prompt/ten-message planning limits. This fresh
 source is authoritative; access failure must not fall back to stale persisted text.
 Without the Feishu integration, the local provider scans up to three times the requested output
 window, capped at 100 raw rows. Both paths preserve the existing prompt budget and group boundary;
@@ -319,6 +337,18 @@ resolve up to eight topic-linked parents/roots in that same chat and date. A den
 lookup supersedes earlier list content, final tombstones still apply, and prompt/planning budgets
 remain unchanged. This dated recall is distinct from both the latest-message anchor and governed
 cross-group document retrieval.
+
+Undated topical follow-ups may use at most two date anchors from recent human messages; relative
+dates are resolved against each anchor's sent time. They share the same eight candidate-ID and
+eight nonrecursive parent/root budgets. The fact store discovers identities only; freshly readable
+same-chat bodies supply evidence. Preserve both available originals and their labels when comparing
+versions, including bounded later sections, and disclose clipping instead of claiming unseen text.
+
+A follow-up may use Iris's own recent answer only through a freshly readable same-chat message
+bound to the sent-delivery ledger and verified Iris sender. Such text is conversational output,
+not a new fact. Document-derived answers require current coverage of the original source, snapshot
+and grant version before reuse; an old answer cannot bypass revoked access. Concrete history/text
+budgets and the deployment record live in [Continuous dialogue](../../development/iris-continuous-dialogue.md).
 
 EmbeddingGemma query vectors have a separate 512-byte UTF-8 input budget, including their search
 prefix, to fit the small local runner. This does not truncate answer evidence or change stored
@@ -338,10 +368,18 @@ Constitutional principle:
 > Iris may use semantic memory for recall, but must use fact-layer sources for important claims. Long-term memory must be traceable, deletable, correctable, and permission-bounded.
 > Live chat context is the anchor of an answer. Background documents inform the answer, but must not overwrite the immediate conversational intent.
 
-Standalone greetings, thanks, and explicit generic drafting requests do not require company-fact
-evidence. Core may route these bounded, self-contained requests to natural conversation with an
-empty company context. Questions about actual company facts or prior discussion still require
-authorized evidence; a greeting attached to such a question does not change that requirement.
+Evidence sufficiency is relative to the requested task. When the available originals support an
+assessment, Iris may compare, explain and offer reasoned conditional advice without a pre-existing
+author verdict. Distinguish source facts from Iris's inference and recommendation; a recommendation
+does not establish a company decision, author intention or empirically proven improvement. Requests
+for those facts still require their own evidence, and missing versions must not be invented or
+relabeled as known ones. A greeting attached to a factual request does not remove these requirements.
+
+Normal Chinese output must not expose internal evidence/confidence policy tokens. Localize display
+prose without changing structured state or confidence, and preserve requested English, URLs and
+code literally. Prompt wording alone is not proof of model behavior: acceptance must inspect real
+answers, source coverage and isolation as separate gates. The approved repair is specified in
+[Intent before retrieval](2026-09-08-iris-intent-before-retrieval-design.md).
 
 ## 6. Permission, Safety, And Proactive Behavior
 
@@ -779,6 +817,37 @@ after its observed failures and user feedback contain no unresolved P0 or P1 iss
 Once the gate is green, the next engineering action is pilot deployment and observation, not another
 general audit. New hardening work should be driven by a failed gate, a pilot incident, or repeated
 user friction. This rule preserves core quality while ensuring quality is tested against real work.
+
+### 11.2 Mandatory Bug-Fix Documentation Closure
+
+Every bug fix must complete a four-place documentation check before it is reported as closed.
+The implementer owns it and the reviewer checks it. This applies to model behavior, runtime,
+permission, deployment and acceptance-script bugs, not only feature work. Code/tests alone do not
+complete the handoff. Record all four dispositions in the checked-in fix or release record:
+
+| Place | Required synchronization |
+|---|---|
+| Architecture whitepaper | Update stable product behavior, boundaries and invariants changed or clarified by the fix; link the detailed design rather than copying incident logs. |
+| [Engineering failure ledger](../../operations/engineering-failure-ledger.md) | Add or amend a reusable failure/root-cause/prevention/guard/exit-condition entry; link the fix and regression evidence. |
+| [Core requirement coverage baseline](2026-07-14-iris-core-requirement-coverage-baseline.md) | Update affected requirement status, acceptance scope and remaining gaps; distinguish implemented, locally verified, internally accepted, real-Feishu accepted and deployed. |
+| Repository entry and [current handoff](../../development/current-handoff.md) | Keep README/AGENTS links, the active worktree/branch locator and latest dated release/backlog pointers discoverable for a fresh session. |
+
+Each disposition must be `updated` with an artifact/section link or `reviewed-unchanged` with a
+specific reason and the still-valid link. An omitted row or unexplained "not applicable" fails the
+closure check. Every fix still needs a durable record, even when it produces no new architecture
+rule or reusable ledger entry. Do not append duplicate text to all four places just to create diffs.
+
+The fix record includes the observed symptom, confirmed root cause (or explicitly unresolved
+attribution), fix commit, regression command/test, actual acceptance result, deployment status and
+known follow-ups. Raw private conversations, credentials and internal identifiers do not belong in
+this record. Historical evidence must remain dated; a documentation commit is not a deployment,
+and passing a replay does not erase a prior unresolved finding.
+
+For an urgent production failure, containment/rollback must not wait for prose. Record the gap and
+finish the four-place check before final handoff or claiming the fix closed. Each gate has an exit:
+once the agreed checks and this documentation closure pass, put nonblocking findings in the backlog
+and move on. This is a required engineering/review gate; do not describe it as an automatic CI
+enforcement unless such a check is actually implemented and verified.
 
 ## 12. Architecture Pressure Tests And Evolution Simulations
 

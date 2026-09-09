@@ -3,6 +3,8 @@
 本次修复的验收标准见 [设计](../superpowers/specs/2026-09-08-iris-continuous-dialogue-design.md) 和
 [实施计划](../superpowers/plans/2026-09-08-iris-continuous-dialogue.md)。部署状态以实际发布记录为准，不能从代码存在推断生产已更新。
 
+新会话先读[当前接手入口与修复索引](current-handoff.md)；下方是带日期的历史事实，不代替重新核对当前生产状态。
+
 ## 用户体验
 
 - 普通知识、解释、创作、改写和一般建议不要求先有公司知识库条目。
@@ -93,3 +95,17 @@ Iris 自己的连续回答只读取本群最近 24 小时内最多两条已发�
 - 意图策略可补充更明确的“拿不准时走上下文”说明；现有资料追问控制已覆盖，但本次不增加新路由、缓存或跨群能力。
 - 当前模型免费额度在密集验收时曾返回429；另有短暂请求超时，其根因未确定。验收通过间隔请求复测，未更改模型、密钥、计费或额度；不把验收间隔作为线上功能变更。
 - 构建提示既有 Fastify5.9.0 中等级别依赖告警。当前唯一 Fastify 实例未配置数字型 `trustProxy`，也未采用相关根级基本类型请求体 schema，因此两个公告的已知触发配置未在本项目发现；依赖仍待维护升级，不能称已修复。见 [代理信任公告](https://github.com/advisories/GHSA-3m5p-2c4r-xxw2) 和 [请求体类型公告](https://github.com/advisories/GHSA-w2qp-rph6-63g4)。
+
+## 2026-09-09 文档补齐：四处同步
+
+问题：这轮代码、测试与发布记录已保存，但白皮书和台账的旧路由表述未完全同步，需求基线缺9月修订，默认工作目录仍是旧工作树，接手者可能只看到旧结论。原因是此前没有强制的四处检查及统一接手索引。本次仅整理文档，不部署、不改运行开关；修复提交和回归文件统一列在[修复索引](current-handoff.md#修复证据索引)。
+
+| 核对项 | 处理结果 |
+|---|---|
+| 白皮书 | 已更新：[5.5](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#55-answer-retrieval-order)补齐先意图后检索、连续资料分析与建议边界；[11.2](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#112-mandatory-bug-fix-documentation-closure)新增每次修复的强制四处检查和退出条件。 |
+| 故障台账 | 已更新：[台账](../operations/engineering-failure-ledger.md)补齐普通对话、建议证据要求、中文策略词及语义验收经验，并修正旧的消息保留/分类适用范围。 |
+| 需求/验收基线 | 已更新：[2026-09-09修订](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#status-amendment---2026-09-09-conversation-repair)区分内部草稿、内存改写、真实回执集成和部署证据，保留P2未解决项。 |
+| 开工入口 | 已更新：[README](../../README.md)、[AGENTS](../../AGENTS.md)与[接手入口](current-handoff.md)给出最新工作树、必读顺序、来源优先级及修复索引；默认目录仅增加相同AGENTS指引，不合并旧代码。 |
+
+核验完成：8份文档的67个本地链接、11个章节引用、21个提交引用有效；18个修复提交均属于当前实现历史，默认目录的旧提交按它自己的分支核对。两个 AGENTS 内容一致、四行同步记录齐全、`git diff --check`通过，独立只读审阅未发现阻塞问题。初版检查器错误地要求旧工作树提交也是实现分支祖先，已改为分别核对两种引用；这是文档检查修正，不涉及应用。
+本次不重跑应用/生产验收，也不声称强制规则已经由 CI 自动执行。本机可重放 `node .superpowers/sdd/2026-09-09-documentation-sync/validate-docs.mjs`；跨机器按上述公开核验范围检查，临时脚本不是唯一交接入口。

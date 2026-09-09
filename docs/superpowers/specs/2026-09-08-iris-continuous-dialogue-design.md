@@ -2,6 +2,12 @@
 
 Date: 2026-09-08. Status: implemented and deployed as c4f83ee7 on 2026-09-08; bounded acceptance passed. See docs/development/iris-continuous-dialogue.md for release evidence and remaining nonblocking wording limitations.
 
+Routing amendment: the retrieval-first semantic routing approach below is historical. The later
+[intent-before-retrieval design](2026-09-08-iris-intent-before-retrieval-design.md) supersedes that
+stage for self-contained conversation; the contextual source selection, budgets and permission
+lineage here remain applicable. Follow the dated release record, not this old status line, for the
+last verified deployment.
+
 ## Approved outcome
 
 Iris must converse, explain ordinary knowledge, compare supplied material, reason and offer advice;

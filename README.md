@@ -2,6 +2,15 @@
 
 Iris is the company's Feishu-native AI assistant and collaboration agent.
 
+## Start Here
+
+Read [AGENTS.md](AGENTS.md) and the [current handoff](docs/development/current-handoff.md) before
+continuing work. Recheck `git status`, `git diff`, recent commits and `git worktree list`; an old
+checkout or a remembered conversation is not the current implementation/release baseline.
+Every bug fix requires the [four-place documentation closure](docs/superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#112-mandatory-bug-fix-documentation-closure):
+whitepaper, failure ledger, coverage baseline and repository entry. Record updates or justified
+unchanged reviews in the checked-in fix record before declaring completion.
+
 The architecture constitution lives at:
 
 `docs/superpowers/specs/2026-06-30-iris-architecture-whitepaper.md`
@@ -20,8 +29,9 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
-All ten required P1 product loops have passed a bounded real-Feishu acceptance run. Production is
-now in a controlled 3-5 person, single-group daily pilot. This does not authorize expansion to all
+All ten required P1 product loops have historical bounded real-Feishu acceptance evidence. The
+rollout began with a controlled 3-5 person, single-group daily pilot; consult the dated current
+handoff and fresh runtime checks for present activation and group scope. This does not authorize expansion to all
 20-30 employees; expansion follows only after ordinary pilot use contains no unresolved P0 or P1
 issue.
 
@@ -68,8 +78,8 @@ intentional governed session; the acceptance evidence is recorded in
 contract remains `docs/runbooks/iris-governed-feishu-task-acceptance.md`.
 
 High-impact capabilities remain bounded: proactive deliveries require human review, knowledge-base
-writes open only for an intentional governed session, and every known non-pilot group remains
-disabled.
+writes open only for an intentional governed session, and groups outside the exact approved pilot
+scope must remain disabled. Accepted capability coverage does not imply that a runtime gate is on.
 
 ## Local Development
 
