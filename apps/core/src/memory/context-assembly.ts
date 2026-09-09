@@ -1,4 +1,5 @@
 import { boundLiveAnalysisItems, MAX_LIVE_ANALYSIS_TOTAL_CHARS } from "./live-analysis-text.js";
+import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 import type {
   GroupMemoryCategory,
   GroupMemoryScope,
@@ -28,7 +29,46 @@ export type LiveChatMessage = {
   messageId?: string;
   parentMessageId?: string;
   rootMessageId?: string;
+  sourceChatId?: string;
+  sourceChatName?: string;
+  sourceSentAt?: string;
+  sharedChatSource?: SharedChatSourceBinding;
+  underlyingChatSources?: SharedChatSourceBinding[];
+  sharedChatRecap?: boolean;
 };
+
+export function copyLiveChatSourceMetadata(message: LiveChatMessage): Partial<LiveChatMessage> {
+  return {
+    ...(message.sharedChatRecap === undefined ? {} : { sharedChatRecap: message.sharedChatRecap }),
+    ...(message.sourceChatId === undefined ? {} : { sourceChatId: message.sourceChatId }),
+    ...(message.sourceChatName === undefined ? {} : { sourceChatName: message.sourceChatName }),
+    ...(message.sourceSentAt === undefined ? {} : { sourceSentAt: message.sourceSentAt }),
+    ...(message.sharedChatSource === undefined ? {} : { sharedChatSource: { ...message.sharedChatSource } }),
+    ...(message.underlyingChatSources === undefined ? {} : { underlyingChatSources: message.underlyingChatSources.map(source => ({ ...source })) }),
+  };
+}
+
+/** Source identity is durable provenance, independent of which facts receive Cn citations. */
+export function collectSharedChatSources(messages: readonly LiveChatMessage[]): SharedChatSourceBinding[] {
+  const sources = new Map<string, SharedChatSourceBinding>();
+  for (const message of messages) {
+    for (const source of [ ...(message.sharedChatSource === undefined ? [] : [message.sharedChatSource]), ...(message.underlyingChatSources ?? []) ]) {
+      const key = JSON.stringify([source.scopeId, source.scopeVersion, source.sourceChatId, source.destinationChatId, source.messageId, source.contentHash]);
+      sources.set(key, { ...source });
+    }
+  }
+  return [...sources.values()];
+}
+
+/** Bounded display metadata; permission bindings remain outside the model payload. */
+export function liveChatSourceAttribution(message: LiveChatMessage): Partial<LiveChatMessage> {
+  return {
+    ...(message.sourceChatId === undefined ? {} : { sourceChatId: message.sourceChatId.slice(0, 512) }),
+    ...(message.sourceChatName === undefined ? {} : { sourceChatName: message.sourceChatName.slice(0, 128) }),
+    ...(message.sourceSentAt === undefined ? {} : { sourceSentAt: message.sourceSentAt.slice(0, 32) }),
+    ...(message.sourceChatId === undefined || message.messageId === undefined ? {} : { messageId: message.messageId.slice(0, 512) }),
+  };
+}
 
 export type PromptGroupMemory = {
   id: string;
@@ -102,7 +142,7 @@ export const MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS = MAX_XML_ITEM_MARKUP_CHARS
   + MAX_ACTION_ITEM_LIMIT * ((2 * MAX_STATE_ID_ATTRIBUTE_CHARS + MAX_STATE_STATUS_ATTRIBUTE_CHARS
     + MAX_STATE_EVIDENCE_ATTRIBUTE_CHARS + MAX_ACTION_DESCRIPTION_CHARS
     + MAX_ACTION_OWNER_ATTRIBUTE_CHARS + MAX_ACTION_DUE_ATTRIBUTE_CHARS) * MAX_XML_ESCAPE_EXPANSION + MAX_XML_ITEM_MARKUP_CHARS)
-  + MAX_LIVE_CHAT_LIMIT * (MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS + MAX_XML_ITEM_MARKUP_CHARS)
+  + MAX_LIVE_CHAT_LIMIT * (MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS + 4 * 512 + MAX_XML_ITEM_MARKUP_CHARS)
   + MAX_LIVE_ANALYSIS_TOTAL_CHARS * MAX_XML_ESCAPE_EXPANSION;
 
 export function assemblePromptContext(input: PromptContextInput): string {
@@ -206,10 +246,14 @@ function formatDocumentCitationRef(value: string): string {
 }
 
 function formatLiveChatMessage(message: LiveChatMessage): string {
+  const attribution = liveChatSourceAttribution(message);
+  const attributes = [["source_chat_id", attribution.sourceChatId], ["source_chat_name", attribution.sourceChatName],
+    ["source_sent_at", attribution.sourceSentAt], ["message_id", attribution.messageId]]
+    .map(([name, value]) => value === undefined ? "" : ` ${name}="${formatXmlAttribute(value, 512)}"`).join("");
   return `<message speaker="${formatXmlAttribute(
     message.speaker,
     MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS,
-  )}"${message.role === "assistant" ? ' role="assistant"' : ""}>${escapeXml(message.text)}</message>`;
+  )}"${message.role === "assistant" ? ' role="assistant"' : ""}${attributes}>${escapeXml(message.text)}</message>`;
 }
 
 function formatXmlText(value: string, maxChars: number): string {

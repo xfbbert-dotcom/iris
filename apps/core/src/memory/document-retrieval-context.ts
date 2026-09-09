@@ -14,6 +14,7 @@ import {
 } from "../permissions/permission-guard.js";
 import {
   assemblePromptContext,
+  copyLiveChatSourceMetadata,
   type LiveChatMessage,
   type PromptActionItem,
   type PromptDiscussionThread,
@@ -458,6 +459,7 @@ async function embedQueries(
 
 function cloneLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {
   return messages.map((message) => ({ ...message,
+    ...copyLiveChatSourceMetadata(message),
     ...(message.underlyingDocumentSources === undefined ? {} : { underlyingDocumentSources: message.underlyingDocumentSources.map(source => ({ ...source })) }),
   }));
 }

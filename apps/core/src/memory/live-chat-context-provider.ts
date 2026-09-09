@@ -1,9 +1,11 @@
 import type { ConversationMessageRepository } from "../conversation/conversation-message-repository.js";
 import type { Queryable } from "../documents/document-fragment-repository.js";
 import type { FeishuChatHistoryMessage, FeishuChatHistoryReader } from "../feishu/feishu-chat-history-reader.js";
-import type { LiveChatMessage } from "./context-assembly.js";
+import { collectSharedChatSources, type LiveChatMessage } from "./context-assembly.js";
+import { boundLiveAnalysisItems } from "./live-analysis-text.js";
+import { hashSharedChatText, type WorkingChatScope, type WorkingChatScopeRepository, type SharedChatSourceVerifier } from "../shared-chat/working-chat-scope.js";
 import { selectTopicAwareChatWindow } from "./topic-aware-chat-window.js";
-import { resolveHistoricalChatQuery } from "./historical-chat-query.js";
+import { extractHistoricalChatTopicTerms, resolveHistoricalChatQuery, type HistoricalChatQuery } from "./historical-chat-query.js";
 import { resolveFollowupHistoricalQueries } from "./followup-historical-chat-query.js";
 import type { AssistantConversationContextProvider } from "./assistant-conversation-context.js";
 
@@ -46,11 +48,17 @@ export function createFeishuLiveChatContextProvider({
   queryable,
   now = () => new Date(),
   assistantReplies,
+  sharedChatScopes,
+  canReadChat,
+  sharedChatVerifier,
 }: {
   reader: FeishuChatHistoryReader;
   queryable: Queryable;
   now?: () => Date;
   assistantReplies?: AssistantConversationContextProvider;
+  sharedChatScopes?: Pick<WorkingChatScopeRepository, "resolveForChat" | "validateExact">;
+  canReadChat?: (chatId: string) => Promise<boolean>;
+  sharedChatVerifier?: SharedChatSourceVerifier;
 }): LiveChatContextProvider {
   return {
     async loadRecentMessages(input) {
@@ -60,6 +68,15 @@ export function createFeishuLiveChatContextProvider({
       }
 
       const answerTime = now();
+      const resolvedScope = await sharedChatScopes?.resolveForChat(input.chatId);
+      const scope = resolvedScope?.state === "active" && resolvedScope.groups.some(group => group.chatId === input.chatId)
+        && resolvedScope.groups.length <= 5 && canReadChat !== undefined && sharedChatVerifier !== undefined
+        && await canReadChat(input.chatId) ? resolvedScope : undefined;
+      const onlyCurrentChat = requestsOnlyCurrentChat(input.question, input.chatId, resolvedScope);
+      const externalGroups = scope === undefined || onlyCurrentChat ? [] : (await Promise.all(scope.groups
+        .filter(group => group.chatId !== input.chatId)
+        .map(async group => await canReadChat!(group.chatId) ? group : undefined)))
+        .filter((group): group is WorkingChatScope["groups"][number] => group !== undefined);
       const historicalQuery = resolveHistoricalChatQuery(input.question, answerTime);
       const recallBudget = { candidates: 8, parents: 8, attempted: new Set<string>() };
       const recent = historicalQuery === undefined
@@ -74,15 +91,21 @@ export function createFeishuLiveChatContextProvider({
       for (const [index, query] of historicalQueries.entries()) {
         const recalled = await loadHistoricalMessages({ reader, queryable, chatId: input.chatId,
           question: input.question!, query, budget: recallBudget,
-          candidateLimit: Math.ceil(recallBudget.candidates / (historicalQueries.length - index)),
+          candidateLimit: Math.ceil(recallBudget.candidates / (historicalQueries.length - index + (externalGroups.length > 0 ? 1 : 0))),
         });
         // A fresh exact denial must not be undone by another (earlier) recent/day list.
         for (const id of recalled.revalidatedIds) byId.delete(id);
         for (const message of recalled.messages) byId.set(message.messageId, message);
       }
+      if (scope !== undefined && externalGroups.length > 0 && input.question?.trim()) {
+        const shared = await loadSharedMessages({ reader, queryable, groups: externalGroups, question: input.question,
+          queries: historicalQueries, answerTime, budget: recallBudget });
+        for (const message of shared) byId.set(`${message.chatId}\u0000${message.messageId}`, message);
+      }
       if (historicalQuery === undefined && assistantReplies !== undefined) {
         const replies = await assistantReplies.loadRecentReplies({ chatId: input.chatId, before: answerTime });
         for (const reply of replies) {
+          if (onlyCurrentChat && (reply.underlyingChatSources?.length ?? 0) > 0) continue;
           if (reply.chatId === input.chatId && reply.role === "assistant") byId.set(reply.messageId, reply);
         }
       }
@@ -111,10 +134,116 @@ export function createFeishuLiveChatContextProvider({
           ...(message.underlyingDocumentSources === undefined ? {} : { underlyingDocumentSources: message.underlyingDocumentSources.map(source => ({ ...source })) }),
           ...(message.parentMessageId === undefined ? {} : { parentMessageId: message.parentMessageId }),
           ...(message.rootMessageId === undefined ? {} : { rootMessageId: message.rootMessageId }),
+          ...(scope === undefined ? {} : { sourceChatId: message.chatId,
+            sourceChatName: scope.groups.find(group => group.chatId === message.chatId)?.name ?? message.chatId,
+            sourceSentAt: message.sentAt.toISOString(),
+          }),
+          ...(scope === undefined || message.chatId === input.chatId ? {} : { sharedChatSource: {
+            scopeId: scope.id, scopeVersion: scope.version, sourceChatId: message.chatId,
+            destinationChatId: input.chatId, messageId: message.messageId, contentHash: hashSharedChatText(message.text),
+          } }),
+          ...(message.underlyingChatSources === undefined ? {} : { underlyingChatSources: message.underlyingChatSources.map(source => ({ ...source })) }),
+          ...(message.sharedChatRecap === undefined ? {} : { sharedChatRecap: message.sharedChatRecap }),
         }));
-      return selectTopicAwareChatWindow(readableMessages, input.question, outputLimit);
+      const selected = selectTopicAwareChatWindow(readableMessages, input.question, outputLimit);
+      const sources = collectSharedChatSources(selected);
+      if (sources.length > 0 && (sharedChatVerifier === undefined
+        || !await sharedChatVerifier.verify({ chatId: input.chatId, sources }))) {
+        return boundLiveAnalysisItems(selected.filter(message => collectSharedChatSources([message]).length === 0));
+      }
+      return boundLiveAnalysisItems(selected);
     },
   };
+}
+
+type RecallBudget = { candidates: number; parents: number; attempted: Set<string> };
+
+function requestsOnlyCurrentChat(question: string | undefined, chatId: string, scope: WorkingChatScope | undefined): boolean {
+  if (question === undefined) return false;
+  if (/(?:仅|只)(?:根据|看|使用|用|查|基于)?(?:本群|当前群|这个群)/u.test(question)) return true;
+  const namesCurrent = /本群|当前群|这个群/u.test(question)
+    || scope?.groups.some(group => group.chatId === chatId && group.name.length >= 2 && question.includes(group.name)) === true;
+  const namesExternal = /其他群|其它群|别的群|各群|所有群/u.test(question)
+    || scope?.groups.some(group => group.chatId !== chatId && group.name.length >= 2 && question.includes(group.name)) === true;
+  return namesCurrent && !namesExternal;
+}
+
+/** DB text ranks identities only; every shared body is read freshly from its exact source chat. */
+async function loadSharedMessages({ reader, queryable, groups, question, queries, answerTime, budget }: {
+  reader: FeishuChatHistoryReader; queryable: Queryable; groups: WorkingChatScope["groups"];
+  question: string; queries: HistoricalChatQuery[]; answerTime: Date; budget: RecallBudget;
+}): Promise<FeishuChatHistoryMessage[]> {
+  const namedGroups = groups.filter(group => group.name.trim().length >= 2 && question.includes(group.name));
+  const selectedGroups = namedGroups.length > 0 ? namedGroups : groups;
+  let topic = question;
+  for (const group of groups) topic = topic.replaceAll(group.name, " ");
+  topic = topic.replace(/其他群|其它群|别的群|各群|所有群|最近|刚才|之前|上次|进展/gu, " ");
+  const terms = extractHistoricalChatTopicTerms(topic);
+  const explicitQuery = resolveHistoricalChatQuery(topic, answerTime);
+  if (queries.length === 0 && terms.length === 0) {
+    const messages: FeishuChatHistoryMessage[] = [];
+    for (const group of selectedGroups) {
+      const recent = await reader.listRecentMessages({ chatId: group.chatId, limit: 20 });
+      messages.push(...recent.filter(message => message.chatId === group.chatId && message.role !== "assistant"
+        && message.sentAt <= answerTime).slice(0, 20).map(message => ({ ...message, sharedChatRecap: true })));
+    }
+    return messages;
+  }
+  const windows = explicitQuery !== undefined ? [explicitQuery] : queries.length > 0 ? queries
+    : [{ start: new Date(answerTime.getTime() - 30 * 24 * 60 * 60 * 1000), end: answerTime, terms }];
+  const messages = new Map<string, FeishuChatHistoryMessage>();
+  for (const [index, query] of windows.entries()) {
+    if (query.terms.length === 0) {
+      for (const group of selectedGroups) {
+        const recent = await reader.listRecentMessages({ chatId: group.chatId, limit: 20, timeRange: { start: query.start, end: query.end } });
+        for (const message of recent.filter(message => message.chatId === group.chatId && message.role !== "assistant"
+          && message.sentAt >= query.start && message.sentAt < query.end).slice(0, 20)) {
+          messages.set(`${group.chatId}\u0000${message.messageId}`, { ...message, sharedChatRecap: true });
+        }
+      }
+      continue;
+    }
+    const candidateLimit = Math.ceil(budget.candidates / (windows.length - index));
+    if (candidateLimit === 0 || reader.readMessagesByIds === undefined) continue;
+    const groupIds = selectedGroups.map(group => group.chatId);
+    const candidates = (await queryable.query<{ chat_id: string; provider_message_id: string }>(
+      `SELECT m.chat_id, m.provider_message_id FROM conversation_messages m
+       WHERE m.provider = 'feishu' AND m.chat_id = ANY($1::text[])
+         AND m.sent_at >= $2 AND m.sent_at < $3
+         AND m.message_type IN ('text', 'post') AND m.text IS NOT NULL
+         AND RIGHT(LOWER(TRIM(m.text)), LENGTH($5::text)) <> $5
+         AND NOT EXISTS (SELECT 1 FROM conversation_message_deletion_tombstones t
+           WHERE t.provider = 'feishu' AND t.provider_message_id = m.provider_message_id)
+         AND EXISTS (SELECT 1 FROM UNNEST($4::text[]) term WHERE STRPOS(LOWER(m.text), term) > 0)
+         AND NOT (m.provider_message_id = ANY($7::text[]))
+       ORDER BY CASE WHEN LENGTH(m.text) > 500 THEN 0 WHEN m.text ~ '@_user_|[?？]' THEN 2 ELSE 1 END,
+         (SELECT COUNT(*) FROM UNNEST($4::text[]) term WHERE STRPOS(LOWER(m.text), term) > 0) DESC,
+         m.sent_at DESC, m.provider_message_id ASC LIMIT $6`,
+      [groupIds, query.start, query.end, query.terms, question.trim().toLowerCase(), candidateLimit, [...budget.attempted]],
+    )).rows.filter(row => groupIds.includes(row.chat_id) && typeof row.provider_message_id === "string"
+      && row.provider_message_id.length > 0 && !budget.attempted.has(row.provider_message_id)).slice(0, candidateLimit);
+    budget.candidates -= candidates.length;
+    candidates.forEach(candidate => budget.attempted.add(candidate.provider_message_id));
+    for (const group of selectedGroups) {
+      const ids = [...new Set(candidates.filter(candidate => candidate.chat_id === group.chatId).map(candidate => candidate.provider_message_id))];
+      if (ids.length === 0) continue;
+      const isAllowed = (message: FeishuChatHistoryMessage) => message.chatId === group.chatId && message.role !== "assistant"
+        && message.sentAt >= query.start && message.sentAt < query.end;
+      const fresh = (await reader.readMessagesByIds({ chatId: group.chatId, messageIds: ids }))
+        .filter(message => ids.includes(message.messageId) && isAllowed(message)).slice(0, ids.length);
+      for (const message of fresh) messages.set(`${group.chatId}\u0000${message.messageId}`, message);
+      const parentIds = [...new Set(fresh.flatMap(message => [message.parentMessageId, message.rootMessageId]))]
+        .filter((id): id is string => id !== undefined && !budget.attempted.has(id)).slice(0, budget.parents);
+      if (parentIds.length === 0) continue;
+      budget.parents -= parentIds.length;
+      parentIds.forEach(id => budget.attempted.add(id));
+      const parents = await reader.readMessagesByIds({ chatId: group.chatId, messageIds: parentIds });
+      for (const message of parents.filter(message => parentIds.includes(message.messageId) && isAllowed(message)).slice(0, parentIds.length)) {
+        messages.set(`${group.chatId}\u0000${message.messageId}`, message);
+      }
+    }
+  }
+  return [...messages.values()];
 }
 
 // Stored rows discover candidate identities only. Every body used below comes from a fresh

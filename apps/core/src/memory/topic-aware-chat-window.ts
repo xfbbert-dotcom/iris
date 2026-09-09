@@ -2,6 +2,8 @@ import { normalizeConversationStateQueryTerms } from "../conversation-state/conv
 import { isReferentialFollowup } from "./followup-historical-chat-query.js";
 
 type ChatTopicMessage = {
+  sourceChatId?: string;
+  sharedChatRecap?: boolean;
   text: string;
   speaker?: string;
   messageId?: string;
@@ -46,6 +48,7 @@ export function selectTopicAwareChatWindow<T extends ChatTopicMessage>(
 ): T[] {
   if (limit <= 0) return [];
   if (messages.length <= limit) return [...messages];
+  if (messages.some(message => message.sharedChatRecap === true)) return selectSharedRecapWindow(messages, limit);
 
   const normalizedQuestion = question?.trim().toLowerCase() ?? "";
   const terms = normalizeConversationStateQueryTerms(normalizedQuestion).filter((term) => (
@@ -142,6 +145,33 @@ export function selectTopicAwareChatWindow<T extends ChatTopicMessage>(
   return messages.filter((_message, index) => selected.has(index));
 }
 
+/** A busy destination must not erase the very groups a recap asks about at either window. */
+function selectSharedRecapWindow<T extends ChatTopicMessage>(messages: readonly T[], limit: number): T[] {
+  const localIndexes: number[] = [];
+  const groups = new Map<string, number[]>();
+  messages.forEach((message, index) => {
+    if (message.sharedChatRecap !== true) { localIndexes.push(index); return; }
+    const key = message.sourceChatId ?? "unknown";
+    const indexes = groups.get(key) ?? [];
+    indexes.push(index);
+    groups.set(key, indexes);
+  });
+  const selected = new Set<number>();
+  const localSlots = Math.min(5, Math.floor(limit / 2), localIndexes.length);
+  const sharedSlots = limit - localSlots;
+  while (selected.size < sharedSlots) {
+    let progressed = false;
+    for (const indexes of groups.values()) {
+      const index = indexes.pop();
+      if (index !== undefined) { selected.add(index); progressed = true; }
+      if (selected.size === sharedSlots) break;
+    }
+    if (!progressed) break;
+  }
+  for (let cursor = localIndexes.length - 1; cursor >= 0 && selected.size < limit; cursor -= 1) selected.add(localIndexes[cursor]!);
+  return messages.filter((_message, index) => selected.has(index));
+}
+
 function resolveFreshSource(
   messages: readonly ChatTopicMessage[],
   messageIndexes: ReadonlyMap<string, readonly number[]>,
@@ -154,7 +184,8 @@ function resolveFreshSource(
     const indexes = messageIndexes.get(identity) ?? [];
     for (let cursor = indexes.length - 1; cursor >= 0; cursor -= 1) {
       const index = indexes[cursor]!;
-      if (index < messageIndex && messages[index]?.role !== "assistant") {
+      if (index < messageIndex && messages[index]?.role !== "assistant"
+        && messages[index]?.sourceChatId === message.sourceChatId) {
         return { identity, index };
       }
     }
@@ -196,7 +227,7 @@ function resolveNearbyLongSource(
   for (let index = labelIndex - 1; index >= earliestIndex; index -= 1) {
     const source = messages[index]!;
     if (
-      source.role === "assistant" || source.text.trim().length < MIN_IMPLICIT_SOURCE_CHARS
+      source.role === "assistant" || source.sourceChatId !== label.sourceChatId || source.text.trim().length < MIN_IMPLICIT_SOURCE_CHARS
       || (
         label.speaker !== undefined && source.speaker !== undefined
         && label.speaker !== source.speaker

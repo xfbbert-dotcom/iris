@@ -3,6 +3,7 @@ import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readFeishuMessageText } from "./feishu-message-text.js";
 import type { AssistantDocumentSourceBinding } from "../memory/context-assembly.js";
+import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 
 export type FeishuChatHistoryMessage = {
   messageId: string;
@@ -14,6 +15,8 @@ export type FeishuChatHistoryMessage = {
   rootMessageId?: string;
   role?: "assistant";
   underlyingDocumentSources?: AssistantDocumentSourceBinding[];
+  underlyingChatSources?: SharedChatSourceBinding[];
+  sharedChatRecap?: boolean;
 };
 
 export type FeishuChatHistoryReader = {

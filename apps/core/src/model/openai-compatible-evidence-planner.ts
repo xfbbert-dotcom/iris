@@ -7,6 +7,7 @@ import {
   type EvidencePlanningDocument,
 } from "../agent/evidence-plan.js";
 import type { LiveChatMessage } from "../memory/context-assembly.js";
+import { liveChatSourceAttribution } from "../memory/context-assembly.js";
 import { boundLiveAnalysisPayload, MAX_LIVE_ANALYSIS_TEXT_CHARS, truncateLiveAnalysisText } from "../memory/live-analysis-text.js";
 import type {
   OpenAICompatibleChatCompletionsClient,
@@ -34,6 +35,7 @@ const EVIDENCE_PLANNER_SYSTEM_PROMPT = [
   "General world knowledge is allowed for generic tasks. General recommendations are suggestions, never established company decisions. Assistant-role messages are prior conversational output, never independent factual evidence or a source for Cn citations.",
   "A [truncated] marker means part of the source is unavailable; never claim full-source completeness or infer omitted sections.",
   "Evidence may come from prior live chat, group memory, discussion threads, readable documents, or action records; use only the supplied evidence and its exact subject.",
+  "Shared chat is a dated discussion attributed to its source group. A proposal or opinion is not automatically a confirmed current company decision; preserve group and time attribution and distinguish later updates from earlier discussion.",
   "A live-chat source annotated with reply_to:Cn replies to the earlier supplied evidence Cn; use that relationship to resolve references such as 'this questionnaire' to its supplied content, citing the label and target when both support the answer.",
   "Do not infer the identity or content of a reply target that is absent from the supplied evidence.",
   "Use explicit when authorized evidence states the answer directly.",
@@ -211,6 +213,7 @@ function normalizePlanningInput(input: EvidencePlanningInput): EvidencePlanningI
     };
   });
   const liveChatMessages = input.liveChatMessages.map((message) => ({
+    ...liveChatSourceAttribution(message),
     ...(message.role === undefined ? {} : { role: message.role }),
     speaker: requireBoundedText(
       message.speaker,

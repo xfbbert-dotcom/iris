@@ -7,6 +7,7 @@ import {
   type EvidenceState,
 } from "../agent/evidence-plan.js";
 import type { LiveChatMessage } from "../memory/context-assembly.js";
+import { liveChatSourceAttribution } from "../memory/context-assembly.js";
 import { boundLiveAnalysisPayload, MAX_LIVE_ANALYSIS_TEXT_CHARS, truncateLiveAnalysisText } from "../memory/live-analysis-text.js";
 import type {
   OpenAICompatibleChatCompletionsClient,
@@ -32,6 +33,7 @@ const GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT = [
   "Do not use general world knowledge to add a company-specific fact.",
   "You may explain generic concepts using general knowledge and offer recommendations clearly as suggestions, without inventing company decisions. Distinguish source facts, inference and advice in natural language.",
   "Assistant-role messages are prior conversational output only, never independent factual evidence; do not cite them as proof or reuse unavailable underlying sources.",
+  "Attribute shared discussion to the supplied group and time. Preserve whether a statement was a proposal, opinion or confirmed decision; an old discussion alone does not establish current company policy.",
   "A [truncated] marker means source text is incomplete. Analyze only visible sections and mention the relevant limitation; never claim a complete comparison of omitted sections.",
   "You must not add premises or citation references, and you must not change the plan's evidenceState or confidence.",
   "Preserve the requested level of detail in comparisons: carry through the validated plan's meaningful differences and paired source examples, normally covering 2-4 dimensions when available, rather than collapsing them into a generic judgment. Respect an explicit request for brevity. Do not invent a difference when a version or relevant section is missing.",
@@ -179,6 +181,7 @@ function normalizeRenderInput(input: GroundedAnswerRenderInput): GroundedAnswerR
     );
   }
   const liveChatMessages = input.liveChatMessages.map((message) => ({
+    ...liveChatSourceAttribution(message),
     ...(message.role === undefined ? {} : { role: message.role }),
     speaker: requireBoundedText(
       message.speaker,

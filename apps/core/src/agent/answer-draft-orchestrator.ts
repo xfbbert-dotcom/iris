@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { classifyStandaloneConversation } from "./standalone-conversation.js";
 import { selectTopicAwareChatWindow } from "../memory/topic-aware-chat-window.js";
 import { boundLiveAnalysisItems, truncateLiveAnalysisText } from "../memory/live-analysis-text.js";
+import { collectSharedChatSources, copyLiveChatSourceMetadata } from "../memory/context-assembly.js";
+import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import {
@@ -59,6 +61,7 @@ export type AnswerDraftInput = {
 };
 
 export type AnswerDraftResult = {
+  sharedChatSources?: SharedChatSourceBinding[];
   answerText: string;
   citedSourceRefs?: string[];
   knowledgeConflictCandidateId?: string;
@@ -474,14 +477,14 @@ function buildPlanningEvidence(
     .map((message, index) => {
       const citationRef = `C${index + 1}`;
       const replyTo = [message.parentMessageId, message.rootMessageId]
-        .flatMap((id) => id === undefined ? [] : [priorLiveChatRefs.get(id)])
+        .flatMap((id) => id === undefined ? [] : [priorLiveChatRefs.get(`${message.sourceChatId ?? ""}\u0000${id}`)])
         .find((ref) => ref !== undefined);
       if (message.messageId !== undefined) {
-        priorLiveChatRefs.set(message.messageId, citationRef);
+        priorLiveChatRefs.set(`${message.sourceChatId ?? ""}\u0000${message.messageId}`, citationRef);
       }
       return {
         citationRef,
-        source: `live_chat:${index + 1}${replyTo === undefined ? "" : `; reply_to:${replyTo}`}`,
+        source: `live_chat:${index + 1}${message.sourceChatId === undefined ? "" : `; group:${(message.sourceChatName ?? message.sourceChatId).slice(0, 96)}; time:${message.sourceSentAt?.slice(0, 32) ?? "unknown"}; chat:${message.sourceChatId.slice(0, 96)}; message:${message.messageId?.slice(0, 96) ?? "unknown"}`}${replyTo === undefined ? "" : `; reply_to:${replyTo}`}`,
         text: truncateLiveAnalysisText(`${message.speaker.trim()}: ${message.text}`),
       };
     });
@@ -687,9 +690,10 @@ function truncateWithMarker(value: string, maxChars: number): string {
 }
 
 function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, LiveChatMessage>();
   const normalizedMessages = messages
     .map((message) => ({
+      ...copyLiveChatSourceMetadata(message),
       speaker: truncateWithMarker(message.speaker.trim(), MAX_LIVE_CHAT_SPEAKER_CHARS),
       text: truncateLiveAnalysisText(message.text),
       ...(message.role === undefined ? {} : { role: message.role }),
@@ -705,12 +709,15 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
 
   return normalizedMessages.reduceRight<LiveChatMessage[]>((deduplicated, message) => {
     const key = message.messageId === undefined
-      ? `text:${message.speaker}\u0000${message.text}`
-      : `id:${message.messageId}`;
-    if (seen.has(key)) {
+      ? `text:${message.sourceChatId ?? ""}\u0000${message.speaker}\u0000${message.text}`
+      : `id:${message.sourceChatId ?? ""}\u0000${message.messageId}`;
+    const retained = seen.get(key);
+    if (retained !== undefined) {
+      const sources = collectSharedChatSources([retained, message]);
+      if (sources.length > 0) retained.underlyingChatSources = sources;
       return deduplicated;
     }
-    seen.add(key);
+    seen.set(key, message);
     deduplicated.unshift(message);
     return deduplicated;
   }, []);
@@ -790,7 +797,9 @@ function toAnswerDraftResult(
   citedSourceRefs: string[],
   knowledgeConflictCandidateId?: string,
 ): AnswerDraftResult {
+  const sharedChatSources = collectSharedChatSources(context.liveChatMessages ?? []);
   return {
+    ...(sharedChatSources.length === 0 ? {} : { sharedChatSources }),
     answerText,
     ...(citedSourceRefs.length === 0 ? {} : { citedSourceRefs: [...citedSourceRefs] }),
     ...(knowledgeConflictCandidateId === undefined
