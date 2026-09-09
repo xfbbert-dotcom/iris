@@ -134,6 +134,12 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   fallbacks, handle ERR/HUP/INT/TERM, and verify the final stopped/disabled state explicitly.
   Read-only preflight failures must not mutate runtime. Use a restrictive umask when replacing
   secret-bearing files and recheck their permissions after replacement, not only before it.
+  Inspect backup retention targets before invoking a maintenance backup. When a release must
+  preserve existing archives, use a fixed validated release subdirectory without old retention
+  targets, while also holding the normal parent backup lock; changing the output directory must
+  not silently allow concurrent default snapshots. The 2026-09-09 v3 preflight caught an archive
+  aging into retention before any runtime mutation; the bounded directory/lock adjustment was
+  independently reviewed and the old archive remained present after the new paired backup.
 - **Guard:** Independently reviewed helper traps; a local Bash failure reproduction; remote
   syntax checks; exact regular-file/owner, mode600, configuration-patch and image checks before
   migration. Resume only from the observed partial stage, without replaying approvals or business writes.
@@ -672,8 +678,10 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   Fix `748b8404`; [dated production evidence](../development/iris-continuous-dialogue.md).
   Those 22 cases are historical, not sufficient evidence for the newly observed enum gap; its
   RED/GREEN regression and new release gate are tracked in [shared-chat acceptance](../development/iris-shared-working-chat.md).
-  The bounded two-order fix is `d475c5d1`; local renderer185/Core4486 and independent review pass,
-  while its new exact-SHA CI and production real-model gate remain separate pending evidence.
+  The bounded two-order fix is `d475c5d1`; local renderer185/Core4486 and independent review pass.
+  Final application `f6a6dd41` passed its own exact-SHA CI and all nine internal real-model checks,
+  including Chinese confidence prose, before public ingress reopened at 07:43:52 UTC on 2026-09-09.
+  This is not a new real-Feishu delivery/receipt acceptance; both rejected candidates remain recorded.
 
 ### Preserve the reference date when restating older messages
 

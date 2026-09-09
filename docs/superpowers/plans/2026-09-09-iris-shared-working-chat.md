@@ -187,3 +187,20 @@ expect(draft.sharedChatSources?.some(s=>s.sourceChatId===testGroupId)).toBe(true
 ## Plan self-review
 
 Task 1 produces shared types/tables/locks; Task 2 consumes them and adds prompt/result provenance; Task 3 persists and verifies that provenance; Task 4 wires the real runtime and API. Task 2 and Task 3 both touch assistant lineage tests: run sequentially or assign test additions to separate new files before parallel implementation. No task changes old document grant semantics. Historical source classification, revocation, global budgets, no-per-message approval and four-document closure each have a task and an acceptance check.
+
+## Dated execution disposition — 2026-09-09
+
+The checkboxes above preserve the original task procedure, not a live release dashboard. Actual
+commit/test/deployment evidence is maintained in the [execution record](../../development/iris-shared-working-chat.md).
+
+| Task | Observed disposition |
+|---|---|
+| 1: scope/types/locks | Implemented in `33388d68`/`8ba4966d`; pure31 and exact-candidate PostgreSQL16 pass |
+| 2: fresh bounded context | Implemented in `b9cb482e`; local matrix and PostgreSQL context case pass |
+| 3: durable lineage/delivery | Implemented in `a138c5a1`; persisted two-rewrite coverage `fe903acb`, isolated PG fixture `b9a1bb7e`; PostgreSQL concurrency9 pass after retained initial fixture failure |
+| 4: runtime/API/docs | Wiring `7829938b`, reviewed four-layer closure, two exact-SHA CIs pass; migration0058 and candidate9d5 deployed |
+| Production release exit | Satisfied for the exact three-group audience: final candidate`f6a6dd41` passed its own CI and nine internal real-model/manual checks; public ingress restored07:43:52 UTC, scope active/v5, runtime3387. Earlier two failed language runs and revocations remain recorded |
+| Bounded repair | `d475c5d1` has renderer185/Core4486 local passes plus independent review; the same code is deployed within accepted candidate`f6a6dd41` |
+
+Skipped local PostgreSQL cases are not counted as passes. The third candidate has its own CI
+evidence rather than reusing older candidate results; internal drafts are not real Feishu deliveries.

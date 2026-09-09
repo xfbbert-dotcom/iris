@@ -30,13 +30,13 @@ The internal MVP acceptance checklist lives at:
 ## Current Product State
 
 The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
-has reviewed releases `4a9f852d` and `9d5a5545` with passing exact-SHA CI, including PostgreSQL.
-Migration `0058` and `9d5a5545` images are deployed, but both real-model acceptance runs failed
-on different mixed-language confidence word orders. Shared scope was revoked at version 4; base Q&A was restored at runtime revision 3384
-with public health green and unchanged action gates. The presentation fix and another acceptance
-run are required before shared-chat availability can be claimed. This separates cross-group lookup
-from formal Wiki publication; other groups and external-action gates remain outside that approval.
-Consult the linked status for the final acceptance and release outcome.
+is deployed as `f6a6dd41` after passing exact-SHA CI (including PostgreSQL), all nine internal
+real-model checks and manual answer review. On 2026-09-09 at 07:43:52 UTC, public ingress was
+restored with shared scope active/version5 and runtime revision3387. Ordinary discussion in these
+exact three groups can now support cross-group questions without per-message Wiki publication.
+The linked record preserves two earlier failed acceptance runs and revocations; it does not claim
+new Feishu test-message delivery. Other groups, proactive speech and external-action gates remain
+outside this activation; known nonblocking wording and migration follow-ups are recorded.
 
 All ten required P1 product loops have historical bounded real-Feishu acceptance evidence. The
 rollout began with a controlled 3-5 person, single-group daily pilot; consult the dated current
