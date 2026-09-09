@@ -13,6 +13,12 @@ import { ConversationEvidenceDeletionConflictError, deleteConversationMessageEvi
 import { createPostgresWorkingChatScopeRepository } from "../src/shared-chat/postgres-working-chat-scope-repository.js";
 import { WorkingChatScopeConflictError, WorkingChatScopeStaleError, hashSharedChatText } from "../src/shared-chat/working-chat-scope.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
+import type { FeishuChatHistoryMessage, FeishuChatHistoryReader } from "../src/feishu/feishu-chat-history-reader.js";
+import { createAnswerDraftOrchestrator } from "../src/agent/answer-draft-orchestrator.js";
+import { createDocumentRetrievalContextBuilder } from "../src/memory/document-retrieval-context.js";
+import { createFeishuLiveChatContextProvider } from "../src/memory/live-chat-context-provider.js";
+import { createAssistantConversationContextProvider } from "../src/memory/assistant-conversation-context.js";
+import { createSharedChatSourceVerifier } from "../src/shared-chat/shared-chat-source-verifier.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
@@ -145,6 +151,85 @@ runIfDatabase("shared-chat answer transaction boundaries with disposable Postgre
       at: new Date(), safeNoticeMessageId: "safe-notice" });
     await expect(deleteConversationMessageEvidence({ dataSource: pool, groupId: "group-b", messageId: "feishu:incoming-b", operatorHint: "test" }))
       .resolves.toMatchObject({ status: "deleted" });
+  });
+
+  it("persists original shared lineage through two real orchestrated rewrites and refuses reuse after revoke", async () => {
+    let clock = new Date("2026-09-09T08:00:00Z");
+    const original: FeishuChatHistoryMessage = { messageId: "questionnaire-original", chatId: "group-a", senderId: "human",
+      text: "问卷原始正文：先了解使用经历，再询问困难，最后收集建议。", sentAt: new Date(clock.getTime() - 60_000) };
+    await createPostgresConversationMessageRepository({ queryable: pool }).upsertMessage({ provider: "feishu",
+      providerMessageId: original.messageId, chatId: original.chatId, senderId: original.senderId, text: original.text,
+      messageType: "text", mentions: [], sentAt: original.sentAt, rawEventIdempotencyKey: "questionnaire-event" });
+    const remoteMessages = new Map<string, FeishuChatHistoryMessage>([[original.messageId, original]]);
+    let latestReplyId: string | undefined;
+    const assistantReads: string[][] = [];
+    const reader: FeishuChatHistoryReader = {
+      async listRecentMessages({ chatId }) { return chatId === original.chatId ? [original] : []; },
+      async readMessagesByIds({ chatId, messageIds, sender }) {
+        // Each rewrite can see only its immediate predecessor, never the first draft directly.
+        const selected = messageIds.flatMap(id => {
+          const message = remoteMessages.get(id);
+          return message?.chatId === chatId && (sender === "assistant" ? id === latestReplyId : message.role !== "assistant") ? [message] : [];
+        });
+        if (sender === "assistant") assistantReads.push(selected.map(message => message.messageId));
+        return selected;
+      },
+    };
+    const scopes = createPostgresWorkingChatScopeRepository({ dataSource: pool });
+    const sharedChatVerifier = createSharedChatSourceVerifier({ scopes, reader,
+      botAccessChecker: { canAccessChat: async () => true },
+      runtimeController: { canReadGroupContext: () => true, canReplyWhenMentioned: () => true } });
+    const documentVerifier = { verify: async () => [] };
+    const assistantReplies = createAssistantConversationContextProvider({ queryable: pool, reader, verifier: documentVerifier,
+      sharedChatVerifier, requireChatProvenance: true });
+    const firstContext = createFeishuLiveChatContextProvider({ queryable: pool, reader, now: () => clock,
+      sharedChatScopes: scopes, sharedChatVerifier, canReadChat: async () => true });
+    // No external scope retrieval on rewrite rounds: all lineage must come from persisted assistant receipts.
+    const rewriteContext = createFeishuLiveChatContextProvider({ queryable: pool, reader, now: () => clock,
+      assistantReplies, sharedChatVerifier });
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool });
+    const replier = { async replyText({ messageId, text }: { messageId: string; text: string }) {
+      latestReplyId = `reply-${messageId}`;
+      remoteMessages.set(latestReplyId, { messageId: latestReplyId, chatId: "group-b", senderId: "iris", role: "assistant",
+        text, sentAt: new Date(clock) });
+      return { replyMessageId: latestReplyId };
+    } };
+    const service = createAnswerReplyDeliveryService({ repository, verifier: documentVerifier, sharedChatVerifier, replier, now: () => clock });
+    const persistedBindings = [];
+    for (let round = 0; round < 3; round += 1) {
+      const expectedContextText = round === 0 ? original.text : `问卷草稿-${round - 1}`;
+      const orchestrator = createAnswerDraftOrchestrator({ liveChatContextProvider: round === 0 ? firstContext : rewriteContext,
+        contextBuilder: createDocumentRetrievalContextBuilder({ embeddingProfileId: "test",
+          embedder: { embedTexts: async texts => texts.map(() => [1]) }, fragments: { searchSimilarFragments: async () => [] }, canReadDocument: async () => false }),
+        planner: { plan: async () => ({ taskMode: "direct_task", evidenceState: null, premises: [], proposedAnswer: null,
+          missingInformation: [], confidence: null }) },
+        model: { async generateAnswerDraft(input) {
+          expect(input.promptContext).toContain(expectedContextText);
+          if (round > 0) expect(assistantReads.at(-1)).toEqual([`reply-rewrite-${round - 1}`]);
+          return { answerText: `问卷草稿-${round}` };
+        } },
+        renderer: { render: async () => { throw new Error("direct task uses the model boundary"); } },
+      });
+      const responder = createFeishuMentionAnswerResponder({ botOpenId: "iris", answerDraftOrchestrator: orchestrator,
+        answerReplyDeliveryService: service, replier, now: () => clock });
+      await expect(responder.maybeRespond({ messageId: `rewrite-${round}`, chatId: "group-b", senderId: "human",
+        text: round === 0 ? "@iris 把问卷整理成草稿" : "@iris 把问卷草稿改短", mentions: [{ key: "@iris", openId: "iris" }] }))
+        .resolves.toMatchObject({ status: "replied", replyMessageId: `reply-rewrite-${round}` });
+      const receipt = await repository.findByIncomingMessage({ provider: "feishu", incomingMessageId: `rewrite-${round}` });
+      expect(receipt?.delivery.state).toBe("sent");
+      expect(receipt?.delivery.chatProvenanceVersion).toBe(1);
+      expect(receipt?.chatSources).toEqual([{ scopeId: "pilot-working-chat", scopeVersion: 1, sourceChatId: "group-a",
+        destinationChatId: "group-b", messageId: original.messageId, contentHash: hashSharedChatText(original.text) }]);
+      persistedBindings.push(receipt!.chatSources);
+      clock = new Date(clock.getTime() + 1_000);
+    }
+    expect(persistedBindings[2]).toEqual(persistedBindings[0]);
+    expect((await assistantReplies.loadRecentReplies({ chatId: "group-b", before: clock })).map(message => message.messageId))
+      .toEqual(["reply-rewrite-2"]);
+    const readsBeforeRevoke = assistantReads.length;
+    await scopes.replace({ expectedVersion: 1, state: "revoked", groups, updatedBy: "test", at: clock });
+    expect(await assistantReplies.loadRecentReplies({ chatId: "group-b", before: clock })).toEqual([]);
+    expect(assistantReads).toHaveLength(readsBeforeRevoke);
   });
 
   async function seedMessages() {
