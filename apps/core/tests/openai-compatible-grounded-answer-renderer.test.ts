@@ -226,12 +226,62 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
     expect(result).toEqual({ answerText: "缺少可用的讨论记录，置信度等级为低。", evidenceState: "none", confidence: "low" });
   });
 
+  it("localizes the observed value-before-label recap without changing structured confidence", async () => {
+    const result = await renderConfidenceProse("目前仅能以 medium 的置信度提供上述有限概括。", "partial", "medium");
+    expect(result).toEqual({ answerText: "目前仅能以中等的置信度提供上述有限概括。", evidenceState: "partial", confidence: "medium" });
+  });
+
+  const confidenceExpressions = [
+    ["置信度为VALUE", "置信度为LEVEL"],
+    ["置信度 是 VALUE", "置信度是LEVEL"],
+    ["置信度等级：\tVALUE", "置信度等级：LEVEL"],
+    ["置信度的等级是VALUE", "置信度等级是LEVEL"],
+    ["confidence is VALUE", "置信度为LEVEL"],
+    ["confidence rating = VALUE", "置信度评级=LEVEL"],
+    ["confidence等级\t为\tVALUE", "置信度等级为LEVEL"],
+    ["VALUE 的置信度", "LEVEL的置信度"],
+    ["VALUE的置信度", "LEVEL的置信度"],
+    ["VALUE\tconfidence", "LEVEL置信度"],
+    ["VALUE 的 confidence 等级", "LEVEL的置信度等级"],
+    ["VALUE confidence level", "LEVEL置信度等级"],
+    ["VALUE-confidence", "LEVEL置信度"],
+    ["VALUE 级别的置信度", "LEVEL级别的置信度"],
+    ["VALUE 级别的 confidence", "LEVEL级别的置信度"],
+    ["置信度级别为：VALUE", "置信度级别为：LEVEL"],
+    ["置信度为：VALUE", "置信度为：LEVEL"],
+    ["confidence is: VALUE", "置信度为:LEVEL"],
+    ["**VALUE** 的置信度", "**LEVEL** 的置信度"],
+    ["置信度为 **VALUE**", "置信度为 **LEVEL**"],
+    ["**confidence** is **VALUE**", "**置信度** 为 **LEVEL**"],
+    ["**置信度**为：**VALUE**", "**置信度**为：**LEVEL**"],
+    ["**VALUE** 的 **置信度**", "**LEVEL** 的 **置信度**"],
+    ["*VALUE* 的置信度", "*LEVEL* 的置信度"],
+    ["__VALUE__ 的置信度", "__LEVEL__ 的置信度"],
+    ["置信度为 _VALUE_", "置信度为 _LEVEL_"],
+  ];
+  const confidenceCases = ([ ["low", "低"], ["medium", "中等"], ["high", "高"] ] as const)
+    .flatMap(([confidence, localized]) => confidenceExpressions.map(([expression, expected]) => ({
+      confidence, expression: expression!.replace("VALUE", confidence), expected: expected!.replace("LEVEL", localized),
+    })));
+  describe.each(["partial", "none"] as const)("%s confidence-expression grammar", (evidenceState) => {
+    it.each(confidenceCases)("normalizes $expression without changing policy fields", async ({ confidence, expression, expected }) => {
+      const result = await renderConfidenceProse(`当前记录并不完整；这里只描述不确定程度：${expression}。`, evidenceState, confidence);
+      expect(result).toEqual({ answerText: `当前记录并不完整；这里只描述不确定程度：${expected}。`, evidenceState, confidence });
+    });
+  });
+
   it("preserves literal code and URLs around Chinese-prefixed confidence prose", async () => {
     const literals = [
       "原文字面片段 `置信度为medium`。",
+      "反向原文 `medium 的置信度` 与 `confidence is low`。",
+      "强调字面量 `**medium** 的置信度` 与 `置信度为：low`。",
       "https://docs.example/置信度为medium?level=high",
+      "https://docs.example/medium-confidence?confidence=high",
       "```text", "置信度等级为low", "```",
+      "```text", "medium 的置信度; confidence is low", "```",
       "独立术语 medium、low、high 不作为置信度评级改写。",
+      "medium 的尺寸、high 的性能以及 lowLatency、confidenceScore 均是独立描述或标识。",
+      "独立的 **medium**、__high__ 以及 confidence_score 不作为置信度改写。",
     ].join("\n");
     const client = { complete: vi.fn(async () => JSON.stringify({
       answerText: `资料不足；这是推测，置信度为medium。\n${literals}`, evidenceState: "partial", confidence: "medium",
@@ -242,7 +292,7 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
   });
 
   it("preserves Chinese-prefixed confidence excerpts when English output is explicitly requested", async () => {
-    const answerText = "The available excerpt says 置信度为medium; the broader discussion remains unavailable.";
+    const answerText = "The excerpt says 置信度为medium or medium 的置信度; confidence is medium, and broader discussion remains unavailable.";
     const client = { complete: vi.fn(async () => JSON.stringify({ answerText, evidenceState: "partial", confidence: "medium" })) };
     const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
       ...groundedRenderInput(partialPlan()), question: "请用英语回答：其他群最近聊了什么？",
@@ -486,6 +536,16 @@ function partialPlan(): EvidencePlan {
     missingInformation: ["The exact selection algorithm"],
     confidence: "medium",
   };
+}
+
+async function renderConfidenceProse(answerText: string, evidenceState: "partial" | "none", confidence: "low" | "medium" | "high") {
+  const plan: EvidencePlan = evidenceState === "none"
+    ? { taskMode: "company_fact", evidenceState, confidence, premises: [], proposedAnswer: null, missingInformation: ["讨论原文"] }
+    : { ...partialPlan(), confidence };
+  const input = groundedRenderInput(plan);
+  return createOpenAICompatibleGroundedAnswerRenderer({ client: {
+    async complete() { return JSON.stringify({ answerText, evidenceState, confidence }); },
+  } }).render({ ...input, question: "其他群最近聊了什么？", evidence: evidenceState === "none" ? [] : input.evidence });
 }
 
 function groundedRenderInput(plan: EvidencePlan) {

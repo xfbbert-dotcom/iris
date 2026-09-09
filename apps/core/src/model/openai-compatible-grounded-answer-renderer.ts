@@ -23,6 +23,9 @@ const MAX_RENDERER_SPEAKER_CHARS = 256;
 const MAX_RENDERED_ANSWER_CHARS = 8000;
 const RENDER_RESULT_FIELDS = new Set(["answerText", "evidenceState", "confidence"]);
 const PROTECTED_ANSWER_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]*`|https?:\/\/\S+/gu;
+const CHINESE_CONFIDENCE_TERMS: Readonly<Record<string, string>> = {
+  low: "低", medium: "中等", high: "高", confidence: "置信度", level: "等级", rating: "评级", is: "为",
+};
 
 const GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT = [
   "You are Iris, rendering a validated evidence plan for an internal work chat.",
@@ -43,6 +46,7 @@ const GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT = [
   "For explicit, answer directly without claiming more than the cited premise.",
   "For complete_inference, visibly say the conclusion is inferred from the available material and explain only the bounded conclusion.",
   "For partial, the answer must first name the missing information, then clearly say that the following conclusion is a conjecture based on current evidence, and state the supplied confidence.",
+  "In Chinese answerText, express uncertainty naturally as 推测 and 置信度低/中等/高 (low → 低, medium → 中等, high → 高), never as English policy words. Keep the structured confidence field unchanged as low/medium/high; preserve explicit non-Chinese output requests, literal code and URLs.",
   "For none, naturally identify the specific useful missing source or information in the user's language and what it would let you answer. Do not invent differences, quote internal policy templates, or imply every task requires a knowledge-base entry.",
   "For conflict: Label this as a possible conflict. State the current synchronized knowledge and the newer group conclusion separately, describe the material difference, and offer the reviewed update-draft path. Do not select a winner, merge the statements, or increase confidence.",
   "Never present a conjecture as a quotation, explicit source statement, or certain company fact.",
@@ -245,15 +249,29 @@ function localizeChineseUncertaintyPolicyTerms(
 
   const answerText = transformUnprotectedAnswerText(result.answerText, (text) => text
     .replace(/[ \t]*\bconjecture\b[ \t]*/giu, "推测")
-    .replace(/(?:\bconfidence\b|置信度)([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\blow\b/giu, "置信度$1低")
-    .replace(/(?:\bconfidence\b|置信度)([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bmedium\b/giu, "置信度$1中等")
-    .replace(/(?:\bconfidence\b|置信度)([ \t]*(?:评级|等级)?[ \t]*(?:为|[:：=])?[ \t]*)\bhigh\b/giu, "置信度$1高")
-    .replace(/\blow[ \t]+confidence\b/giu, "低置信度")
-    .replace(/\bmedium[ \t]+confidence\b/giu, "中等置信度")
-    .replace(/\bhigh[ \t]+confidence\b/giu, "高置信度")
+    // Parse the bounded expression, not a particular grade or the model's chosen word order.
+    .replace(/[ \t]*(?<![A-Za-z0-9_])(\*{1,2}|_{1,2})?(?:置信度|confidence)\1(?![A-Za-z0-9_])[ \t]*(?:的[ \t]*)?(评级|等级|级别|\blevel\b|\brating\b)?[ \t]*(为|是|\bis\b)?[ \t]*([:：=])?[ \t]*(\*{1,2}|_{1,2})?(low|medium|high)\5(?![A-Za-z0-9_])[ \t]*/giu,
+      (match, labelEmphasis: string | undefined, rating: string | undefined, connector: string | undefined,
+        separator: string | undefined, valueEmphasis: string | undefined, value: string) => labelEmphasis || valueEmphasis
+        ? localizeEmphasizedConfidenceExpression(match)
+        : `置信度${chineseConfidenceTerm(rating)}${chineseConfidenceTerm(connector)}${separator ?? ""}${chineseConfidenceTerm(value)}`)
+    .replace(/[ \t]*(?<![A-Za-z0-9_])(\*{1,2}|_{1,2})?(low|medium|high)\1(?![A-Za-z0-9_])[ \t]*(级别|等级|评级)?[ \t]*(?:(的|是|为|\bis\b|[-:：=])[ \t]*)?(\*{1,2}|_{1,2})?(?:置信度|confidence)\5(?![A-Za-z0-9_])[ \t]*(评级|等级|级别|\blevel\b|\brating\b)?[ \t]*/giu,
+      (match, valueEmphasis: string | undefined, value: string, valueRating: string | undefined,
+        connector: string | undefined, labelEmphasis: string | undefined, labelRating: string | undefined) => labelEmphasis || valueEmphasis
+        ? localizeEmphasizedConfidenceExpression(match)
+        : `${chineseConfidenceTerm(value)}${valueRating ?? ""}${connector === "的" ? "的" : ""}置信度${chineseConfidenceTerm(labelRating)}`)
     .replace(/[ \t]*\bconfidence\b[ \t]*/giu, "置信度"));
 
   return answerText === result.answerText ? result : { ...result, answerText };
+}
+
+function chineseConfidenceTerm(value = ""): string {
+  return CHINESE_CONFIDENCE_TERMS[value.toLowerCase()] ?? value;
+}
+
+function localizeEmphasizedConfidenceExpression(expression: string): string {
+  // The expression grammar already bounded these words; retain Markdown delimiter spacing.
+  return expression.replace(/[A-Za-z]+/gu, (term) => chineseConfidenceTerm(term));
 }
 
 function transformUnprotectedAnswerText(
