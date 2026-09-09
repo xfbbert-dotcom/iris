@@ -263,6 +263,9 @@ The semantic layer helps Iris retrieve context, but it is not the authority laye
 Iris memory is divided into:
 
 - short-term context: recent messages in the current group;
+- shared working-chat context: ordinary human discussion from an explicitly approved,
+  versioned set of groups, available to the participating audience without per-message
+  knowledge publication; its sources remain attributed discussion, not reviewed company truth;
 - thread memory: how one topic evolved over time;
 - group memory: long-term project, preference, person, term, and workflow knowledge for a group;
 - company knowledge memory: authorized and reviewed knowledge-base content;
@@ -291,7 +294,8 @@ to the model must still retain its permission trace.
 
 For contextual requests, Iris should search in this order:
 
-1. current group-chat context;
+1. current group-chat context, plus relevant working-chat discussion from the current group's
+   explicitly approved shared scope when that capability has passed its own activation gate;
 2. current group's long-term memory;
 3. readable document bodies that appeared in the current group;
 4. authorized Feishu knowledge-base content;
@@ -330,6 +334,15 @@ Without the Feishu integration, the local provider scans up to three times the r
 window, capped at 100 raw rows. Both paths preserve the existing prompt budget and group boundary;
 the live read does not persist callbacks or authorize cross-group raw chat access.
 
+The separately approved [shared working-chat design](2026-09-09-iris-shared-working-chat-design.md)
+extends this current-chat default only for exact participating groups. Ordinary messages in that
+scope need no per-message confirmation or "save to knowledge base" instruction before another
+participating group can ask about them. Bot membership alone never defines the shared audience.
+Scope membership is versioned, defaults absent/closed, and is rechecked with source/destination
+runtime controls, fresh source access and deletion facts. Keep source group/time attribution and
+global context budgets; do not relabel another group's proposal as a confirmed company decision.
+This is an approved architecture extension, not a statement that it is already deployed.
+
 Explicit single-day historical questions use an Asia/Shanghai date-scoped live read. Same-chat,
 same-date topic matching in the fact store can additionally locate at most eight message IDs;
 only fresh Feishu bodies, never cached message text, enter evidence. A bounded one-hop read may
@@ -349,6 +362,14 @@ bound to the sent-delivery ledger and verified Iris sender. Such text is convers
 not a new fact. Document-derived answers require current coverage of the original source, snapshot
 and grant version before reuse; an old answer cannot bypass revoked access. Concrete history/text
 budgets and the deployment record live in [Continuous dialogue](../../development/iris-continuous-dialogue.md).
+
+Shared-chat-derived answers also retain every model-exposed external message's exact scope
+version, source/destination group and fresh-body identity. Propagate this original provenance
+through rewrites and validate it before reuse and final sending; uncited context is not exempt.
+Scope revocation and send-start decisions must share a durable transaction boundary, and an
+already-started external send cannot be represented as recalled or canceled. The dedicated
+[implementation record](../../development/iris-shared-working-chat.md) distinguishes design,
+code, regression, actual model acceptance and deployment.
 
 EmbeddingGemma query vectors have a separate 512-byte UTF-8 input budget, including their search
 prefix, to fit the small local runner. This does not truncate answer evidence or change stored
@@ -406,6 +427,11 @@ Actions requiring confirmation include:
 - forwarding current-group content to another group;
 - using unauthorized data sources;
 - calling external tools or systems for high-impact effects.
+
+Scope-level approval for shared working-chat Q&A is distinct from one-off forwarding: once an
+explicit audience scope is approved and enabled, answers to its members may use ordinary shared
+discussion without asking for approval on every message. This exception does not authorize
+unsolicited cross-group notifications, Wiki publication, task execution or additional groups.
 
 All high-impact actions follow:
 

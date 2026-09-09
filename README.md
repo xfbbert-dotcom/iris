@@ -29,6 +29,11 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
+is in implementation. It separates ordinary cross-group discussion lookup from formal Wiki
+publication. It is not yet deployed or activated; other groups and external-action gates remain
+outside that approval. Consult the linked status before claiming it is available.
+
 All ten required P1 product loops have historical bounded real-Feishu acceptance evidence. The
 rollout began with a controlled 3-5 person, single-group daily pilot; consult the dated current
 handoff and fresh runtime checks for present activation and group scope. This does not authorize expansion to all

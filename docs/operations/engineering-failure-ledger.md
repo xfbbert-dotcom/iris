@@ -15,6 +15,25 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 
 ## Product Delivery
 
+### A working discussion is not required to become formal knowledge before it can be shared
+
+- **Observed gap:** In the pilot, Iris could describe material in its source group but could not
+  answer another pilot group's question unless the content had entered the separately governed
+  document-sharing path. Users expected ordinary discussion to be available across their working groups.
+- **Confirmed cause:** Raw-chat retrieval and assistant context were restricted to the current
+  chat. The single-document grant intentionally did not grant raw chat; this is a newly approved
+  product boundary, not evidence that the document permission guard was broken.
+- **Prevention rule:** Keep a versioned, explicitly approved working-chat audience separate from
+  formal Wiki publication. Do not require per-message publication inside that audience, and do not
+  infer sharing from bot membership. Attribute discussion to its source group/time.
+- **Guard being implemented:** Scope-aware fresh retrieval, global budgets, all-exposed-message
+  provenance, and durable send/revoke checks; an Iris rewrite cannot launder an old shared answer
+  into source-free text. Tests, commits and acceptance status are tracked in
+  [shared working-chat](../development/iris-shared-working-chat.md).
+- **Exit condition:** Ordinary A-group discussion is answerable in participating B without a Wiki
+  write; outside C remains isolated; revoke/delete/changed-text and rewrite-chain gates pass. This
+  entry records design intent, not a claim that those gates have already passed or been deployed.
+
 ### Do not confuse hardening with product completion
 
 - **Failure:** Work continued through increasingly narrow robustness checks while whitepaper core
