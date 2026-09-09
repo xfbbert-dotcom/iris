@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
-import { assemblePromptContext } from "../src/memory/context-assembly.js";
+import { assemblePromptContext, MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS } from "../src/memory/context-assembly.js";
 import { createOpenAICompatibleModelProvider } from "../src/model/openai-compatible-model-provider.js";
 
 describe("OpenAICompatibleModelProvider", () => {
@@ -79,8 +79,20 @@ describe("OpenAICompatibleModelProvider", () => {
       groupMemories: Array.from({ length: 8 }, () => ({ id: quoted(512), scope: "group", category: "summary", content: quoted(600), evidenceMessageIds: [quoted(1024)] })),
       discussionThreads: Array.from({ length: 6 }, () => ({ id: quoted(512), status: "open", summary: quoted(1200, "THREAD_END"), evidenceMessageIds: [quoted(1024)] })),
       actionItems: Array.from({ length: 6 }, () => ({ id: quoted(512), threadId: quoted(512), status: "open", description: quoted(1200, "ACTION_END"), ownerRef: quoted(512), dueAt: new Date("2026-09-08T00:00:00Z"), evidenceMessageIds: [quoted(1024)] })),
-      liveChatMessages: Array.from({ length: 20 }, () => ({ speaker: quoted(256), text: quoted(1200, "LIVE_END"), role: "assistant" })),
+      liveChatMessages: Array.from({ length: 20 }, () => ({
+        speaker: quoted(256), text: quoted(1200, "LIVE_END"), role: "assistant",
+        sourceChatId: quoted(512), sourceChatName: quoted(128),
+        sourceSentAt: quoted(32), messageId: quoted(512),
+      })),
     });
+    // The old transport ceiling cannot fit all retained source attribution. The
+    // new allowance adds 20 messages x 4 attributes x 512 encoded characters;
+    // it does not add raw chat text or multiply the body's XML expansion twice.
+    expect(promptContext.length).toBeGreaterThan(452_352);
+    expect(promptContext.length).toBeLessThanOrEqual(MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS);
+    const sourceAttributes = [...promptContext.matchAll(/ (?:source_chat_id|source_chat_name|source_sent_at|message_id)="([^"]*)"/gu)];
+    expect(sourceAttributes).toHaveLength(80);
+    expect(sourceAttributes.every(match => match[1]!.length <= 512)).toBe(true);
     const provider = createOpenAICompatibleModelProvider({ config: config(), client: { async complete(messages) {
       const sentContext = messages[1]!.content;
       expect(sentContext.match(/<document /gu)).toHaveLength(12);
@@ -99,6 +111,21 @@ describe("OpenAICompatibleModelProvider", () => {
       return "已根据原文改写。";
     } } });
     await expect(provider.generateAnswerDraft({ question: "改写前文", promptContext })).resolves.toEqual({ answerText: "已根据原文改写。" });
+  });
+  it("keeps shared-chat raw text within 24k despite the larger encoded transport allowance", () => {
+    const promptContext = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: Array.from({ length: 4 }, (_, index) => ({
+        speaker: "Alice", text: '"'.repeat(9000),
+        sourceChatId: `group-${index}`, sourceChatName: `工作组 ${index}`,
+        sourceSentAt: "2026-09-09T00:00:00Z", messageId: `message-${index}`,
+      })),
+    });
+    const rawBodies = [...promptContext.matchAll(/<message\b[^>]*>(.*?)<\/message>/gsu)]
+      .map(match => match[1]!.replaceAll("&quot;", '"'));
+    expect(rawBodies).toHaveLength(4);
+    expect(rawBodies.every(text => text.length <= 8000)).toBe(true);
+    expect(rawBodies.reduce((total, text) => total + text.length, 0)).toBe(24_000);
   });
   it("sends a chat completions request and returns trimmed answer text", async () => {
     const fetch = vi.fn(async () =>
@@ -919,6 +946,17 @@ describe("OpenAICompatibleModelProvider", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("accepts prompt contexts exactly at the assembled transport ceiling", async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: "Answer draft." } }],
+    }));
+    const provider = createOpenAICompatibleModelProvider({ config: config(), fetch });
+    await expect(provider.generateAnswerDraft({
+      question: "Q", promptContext: "C".repeat(MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS),
+    })).resolves.toEqual({ answerText: "Answer draft." });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects oversized prompt contexts before external requests", async () => {
     const fetch = vi.fn(async () =>
       jsonResponse({
@@ -933,9 +971,9 @@ describe("OpenAICompatibleModelProvider", () => {
     await expect(
       provider.generateAnswerDraft({
         question: "Q",
-        promptContext: "C".repeat(452_353),
+        promptContext: "C".repeat(MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS + 1),
       }),
-    ).rejects.toThrow("model promptContext must be at most 452352 characters");
+    ).rejects.toThrow(`model promptContext must be at most ${MAX_ASSEMBLED_PROMPT_CONTEXT_CHARS} characters`);
     expect(fetch).not.toHaveBeenCalled();
   });
 
