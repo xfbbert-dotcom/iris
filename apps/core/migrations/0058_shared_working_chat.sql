@@ -50,3 +50,7 @@ CREATE TABLE answer_reply_chat_source_traces (
 );
 CREATE INDEX answer_reply_chat_sources_scope_idx ON answer_reply_chat_source_traces(scope_id, delivery_id);
 CREATE INDEX answer_reply_chat_sources_message_idx ON answer_reply_chat_source_traces(message_id, delivery_id);
+
+CREATE TRIGGER answer_reply_chat_source_traces_append_only
+BEFORE UPDATE OR DELETE ON answer_reply_chat_source_traces
+FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();

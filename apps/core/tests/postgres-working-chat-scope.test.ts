@@ -35,7 +35,8 @@ runIfDatabase("versioned working chat scope with disposable PostgreSQL", () => {
     }
   });
   beforeEach(async () => {
-    await pool.query("DELETE FROM answer_reply_chat_source_traces");
+    // This pool is scoped to the random disposable test schema, never the production schema.
+    await pool.query("TRUNCATE answer_reply_chat_source_traces");
     await pool.query("DELETE FROM answer_reply_deliveries");
     await pool.query("DELETE FROM working_chat_scopes");
     await pool.query("DELETE FROM conversation_message_deletion_tombstones");
@@ -149,9 +150,22 @@ runIfDatabase("versioned working chat scope with disposable PostgreSQL", () => {
     await insertDelivery(pool, "prepared");
     expect((await pool.query("SELECT chat_provenance_version FROM answer_reply_deliveries")).rows)
       .toEqual([{ chat_provenance_version: null }]);
-    await expect(pool.query("UPDATE answer_reply_chat_source_traces SET content_hash = 'bad' ")).rejects.toThrow();
-    await expect(pool.query("UPDATE answer_reply_chat_source_traces SET source_chat_id = destination_chat_id")).rejects.toThrow();
+    await expect(pool.query(`INSERT INTO answer_reply_chat_source_traces
+      SELECT delivery_id, 1, scope_id, scope_version, source_chat_id, destination_chat_id, message_id, 'bad'
+      FROM answer_reply_chat_source_traces`)).rejects.toThrow();
+    await expect(pool.query(`INSERT INTO answer_reply_chat_source_traces
+      SELECT delivery_id, 1, scope_id, scope_version, destination_chat_id, destination_chat_id, message_id, content_hash
+      FROM answer_reply_chat_source_traces`)).rejects.toThrow();
     await expect(pool.query("UPDATE working_chat_scopes SET groups = '[{\"chatId\":\"a\",\"name\":\"A\"},{\"chatId\":\"a\",\"name\":\"B\"}]'::jsonb")).rejects.toThrow();
+  });
+
+  it("preserves chat trace facts when an update or deletion is attempted", async () => {
+    await createPostgresWorkingChatScopeRepository({ dataSource: pool }).replace(replacement);
+    await insertDelivery(pool, "prepared");
+    await expect(pool.query("UPDATE answer_reply_chat_source_traces SET content_hash = repeat('b',64)")).rejects.toThrow();
+    await expect(pool.query("DELETE FROM answer_reply_chat_source_traces")).rejects.toThrow();
+    expect((await pool.query("SELECT message_id, content_hash FROM answer_reply_chat_source_traces")).rows)
+      .toEqual([{ message_id: "message-1", content_hash: "a".repeat(64) }]);
   });
 });
 
