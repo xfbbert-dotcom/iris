@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import { createFeishuMessageEventProcessor } from "../src/conversation/feishu-message-event-processor.js";
 import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
@@ -25,36 +25,47 @@ const runIfDatabase = databaseUrl ? describe : describe.skip;
 const groups = [{ chatId: "group-a", name: "A" }, { chatId: "group-b", name: "B" }];
 
 runIfDatabase("shared-chat answer transaction boundaries with disposable PostgreSQL", () => {
-  const schema = `shared_answer_${randomUUID().replaceAll("-", "")}`;
   let admin: pg.Pool;
   let pool: pg.Pool;
+  let casePool: pg.Pool | undefined;
+  let caseSchema: string | undefined;
   beforeAll(async () => {
     admin = new pg.Pool({ connectionString: databaseUrl });
+  });
+  afterAll(async () => { await admin?.end(); });
+  beforeEach(async () => {
+    // Delivery FKs reach immutable document/event tables whose statement triggers reject
+    // TRUNCATE even when empty. Isolate each case instead of weakening append-only guards.
+    const schema = `shared_answer_${randomUUID().replaceAll("-", "")}`;
     const client = await admin.connect();
     try {
       await client.query(`CREATE SCHEMA ${schema}`);
+      caseSchema = schema;
       await client.query(`SET search_path TO ${schema}, public`);
       await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
     } finally { client.release(); }
     // Statement timeout also bounds the pre-fix application-level lock cycle.
     pool = new pg.Pool({ connectionString: databaseUrl,
       options: `-c search_path=${schema},public -c statement_timeout=3000`, max: 12 });
-  }, 60_000);
-  afterAll(async () => {
-    await pool?.end();
-    if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await admin.end(); }
-  });
-  beforeEach(async () => {
-    // The entire pool is restricted to this random test schema. Trace facts are append-only.
-    await pool.query("TRUNCATE answer_reply_deliveries CASCADE");
-    await pool.query("DELETE FROM working_chat_scopes");
-    await pool.query("DELETE FROM conversation_messages");
-    await pool.query("DELETE FROM conversation_message_deletion_tombstones");
+    casePool = pool;
     await pool.query(`UPDATE runtime_control_state SET desired_global_enabled = true, disabled_group_ids = '{}',
       capabilities = capabilities || '{"readGroupContext":true,"replyWhenMentioned":true}'::jsonb`);
     await createPostgresWorkingChatScopeRepository({ dataSource: pool }).replace({ expectedVersion: 0,
       state: "active", groups, updatedBy: "test", at: new Date() });
-  });
+  }, 60_000);
+  afterEach(async () => {
+    const finishedPool = casePool;
+    const finishedSchema = caseSchema;
+    casePool = undefined;
+    caseSchema = undefined;
+    try { await finishedPool?.end(); }
+    finally {
+      if (finishedSchema !== undefined) {
+        if (!/^shared_answer_[a-f0-9]{32}$/u.test(finishedSchema)) throw new Error("invalid disposable schema name");
+        await admin.query(`DROP SCHEMA IF EXISTS ${finishedSchema} CASCADE`);
+      }
+    }
+  }, 60_000);
 
   it("completes reciprocal ordinary A/B requests whose incoming messages are each other's source", async () => {
     const bothModelsEntered = deferred();
