@@ -26,13 +26,13 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 - **Prevention rule:** Keep a versioned, explicitly approved working-chat audience separate from
   formal Wiki publication. Do not require per-message publication inside that audience, and do not
   infer sharing from bot membership. Attribute discussion to its source group/time.
-- **Guard being implemented:** Scope-aware fresh retrieval, global budgets, all-exposed-message
+- **Implemented guard:** Scope-aware fresh retrieval, global budgets, all-exposed-message
   provenance, and durable send/revoke checks; an Iris rewrite cannot launder an old shared answer
   into source-free text. Tests, commits and acceptance status are tracked in
   [shared working-chat](../development/iris-shared-working-chat.md).
 - **Exit condition:** Ordinary A-group discussion is answerable in participating B without a Wiki
   write; outside C remains isolated; revoke/delete/changed-text and rewrite-chain gates pass. This
-  entry records design intent, not a claim that those gates have already passed or been deployed.
+  entry defines the gate; its dated code, CI and production outcomes live in the linked record.
 
 ### Check the outer message transaction when adding cross-source send locks
 
@@ -47,8 +47,10 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 - **Finite gate:** Real processor/responder/receipt reciprocal-group concurrency, revoke-vs-send,
   and source/incoming-delete-vs-send tests must pass on PostgreSQL. Unit tests or skipped database
   cases do not prove the lock boundary. Implementation and actual gate status are recorded in
-  [the shared-chat record](../development/iris-shared-working-chat.md); no production incident or
-  completed database validation is inferred from this design review finding.
+  [the shared-chat record](../development/iris-shared-working-chat.md); no production incident
+  is inferred from this design review finding. Exact-candidate CI subsequently
+  passed all nine real-PG concurrency/provenance cases, including persisted two-step rewrites;
+  that does not claim a real Feishu send or a production race was exercised.
 
 ### Do not confuse hardening with product completion
 
@@ -120,6 +122,23 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 - **Exit condition:** The exact candidate is healthy, public `/health` is `200`, public
   `/internal/status` is `404`, the new encrypted backup is verified, and no maintenance process is
   still running.
+
+### Release containment must survive its own cleanup failure
+
+- **Observed defects:** Review of the 2026-09-09 release helper found that an unguarded Caddy-stop
+  failure under `set -e` would exit its error handler before the independent Core-stop fallback.
+  Separately, the production pre-migration gate caught `git apply` recreating `.env.pilot` as
+  mode664 after it had been tightened to600. The entry remained closed and the old image was
+  still running; this was a deployment-helper failure, not an application or sharing-policy failure.
+- **Prevention rule:** Disable errexit inside bounded cleanup, attempt independent containment
+  fallbacks, handle ERR/HUP/INT/TERM, and verify the final stopped/disabled state explicitly.
+  Read-only preflight failures must not mutate runtime. Use a restrictive umask when replacing
+  secret-bearing files and recheck their permissions after replacement, not only before it.
+- **Guard:** Independently reviewed helper traps; a local Bash failure reproduction; remote
+  syntax checks; exact regular-file/owner, mode600, configuration-patch and image checks before
+  migration. Resume only from the observed partial stage, without replaying approvals or business writes.
+- **Exit condition:** Containment is proven, file mode is600, the exact candidate resumes through
+  migration and private health gates, and the dated release record preserves the interrupted step.
 
 ## External Providers
 
@@ -639,13 +658,18 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   normalization attempt could also rewrite those words inside URLs and code.
 - **Root cause:** The display normalizer excluded the `none` state, and prose replacement did not
   initially protect literal spans. Model outputs were stochastic; the coverage gap was deterministic.
+  A later 2026-09-09 shared-chat recap exposed another deterministic gap: Chinese `置信度` followed
+  by an English enum (`置信度为medium`) did not match the English-only `confidence` prefix.
 - **Prevention rule:** Normalize only Chinese display prose for the affected states. Preserve
   structured evidence/confidence data, explicitly requested English, URLs, inline code and fenced code.
 - **Guard:** [Renderer regression tests](../../apps/core/tests/openai-compatible-grounded-answer-renderer.test.ts)
-  include `none`/`partial`, English overrides and protected spans. Check real negative answers as well;
+  include `none`/`partial`, Chinese/English confidence prefixes, English overrides and protected spans.
+  The shared-chat acceptance now rejects the actual mixed-language output automatically. Check real negative answers as well;
   do not change evidence sufficiency merely to produce fluent wording.
 - **Exit condition:** The 22 focused renderer cases and required real-model language controls pass.
   Fix `748b8404`; [dated production evidence](../development/iris-continuous-dialogue.md).
+  Those 22 cases are historical, not sufficient evidence for the newly observed enum gap; its
+  RED/GREEN regression and new release gate are tracked in [shared-chat acceptance](../development/iris-shared-working-chat.md).
 
 ## Test Architecture
 

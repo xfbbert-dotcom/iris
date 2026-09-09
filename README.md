@@ -30,10 +30,13 @@ The internal MVP acceptance checklist lives at:
 ## Current Product State
 
 The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
-has committed code and passing local regression tests; database and release gates are in progress.
-It separates ordinary cross-group discussion lookup from formal Wiki
-publication. It is not yet deployed or activated; other groups and external-action gates remain
-outside that approval. Consult the linked status before claiming it is available.
+has reviewed release `4a9f852d` with passing local regression and exact-SHA CI, including PostgreSQL.
+Migration `0058` and the candidate images are deployed, but the first real-model acceptance failed
+on a mixed-language confidence label. Shared scope was revoked at version 2; base Q&A was restored
+with public health green and unchanged action gates. The presentation fix and another acceptance
+run are required before shared-chat availability can be claimed. This separates cross-group lookup
+from formal Wiki publication; other groups and external-action gates remain outside that approval.
+Consult the linked status for the final acceptance and release outcome.
 
 All ten required P1 product loops have historical bounded real-Feishu acceptance evidence. The
 rollout began with a controlled 3-5 person, single-group daily pilot; consult the dated current
