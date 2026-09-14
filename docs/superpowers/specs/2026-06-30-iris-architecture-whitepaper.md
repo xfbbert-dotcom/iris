@@ -497,6 +497,14 @@ message. Validate job freshness against the actual event-storage representation,
 model-exposed sources to the complete live body before prompt truncation. Tests must exercise the
 real persistence-to-registration-to-live-context path, including long messages and changed content.
 
+Issue novelty must remember previously consumed evidence across basis revisions, not only the
+latest opinion. An unchanged old premise does not become new because it left the current basis;
+preserve that durable history without automatically exposing all historical prose to the model.
+Freshly authorized same-group history need not have a local ingestion row to be valid context.
+Keep the trigger's durable job identity strict, protect all contextual message identities against
+known deletion/change, and re-evaluate changed context rather than fabricating backfill events or
+permanently rejecting an otherwise valid trigger.
+
 Constitutional principle:
 
 > Iris can be proactive, but every proactive behavior must be explainable, configurable, protected against repetition and technical overload, auditable, and pausable. Novel, important contributions are not blocked by arbitrary time intervals. Iris cannot use "I remember" as a substitute for "I am allowed to know."

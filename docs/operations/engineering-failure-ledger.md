@@ -43,6 +43,30 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   real-model drafts and one-group real-Feishu acceptance must be recorded separately before this
   feature is declared delivered.
 
+### Preserve issue history and the actual live-context producer contract
+
+- **Observed implementation failures (2026-09-15):** Review of unshipped Task4 candidate
+  `12d1280b` found two defects: after evidence A/B was replaced by C, unchanged A could qualify as
+  new evidence again; and valid live-history messages without local ingestion rows could cancel a
+  stored trigger permanently. These are local review findings, not diagnosed production incidents.
+- **Confirmed causes:** Novelty compared only the latest `basisSources`; aggregate local-message
+  validation assumed every live context source had been ingested, although the context builder
+  obtains authorized history directly from Feishu and does not establish that persistence contract.
+- **Prevention rule:** Check previously consumed issue evidence using immutable history, keeping
+  prompt-visible current basis bounded. Separate strict durable trigger validation from contextual
+  source protection; absence of a local history row is not loss of live authorization. Known
+  contextual deletion/change requires same-job reevaluation, not false trigger invalidation.
+  Carry verified identity/proof fields explicitly across asynchronous ingress/feedback boundaries.
+- **Locally accepted guard:** Real-PG A/B → C → unchanged A (including resolution/reopen), a stored
+  trigger plus valid history-only source, and non-trigger deletion/requeue regressions. Commit,
+  actual test counts and scoped review status are tracked in the
+  [execution record](../development/iris-proactive-discussion-execution.md): fix `b1c6564f` passed
+  60 scoped tests (42 real-PG scenarios) and typecheck; scoped review accepted both fixes with no
+  new blocker. Four-place local closure is complete; no production release is claimed.
+- **Exit condition:** These behavioral regressions, covering repository/worker tests and typecheck
+  pass, scoped review has no open blocker, and four-place closure records the actual level. This
+  does not establish final-send, runtime, model quality or real-group delivery acceptance.
+
 ### Keep stored-event hashes separate from full live-source hashes
 
 - **Observed implementation failure (2026-09-14):** Review of the unshipped proactive context
