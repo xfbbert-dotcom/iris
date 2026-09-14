@@ -71,6 +71,26 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   pass, scoped review has no open blocker, and four-place closure records the actual level. This
   does not establish final-send, runtime, model quality or real-group delivery acceptance.
 
+### Preserve prose provenance and distinguish unattempted work from completed effects
+
+- **Observed local review failures (2026-09-15):** Original issue descriptions outlived their
+  cited source bindings; uncited exposures disappeared from reused prose. A stale first draft
+  consumed its evidence despite zero send attempts. Three successful 25-second model calls
+  exhausted a fixed 60-second lease, and enabled startup acknowledged events before registration.
+- **Confirmed causes:** One current-basis projection served two different provenance/novelty
+  contracts; preparation was treated as a completed intervention; leases had no renewal; the
+  enabled registrar returned success while no delegate existed.
+- **Prevention:** Bind all surviving derived text to full exposure lineage and reject unknown
+  legacy prose. Prove the narrow first-unattempted exception from immutable delivery/lifecycle
+  history in the repository. Renew only unexpired owned work, check between internal model calls,
+  and preserve retryable registration errors without blocking ordinary answer processing.
+- **Guard/exit:** Actual model payload and PG delivery provenance, cancelled-first → reassessment
+  → one send, attempted/unknown/stopped/resolved negatives, PG lease CAS plus injected clock and
+  real default heartbeat, delayed app startup → raw queue replay → one ordinary reply and one
+  stop registration. See the [fix/acceptance record](../development/iris-proactive-discussion-final-fixes.md).
+  Local tests and four-place closure plus scoped review close these findings; real-model and
+  single-group acceptance remain separate. Retain prior failures and the finite catalog backlog.
+
 ### Keep stored-event hashes separate from full live-source hashes
 
 - **Observed implementation failure (2026-09-14):** Review of the unshipped proactive context

@@ -38,6 +38,9 @@ is implemented through the local end-to-end path and a synthetic-only model eval
 the [finite acceptance and release handoff](docs/development/iris-proactive-discussion.md) records
 actual tests, retained failures and four-place dispositions. Real-model configuration is still
 unavailable; internal model acceptance, exact-SHA CI and real-Feishu deployment/acceptance remain pending.
+The 2026-09-15 [final-review fixes](docs/development/iris-proactive-discussion-final-fixes.md)
+address issue-prose provenance, unattempted stale drafts, owned lease renewal and startup registration;
+the record distinguishes their local regression evidence from the pending model and live gates.
 
 The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
 is deployed as `f6a6dd41` after passing exact-SHA CI (including PostgreSQL), all nine internal

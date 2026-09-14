@@ -4,6 +4,10 @@
 
 ## 当前边界
 
+2026-09-15 后续全分支审查发现的四项 Important 已进入一次合并[修复与回归记录](iris-proactive-discussion-final-fixes.md)。
+下文 Task 8 数字保留为当时证据；最新应用 SHA、0060 迁移、保留失败与有限复审出口以修复记录为准，
+不能把旧局部绿灯当成这四项原本不存在。
+
 已实现新的独立主动讨论链，默认关闭且名单为空；首轮只允许 `oc_637a9aca45f01943477f4e17f1fc5b9a`。触发来自本群非 @ 人类讨论，来源为本群及已授权文档，按问题和实质依据去重，无固定发言冷却或日额度。发送依据是 `authorizationKind=policy`，不伪造人工批准。
 
 Task 8 应用/测试/CI 提交为 `89f299f5e00b0a4db4389a712d33a15700a8f466`；本记录为随后独立文档提交，不能用文档 SHA 替代应用 SHA。截至本次本地执行，真实模型配置路径未提供，`npm run pilot:proactive-eval -- --rounds 2` 实际退出 2，没有模型 assessment/draft 报告；没有 production/SSH/push/部署/真实飞书外发/单群开关操作。尚不能称“实现与内部验收完成”，更不能称“真实单群验收通过”。下一步是完成有限实模门禁和审查，之后按当次授权执行下文 runbook。
@@ -84,7 +88,7 @@ npm run pilot:proactive-eval -- --rounds 2
 
 1. 重新取得并记录当前部署和单群启用授权、操作者、精确目标群及预定应用 SHA；核对该 SHA 的远端 CI 和两轮实模人工审阅均通过。模型/CI 任一未完成则不启动部署。核对现场生产应用 SHA、镜像标签/摘要、迁移位置、备份和恢复验证、健康、队列/死信/未决回复/unknown 及原 Q&A 控制状态；保存时间戳，不沿用本页历史值。
 2. 使用该版本的 [pilot Compose](../../deploy/pilot/docker-compose.yml) 和现有[发布运行手册](../operations/internal-rollout-runbook.md)，记录明确 env-file 路径、compose 文件和不可变镜像。先用 `config --quiet` 校验。生成成对数据库/队列备份并记录校验信息；旧共享群聊脚本不作为本功能部署器。依现场维护步骤控制入口和旧 worker 的切换，防止两个版本并发消费。
-3. 用 Compose 的 `migrate` 服务、迁移角色执行该精确镜像的迁移器，验证 `0059_proactive_discussion.sql` 仅应用一次，未改旧迁移、未清事实表。首次启动保持 `IRIS_PROACTIVE_DISCUSSION_ENABLED=false`、`IRIS_PROACTIVE_DISCUSSION_GROUP_IDS=`；确认新策略缺失/关闭，普通问答仍工作，PD status 为 disabled/不运行、无外发。
+3. 用 Compose 的 `migrate` 服务、迁移角色执行该精确镜像的迁移器，验证 `0059_proactive_discussion.sql` 及后续 `0060_proactive_discussion_prose_sources.sql` 仅应用一次，未改旧迁移、未清事实表。0060 不猜测旧目录文字来源；null 来源项的保守可用性限制见[修复记录](iris-proactive-discussion-final-fixes.md)。首次启动保持 `IRIS_PROACTIVE_DISCUSSION_ENABLED=false`、`IRIS_PROACTIVE_DISCUSSION_GROUP_IDS=`；确认新策略缺失/关闭，普通问答仍工作，PD status 为 disabled/不运行、无外发。
 4. 经本次授权后，配置新 runtime 开启且名单只含原群，设置服务端 `IRIS_INTERNAL_API_AUDIT_ACTOR` 凭据角色；保留现有认证。此时 policy 仍关闭，先确认受保护 `GET /internal/proactive-discussion/status` 健康、原群读取可用。核对旧 planner、旧主动 delivery、memory extraction、task/Wiki 写入开关未被打开，不把原三群 Q&A scope 当主动授权。
 5. 从实际 `proactive_discussion_policies` 读取当前版本（不存在则 expectedVersion=0），以受保护 `PUT /internal/proactive-discussion/policy` 提交且只提交 `{chatId, expectedVersion, enabled:true}`，核对返回版本和真实 `internal-api:` 操作者。通过既有控制面核对全局/原群/readGroupContext 和 `proactiveSpeech` 必须同时允许；只变更本次授权的必要开关，不能顺带扩群、开旧能力或伪造 human_approved。
 6. 在该群由真实成员自然发送一组有用的普通讨论，观察一条真实主动意见、实际 provider message ID、trigger ID、delivery ID、issue/basis/policy/context 版本及 sent 回执。随后真实成员 @ 追问理由/改口语，记录普通回答回执和完整来源延续。不能注入伪造 @、回调或成员 ID 作验收。

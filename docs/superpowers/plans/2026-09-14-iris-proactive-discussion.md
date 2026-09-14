@@ -8,6 +8,15 @@
 
 **Tech Stack:** 现有 Node.js/TypeScript、Fastify、Postgres/pg、Vitest、Zod 和 OpenAI-compatible client；不增加服务或第三方依赖。
 
+2026-09-15 全分支审查的 R26–R29 合同澄清：以[修复记录](../../development/iris-proactive-discussion-final-fixes.md)
+及[设计 5.3](../specs/2026-09-09-iris-proactive-discussion-design.md#53-来源与连续对话)补充下方最初任务接口。
+`PdIssue` 增加 nullable `proseSources` 与服务端派生 `canReassessUnattempted`，引用依据与存续文字完整
+来源分离；`materialChange` 增加明确 `unattempted_first`，仅允许持久证明首次未尝试且仅因 stale 取消。
+增加 `renewEvaluation({job,at,leaseUntil}):Promise<boolean>`；worker 串行短事务每 20 秒续 60 秒，
+`PdModel` 可选 `assertActive` 在每个 complete 前调用；commit 的 `lease_lost` 与成功重排的 `stale` 分开。
+enabled/pending 登记不能 no-op，精确范围内通过已有 raw-event 重试保留工作、普通回答仍完成并去重。
+只新增 0060，不改 0059；旧 null 来源身份仍保留并使不完整目录失败关闭，1000 来源不得截断证明。
+
 **Spec:** [2026-09-09 Iris 主动参与工作讨论设计](../specs/2026-09-09-iris-proactive-discussion-design.md)。2026-09-14 用户回复“继续”，进入该书面设计的实施计划。计划尚未执行；本文命令、测试和发布门禁不是已通过的证据。
 
 ## Global Constraints

@@ -505,6 +505,20 @@ Keep the trigger's durable job identity strict, protect all contextual message i
 known deletion/change, and re-evaluate changed context rather than fabricating backfill events or
 permanently rejecting an otherwise valid trigger.
 
+Cited evidence consumption and the provenance of surviving issue prose are separate facts.
+Reusing an issue description or derived observation/reasoning/suggestion requires the full
+verified exposure lineage, including uncited materials and other issue prose that influenced it.
+Unknown legacy lineage excludes that prose while preserving hidden issue identity and pause/unknown
+guards; source limits must reject an entire unsafe context, never truncate proof and keep its text.
+A first draft cancelled only for stale context before any send attempt may be freshly reassessed
+on the same valid premises when durable history proves it has never been attempted, paused or
+resolved. Previously attempted/unknown/surfaced interventions retain lifetime novelty protection.
+Owned evaluation leases must renew across bounded model/source work without reviving expired or
+reassigned ownership. Enabled startup cannot silently acknowledge lost registrations: retryable
+registration failure preserves the existing event recovery path while ordinary Q&A still runs.
+The [final-review fix record](../../development/iris-proactive-discussion-final-fixes.md) describes
+these boundaries and their local acceptance separately from real-model or deployment acceptance.
+
 Constitutional principle:
 
 > Iris can be proactive, but every proactive behavior must be explainable, configurable, protected against repetition and technical overload, auditable, and pausable. Novel, important contributions are not blocked by arbitrary time intervals. Iris cannot use "I remember" as a substitute for "I am allowed to know."

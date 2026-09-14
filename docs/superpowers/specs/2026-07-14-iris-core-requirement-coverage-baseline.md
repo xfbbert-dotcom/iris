@@ -41,6 +41,11 @@
 - [专项设计](2026-09-09-iris-proactive-discussion-design.md)限定原试点单群，采用独立消息事件评估和真实策略授权，不伪造逐条人工审批；不扩大跨群主动来源或高影响执行权限。
 - 2026-09-14 书面设计确认并编写[实施计划](../plans/2026-09-14-iris-proactive-discussion.md)时，尚无新实现或验收；之后开始实施，2026-09-15 更新到 Task 1–7 局部门禁通过（含 Task 4 审查修复、Task 5 发送边界、Task 6 两次来源延续及 Task 7 实际运行装配），见[执行记录](../../development/iris-proactive-discussion-execution.md)。尚无真实模型验收或部署证据，IRIS-CORE-005 不提升为完成；原三群问答的已记录发布不变。
 - Task 8 已补非 @ 真实 ingress/PG/worker/回执/普通追问端到端、同问题停止与新问题连续发送，CLI 默认对固定合成集逐例执行两个独立轮次，CI 显式接入 PG 三文件及 CLI 测试。实际结果、保留失败和[下一层验收](../../development/iris-proactive-discussion.md)分别记录；模型配置缺失使实际命令退出 2，不能提升为实模内部验收或真实群交付。
+- 2026-09-15 最终审查后的 I1–I4 [合并修复](../../development/iris-proactive-discussion-final-fixes.md)补齐
+  issue 文字全来源、从未尝试 stale 首次意见恢复、所有者续租和启动登记重试；Core 4613 通过 /
+  463 条件跳过，真实 PG 及实际 model payload/普通 Q&A 去重证据单列。应用提交、保留失败、0060
+  迁移/旧未知来源限制、四处处置和一次范围复审边界见该记录。IRIS-CORE-005 不提升为完成，
+  实模、exact-SHA CI 与真实单群投递/停止/恢复仍未验收。
 - 本修订澄清 IRIS-CORE-005 的实际缺口，不抹去旧 IRIS-CORE-006 和历史 P1 灰度成果，也不将“旧提醒卡能发送”写成语义主动协作已完成。
 
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
