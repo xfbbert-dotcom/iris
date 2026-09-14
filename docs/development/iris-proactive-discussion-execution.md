@@ -5,7 +5,7 @@
 ## 当前状态
 
 - 用户选择子任务实施与逐项审查。实现工作树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支 `codex/iris-daily-pilot-followup`；执行起点 `1f1a5efe`。
-- Task 1 基础实现已提交为 `24c090fc`，独立审查已通过规格与质量两项，无阻塞发现；Task 2–8 尚未开始。没有模型验收、飞书发送或部署证据。
+- Task 1 基础实现 `24c090fc` 已通过独立审查；Task 2 候选 `9f9f51a0` 的长消息存储/实时身份混用已由 `4ec806d6` 修复并通过范围复审，Task 2 本地门禁完成；下一步 Task 3–8。没有模型验收、飞书发送或部署证据。
 - 已实现基础类型、消息完整内容哈希绑定、`0059_proactive_discussion.sql` 和六方法 foundation PostgreSQL repository，并以隔离 schema 运行真实数据库测试。评估/反馈状态转换和发送方法仍分别属于 Task 4/5，没有占位运行方法，也没有接入生产入口。
 - 20:44 本机 Docker 已恢复启动；随后在独立 PostgreSQL 16.14 中取得实际缺表失败及修复后通过证据。数据库可用和基础测试通过仍不等于主动讨论端到端可用。
 
@@ -21,8 +21,19 @@
 | 首轮真实 PG 回归失败 | 两个聚焦文件：49 通过 / 15 失败；14 项受到 vector 扩展在临时 schema 中并发创建/清理影响，1 项先被 FK 拒绝而未到达预期 TRUNCATE trigger | 保留失败；只在专用测试库初始化 public 扩展并修正测试断言，不改历史应用迁移 |
 | Task 1 真实 PG GREEN | `npm --workspace apps/core test -- migration-runner.test.ts postgres-proactive-discussion-repository.test.ts`：64 通过 / 0 跳过，13.30 秒；`npm run typecheck` 退出 0 | PostgreSQL 16.14 / vector 0.8.5，基础持久化与并发/回滚验证，不是评估或发送验收 |
 | Task 1 完整 Core 回归 | `npm --workspace apps/core test -- --reporter=dot`：4488 通过 / 357 条件跳过，240 文件通过 / 9 跳过，47.79 秒 | 此命令未设置数据库环境变量；新增 12 个条件 PG 用例已在上行单独实际运行。其余服务条件跳过不算通过 |
+| Task 2 行为 RED | 实现前处理器未登记、登记失败未冒泡；定向测试还复现权限检查发生在读取之后、无回复目标反馈被误建 assessment、等义文档绑定因键顺序不同被拒绝 | 各缺口分别修复后转绿；缺模块红灯单独保留，不充当行为证明 |
+| Task 2 聚焦与完整回归 | ingress/context/processor/history 四文件 139 通过；最终 `npm --workspace apps/core test -- --reporter=dot`：4517 通过 / 357 条件跳过，242 文件通过 / 9 跳过，27.13 秒；`npm run typecheck` 退出 0 | 对应 `9f9f51a0`；最后一次来源校验实现改动后重新跑全量。未修改 PG 行为、不重跑 Task 1 PG；无生产装配或发送 |
 
-以上最终验证对应 `24c090fc` 的 Task 1 应用改动；既有事件/OAuth 负向用例日志保留为基线噪声。独立审查已确认局部规格与质量通过；扩展 bootstrap、进度文档及基线日志的 P2 发现分别记录在本页或交给 Task 8。不把本页开发前基线替代新增代码证据。
+表中 Task 1 最终验证对应 `24c090fc`；既有事件/OAuth 负向用例日志保留为基线噪声。独立审查已确认局部规格与质量通过；扩展 bootstrap、进度文档及基线日志的 P2 发现分别记录在本页或交给 Task 8。不把本页开发前基线替代新增代码证据。
+
+Task 2 初审范围为 `8a557ed7..9f9f51a0`：只接可选处理器登记、严格人类触发、明确反馈解析、同群实时上下文和来源复验。原普通 @ 不新增主动 assessment；反馈应用仍属于 Task 4，发送复验属于 Task 5，生产装配属于 Task 7。
+
+### Task 2 审查发现：长消息身份混用（本地修复已复审）
+
+- 观察症状：超过存储预算的原消息虽然成功登记，未改动的实时完整正文却构建不出上下文。
+- 已确认根因：`postgres-conversation-message-repository` 将正文按 8000 字符上限添加截断标记；registrar 对该存储表示求 hash，而 context builder 将其直接与完整实时正文 hash 比较。初版预算测试手写完整 hash，未走实际生产者链路。
+- 修复提交 `4ec806d6`：抽出并复用原有存储表示函数做登记新鲜度校验，存储行为不变；完整实时正文独立绑定模型证据。实际仓储归一化/upsert→登记器→实时上下文的测试先复现失败，再通过；Queryable 为模拟，不是真实 PostgreSQL I/O。`npm --workspace apps/core test -- proactive-discussion-context.test.ts proactive-discussion-ingress.test.ts postgres-conversation-message-repository.test.ts`：55 通过 / 3 条件跳过；`npm --workspace apps/core run typecheck` 退出 0，真实变化仍拒绝。范围复审 `9f9f51a0..4ec806d6` 确认发现已解决、无新增阻塞。
+- 验收边界：本地未发布候选的审查缺陷，不是生产事故归因；Task 2 本地门禁完成，其他门禁未提升。未在这次窄修复后重跑完整 Core，`9f9f51a0` 的 4517 通过与最终定向证据分别记录。
 
 ## 历史：本机环境阻塞及已做的操作
 
@@ -53,11 +64,11 @@ Windows 版本为 `10.0.26200`，与[上游相同错误报告](https://github.co
 
 ## 继续实施
 
-本机数据库阻塞已解除，Task 1 已提交并通过独立审查。若测试容器以后停止，tmpfs 数据将消失，重新核对隔离环境后运行测试，不恢复或混用生产数据：
+本机数据库阻塞已解除，Task 1/2 已提交并通过独立审查。若测试容器以后停止，tmpfs 数据将消失，重新核对隔离环境后运行测试，不恢复或混用生产数据：
 
 1. 从[当前接手入口](current-handoff.md)规定的 git/文档核对开始，保留已有提交和用户改动。
-2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、`task-1-report.md` 和审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已提交的 Task 1。
-3. 已通过的审查范围为原执行起点 `1f1a5efe` 至 `24c090fc`，不是只看最后一笔文档提交。继续 Task 2–8；不得为重现 RED 删除或改写已提交的 0059。Task 4 需处理 100 条目录容量中保留 resolved 身份的生命周期，不能静默丢弃去重身份。
+2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、各任务 report 与审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已完成的 Task 1/2。
+3. Task 1 已审查 `1f1a5efe..24c090fc`；Task 2 初审 `8a557ed7..9f9f51a0` 后复审 `9f9f51a0..4ec806d6`。继续 Task 3–8；不得为重现 RED 删除或改写已提交的 0059。Task 4 需处理 100 条目录容量中保留 resolved 身份的生命周期，不能静默丢弃去重身份。
 4. 未经当前任务新的部署授权，不推送、部署、发飞书消息或开放任何能力。
 
 ## 已作的实现裁决
@@ -68,12 +79,13 @@ Windows 版本为 `10.0.26200`，与[上游相同错误报告](https://github.co
 | 迁移/CLI 验证必须断言实际数据库或进程行为；文件名/缺 import 不算完整红绿证据 | 防止源码字符串匹配或测试跳过制造完成假象 | 聚焦测试稍长，环境依赖明确暴露 |
 | resolved 问题只有出现经验证的实质新前提才可重开；user_paused 不因模型、策略版本或时间自动恢复 | 按已批准设计解决计划中简写注释的歧义 | 需额外显式状态转换测试或返工 |
 | Task 2 依赖实际需要的 register/readState 子合同；历史读取显式扩展 user 类型并保留既有语义 | 避免要求尚未实现的 Task 4/5 方法或放入假方法，同时满足本群人类来源复验 | 少量依赖类型调整和历史 reader 定向回归 |
+| Task 7 新增服务端内部操作者角色配置 `IRIS_INTERNAL_API_AUDIT_ACTOR`；缺认证或角色时拒绝变更，不信任请求头/正文的操作者身份 | 现有共享 bearer 只能证明凭据持有者，不能证明用户自填的成员身份；审计必须如实区分 internal operator 与飞书成员 | 多一个非密钥部署配置；只能归因到凭据/角色，按真人区分仍需后续认证设计 |
 
 ## 四处文档处置（未关闭功能）
 
 | 核对项 | 处置 |
 |---|---|
-| 白皮书 | reviewed-unchanged：[主动工作讨论规则与11.2](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md)仍有效；只是本机测试阻塞，未改变产品行为或关闭缺陷 |
-| 工程故障台账 | reviewed-unchanged：[故障台账](../operations/engineering-failure-ledger.md)仍有效；没有新增确认的 Iris 生产根因或已完成修复，环境现象留在本记录 |
-| 需求/验收基线 | reviewed-unchanged：[覆盖基线](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)仍将新主动讨论列为未完成；未提升任何验收层级 |
-| 开工入口 | updated：[current-handoff](current-handoff.md)更新执行起点、草稿状态与恢复入口；reviewed-unchanged：[README](../../README.md)、[AGENTS](../../AGENTS.md)的工作树定位和当前交接链接仍有效 |
+| 白皮书 | updated：[主动工作讨论规则与11.2](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md)补存储事件身份与完整实时来源身份的区别，链接执行证据；整体行为与授权范围不变 |
+| 工程故障台账 | updated：[故障台账](../operations/engineering-failure-ledger.md)新增存储/实时 hash 混用的复用防错规则、真实生产者链路测试要求与有限出口；明确是未发布候选审查发现，不伪称生产事故 |
+| 需求/验收基线 | updated：[覆盖基线](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)从计划未执行更正为实现中，链接基础证据和 Task 2 修复；IRIS-CORE-005 仍部分实现，不提升实模或部署层级 |
+| 开工入口 | updated：[current-handoff](current-handoff.md)更新执行起点、Task 1 提交/审查证据、Task 2 进行状态与恢复入口；reviewed-unchanged：[README](../../README.md)、[AGENTS](../../AGENTS.md)的工作树定位和当前交接链接仍有效 |

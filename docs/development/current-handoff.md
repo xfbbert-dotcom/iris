@@ -11,7 +11,8 @@
 [实施计划](../superpowers/plans/2026-09-14-iris-proactive-discussion.md)，拆成 8 个可测试任务。
 设计基线为 `62e162cd`，执行起点为 `1f1a5efe`（均为文档提交，不是新的应用版本）。用户已选择子任务实施与逐项审查。
 Task 1 基础类型、消息绑定、0059 迁移和 foundation 仓储已提交 `24c090fc`，独立审查的规格与质量两项通过；此前的 Docker/备用环境阻塞记录保留。
-20:44 用户授权电脑操作后 Docker 已恢复；独立 PostgreSQL 16.14 / pgvector 0.8.5 取得真实 SQL 缺表 RED，随后 64 项真实 PG 测试通过，类型检查通过，完整 Core 4488 通过 / 357 条件跳过；Task 2–8 尚未开始。详见[实施进度与测试环境](iris-proactive-discussion-execution.md)。
+20:44 用户授权电脑操作后 Docker 已恢复；独立 PostgreSQL 16.14 / pgvector 0.8.5 取得真实 SQL 缺表 RED，随后 64 项真实 PG 测试通过，类型检查通过，完整 Core 4488 通过 / 357 条件跳过。
+Task 2 候选 `9f9f51a0` 完整 Core 4517 通过 / 357 条件跳过后，独立审查确认长消息存储 hash 与实时完整 hash 混用；`4ec806d6` 已修复，定向 55 通过 / 3 条件跳过、Core 类型检查通过，范围复审通过。Task 2 本地门禁完成，接下来 Task 3–8；窄修复没有声称重新跑过完整 Core 或真实 PG。详见[实施进度与测试环境](iris-proactive-discussion-execution.md)。
 这些仅为本地基础实现证据，不等于主动判断或发送功能验收；没有重新核验或修改生产，也没有本功能模型验收、飞书发送或部署证据。
 不能因旧时间触发链路验收过就声称本轮主动判断已完成。四处同步处置见实施计划第 3 节。
 

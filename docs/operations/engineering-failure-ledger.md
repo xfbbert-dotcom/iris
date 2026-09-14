@@ -29,17 +29,41 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   timers or keyword matches. Allow explicitly uncertain, reasoned concerns; do not demand an
   existing Wiki answer or present professional inference as a company fact. Keep task execution
   separate and distinguish policy authorization from human approval.
-- **Planned guard, not yet implemented:** Independent exact-group event-driven assessment,
+- **Guard under implementation, not yet accepted end to end:** Independent exact-group event-driven assessment,
   same-issue novelty checks, pre-send correction/source/pause checks, provenance-safe follow-ups
   and durable nonduplicating delivery. The [approved direction and written design](../superpowers/specs/2026-09-09-iris-proactive-discussion-design.md)
   records the contract and four-place documentation dispositions. Its written review is complete;
   the [implementation plan](../superpowers/plans/2026-09-14-iris-proactive-discussion.md) maps the guards
-  to bounded tasks and tests, but no new application/production acceptance is claimed yet.
+  to bounded tasks and tests. Local foundation acceptance and context review findings are tracked
+  in the [execution record](../development/iris-proactive-discussion-execution.md); no model or
+  production acceptance is claimed.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,
   real-model drafts and one-group real-Feishu acceptance must be recorded separately before this
   feature is declared delivered.
+
+### Keep stored-event hashes separate from full live-source hashes
+
+- **Observed implementation failure (2026-09-14):** Review of the unshipped proactive context
+  candidate `9f9f51a0` found that an unchanged long human message could register successfully but
+  always return no live context. This is a local review finding, not a diagnosed production incident.
+- **Confirmed cause:** The conversation repository stores a bounded body with a truncation marker;
+  registration hashes that stored representation. The context builder directly compared it with
+  the complete live body hash. The original long-message test hand-built the full live hash into
+  the job, bypassing the real producer contract and hiding the mismatch.
+- **Prevention rule:** Keep registration/freshness identity separate from live evidence identity.
+  Reuse the actual storage representation when comparing an event hash; hash full fresh evidence
+  before prompt clipping. Do not duplicate an approximate truncation rule or weaken changed-source
+  checks to make a test pass.
+- **Guard and evidence:** Production-shaped persistence → registration → fresh-context regression,
+  covering both unchanged long content and genuine changes; fix commit and actual acceptance are
+  recorded in the [execution record](../development/iris-proactive-discussion-execution.md).
+  Fix `4ec806d6` passed focused regression/typecheck and scoped re-review. The new production-shaped
+  regression uses the real repository normalization with mocked database I/O; it is not real-PG proof.
+- **Exit condition:** An unchanged long trigger produces context with its full live binding, stale
+  or changed evidence remains rejected, focused regressions/typecheck pass and scoped re-review
+  accepts the fix. This does not establish model, runtime, or real-group delivery acceptance.
 
 ### A working discussion is not required to become formal knowledge before it can be shared
 

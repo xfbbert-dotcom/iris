@@ -486,9 +486,16 @@ actions. Requested task creation belongs to the governed Feishu task path, with 
 by Feishu rather than duplicated by this discussion loop.
 
 The written design is approved and the [implementation plan](../plans/2026-09-14-iris-proactive-discussion.md)
-is written; this is not a claim that the
-new runtime has been implemented or deployed. First activation is limited to the original pilot
+is being executed; local foundation/context evidence and unresolved review findings are tracked in
+the [execution record](../../development/iris-proactive-discussion-execution.md). This is not a claim
+that the new runtime has been completed or deployed. First activation is limited to the original pilot
 group; current Q&A and other groups remain unchanged.
+
+Stored event identity and live source identity are different contracts. A bounded event record may
+contain a truncation marker; its hash must not be equated with the hash of the complete readable
+message. Validate job freshness against the actual event-storage representation, while binding
+model-exposed sources to the complete live body before prompt truncation. Tests must exercise the
+real persistence-to-registration-to-live-context path, including long messages and changed content.
 
 Constitutional principle:
 
