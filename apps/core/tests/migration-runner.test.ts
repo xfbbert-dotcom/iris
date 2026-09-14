@@ -18,6 +18,44 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("reserves one proactive discussion migration after shared working chat", async () => {
+    const names = (await readdir(defaultMigrationsDir())).sort();
+    expect(names.filter(name => name.startsWith("0059_"))).toEqual(["0059_proactive_discussion.sql"]);
+    expect(names.indexOf("0059_proactive_discussion.sql"))
+      .toBeGreaterThan(names.indexOf("0058_shared_working_chat.sql"));
+  });
+
+  it.skipIf(!databaseUrl)("migrates proactive discussion tables once and rejects fact mutations", async () => {
+    const schema = `pd_${randomUUID().replaceAll("-", "")}`;
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+      for (const table of ["policies", "groups", "jobs", "evaluations", "issues", "deliveries", "sources", "events"]) {
+        await expect(client.query(`SELECT 1 FROM proactive_discussion_${table} LIMIT 1`)).resolves.toMatchObject({ rows: [] });
+      }
+      await expect(client.query("SELECT 1 FROM answer_reply_local_source_traces LIMIT 1")).resolves.toMatchObject({ rows: [] });
+      // Statement-level TRUNCATE guards must protect even empty fact tables.
+      for (const table of ["proactive_discussion_evaluations", "proactive_discussion_sources", "proactive_discussion_events", "answer_reply_local_source_traces"]) {
+        const triggers = await client.query("SELECT tgname FROM pg_trigger WHERE tgrelid=$1::regclass AND NOT tgisinternal ORDER BY tgname", [table]);
+        expect(triggers.rows.map(row => row.tgname)).toEqual([`${table}_append_only`, `${table}_truncate_guard`]);
+        // CASCADE passes PostgreSQL's earlier FK precheck so the immutable
+        // trigger is actually exercised, including for referenced evaluations.
+        await expect(client.query(`TRUNCATE ${table} CASCADE`)).rejects.toThrow(/append-only/iu);
+      }
+      const again = await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+      expect(again.applied).toEqual([]);
+      expect(again.skipped).toContain("0059_proactive_discussion.sql");
+    } finally {
+      if (!/^pd_[a-f0-9]{32}$/u.test(schema)) throw new Error("invalid disposable schema");
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      client.release();
+      await pool.end();
+    }
+  }, 60_000);
+
   it("reserves one ordered managed knowledge publication update ledger migration", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
     expect(migrationNames.filter((name) => name.startsWith("0052_"))).toEqual([
