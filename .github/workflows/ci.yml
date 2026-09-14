@@ -56,6 +56,7 @@ jobs:
           DATABASE_URL: postgres://iris:iris@localhost:5432/iris
           IRIS_TEST_DATABASE_URL: postgres://iris:iris@localhost:5432/iris
         run: |
+          node --input-type=module -e 'import pg from "pg"; const pool = new pg.Pool({connectionString:process.env.IRIS_TEST_DATABASE_URL}); try { await pool.query("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public"); } finally { await pool.end(); }'
           npm --workspace apps/core test -- postgres-document-source-registry.test.ts
           npm --workspace apps/core test -- document-snapshot-repository.test.ts
           npm --workspace apps/core test -- document-fragment-repository.test.ts
@@ -67,6 +68,9 @@ jobs:
           npm --workspace apps/core test -- postgres-working-chat-scope.test.ts
           npm --workspace apps/core test -- postgres-shared-working-chat-context.test.ts
           npm --workspace apps/core test -- postgres-shared-chat-answer-concurrency.test.ts
+          npm --workspace apps/core test -- postgres-proactive-discussion-repository.test.ts
+          npm --workspace apps/core test -- postgres-proactive-discussion-concurrency.test.ts
+          npm --workspace apps/core test -- proactive-discussion-e2e.test.ts
           npm --workspace apps/core test -- postgres-conversation-state-evidence-deletion.test.ts
           npm --workspace apps/core test -- agent-execution-ledger.test.ts
           npm --workspace apps/core test -- postgres-formal-task-repository.test.ts
@@ -76,13 +80,13 @@ jobs:
           npm --workspace apps/core test -- postgres-action-review-repository.test.ts
 
       - name: Validate Docker Compose
-        run: docker compose config
+        run: docker compose config --quiet
 
       - name: Validate pilot readiness
         run: npm run readiness -- --env-file deploy/pilot/ci.env
 
       - name: Validate pilot Compose
-        run: npm run pilot:config
+        run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml config --quiet
 
       - name: Start pilot stack
         run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml up --build --detach
