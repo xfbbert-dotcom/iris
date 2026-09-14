@@ -79,8 +79,8 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion final
         const binding = { documentSourceId: "runtime-doc", documentSnapshotId: "runtime-snapshot",
           ...(mode === "restored-wiki-disabled" ? {} : { crossGroupGrantId: grant.grant.id,
             crossGroupGrantVersion: 1, crossGroupGrantorGroupId: "owner", crossGroupGranteeGroupId: PILOT_CHAT }) };
-        await db.pool.query(`INSERT INTO proactive_discussion_issues(id,chat_id,description,state,version,basis_version,last_observation,last_reasoning,last_suggestion,basis_sources)
-          VALUES('restored-issue',$1,'restored-issue-secret','surfaced',1,1,'restored-issue-secret','restored-issue-secret','restored-issue-secret',$2::jsonb)`,
+        await db.pool.query(`INSERT INTO proactive_discussion_issues(id,chat_id,description,state,version,basis_version,last_observation,last_reasoning,last_suggestion,basis_sources,prose_sources)
+          VALUES('restored-issue',$1,'restored-issue-secret','surfaced',1,1,'restored-issue-secret','restored-issue-secret','restored-issue-secret',$2::jsonb,$2::jsonb)`,
           [PILOT_CHAT, JSON.stringify([{ kind: "document", binding, ref: createPdSourceRef({ kind: "document", binding }) }])]);
         if (mode === "snapshot-replaced") await db.pool.query(`INSERT INTO document_snapshots(id,document_source_id,source_uri,fetch_status,body_text,fetched_at,created_at)
           VALUES('new-runtime-snapshot','runtime-doc','https://synthetic.feishu.cn/docx/runtimeDoc','succeeded','new current source',$1,$1)`, [time(1)]);

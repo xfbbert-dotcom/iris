@@ -460,11 +460,20 @@ function emptyDocuments() {
   }) };
 }
 
+it("source capacity rejects the entire context instead of clipping issue provenance", async () => {
+  const issue = pdIssue(messageSource("old", "old"));
+  issue.proseSources = Array.from({ length: 1000 }, (_, i) => messageSource(`proof-${i}`, `premise-${i}`));
+  const builder = createPdContextBuilder({ repository: stableRepository([issue]),
+    reader: { listRecentMessages: async () => [historyMessage("om-trigger", "current")] },
+    documents: () => emptyDocuments(), sourceVerifier: { verify: async () => true }, canReadGroup: () => true });
+  await expect(builder.load(job(hashLocalMessageText("current")))).resolves.toBeNull();
+});
+
 function pdIssue(source: PdSource): PdIssue {
   return {
     id: "issue-1", chatId: PD_PILOT_CHAT, description: "old issue", state: "surfaced",
     version: 1, basisVersion: 1, lastObservation: "old observation",
     lastReasoning: "old reasoning", lastSuggestion: "old suggestion",
-    basisSources: [source], hasUnknownDelivery: false,
+    basisSources: [source], proseSources: [source], canReassessUnattempted: false, hasUnknownDelivery: false,
   };
 }

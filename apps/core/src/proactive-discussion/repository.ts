@@ -13,9 +13,10 @@ export interface PdRepository {
     policy: PdPolicy | null; contextVersion: number; catalogVersion: number; issues: PdIssue[];
   }>;
   claimEvaluation(input: { workerId: string; at: Date; leaseUntil: Date }): Promise<PdJob | null>;
+  renewEvaluation(input: { job: PdJob; at: Date; leaseUntil: Date }): Promise<boolean>;
   commitEvaluation(input: {
     job: PdJob; context: PdContext; assessment: PdAssessment; draft: PdDraft | null; at: Date;
-  }): Promise<"prepared" | "skipped" | "stale" | "blocked">;
+  }): Promise<"prepared" | "skipped" | "stale" | "lease_lost" | "blocked">;
   failEvaluation(input: { job: PdJob; reason: string; retryable: boolean; at: Date }): Promise<void>;
   requeueEvaluation(input: { job: PdJob; at: Date }): Promise<void>;
   applyFeedback(input: {
@@ -47,7 +48,7 @@ export type PdFoundationRepository = Pick<PdRepository,
   "setPolicy" | "register" | "readState" | "claimEvaluation" | "failEvaluation" | "getStatus">;
 
 export type PdEvaluationRepository = PdFoundationRepository & Pick<PdRepository,
-  "commitEvaluation" | "requeueEvaluation" | "applyFeedback" | "findIssueByReply">;
+  "commitEvaluation" | "requeueEvaluation" | "applyFeedback" | "findIssueByReply" | "renewEvaluation">;
 
 export class PdCatalogCapacityError extends Error {
   readonly code = "proactive_discussion_catalog_degraded";

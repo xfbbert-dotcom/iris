@@ -331,6 +331,13 @@ describe("PdModel.render", () => {
   });
 });
 
+it.each([null, []])("does not expose derived issue prose without complete bound provenance: %j", async proseSources => {
+  const context = pdContextWithIssue({ proseSources });
+  const client = completionClient(JSON.stringify(pdSkipAssessment()));
+  await expect(createPdModel({ client }).assess(context)).rejects.toThrow("context");
+  expect(client.complete).not.toHaveBeenCalled();
+});
+
 function completionClient(response: string) {
   return {
     complete: vi.fn(async (

@@ -60,7 +60,8 @@ function withBudgetIssue(context: PdContext, state: PdIssue["state"] = "surfaced
   context.sources.unshift(...prior.sources); context.items.unshift(...prior.items);
   context.issues = [{ id: "synthetic-budget-issue", chatId: PD_PILOT_CHAT, description: "两人招聘成本超过 10 万元预算",
     state, version: 2, basisVersion: 1, lastObservation: "两人每人 8 万共 16 万，超出 10 万预算 6 万。",
-    lastReasoning: "按现有数字，预算不足。", lastSuggestion: "先确认追加预算或调整人数。", basisSources: prior.sources, hasUnknownDelivery: false }];
+    lastReasoning: "按现有数字，预算不足。", lastSuggestion: "先确认追加预算或调整人数。", basisSources: prior.sources,
+    proseSources: prior.sources, canReassessUnattempted: false, hasUnknownDelivery: false }];
   return context;
 }
 

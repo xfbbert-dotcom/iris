@@ -33,6 +33,7 @@ const assessmentSystem = [
   "新问题只返回 description，不创建 ID；已有问题只能使用 suppliedIssues 中的同群 ID。",
   "resolved 只有出现实质新依据时才能重新介入；user_paused 不能自动恢复。",
   "已有问题的发送结果未知时保持沉默，不能推进同一问题的新版本。",
+  "只有 canReassessUnattempted=true 的问题可用 unattempted_first：此前草稿未曾尝试发送，重新判断原依据是否仍值得首次发言；不要把旧依据称为新证据。",
   "skip 使用 materialChange.kind=none；允许以空文本和空引用表达保持沉默。",
   "不要输出思维链，只给出简明、可审计的字段。",
 ].join("\n");
@@ -85,7 +86,7 @@ const assessmentShapeSchema = z.object({
   suggestion: boundedOutputText,
   uncertainty: z.enum(["fact", "qualified_inference"]),
   materialChange: z.object({
-    kind: z.enum(["none", "new_issue", "new_evidence"]),
+    kind: z.enum(["none", "new_issue", "new_evidence", "unattempted_first"]),
     explanation: boundedOutputText,
     evidenceRefs: z.array(z.string()),
   }).strict(),
@@ -108,8 +109,8 @@ const scopeReviewSchema = z.object({
 type ModelContext = ReturnType<typeof modelContext>;
 
 export interface PdModel {
-  assess(context: PdContext): Promise<PdAssessment>;
-  render(input: { context: PdContext; assessment: PdAssessment }): Promise<PdDraft | null>;
+  assess(context: PdContext, assertActive?: () => Promise<void>): Promise<PdAssessment>;
+  render(input: { context: PdContext; assessment: PdAssessment }, assertActive?: () => Promise<void>): Promise<PdDraft | null>;
 }
 
 export function createPdModel({
@@ -118,12 +119,13 @@ export function createPdModel({
   client: OpenAICompatibleChatCompletionsClient;
 }): PdModel {
   return {
-    async assess(context) {
+    async assess(context, assertActive) {
       const input = modelContext(context);
       const responseFormat = assessmentResponseFormat(context);
       let messages = assessmentMessages(input);
 
       for (let attempt = 0; attempt < MAX_INVALID_ASSESSMENT_ATTEMPTS; attempt += 1) {
+        await assertActive?.();
         const content = await client.complete(messages, { responseFormat });
         try {
           return parseAssessmentContent(content, context);
@@ -139,17 +141,19 @@ export function createPdModel({
       throw new Error("proactive discussion assessment was invalid");
     },
 
-    async render({ context, assessment }) {
+    async render({ context, assessment }, assertActive) {
       const validated = validatePdAssessment(assessment, context);
       if (validated.decision === "skip") return null;
 
       const input = renderInput(context, validated);
+      await assertActive?.();
       const draft = parseDraftContent(
         await client.complete(renderMessages(input), {
           responseFormat: draftResponseFormat(validated.evidenceRefs),
         }),
         validated.evidenceRefs,
       );
+      await assertActive?.();
       const review = parseScopeReviewContent(await client.complete(
         scopeReviewMessages({ ...input, draft }),
         { responseFormat: scopeReviewResponseFormat() },
@@ -241,6 +245,12 @@ export function validatePdAssessment(value: unknown, context: PdContext): PdAsse
   if (issue.state === "user_paused") {
     throw assessmentInvalid("a user-paused issue cannot be reopened automatically");
   }
+  if (assessment.materialChange.kind === "unattempted_first") {
+    if (issue.state !== "observing" || !issue.canReassessUnattempted) {
+      throw assessmentInvalid("first intervention requires proven unattempted stale history");
+    }
+    return assessment;
+  }
   if (assessment.materialChange.kind !== "new_evidence") {
     throw assessmentInvalid("an existing issue requires new_evidence material change");
   }
@@ -307,6 +317,8 @@ function modelContext(context: PdContext) {
       lastReasoning: issue.lastReasoning,
       lastSuggestion: issue.lastSuggestion,
       basisSourceRefs: issue.basisSources.map(source => source.ref),
+      proseSourceRefs: issue.proseSources?.map(source => source.ref) ?? [],
+      canReassessUnattempted: issue.canReassessUnattempted,
       hasUnknownDelivery: issue.hasUnknownDelivery,
     })),
   };
@@ -419,7 +431,7 @@ function assessmentResponseFormat(context: PdContext): OpenAICompatibleJsonSchem
             additionalProperties: false,
             required: ["kind", "explanation", "evidenceRefs"],
             properties: {
-              kind: { type: "string", enum: ["none", "new_issue", "new_evidence"] },
+              kind: { type: "string", enum: ["none", "new_issue", "new_evidence", "unattempted_first"] },
               explanation: optionalBoundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
               evidenceRefs,
             },
@@ -545,6 +557,8 @@ function assertContextCatalog(context: PdContext): void {
     || new Set(issueIds).size !== issueIds.length
     || context.sources.some(source => source.kind === "message" && source.binding.chatId !== context.chatId)
     || context.issues.some(issue => issue.chatId !== context.chatId)
+    || context.issues.some(issue => !issue.proseSources?.length
+      || issue.proseSources.some(source => !sourceRefs.includes(source.ref)))
   ) {
     throw new Error("proactive discussion context is invalid");
   }

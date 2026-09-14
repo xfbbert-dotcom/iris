@@ -57,6 +57,8 @@ export function pdContextWithIssue(
     lastReasoning: "现有计划可能超过预算。",
     lastSuggestion: "核对招聘总成本。",
     basisSources: [context.sources[0]!],
+    proseSources: [context.sources[0]!],
+    canReassessUnattempted: false,
     hasUnknownDelivery: false,
     ...issueOverrides,
   };

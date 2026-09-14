@@ -148,7 +148,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
         const group = (await client.query(`SELECT context_version,catalog_version FROM proactive_discussion_groups
           WHERE chat_id=$1 FOR UPDATE`, [job.chatId])).rows[0];
         const issues = (await client.query(`${issueSelect} WHERE i.chat_id=$1 ORDER BY i.id LIMIT 101 FOR UPDATE OF i`, [job.chatId])).rows.map(decodeIssue);
-        if (!await lockOwnedJob(client, job, at)) return "stale";
+        if (!await lockOwnedJob(client, job, at)) return "lease_lost";
         const finish = async (outcome: "prepared" | "skipped" | "blocked", reason: string | null) => {
           const evaluationId = randomUUID();
           await client.query(`INSERT INTO proactive_discussion_evaluations
@@ -184,8 +184,17 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           await requeueOwnedJob(client, job, at, "issue_version_stale"); return "stale";
         }
         try {
-          if (context.sources.some(source => source.ref !== createPdSourceRef(source))
+          if (context.sources.length > 1000 || context.sources.some(source => source.ref !== createPdSourceRef(source))
             || context.items.some(item => !context.sources.some(source => source.ref === item.ref))) throw new Error("invalid source");
+          // The trusted projection, not caller-supplied flags or source lists,
+          // establishes proof for every catalog text exposed to this assessment.
+          for (const suppliedIssue of context.issues) {
+            const saved = issues.find(item => item.id === suppliedIssue.id);
+            if (!saved?.proseSources?.length || saved.version !== suppliedIssue.version
+              || saved.description !== suppliedIssue.description || saved.lastObservation !== suppliedIssue.lastObservation
+              || saved.lastReasoning !== suppliedIssue.lastReasoning || saved.lastSuggestion !== suppliedIssue.lastSuggestion
+              || saved.proseSources.some(source => !context.sources.some(bound => bound.ref === source.ref))) throw new Error("invalid issue provenance");
+          }
           validatePdAssessment(assessment, { ...context, issues: issues.filter(item => context.issues.some(s => s.id === item.id)) });
           if (assessment.decision === "intervene" && (draft === null || !draft.text.trim() || draft.text.length > 1200
             || new Set(draft.evidenceRefs).size !== assessment.evidenceRefs.length
@@ -204,7 +213,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           }
           await finish("skipped", assessment.reason); return "skipped";
         }
-        if (issue && !await hasUnconsumedIssueEvidence(client, issue,
+        if (issue && assessment.materialChange.kind !== "unattempted_first" && !await hasUnconsumedIssueEvidence(client, issue,
           context.sources.filter(source => assessment.materialChange.evidenceRefs.includes(source.ref)))) {
           await finish("blocked", "issue_evidence_already_consumed"); return "blocked";
         }
@@ -212,17 +221,20 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
         const version = (issue?.version ?? 0) + 1;
         const basis = (issue?.basisVersion ?? 0) + 1;
         const basisSources = context.sources.filter(source => assessment.evidenceRefs.includes(source.ref));
+        // context contains the full prior issue provenance; retain it explicitly
+        // because description survives even when the current cited basis changes.
+        const proseSources = [...new Map([...(issue?.proseSources ?? []), ...context.sources].map(source => [source.ref, source])).values()];
         if (issue) {
           await client.query(`UPDATE proactive_discussion_issues SET state='observing',version=$2,basis_version=$3,
-            last_observation=$4,last_reasoning=$5,last_suggestion=$6,basis_sources=$7::jsonb,updated_at=$8 WHERE id=$1`,
-          [id, version, basis, assessment.observation, assessment.reasoning, assessment.suggestion, JSON.stringify(basisSources), at]);
+            last_observation=$4,last_reasoning=$5,last_suggestion=$6,basis_sources=$7::jsonb,updated_at=$8,prose_sources=$9::jsonb WHERE id=$1`,
+          [id, version, basis, assessment.observation, assessment.reasoning, assessment.suggestion, JSON.stringify(basisSources), at, JSON.stringify(proseSources)]);
           await cancelPrepared(client, id, "basis_superseded", at);
         } else {
           await client.query(`INSERT INTO proactive_discussion_issues
-            (id,chat_id,description,state,version,basis_version,last_observation,last_reasoning,last_suggestion,basis_sources,created_at,updated_at)
-            VALUES($1,$2,$3,'observing',1,1,$4,$5,$6,$7::jsonb,$8,$8)`,
+            (id,chat_id,description,state,version,basis_version,last_observation,last_reasoning,last_suggestion,basis_sources,created_at,updated_at,prose_sources)
+            VALUES($1,$2,$3,'observing',1,1,$4,$5,$6,$7::jsonb,$8,$8,$9::jsonb)`,
           [id, job.chatId, assessment.issueRef!.kind === "new" ? assessment.issueRef!.description : "",
-            assessment.observation, assessment.reasoning, assessment.suggestion, JSON.stringify(basisSources), at]);
+            assessment.observation, assessment.reasoning, assessment.suggestion, JSON.stringify(basisSources), at, JSON.stringify(proseSources)]);
         }
         await advanceCatalog(client, job.chatId, at);
         const evaluationId = await finish("prepared", null);
@@ -402,6 +414,17 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
       });
     },
 
+    async renewEvaluation({ job, at, leaseUntil }) {
+      date(at); date(leaseUntil);
+      if (leaseUntil <= at) throw new Error("lease must end after renewal time");
+      return transaction(dataSource, async client => {
+        if (!await lockOwnedJob(client, job, at)) return false;
+        await client.query(`UPDATE proactive_discussion_jobs SET lease_until=GREATEST(lease_until,$2),
+          version=version+1,updated_at=$3 WHERE id=$1`, [job.id, leaseUntil, at]);
+        return true;
+      });
+    },
+
     async failEvaluation({ job, reason, retryable, at }) {
       date(at); identifier(job.id, 512); identifier(job.leaseToken, 512);
       safeInteger(job.attempt, 1); safeInteger(job.policyVersion, 1);
@@ -436,7 +459,13 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
 }
 
 const issueSelect = `SELECT i.*, EXISTS (SELECT 1 FROM proactive_discussion_deliveries d
-  WHERE d.issue_id=i.id AND d.state IN ('sending','outcome_unknown')) AS unknown_delivery FROM proactive_discussion_issues i`;
+  WHERE d.issue_id=i.id AND d.state IN ('sending','outcome_unknown')) AS unknown_delivery,
+  (i.state='observing' AND EXISTS (SELECT 1 FROM proactive_discussion_deliveries d WHERE d.issue_id=i.id)
+    AND NOT EXISTS (SELECT 1 FROM proactive_discussion_deliveries d WHERE d.issue_id=i.id
+      AND (d.state<>'cancelled' OR d.attempted_at IS NOT NULL OR d.last_error IS DISTINCT FROM 'context_stale'))
+    AND NOT EXISTS (SELECT 1 FROM proactive_discussion_events e WHERE e.entity_type='issue' AND e.entity_id=i.id
+      AND e.payload->>'state' IN ('user_paused','resolved'))) AS can_reassess_unattempted
+  FROM proactive_discussion_issues i`;
 
 async function changeIssueParticipation(client: TransactionClient, input: {
   chatId: string; issueId: string; action: "pause" | "resume"; at: Date; origin: "operator" | "feishu_member"; actorId: string;
@@ -682,5 +711,8 @@ function decodeIssue(row: Row): PdIssue {
   return { id: identifier(row.id, 512), chatId: identifier(row.chat_id, 512), description: String(row.description),
     state: row.state as PdIssue["state"], version: safeInteger(row.version, 1), basisVersion: safeInteger(row.basis_version, 1),
     lastObservation: String(row.last_observation), lastReasoning: String(row.last_reasoning), lastSuggestion: String(row.last_suggestion),
-    basisSources: row.basis_sources as PdSource[], hasUnknownDelivery: row.has_unknown_delivery === true || row.unknown_delivery === true };
+    basisSources: row.basis_sources as PdSource[],
+    proseSources: Array.isArray(row.prose_sources) ? row.prose_sources as PdSource[] : null,
+    canReassessUnattempted: row.can_reassess_unattempted === true,
+    hasUnknownDelivery: row.has_unknown_delivery === true || row.unknown_delivery === true };
 }

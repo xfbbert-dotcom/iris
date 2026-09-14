@@ -43,7 +43,7 @@ export async function openPdDatabase(): Promise<{
 export const pdTestAt = new Date("2026-09-14T00:00:00Z");
 export const pdTestTime = (seconds: number) => new Date(pdTestAt.getTime() + seconds * 1000);
 
-export async function preparePdDelivery(db: Awaited<ReturnType<typeof openPdDatabase>>, historyOnly = false, document?: "ordinary" | "grant") {
+export async function preparePdDelivery(db: Awaited<ReturnType<typeof openPdDatabase>>, historyOnly = false, document?: "ordinary" | "grant", assessment = pdAssessment()) {
   const context = pdContext();
   await db.repository.setPolicy({ policy: context.policy, expectedVersion: 0, at: pdTestAt });
   await db.pool.query(`UPDATE runtime_control_state SET desired_global_enabled=true,
@@ -75,7 +75,7 @@ export async function preparePdDelivery(db: Awaited<ReturnType<typeof openPdData
   const job = await db.repository.claimEvaluation({ workerId: "evaluation", at: pdTestAt, leaseUntil: pdTestTime(60) });
   const state = await db.repository.readState(PILOT_CHAT);
   const result = await db.repository.commitEvaluation({ job: job!, context: { ...context, ...state, policy: state.policy! },
-    assessment: pdAssessment(), draft: { text: "两人需要 16 万，建议先核对预算。", evidenceRefs: pdAssessment().evidenceRefs }, at: pdTestAt });
+    assessment, draft: { text: "两人需要 16 万，建议先核对预算。", evidenceRefs: assessment.evidenceRefs }, at: pdTestAt });
   if (result !== "prepared") throw new Error(`fixture preparation failed: ${result}`);
   return { context, job: job! };
 }

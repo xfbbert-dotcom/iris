@@ -109,14 +109,17 @@ export function createPdContextBuilder({
       for (const issue of before.issues) {
         if (
           issue.chatId === job.chatId
-          && issue.basisSources.length > 0
-          && await sourceVerifier.verify({ chatId: job.chatId, sources: issue.basisSources })
+          && issue.proseSources !== null && issue.proseSources !== undefined
+          && issue.proseSources.length > 0 && issue.proseSources.length <= 1000
+          && await sourceVerifier.verify({ chatId: job.chatId, sources: issue.proseSources })
         ) verifiedIssues.push(issue);
       }
       const allSources = uniqueSources([
         ...currentSources,
-        ...verifiedIssues.flatMap((issue) => issue.basisSources),
+        ...verifiedIssues.flatMap((issue) => issue.proseSources!),
       ]);
+      // Never clip provenance while retaining text derived from the missing part.
+      if (allSources.length > 1000) return null;
 
       const bounded = boundLiveAnalysisItems([
         ...messageEntries.map(({ source, text }) => ({ ref: source.ref, text })),

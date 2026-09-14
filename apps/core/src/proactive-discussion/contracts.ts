@@ -13,6 +13,8 @@ export type PdIssue = {
   state: "observing" | "surfaced" | "resolved" | "user_paused";
   version: number; basisVersion: number; lastObservation: string;
   lastReasoning: string; lastSuggestion: string; basisSources: PdSource[];
+  proseSources: PdSource[] | null;
+  canReassessUnattempted: boolean;
   hasUnknownDelivery: boolean;
 };
 export type PdJob = {
@@ -32,7 +34,7 @@ export type PdAssessment = {
   issueRef: { kind: "existing"; id: string } | { kind: "new"; description: string } | null;
   evidenceRefs: string[]; observation: string; reasoning: string; suggestion: string;
   uncertainty: "fact" | "qualified_inference";
-  materialChange: { kind: "none" | "new_issue" | "new_evidence"; explanation: string; evidenceRefs: string[] };
+  materialChange: { kind: "none" | "new_issue" | "new_evidence" | "unattempted_first"; explanation: string; evidenceRefs: string[] };
 };
 export type PdDraft = { text: string; evidenceRefs: string[] };
 export type PdDelivery = {

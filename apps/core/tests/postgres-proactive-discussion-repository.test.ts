@@ -139,6 +139,7 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion Postg
     const issueId = (await value.repository.readState(PILOT_CHAT)).issues[0]!.id;
     if (resolve) {
       const resolution = await evaluation(value, "m1", "预算只有 10 万");
+      resolution.context.sources.push(source);
       expect(await value.repository.commitEvaluation({ ...resolution, assessment: { ...pdSkipAssessment("resolved"),
         issueRef: { kind: "existing", id: issueId } }, draft: null, at })).toBe("skipped");
     }
@@ -153,10 +154,13 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion Postg
     expect(before.basisSources).toEqual([source]);
     await message(value, "repeat", "再看看原来的预算");
     const old = await evaluation(value, "repeat", "再看看原来的预算");
+    old.context.sources.push(source);
     const originalRef = pdContext().sources[0]!.ref;
     const repeated = { ...changed, evidenceRefs: [originalRef],
       materialChange: { kind: "new_evidence" as const, explanation: "换个说法再次强调原来预算不足", evidenceRefs: [originalRef] } };
     expect(await value.repository.commitEvaluation({ ...old, assessment: repeated, draft: advice(repeated), at })).toBe("blocked");
+    expect((await value.pool.query("SELECT last_error FROM proactive_discussion_jobs WHERE id=$1", [old.job.id])).rows[0].last_error)
+      .toBe("issue_evidence_already_consumed");
     expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toEqual(before);
     expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries WHERE issue_id=$1", [issueId])).rows).toHaveLength(2);
   });

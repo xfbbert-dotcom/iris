@@ -155,3 +155,37 @@ test("a failed claim or failed failure-record write returns failed and leaves du
   unavailable = false;
   expect(await worker.runOnce()).toBe("failed");
 });
+
+test("default heartbeat renews slow in-flight model work and releases its timer after commit", async () => {
+  vi.useFakeTimers();
+  try {
+    const context = pdContext();
+    let until = 0, committed = false;
+    const job: PdJob = { id: "slow", chatId: context.chatId, messageId: "m2", contentHash: "a".repeat(64),
+      policyVersion: 1, leaseToken: "owner", attempt: 1, purpose: "assessment" };
+    const repository = { claimEvaluation: async (input: { leaseUntil: Date }) => { until = input.leaseUntil.getTime(); return job; },
+      renewEvaluation: async (input: { at: Date; leaseUntil: Date }) => { if (input.at.getTime() >= until) return false; until = input.leaseUntil.getTime(); return true; },
+      commitEvaluation: async () => { if (Date.now() >= until) return "lease_lost"; committed = true; return "prepared"; },
+      failEvaluation: async () => undefined,
+    } as unknown as PdRepository;
+    const delay = () => new Promise<void>(resolve => setTimeout(resolve, 25_000));
+    const worker = createPdEvaluationWorker({ repository, contextBuilder: { load: async () => context },
+      model: { assess: async () => { await delay(); return pdAssessment(); }, render: async (_input, active) => {
+        await delay(); await active?.(); await delay(); return { text: "核对预算", evidenceRefs: pdAssessment().evidenceRefs }; } },
+      membership: { isCurrentMember: async () => false }, reader: { listRecentMessages: async () => [] }, now: () => new Date(), workerId: "slow" });
+    const result = worker.runOnce();
+    await vi.advanceTimersByTimeAsync(75_000);
+    expect(await result).toBe("processed"); expect(committed).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
+test.each(["lease_lost", "stale"])("commit %s is reported distinctly from an owned context requeue", async result => {
+  const context = pdContext();
+  const repository = { claimEvaluation: async () => ({ id: "job", chatId: context.chatId, messageId: "m2", contentHash: "a".repeat(64),
+    policyVersion: 1, leaseToken: "lease", attempt: 1, purpose: "assessment" }), commitEvaluation: async () => result } as unknown as PdRepository;
+  const worker = createPdEvaluationWorker({ repository, contextBuilder: { load: async () => context },
+    model: { assess: async () => pdSkipAssessment(), render: async () => null }, membership: { isCurrentMember: async () => false },
+    reader: { listRecentMessages: async () => [] }, now: () => new Date(), workerId: "w" });
+  expect(await worker.runOnce()).toBe(result === "lease_lost" ? "failed" : "processed");
+});

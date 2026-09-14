@@ -75,7 +75,16 @@ export function createProactiveDiscussionRuntime({ env = process.env, runtimeCon
     }).catch(() => { failed = true; }).finally(() => { drainPending = false; });
   }
   const runtime: ProactiveDiscussionRuntime = {
-    registrar: { async registerMessage(input) { if (!stopping && running) await delegate?.registerMessage(input); } },
+    registrar: { async registerMessage(input) {
+      if (!config.enabled) return;
+      const knownBot = resources?.botOpenId ?? readOptionalFeishuBotOpenId(env);
+      if (input.conversationMessage.chatId !== PD_PILOT_CHAT || input.senderType !== "user"
+        || (knownBot !== undefined && input.conversationMessage.senderOpenId === knownBot)) return;
+      // The raw-event processor finishes ordinary work before propagating this
+      // retryable failure. Enabled startup must never acknowledge lost PD work.
+      if (stopping || !running || !delegate) throw new Error("proactive discussion registration unavailable");
+      await delegate.registerMessage(input);
+    } },
     get control() { return stopping ? undefined : control; },
     start() {
       return startup ??= observeStartupPromise((async () => {
