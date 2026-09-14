@@ -25,7 +25,11 @@ export type FeishuChatHistoryReader = {
     limit: number;
     timeRange?: { start: Date; end: Date };
   }): Promise<FeishuChatHistoryMessage[]>;
-  readMessagesByIds?(input: { chatId: string; messageIds: string[]; sender?: "assistant" }): Promise<FeishuChatHistoryMessage[]>;
+  readMessagesByIds?(input: {
+    chatId: string;
+    messageIds: string[];
+    sender?: "user" | "assistant";
+  }): Promise<FeishuChatHistoryMessage[]>;
 };
 
 export type FeishuChatHistoryReaderDependencies = {

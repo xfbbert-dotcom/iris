@@ -6,6 +6,19 @@ import {
 } from "../src/feishu/feishu-chat-history-reader.js";
 
 describe("FeishuChatHistoryReader", () => {
+  it("accepts explicit user verification without changing the default human behavior", async () => {
+    const fetch = vi.fn(async () => page([message({ message_id: "om-user" })]));
+    const reader = readerFor(fetch);
+
+    await expect(reader.readMessagesByIds!({
+      chatId: "oc-group", messageIds: ["om-user"], sender: "user",
+    })).resolves.toEqual([
+      expect.objectContaining({ messageId: "om-user", senderId: "ou-author", text: "A recent human message" }),
+    ]);
+    await expect(reader.readMessagesByIds!({ chatId: "oc-group", messageIds: ["om-user"] }))
+      .resolves.toHaveLength(1);
+  });
+
   it("reads only exact configured Iris app replies when explicitly requested, never as human evidence", async () => {
     const own = message({ message_id: "om-own", sender: { id: "cli-iris", sender_type: "app", id_type: "app_id" }, body: { content: JSON.stringify({ text: "hello" }) } });
     const fetch = vi.fn(async () => page([own]));

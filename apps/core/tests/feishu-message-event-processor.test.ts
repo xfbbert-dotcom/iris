@@ -10,6 +10,86 @@ import type { RawEvent } from "../src/events/raw-event-queue.js";
 import { createMemoryExtractionPlanner } from "../src/memory-extraction/memory-extraction-planner.js";
 
 describe("FeishuMessageEventProcessor", () => {
+  it("persists before registering and preserves sender, parent, root, and exact Iris mention metadata", async () => {
+    const calls: string[] = [];
+    const persisted = {
+      id: "feishu:incoming", provider: "feishu" as const, providerMessageId: "incoming",
+      chatId: "group", senderId: "human", senderOpenId: "human", messageType: "text",
+      text: "@iris explain this discussion", mentions: [{ key: "@iris", openId: "ou_iris" }],
+      sentAt: new Date("2026-07-02T01:00:00.000Z"), rawEventIdempotencyKey: "raw-event:feishu:event-1",
+      createdAt: new Date("2026-07-02T01:00:01.000Z"),
+    };
+    const proactiveDiscussionRegistrar = { registerMessage: vi.fn(async () => { calls.push("register"); }) };
+    const processor = createFeishuMessageEventProcessor({
+      messages: { upsertMessage: async () => { calls.push("persist"); return persisted; } },
+      proactiveDiscussionRegistrar,
+      proactiveDiscussionBotOpenId: "ou_iris",
+    });
+
+    await processor.process(rawEventFixture({ rawBody: { event: {
+      sender: { sender_type: "user", sender_id: { open_id: "human" } },
+      message: { message_id: "incoming", chat_id: "group", message_type: "text",
+        content: JSON.stringify({ text: "@iris explain this discussion" }),
+        mentions: [{ key: "@iris", id: { open_id: "ou_iris" } }],
+        parent_id: "parent", root_id: "root" },
+    } } }));
+
+    expect(calls).toEqual(["persist", "register"]);
+    expect(proactiveDiscussionRegistrar.registerMessage).toHaveBeenCalledWith({
+      conversationMessage: persisted,
+      senderType: "user",
+      parentMessageId: "parent",
+      rootMessageId: "root",
+      mentionedIris: true,
+    });
+  });
+
+  it("surfaces proactive registration errors after preserving the existing mention path", async () => {
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "skipped" as const, reason: "not_mentioned" as const })),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages: { upsertMessage: async input => ({ ...input, id: "feishu:incoming", createdAt: new Date() }) },
+      proactiveDiscussionRegistrar: { registerMessage: async () => { throw new Error("registration failed"); } },
+      proactiveDiscussionBotOpenId: "ou_iris",
+      mentionAnswerResponder,
+    });
+
+    await expect(processor.process(rawEventFixture({ rawBody: { event: {
+      sender: { sender_type: "user", sender_id: { open_id: "human" } },
+      message: { message_id: "incoming", chat_id: "group", message_type: "text",
+        content: JSON.stringify({ text: "@iris explain" }),
+        mentions: [{ key: "@iris", id: { open_id: "ou_iris" } }] },
+    } } }))).rejects.toThrow("registration failed");
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledOnce();
+  });
+
+  it("does not duplicate an existing mention response when raw retry repairs registration", async () => {
+    const { responder, generateDraft } = ordinaryResponderFixture();
+    let failRegistration = true;
+    const processor = createFeishuMessageEventProcessor({
+      messages: { upsertMessage: async input => ({ ...input, id: "feishu:incoming", createdAt: new Date() }) },
+      proactiveDiscussionRegistrar: { registerMessage: async () => {
+        if (failRegistration) {
+          failRegistration = false;
+          throw new Error("registration failed");
+        }
+      } },
+      proactiveDiscussionBotOpenId: "ou_iris",
+      mentionAnswerResponder: responder,
+    });
+    const event = rawEventFixture({ rawBody: { event: {
+      sender: { sender_type: "user", sender_id: { open_id: "human" } },
+      message: { message_id: "incoming", chat_id: "group", message_type: "text",
+        content: JSON.stringify({ text: "@iris explain" }),
+        mentions: [{ key: "@iris", id: { open_id: "ou_iris" } }] },
+    } } });
+
+    await expect(processor.process(event)).rejects.toThrow("registration failed");
+    await expect(processor.process(event)).resolves.toBeUndefined();
+    expect(generateDraft).toHaveBeenCalledOnce();
+  });
+
   it("can retry ordinary work after the guard fails to commit its deferred operation", async () => {
     const { responder, generateDraft } = ordinaryResponderFixture();
     let failCommit = true;

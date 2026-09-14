@@ -16,6 +16,7 @@ import type { GroupVisibleDocumentRegistrar } from "../documents/group-visible-d
 import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
 import type { ConversationMessageReplayGuard } from "./conversation-message-replay-guard.js";
 import { readFeishuMessageText } from "../feishu/feishu-message-text.js";
+import type { PdRegistrar } from "../proactive-discussion/registrar.js";
 
 type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
@@ -24,6 +25,9 @@ type RuntimeGate = {
 };
 type ParsedFeishuMessageEvent = Omit<UpsertConversationMessageInput, "mentions"> & {
   mentions: FeishuMessageMention[];
+  senderType: "user" | "app" | "unknown";
+  parentMessageId?: string;
+  rootMessageId?: string;
   replyToMessageId?: string;
 };
 
@@ -37,6 +41,8 @@ export function createFeishuMessageEventProcessor({
   memoryExtractionPlanner,
   runtimeController,
   messageReplayGuard,
+  proactiveDiscussionRegistrar,
+  proactiveDiscussionBotOpenId,
 }: {
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
@@ -45,6 +51,8 @@ export function createFeishuMessageEventProcessor({
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   runtimeController?: RuntimeGate;
   messageReplayGuard: ConversationMessageReplayGuard;
+  proactiveDiscussionRegistrar?: PdRegistrar;
+  proactiveDiscussionBotOpenId?: string;
 }) {
   return {
     async process(event: RawEvent): Promise<void> {
@@ -94,6 +102,26 @@ export function createFeishuMessageEventProcessor({
         persistedMessage = persistenceResult.value;
       } catch (error) {
         persistenceError = error;
+      }
+
+      let proactiveRegistrationError: unknown;
+      if (persistedMessage !== undefined && proactiveDiscussionRegistrar !== undefined) {
+        try {
+          const registrationResult = await messageReplayGuard.runUnlessDeleted({
+            identity: parsed,
+            effect: () => proactiveDiscussionRegistrar.registerMessage({
+              conversationMessage: persistedMessage!,
+              senderType: parsed.senderType,
+              ...(parsed.parentMessageId === undefined ? {} : { parentMessageId: parsed.parentMessageId }),
+              ...(parsed.rootMessageId === undefined ? {} : { rootMessageId: parsed.rootMessageId }),
+              mentionedIris: proactiveDiscussionBotOpenId !== undefined
+                && parsed.mentions.some((mention) => mention.openId === proactiveDiscussionBotOpenId),
+            }),
+          });
+          if (registrationResult.status === "deleted") return;
+        } catch (error) {
+          proactiveRegistrationError = error;
+        }
       }
 
       let mentionResponseError: unknown;
@@ -155,6 +183,9 @@ export function createFeishuMessageEventProcessor({
 
       if (mentionResponseError !== undefined) {
         throw mentionResponseError;
+      }
+      if (proactiveRegistrationError !== undefined) {
+        throw proactiveRegistrationError;
       }
       if (memoryExtractionPlannerError !== undefined) {
         throw memoryExtractionPlannerError;
@@ -258,6 +289,8 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
   const senderOpenId = readSenderOpenId(eventBody.sender);
   const senderUnionId = readSenderTypedId(eventBody.sender, "union_id");
   const senderUserId = readSenderTypedId(eventBody.sender, "user_id");
+  const parentMessageId = readOptionalIdentifier(message.parent_id);
+  const rootMessageId = readOptionalIdentifier(message.root_id);
 
   return {
     provider: "feishu",
@@ -267,10 +300,13 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
     ...(senderOpenId === undefined ? {} : { senderOpenId }),
     ...(senderUnionId === undefined ? {} : { senderUnionId }),
     ...(senderUserId === undefined ? {} : { senderUserId }),
+    senderType: readSenderType(eventBody.sender),
     messageType,
-    ...(readReplyToMessageId(message) === undefined
+    ...(parentMessageId === undefined ? {} : { parentMessageId }),
+    ...(rootMessageId === undefined ? {} : { rootMessageId }),
+    ...((parentMessageId ?? rootMessageId) === undefined
       ? {}
-      : { replyToMessageId: readReplyToMessageId(message) }),
+      : { replyToMessageId: parentMessageId ?? rootMessageId }),
     text: readFeishuMessageText(messageType, message.content),
     mentions: readMentions(message.mentions),
     sentAt: readFeishuTimestamp(
@@ -279,10 +315,6 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
     ),
     rawEventIdempotencyKey: event.idempotencyKey,
   };
-}
-
-function readReplyToMessageId(message: Record<string, unknown>): string | undefined {
-  return readOptionalIdentifier(message.parent_id) ?? readOptionalIdentifier(message.root_id);
 }
 
 function readMentions(value: unknown): FeishuMessageMention[] {
@@ -312,6 +344,13 @@ function readMentions(value: unknown): FeishuMessageMention[] {
       },
     ];
   });
+}
+
+function readSenderType(sender: unknown): "user" | "app" | "unknown" {
+  if (!isRecord(sender)) return "unknown";
+  return sender.sender_type === "user" || sender.sender_type === "app"
+    ? sender.sender_type
+    : "unknown";
 }
 
 function readMentionOpenId(id: unknown): string | undefined {
