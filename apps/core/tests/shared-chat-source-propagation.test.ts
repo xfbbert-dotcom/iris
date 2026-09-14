@@ -9,11 +9,13 @@ describe("shared source propagation", () => {
   it("retains uncited external labels and inherited assistant sources through model context and result", async () => {
     const labelBinding = { ...binding, messageId: "label", contentHash: "b".repeat(64) };
     const inheritedBinding = { ...binding, messageId: "previous-original", contentHash: "c".repeat(64) };
+    const localOne = { chatId: "group-b", messageId: "local-original", contentHash: "d".repeat(64) };
+    const localTwo = { chatId: "group-b", messageId: "local-label", contentHash: "e".repeat(64) };
     const messages: LiveChatMessage[] = [
       { speaker: "author", text: "问卷原始正文", messageId: "original", sourceChatId: "group-a", sourceChatName: "研究群", sourceSentAt: "2026-09-08T08:00:00.000Z", sharedChatSource: binding },
       { speaker: "author", text: "这是问卷", messageId: "label", parentMessageId: "original", sourceChatId: "group-a", sharedChatSource: labelBinding },
-      { speaker: "Iris", role: "assistant", text: "上轮问卷草稿", messageId: "reply", sourceChatId: "group-b", underlyingChatSources: [inheritedBinding] },
-      { speaker: "Iris", role: "assistant", text: "上轮问卷草稿", messageId: "reply", sourceChatId: "group-b" },
+      { speaker: "Iris", role: "assistant", text: "上轮问卷草稿", messageId: "reply", sourceChatId: "group-b", underlyingChatSources: [inheritedBinding], underlyingLocalMessageSources: [localOne] },
+      { speaker: "Iris", role: "assistant", text: "上轮问卷草稿", messageId: "reply", sourceChatId: "group-b", underlyingLocalMessageSources: [localOne, localTwo] },
     ];
     let planningSources: string[] = [];
     const orchestrator = createAnswerDraftOrchestrator({ liveChatContextProvider: { async loadRecentMessages() { return messages; } },
@@ -26,6 +28,7 @@ describe("shared source propagation", () => {
     const result = await orchestrator.generateDraft({ chatId: "group-b", question: "把问卷草稿改短", liveChatMessages: [], fragmentLimit: 0 });
     expect(result.answerText).toBe("改写完成");
     expect(result.sharedChatSources).toEqual([binding, labelBinding, inheritedBinding]);
+    expect(result.localMessageSources).toEqual([localOne, localTwo]);
     expect(result.promptContext).toContain('source_chat_id="group-a"');
     expect(result.promptContext).toContain("研究群");
     expect(planningSources[0]).toContain("研究群");

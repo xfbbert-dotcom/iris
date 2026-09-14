@@ -1422,10 +1422,12 @@ function createHarness({
   verifierResults = [],
   replyResults = [{ replyMessageId: "reply-default" }],
   sharedChatVerifier,
+  localMessageVerifier,
 }: {
   verifierResults?: Array<AnswerSourcePermissionDecision[] | Error>;
   replyResults?: Array<{ replyMessageId?: string } | Error>;
   sharedChatVerifier?: import("../src/shared-chat/working-chat-scope.js").SharedChatSourceVerifier;
+  localMessageVerifier?: import("../src/memory/local-message-source.js").LocalMessageSourceVerifier;
 } = {}) {
   const repository = new RecordingAnswerReplyRepository();
   const queuedVerifierResults = [...verifierResults];
@@ -1458,6 +1460,7 @@ function createHarness({
     verifier,
     replier,
     sharedChatVerifier,
+    localMessageVerifier,
     now: () => new Date(transitionAt.getTime()),
   });
 
@@ -1480,6 +1483,26 @@ describe("shared chat permission at answer dispatch", () => {
     await harness.service.respond(request(async () => preparedAnswer({ sourceTraces: [], sharedChatSources: [sharedSource] })));
     expect(harness.repository.receipt?.chatSources).toEqual([sharedSource]);
     expect(harness.repository.receipt?.delivery.chatProvenanceVersion).toBe(1);
+    expect(harness.repository.receipt?.delivery.state).toBe("sent");
+  });
+});
+
+describe("local source permission at answer dispatch", () => {
+  const source = { chatId: "oc_1", messageId: "original", contentHash: "a".repeat(64) };
+  it.each(["missing", "denied", "error"])("withholds a local-derived answer when verifier is %s", async mode => {
+    const harness = createHarness(mode === "missing" ? {} : { localMessageVerifier: { async verify() {
+      if (mode === "error") throw new Error("read failed");
+      return false;
+    } } });
+    harness.repository.receipt = receipt({}, [], [], [source]);
+    await harness.service.respond(request(async () => { throw new Error("must resume"); }));
+    expectOnlySafeNoticeWasSent(harness);
+    expect(harness.repository.receipt?.delivery.state).toBe("permission_blocked");
+  });
+  it("carries all local bindings from prepare to the actual sent receipt", async () => {
+    const harness = createHarness({ localMessageVerifier: { async verify() { return true; } } });
+    await harness.service.respond(request(async () => preparedAnswer({ sourceTraces: [], sharedChatSources: [], localMessageSources: [source] })));
+    expect(harness.repository.receipt?.localMessageSources).toEqual([source]);
     expect(harness.repository.receipt?.delivery.state).toBe("sent");
   });
 });
@@ -1553,6 +1576,7 @@ function receipt(
   deliveryOverrides: Partial<AnswerReplyReceipt["delivery"]> = {},
   sourceTraces: AnswerReplySourceTraceInput[] = [sourceTrace()],
   chatSources?: import("../src/shared-chat/working-chat-scope.js").SharedChatSourceBinding[],
+  localMessageSources?: import("../src/memory/local-message-source.js").LocalMessageSourceBinding[],
 ): AnswerReplyReceipt {
   const provider = deliveryOverrides.provider ?? "feishu";
   const receiptIncomingMessageId = deliveryOverrides.incomingMessageId ?? incomingMessageId;
@@ -1570,6 +1594,7 @@ function receipt(
       knowledgeConflictCandidateId: deliveryOverrides.knowledgeConflictCandidateId,
       sourceTraces,
       sharedChatSources: chatSources,
+      localMessageSources,
     });
   return {
     delivery: {
@@ -1599,6 +1624,7 @@ function receipt(
       deliveryId,
     })),
     ...(chatSources === undefined ? {} : { chatSources }),
+    ...(localMessageSources === undefined ? {} : { localMessageSources }),
     events: [{
       id: createAnswerReplyEventId(deliveryId, 1),
       deliveryId,
@@ -1898,7 +1924,7 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
         knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
         createdAt: input.at,
         updatedAt: input.at,
-      }, [...input.sourceTraces], input.sharedChatSources === undefined ? undefined : [...input.sharedChatSources]);
+      }, [...input.sourceTraces], input.sharedChatSources === undefined ? undefined : [...input.sharedChatSources], input.localMessageSources === undefined ? undefined : [...input.localMessageSources]);
       if ((input.blockedDocumentSourceIds?.length ?? 0) > 0) {
         current = blockedReceipt(
           current,

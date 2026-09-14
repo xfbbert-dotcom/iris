@@ -143,6 +143,7 @@ export function createFeishuLiveChatContextProvider({
             destinationChatId: input.chatId, messageId: message.messageId, contentHash: hashSharedChatText(message.text),
           } }),
           ...(message.underlyingChatSources === undefined ? {} : { underlyingChatSources: message.underlyingChatSources.map(source => ({ ...source })) }),
+          ...(message.underlyingLocalMessageSources === undefined ? {} : { underlyingLocalMessageSources: message.underlyingLocalMessageSources.map(source => ({ ...source })) }),
           ...(message.sharedChatRecap === undefined ? {} : { sharedChatRecap: message.sharedChatRecap }),
         }));
       const selected = selectTopicAwareChatWindow(readableMessages, input.question, outputLimit);

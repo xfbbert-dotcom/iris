@@ -7,6 +7,19 @@ import { lockConversationMessageIngestScope } from "../src/conversation/conversa
 import { createPostgresProactiveDiscussionRepository } from "../src/proactive-discussion/postgres-repository.js";
 import { createPostgresDocumentSourceGroupGrantRepository } from "../src/documents/postgres-document-source-group-grant-repository.js";
 import type { TransactionClient } from "../src/conversation-state/postgres-conversation-state-repository.js";
+import { createPostgresAnswerReplyRepository } from "../src/answer-replies/postgres-answer-reply-repository.js";
+import { createAnswerReplyUuid, createAnswerReplySafeNoticeUuid } from "../src/answer-replies/answer-reply-repository.js";
+import { createPassiveAssistantReceiptProvider } from "../src/memory/assistant-reply-receipt-provider.js";
+import { createPdReceiptProvider } from "../src/proactive-discussion/receipt-provider.js";
+import { deleteConversationMessageEvidence, ConversationEvidenceDeletionConflictError } from "../src/conversation-state/conversation-state-evidence-deletion.js";
+import { createAssistantConversationContextProvider } from "../src/memory/assistant-conversation-context.js";
+import { createFeishuLiveChatContextProvider } from "../src/memory/live-chat-context-provider.js";
+import { createLocalMessageSourceVerifier } from "../src/memory/local-message-source.js";
+import { createAnswerDraftOrchestrator } from "../src/agent/answer-draft-orchestrator.js";
+import { createDocumentRetrievalContextBuilder } from "../src/memory/document-retrieval-context.js";
+import { createAnswerReplyDeliveryService } from "../src/answer-replies/answer-reply-delivery-service.js";
+import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
+import type { FeishuChatHistoryMessage, FeishuChatHistoryReader } from "../src/feishu/feishu-chat-history-reader.js";
 
 // Each case migrates an isolated schema; SQL lock waits remain capped at 3s.
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
@@ -18,6 +31,108 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion final
     db = await openPdDatabase(); await preparePdDelivery(db, historyOnly);
     return (await db.repository.claimDelivery({ workerId: "sender", at, leaseUntil: time(60) }))!;
   }
+  async function preparePassive() {
+    const delivery = await setup(true);
+    await db.pool.query(`UPDATE runtime_control_state SET capabilities=jsonb_set(capabilities,'{replyWhenMentioned}','true')`);
+    const repository = createPostgresAnswerReplyRepository({ dataSource: db.pool });
+    const sources = delivery.sources.flatMap(source => source.kind === "message" ? [source.binding] : []);
+    const { receipt } = await repository.prepare({ provider: "feishu", incomingMessageId: "followup", chatId: PILOT_CHAT,
+      replyUuid: createAnswerReplyUuid("followup"), safeNoticeUuid: createAnswerReplySafeNoticeUuid("followup"), renderedText: "预算改写", sourceTraces: [],
+      sharedChatSources: [], localMessageSources: sources, at });
+    return { repository, receipt, sources };
+  }
+  test("passive local trace roundtrip is immutable and rereads complete sent provenance", async () => {
+    const { repository, receipt, sources } = await preparePassive();
+    expect(receipt.localMessageSources).toEqual(sources);
+    expect((await repository.findByIncomingMessage({ provider: "feishu", incomingMessageId: "followup" }))?.localMessageSources).toEqual(sources);
+    await expect(db.pool.query("UPDATE answer_reply_local_source_traces SET content_hash=repeat('b',64)")).rejects.toThrow();
+    await expect(db.pool.query("DELETE FROM answer_reply_local_source_traces")).rejects.toThrow();
+    const sending = await repository.beginAnswerSend({ deliveryId: receipt.delivery.id, expectedVersion: receipt.delivery.version, at });
+    await repository.completeAnswerSend({ deliveryId: sending.delivery.id, expectedVersion: sending.delivery.version, replyMessageId: "rewritten", at: time(1) });
+    const candidates = await createPassiveAssistantReceiptProvider({ queryable: db.pool }).listRecentSent({ chatId: PILOT_CHAT, after: at, before: time(10), limit: 2 });
+    expect(candidates[0]?.localMessageSources).toEqual(sources);
+    expect(candidates[0]?.provenanceVersion).toBe(1);
+    expect((await db.pool.query("SELECT id FROM conversation_messages WHERE id='feishu:m1'")).rows).toEqual([]);
+  });
+  test("local-only source permission disabled after preparation blocks passive beginSend", async () => {
+    const { repository, receipt } = await preparePassive();
+    await db.pool.query("UPDATE runtime_control_state SET desired_global_enabled=false,revision=revision+1");
+    await expect(repository.beginAnswerSend({ deliveryId: receipt.delivery.id, expectedVersion: receipt.delivery.version, at })).rejects.toThrow();
+    expect((await repository.findByIncomingMessage({ provider: "feishu", incomingMessageId: "followup" }))?.delivery.state).toBe("prepared");
+  });
+  test("a local source deleted after preparation blocks passive beginSend", async () => {
+    const { repository, receipt } = await preparePassive();
+    await deleteConversationMessageEvidence({ dataSource: db.pool, groupId: PILOT_CHAT, messageId: "feishu:m2", operatorHint: "test" });
+    await expect(repository.beginAnswerSend({ deliveryId: receipt.delivery.id, expectedVersion: receipt.delivery.version, at })).rejects.toThrow();
+  });
+  test("a declared passive local-source send protects its source until delivery settlement", async () => {
+    const { repository, receipt } = await preparePassive();
+    const sending = await repository.beginAnswerSend({ deliveryId: receipt.delivery.id, expectedVersion: receipt.delivery.version, at });
+    await expect(deleteConversationMessageEvidence({ dataSource: db.pool, groupId: PILOT_CHAT, messageId: "feishu:m2", operatorHint: "test" })).rejects.toBeInstanceOf(ConversationEvidenceDeletionConflictError);
+    expect((await db.pool.query("SELECT provider_message_id FROM conversation_message_deletion_tombstones")).rows).toEqual([]);
+    await repository.completeAnswerSend({ deliveryId: sending.delivery.id, expectedVersion: sending.delivery.version, replyMessageId: "sent", at: time(1) });
+    expect(await deleteConversationMessageEvidence({ dataSource: db.pool, groupId: PILOT_CHAT, messageId: "feishu:m2", operatorHint: "test" })).toMatchObject({ status: "deleted" });
+  });
+  test("proactive provider admits actual sent sources and excludes an uncertain delivery", async () => {
+    const delivery = await setup(true);
+    const provider = createPdReceiptProvider({ queryable: db.pool });
+    const window = { chatId: PILOT_CHAT, after: at, before: time(10), limit: 2 };
+    await db.repository.beginSend({ delivery, checkedContextVersion: delivery.contextVersion, at });
+    await db.repository.finishSend({ delivery, outcome: "outcome_unknown", at: time(1) });
+    expect(await provider.listRecentSent(window)).toEqual([]);
+    const version = Number((await db.pool.query("SELECT version FROM proactive_discussion_deliveries WHERE id=$1", [delivery.id])).rows[0].version);
+    await db.repository.reconcile({ deliveryId: delivery.id, expectedVersion: version, operatorId: "test-operator", outcome: "sent", replyMessageId: "opinion", evidence: "synthetic verified receipt", at: time(2) });
+    const [receipt] = await provider.listRecentSent(window);
+    expect(receipt.localMessageSources).toEqual(delivery.sources.flatMap(source => source.kind === "message" ? [source.binding] : []));
+    expect(receipt.provenanceVersion).toBe(1);
+  });
+  test("actual proactive sent receipt survives two ordinary responder rewrites with immutable local traces", async () => {
+    const delivery = await setup(true);
+    await db.pool.query(`UPDATE runtime_control_state SET capabilities=jsonb_set(capabilities,'{replyWhenMentioned}','true')`);
+    await db.repository.beginSend({ delivery, checkedContextVersion: delivery.contextVersion, at });
+    await db.repository.finishSend({ delivery, outcome: "sent", replyMessageId: "opinion", at: time(1) });
+    let clock = time(2);
+    let latestId = "opinion";
+    let latestBody = delivery.text;
+    const remote = new Map<string, FeishuChatHistoryMessage>();
+    pdContext().items.forEach((item, index) => remote.set(`m${index + 1}`, { messageId: `m${index + 1}`, chatId: PILOT_CHAT, senderId: "human", text: item.text, sentAt: at }));
+    remote.set("opinion", { messageId: "opinion", chatId: PILOT_CHAT, senderId: "iris", role: "assistant", text: latestBody, sentAt: time(1) });
+    const reader: FeishuChatHistoryReader = { async listRecentMessages() { return []; }, async readMessagesByIds({ messageIds, sender }) {
+      return messageIds.flatMap(id => { const message = remote.get(id); return message && (sender === "assistant" ? id === latestId : message.role !== "assistant") ? [{ ...message }] : []; });
+    } };
+    const localMessageVerifier = createLocalMessageSourceVerifier({ reader, canReadGroup: () => true });
+    const documentVerifier = { async verify() { return []; } };
+    const assistantReplies = createAssistantConversationContextProvider({ queryable: db.pool, reader, verifier: documentVerifier,
+      localMessageVerifier, proactiveReceipts: createPdReceiptProvider({ queryable: db.pool }), requireChatProvenance: true });
+    const liveChatContextProvider = createFeishuLiveChatContextProvider({ queryable: db.pool, reader, assistantReplies, now: () => clock });
+    const repository = createPostgresAnswerReplyRepository({ dataSource: db.pool });
+    const replier = { async replyText({ messageId, text }: { messageId: string; text: string }) {
+      latestId = `reply-${messageId}`; latestBody = text;
+      remote.set(latestId, { messageId: latestId, chatId: PILOT_CHAT, senderId: "iris", role: "assistant", text, sentAt: clock });
+      return { replyMessageId: latestId };
+    } };
+    const service = createAnswerReplyDeliveryService({ repository, replier, verifier: documentVerifier, localMessageVerifier, now: () => clock });
+    for (let round = 1; round <= 2; round++) {
+      const expectedBody = latestBody;
+      const orchestrator = createAnswerDraftOrchestrator({ liveChatContextProvider,
+        contextBuilder: createDocumentRetrievalContextBuilder({ embeddingProfileId: "test", embedder: { async embedTexts(texts) { return texts.map(() => [1]); } }, fragments: { async searchSimilarFragments() { return []; } }, canReadDocument: async () => false }),
+        planner: { async plan() { return { taskMode: "direct_task", evidenceState: null, premises: [], proposedAnswer: null, missingInformation: [], confidence: null }; } },
+        model: { async generateAnswerDraft(input) { expect(input.promptContext).toContain(expectedBody); return { answerText: `预算意见第${round}次改写` }; } },
+        renderer: { async render() { throw new Error("direct rewrite uses ordinary model"); } },
+      });
+      const responder = createFeishuMentionAnswerResponder({ botOpenId: "iris", answerDraftOrchestrator: orchestrator, answerReplyDeliveryService: service, replier, now: () => clock });
+      expect(await responder.maybeRespond({ messageId: `rewrite-${round}`, chatId: PILOT_CHAT, senderId: "human", text: "@iris 把上条意见改短一点", mentions: [{ key: "@iris", openId: "iris" }] })).toMatchObject({ status: "replied", replyMessageId: `reply-rewrite-${round}` });
+      const receipt = await repository.findByIncomingMessage({ provider: "feishu", incomingMessageId: `rewrite-${round}` });
+      expect(receipt?.localMessageSources).toEqual(delivery.sources.flatMap(source => source.kind === "message" ? [source.binding] : []));
+      expect(receipt?.chatSources).toEqual([]);
+      expect(receipt?.delivery.state).toBe("sent");
+      clock = new Date(clock.getTime() + 1000);
+    }
+    expect((await assistantReplies.loadRecentReplies({ chatId: PILOT_CHAT, before: clock }))[0]?.messageId).toBe("reply-rewrite-2");
+    remote.set("m1", { ...remote.get("m1")!, text: "预算已经改为 20 万" });
+    expect(await assistantReplies.loadRecentReplies({ chatId: PILOT_CHAT, before: clock })).toEqual([]);
+    expect((await db.pool.query("SELECT id FROM conversation_messages WHERE id='feishu:m1'")).rows).toEqual([]);
+  });
   test("correction committed before final send invalidates the actual prepared delivery", async () => {
     const delivery = await setup();
     const before = await db.repository.readState(delivery.chatId);

@@ -104,6 +104,37 @@ runIfDatabase("shared-chat answer transaction boundaries with disposable Postgre
     }
   }, 12_000);
 
+  it("completes reciprocal mixed local/shared sends with one common sorted message lock set", async () => {
+    await seedMessages();
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool });
+    const preparations = ["a", "b"].map(suffix => ({ provider: "feishu" as const, incomingMessageId: `mixed-${suffix}`, chatId: `group-${suffix}`,
+      replyUuid: createAnswerReplyUuid(`mixed-${suffix}`), safeNoticeUuid: createAnswerReplySafeNoticeUuid(`mixed-${suffix}`), renderedText: "Mixed answer", sourceTraces: [],
+      sharedChatSources: [sourceFor(`group-${suffix}`)], localMessageSources: [{ chatId: `group-${suffix}`, messageId: `incoming-${suffix}`, contentHash: hashSharedChatText("original") }], at: new Date() }));
+    const prepared = await Promise.all(preparations.map(input => repository.prepare(input)));
+    const sending = await Promise.all(prepared.map(({ receipt }) => repository.beginAnswerSend({ deliveryId: receipt.delivery.id, expectedVersion: receipt.delivery.version, at: new Date() })));
+    expect(sending.map(receipt => receipt.delivery.state)).toEqual(["sending", "sending"]);
+    expect(sending.map(receipt => receipt.localMessageSources)).toEqual(preparations.map(input => input.localMessageSources));
+  });
+
+  it("local-only send waits for a concurrent runtime disable and then rejects it", async () => {
+    await seedMessages();
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool });
+    const prepared = await repository.prepare({ ...preparation(), sharedChatSources: [], localMessageSources: [{ chatId: "group-b", messageId: "incoming-b", contentHash: hashSharedChatText("original") }] });
+    const writer = await pool.connect();
+    await writer.query("BEGIN");
+    await writer.query("UPDATE runtime_control_state SET desired_global_enabled=false,revision=revision+1");
+    const sending = repository.beginAnswerSend({ deliveryId: prepared.receipt.delivery.id, expectedVersion: prepared.receipt.delivery.version, at: new Date() });
+    const rejected = expect(sending).rejects.toBeInstanceOf(WorkingChatScopeStaleError);
+    try {
+      let blocked = false;
+      for (let step = 0; step < 100 && !blocked; step++) blocked = (await pool.query(`SELECT pid FROM pg_stat_activity WHERE datname=current_database()
+        AND wait_event_type='Lock' AND query LIKE '%FROM runtime_control_state WHERE singleton_id = 1 FOR SHARE%'`)).rows.length > 0;
+      expect(blocked).toBe(true);
+    } finally { await writer.query("COMMIT"); writer.release(); }
+    await rejected;
+    expect((await repository.findByIncomingMessage(preparation()))?.delivery.state).toBe("prepared");
+  });
+
   it.each(["source", "incoming"])("deletion of %s wins before prepare and before send", async kind => {
     await seedMessages();
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool });

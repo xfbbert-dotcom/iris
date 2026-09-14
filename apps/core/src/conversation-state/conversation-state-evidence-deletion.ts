@@ -94,6 +94,8 @@ export async function deleteConversationMessageEvidence(input: {
          (delivery.provider = $1 AND delivery.incoming_message_id = $2 AND delivery.chat_id = $3)
          OR EXISTS (SELECT 1 FROM answer_reply_chat_source_traces trace
            WHERE trace.delivery_id = delivery.id AND trace.source_chat_id = $3 AND trace.message_id = $2)
+         OR EXISTS (SELECT 1 FROM answer_reply_local_source_traces trace
+           WHERE trace.delivery_id = delivery.id AND trace.chat_id = $3 AND trace.message_id = $2)
        ) AND (delivery.state IN ('sending', 'reconciliation_required')
          OR (delivery.provider = $1 AND delivery.incoming_message_id = $2 AND delivery.chat_id = $3
            AND delivery.safe_notice_attempt_count > 0 AND delivery.safe_notice_sent_at IS NULL))

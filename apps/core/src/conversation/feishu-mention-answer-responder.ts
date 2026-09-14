@@ -523,6 +523,7 @@ export function createFeishuMentionAnswerResponder({
                       const deliveryEvidence = selectDeliveryEvidence(answer);
                       return {
                         sharedChatSources: answer.sharedChatSources ?? [],
+                        localMessageSources: answer.localMessageSources?.map(source => ({ ...source })) ?? [],
                         ...renderAnswerWithSourceCitations({
                           answerText: answer.answerText,
                           citedSourceRefs: deliveryEvidence.citedSourceRefs,

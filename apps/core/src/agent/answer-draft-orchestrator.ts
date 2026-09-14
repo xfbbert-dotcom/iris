@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { classifyStandaloneConversation } from "./standalone-conversation.js";
 import { selectTopicAwareChatWindow } from "../memory/topic-aware-chat-window.js";
 import { boundLiveAnalysisItems, truncateLiveAnalysisText } from "../memory/live-analysis-text.js";
-import { collectSharedChatSources, copyLiveChatSourceMetadata } from "../memory/context-assembly.js";
+import { collectSharedChatSources, collectLocalMessageSources, copyLiveChatSourceMetadata } from "../memory/context-assembly.js";
+import type { LocalMessageSourceBinding } from "../memory/local-message-source.js";
 import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
@@ -62,6 +63,7 @@ export type AnswerDraftInput = {
 
 export type AnswerDraftResult = {
   sharedChatSources?: SharedChatSourceBinding[];
+  localMessageSources?: LocalMessageSourceBinding[];
   answerText: string;
   citedSourceRefs?: string[];
   knowledgeConflictCandidateId?: string;
@@ -714,6 +716,8 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
     const retained = seen.get(key);
     if (retained !== undefined) {
       const sources = collectSharedChatSources([retained, message]);
+      const localSources = collectLocalMessageSources([retained, message]);
+      if (localSources.length > 0) retained.underlyingLocalMessageSources = localSources;
       if (sources.length > 0) retained.underlyingChatSources = sources;
       return deduplicated;
     }
@@ -798,8 +802,10 @@ function toAnswerDraftResult(
   knowledgeConflictCandidateId?: string,
 ): AnswerDraftResult {
   const sharedChatSources = collectSharedChatSources(context.liveChatMessages ?? []);
+  const localMessageSources = collectLocalMessageSources(context.liveChatMessages ?? []);
   return {
     ...(sharedChatSources.length === 0 ? {} : { sharedChatSources }),
+    ...(localMessageSources.length === 0 ? {} : { localMessageSources }),
     answerText,
     ...(citedSourceRefs.length === 0 ? {} : { citedSourceRefs: [...citedSourceRefs] }),
     ...(knowledgeConflictCandidateId === undefined

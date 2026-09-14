@@ -3,7 +3,7 @@ import { createAssistantConversationContextProvider } from "../src/memory/assist
 
 const ownReply = { messageId: "own", chatId: "oc-group", senderId: "cli-iris", role: "assistant" as const,
   text: "三个访谈问题：先了解使用经历，再询问困难，最后收集建议。", sentAt: new Date("2026-09-08T11:00:00Z") };
-const delivery = { delivery_id: "delivery", reply_message_id: "own" };
+const delivery = { delivery_id: "delivery", reply_message_id: "own", sent_at: ownReply.sentAt };
 const source = { delivery_id: "delivery", document_source_id: "source", document_snapshot_id: "snapshot",
   cross_group_grant_id: null, cross_group_grant_version: null, cross_group_grantor_group_id: null, cross_group_grantee_group_id: null };
 
@@ -14,7 +14,7 @@ function setup(traces = [source], outcome = "allowed") {
       return { rows: [delivery] };
     }
     if (sql.includes("FROM answer_reply_source_traces")) return { rows: traces };
-    expect(sql).toContain("FROM answer_reply_chat_source_traces");
+    expect(sql).toMatch(/FROM answer_reply_(chat|local)_source_traces/);
     return { rows: [] };
   });
   const reader = { listRecentMessages: async () => [], readMessagesByIds: vi.fn(async () => [ownReply]) };
@@ -64,7 +64,7 @@ describe("own sent-answer conversational continuity", () => {
       queryable: { query: async (sql: string) => {
         if (sql.includes("FROM answer_reply_deliveries")) return { rows: [delivery] };
         if (sql.includes("FROM answer_reply_source_traces")) return { rows: [first, second] };
-        expect(sql).toContain("FROM answer_reply_chat_source_traces");
+        expect(sql).toMatch(/FROM answer_reply_(chat|local)_source_traces/);
         return { rows: [] };
       } } as never,
       grants: { validateExact: async () => true }, verifier: { verify },

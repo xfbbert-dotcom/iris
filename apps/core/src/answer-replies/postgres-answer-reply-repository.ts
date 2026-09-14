@@ -1,5 +1,7 @@
 import { normalizeFeishuDocumentSourceUri } from "../documents/feishu-document-body-fetcher.js";
 import { lockSharedChatSources } from "../shared-chat/postgres-working-chat-scope-repository.js";
+import type { LocalMessageSourceBinding } from "../memory/local-message-source.js";
+import { normalizeLocalMessageBinding } from "../memory/assistant-reply-receipt-provider.js";
 import { MAX_SHARED_CHAT_SOURCE_BINDINGS, normalizeSharedChatSourceBinding, WorkingChatScopeStaleError, type SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
 import {
   KnowledgeConflictNotFoundError,
@@ -158,6 +160,7 @@ type NormalizedPrepareInput = {
   renderedText: string;
   sourceTraces: AnswerReplySourceTraceInput[];
   sharedChatSources?: SharedChatSourceBinding[];
+  localMessageSources?: LocalMessageSourceBinding[];
   blockedDocumentSourceIds: string[];
   at: Date;
   deliveryId: string;
@@ -216,7 +219,7 @@ export function createPostgresAnswerReplyRepository(input: {
     async prepare(prepareInput) {
       const normalized = normalizePrepareInput(prepareInput);
       return withTransaction(dataSource, async (client) => {
-        await lockSharedChatSources(client, normalized.sharedChatSources ?? [], normalized.chatId, [normalized.incomingMessageId]);
+        await lockSharedChatSources(client, normalized.sharedChatSources ?? [], normalized.chatId, [normalized.incomingMessageId], normalized.localMessageSources);
         await acquireAdvisoryLock(
           client,
           `${normalized.provider}:${normalized.incomingMessageId}`,
@@ -347,6 +350,10 @@ export function createPostgresAnswerReplyRepository(input: {
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [normalized.deliveryId,index,source.scopeId,source.scopeVersion,
               source.sourceChatId,source.destinationChatId,source.messageId,source.contentHash]);
         }
+        for (const [index, source] of (normalized.localMessageSources ?? []).entries()) {
+          await client.query(`INSERT INTO answer_reply_local_source_traces(delivery_id,trace_index,chat_id,message_id,content_hash)
+            VALUES($1,$2,$3,$4,$5)`, [normalized.deliveryId, index, source.chatId, source.messageId, source.contentHash]);
+        }
         await insertEvent(client, {
           deliveryId: normalized.deliveryId,
           sequence: 1,
@@ -381,7 +388,8 @@ export function createPostgresAnswerReplyRepository(input: {
         const initial = await client.query<DeliveryRow>(`SELECT ${DELIVERY_COLUMNS} FROM answer_reply_deliveries WHERE id = $1`, [normalized.deliveryId]);
         if (initial.rows.length !== 1) throw new AnswerReplyNotFoundError();
         const initialDelivery = mapDelivery(initial.rows[0]!);
-        await lockSharedChatSources(client, chatSources, initialDelivery.chatId, [initialDelivery.incomingMessageId]);
+        const localSources = await loadLocalSources(client, normalized.deliveryId, initialDelivery.chatId);
+        await lockSharedChatSources(client, chatSources, initialDelivery.chatId, [initialDelivery.incomingMessageId], localSources);
         await acquireAdvisoryLock(client, normalized.deliveryId);
         const prelockedSources = await loadSources(client, normalized.deliveryId);
         await lockAnswerDocumentSources({ client,
@@ -397,6 +405,8 @@ export function createPostgresAnswerReplyRepository(input: {
         const { delivery, sources } = await lockDeliveryInTransaction(client, normalized);
         if (chatSources.some(source => source.destinationChatId !== delivery.chatId)
           || !sameChatSources(chatSources, await loadChatSources(client, delivery.id))) throw new WorkingChatScopeStaleError();
+        if (localSources.some(source => source.chatId !== delivery.chatId)
+          || JSON.stringify(localSources) !== JSON.stringify(await loadLocalSources(client, delivery.id, delivery.chatId))) throw new WorkingChatScopeStaleError();
         requireSameSourceGrantBindings(prelockedSources, sources, delivery.chatId);
         if ((delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)) {
           throw new AnswerReplyTransitionError();
@@ -475,7 +485,8 @@ export function createPostgresAnswerReplyRepository(input: {
         true,
       );
       return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
-        if (requestedDocumentSourceIds.length === 0 && (await loadChatSources(client, delivery.id)).length === 0) {
+        if (requestedDocumentSourceIds.length === 0 && (await loadChatSources(client, delivery.id)).length === 0
+          && (await loadLocalSources(client, delivery.id, delivery.chatId)).length === 0) {
           throw new AnswerReplyTransitionError();
         }
         if (delivery.state !== "prepared" && delivery.state !== "sending") {
@@ -717,11 +728,12 @@ async function loadReceipt(
   queryable: AnswerReplyQueryable,
   delivery: AnswerReplyDelivery,
 ): Promise<AnswerReplyReceipt> {
-  const [sources, events, binding, chatSources] = await Promise.all([
+  const [sources, events, binding, chatSources, localMessageSources] = await Promise.all([
     loadSources(queryable, delivery.id),
     loadEvents(queryable, delivery.id),
     loadKnowledgeConflictBinding(queryable, delivery.id),
     loadChatSources(queryable, delivery.id),
+    loadLocalSources(queryable, delivery.id, delivery.chatId),
   ]);
   if (
     (delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)
@@ -731,9 +743,20 @@ async function loadReceipt(
       || requireDatabaseInteger(binding.candidate_version, 1) < 1
     ))
   ) throw new Error("answer reply knowledge conflict binding is invalid");
-  if (delivery.chatProvenanceVersion === undefined && chatSources.length > 0) throw new Error("chat provenance marker missing");
+  if (delivery.chatProvenanceVersion === undefined && (chatSources.length > 0 || localMessageSources.length > 0)) throw new Error("chat provenance marker missing");
   return requireValidAnswerReplyReceipt({ delivery, sources, events,
+    ...(localMessageSources.length === 0 ? {} : { localMessageSources }),
     ...(delivery.chatProvenanceVersion === undefined ? {} : { chatSources }) });
+}
+
+async function loadLocalSources(queryable: AnswerReplyQueryable, deliveryId: string, chatId: string): Promise<LocalMessageSourceBinding[]> {
+  const result = await queryable.query<Record<string, unknown>>(`SELECT delivery_id,trace_index,chat_id,message_id,content_hash
+    FROM answer_reply_local_source_traces WHERE delivery_id=$1 ORDER BY trace_index ASC LIMIT 1001`, [deliveryId]);
+  if (result.rows.length > 1000) throw new Error("too many local sources");
+  return result.rows.map((row, index) => {
+    if (row.delivery_id !== deliveryId || row.trace_index !== index) throw new Error("invalid local source index");
+    return normalizeLocalMessageBinding({ chatId: row.chat_id, messageId: row.message_id, contentHash: row.content_hash }, chatId);
+  });
 }
 
 async function loadChatSources(queryable: AnswerReplyQueryable, deliveryId: string): Promise<SharedChatSourceBinding[]> {
@@ -1050,7 +1073,11 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     input.knowledgeConflictCandidateId,
   );
   const sourceTraces = normalizeSourceTraces(input.sourceTraces);
-  const sharedChatSources = input.sharedChatSources === undefined ? undefined : normalizeChatSources(input.sharedChatSources, chatId);
+  if (input.localMessageSources !== undefined && (!Array.isArray(input.localMessageSources) || input.localMessageSources.length > 1000)) throw new WorkingChatScopeStaleError();
+  const localMessageSources = input.localMessageSources?.map(source => normalizeLocalMessageBinding(source, chatId));
+  if (localMessageSources && new Set(localMessageSources.map(source => source.messageId)).size !== localMessageSources.length) throw new WorkingChatScopeStaleError();
+  const sharedInput = input.sharedChatSources ?? ((localMessageSources?.length ?? 0) > 0 ? [] : undefined);
+  const sharedChatSources = sharedInput === undefined ? undefined : normalizeChatSources(sharedInput, chatId);
   const blockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
     input.blockedDocumentSourceIds,
     sourceTraces,
@@ -1065,6 +1092,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     knowledgeConflictCandidateId,
     sourceTraces,
     ...(sharedChatSources === undefined ? {} : { sharedChatSources }),
+    ...(localMessageSources === undefined ? {} : { localMessageSources }),
   });
   return {
     provider,
@@ -1076,6 +1104,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     ...(knowledgeConflictCandidateId === undefined ? {} : { knowledgeConflictCandidateId }),
     sourceTraces,
     ...(sharedChatSources === undefined ? {} : { sharedChatSources }),
+    ...(localMessageSources === undefined ? {} : { localMessageSources }),
     blockedDocumentSourceIds,
     at,
     deliveryId: createAnswerReplyDeliveryId(provider, incomingMessageId),

@@ -4,6 +4,41 @@ import { createFeishuLiveChatContextProvider } from "../src/memory/live-chat-con
 import { createDocumentRetrievalContextBuilder } from "../src/memory/document-retrieval-context.js";
 import { createAnswerDraftOrchestrator } from "../src/agent/answer-draft-orchestrator.js";
 import type { Queryable, RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
+import { createLocalMessageSourceVerifier, hashLocalMessageText } from "../src/memory/local-message-source.js";
+
+const PILOT_CHAT = "oc_637a9aca45f01943477f4e17f1fc5b9a";
+
+describe("local source receipt reuse", () => {
+  const originals = ["预算只有 10 万", "按每人 8 万招两人，预算够"];
+  const localSources = originals.map((text, index) => ({ chatId: PILOT_CHAT, messageId: `m${index + 1}`, contentHash: hashLocalMessageText(text) }));
+  async function load(input: { changed?: boolean; deleted?: boolean; missingVerifier?: boolean; marker?: number | null } = {}) {
+    const reader = { async listRecentMessages() { return []; }, async readMessagesByIds(request: { sender?: string }) {
+      return request.sender === "assistant"
+        ? [{ messageId: "opinion", chatId: PILOT_CHAT, senderId: "iris", role: "assistant" as const, text: "这笔预算可能不够", sentAt: new Date("2026-09-14T11:00:00Z") }]
+        : originals.flatMap((text, index) => input.deleted && index === 0 ? [] : [{ messageId: `m${index + 1}`, chatId: PILOT_CHAT, senderId: "human", text: input.changed && index === 0 ? "预算现在 20 万" : text, sentAt: new Date("2026-09-14T10:00:00Z") }]);
+    } };
+    const queryable: Queryable = { async query<T>(sql: string) { return { rows: (sql.includes("FROM answer_reply_deliveries")
+      ? [{ delivery_id: "delivery", reply_message_id: "opinion", sent_at: new Date("2026-09-14T11:00:00Z"), chat_provenance_version: input.marker === undefined ? 1 : input.marker }]
+      : sql.includes("FROM answer_reply_local_source_traces") ? localSources.map((binding, trace_index) => ({ delivery_id: "delivery", trace_index, chat_id: binding.chatId, message_id: binding.messageId, content_hash: binding.contentHash })) : []) as T[] }; } };
+    const assistantReplies = createAssistantConversationContextProvider({ queryable, reader, requireChatProvenance: true,
+      verifier: { async verify() { return []; } },
+      ...(input.missingVerifier ? {} : { localMessageVerifier: createLocalMessageSourceVerifier({ reader, canReadGroup: () => true }) }),
+    });
+    const provider = createFeishuLiveChatContextProvider({ queryable, reader, assistantReplies, now: () => new Date("2026-09-14T12:00:00Z") });
+    return provider.loadRecentMessages({ chatId: PILOT_CHAT, question: "把上条意见改短一点" });
+  }
+  it("returns verified full-body local bindings from the actual live context provider", async () => {
+    const [rewrittenMessage] = await load();
+    expect(rewrittenMessage.underlyingLocalMessageSources).toEqual([
+      { chatId: PILOT_CHAT, messageId: "m1", contentHash: hashLocalMessageText("预算只有 10 万") },
+      { chatId: PILOT_CHAT, messageId: "m2", contentHash: hashLocalMessageText("按每人 8 万招两人，预算够") },
+    ]);
+    expect(rewrittenMessage.sharedChatSource).toBeUndefined();
+  });
+  it.each([{ changed: true }, { deleted: true }, { missingVerifier: true }, { marker: null }])("excludes assistant body when local provenance cannot verify: %j", async input => {
+    expect(await load(input)).toEqual([]);
+  });
+});
 
 const fragment: RetrievedDocumentFragment = {
   id: "fragment", documentSourceId: "source", documentSnapshotId: "snapshot", sourceUri: "https://example.com/doc", sourceType: "feishu_wiki",
@@ -16,7 +51,7 @@ async function run(input: { current?: RetrievedDocumentFragment[]; generic?: boo
     cross_group_grant_id: input.grant ? "grant" : null, cross_group_grant_version: input.grant ? 1 : null,
     cross_group_grantor_group_id: input.grant ? "oc-other" : null, cross_group_grantee_group_id: input.grant ? "oc-current" : null };
   const queryable: Queryable = { async query<T>(sql: string) {
-    const rows = sql.includes("FROM answer_reply_deliveries") ? [{ delivery_id: "delivery", reply_message_id: "own" }]
+    const rows = sql.includes("FROM answer_reply_deliveries") ? [{ delivery_id: "delivery", reply_message_id: "own", sent_at: new Date("2026-09-08T11:00:00Z") }]
       : sql.includes("FROM answer_reply_source_traces") ? input.generic ? [] : [trace] : [];
     return { rows: rows as T[] };
   } };
@@ -87,7 +122,7 @@ describe("shared chat provenance on assistant reuse", () => {
     const sources = input.sources ?? [source];
     const provider = createAssistantConversationContextProvider({
       queryable: { async query<T>(sql: string) { return { rows: (sql.includes("FROM answer_reply_deliveries")
-        ? [{ delivery_id: "delivery", reply_message_id: "own", chat_provenance_version: input.legacy ? null : 1 }]
+        ? [{ delivery_id: "delivery", reply_message_id: "own", sent_at: new Date("2026-09-09T11:00:00Z"), chat_provenance_version: input.legacy ? null : 1 }]
         : sql.includes("FROM answer_reply_chat_source_traces") ? sources.map((binding, trace_index) => ({ delivery_id: "delivery", trace_index,
           scope_id: binding.scopeId, scope_version: binding.scopeVersion, source_chat_id: binding.sourceChatId,
           destination_chat_id: binding.destinationChatId, message_id: binding.messageId, content_hash: binding.contentHash })) : []) as T[] }; } },

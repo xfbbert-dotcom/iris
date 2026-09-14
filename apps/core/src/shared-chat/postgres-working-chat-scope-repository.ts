@@ -1,5 +1,7 @@
 import { decodeDurableRuntimeControlSnapshot } from "../admin/runtime-control-state-repository.js";
 import { lockConversationMessageIngestScope } from "../conversation/conversation-message-replay-guard.js";
+import type { LocalMessageSourceBinding } from "../memory/local-message-source.js";
+import { normalizeLocalMessageBinding } from "../memory/assistant-reply-receipt-provider.js";
 import {
   MAX_SHARED_CHAT_SOURCE_BINDINGS,
   WORKING_CHAT_SCOPE_ID,
@@ -81,13 +83,18 @@ export async function lockSharedChatSources(
   bindings: readonly SharedChatSourceBinding[],
   destinationChatId: string,
   additionalMessageIds: readonly string[] = [],
+  localMessageSources: readonly LocalMessageSourceBinding[] = [],
 ): Promise<void> {
   if (!Array.isArray(bindings) || bindings.length > MAX_SHARED_CHAT_SOURCE_BINDINGS) throw new WorkingChatScopeStaleError();
   if (!Array.isArray(additionalMessageIds) || additionalMessageIds.length > 1
     || additionalMessageIds.some(id => typeof id !== "string" || id.trim() !== id || id.length < 1 || id.length > 505)) {
     throw new WorkingChatScopeStaleError();
   }
-  if (bindings.length === 0) {
+  if (!Array.isArray(localMessageSources) || localMessageSources.length > 1000) throw new WorkingChatScopeStaleError();
+  const localBindings: LocalMessageSourceBinding[] = [];
+  try { for (const binding of localMessageSources) localBindings.push(normalizeLocalMessageBinding(binding, destinationChatId)); }
+  catch { throw new WorkingChatScopeStaleError(); }
+  if (bindings.length === 0 && localBindings.length === 0) {
     await lockMessagesAndCheckTombstones(queryable, additionalMessageIds);
     return;
   }
@@ -103,14 +110,23 @@ export async function lockSharedChatSources(
     normalized.push(binding);
   }
 
-  await lockScope(queryable);
-  let scope: WorkingChatScope | undefined;
-  try { scope = await readScope(queryable); }
-  catch { throw new WorkingChatScopeStaleError(); }
-  if (scope?.state !== "active") throw new WorkingChatScopeStaleError();
-  const groups = new Set(scope.groups.map(group => group.chatId));
-  if (!groups.has(destinationChatId) || normalized.some(binding => binding.scopeVersion !== scope.version
-    || !groups.has(binding.sourceChatId))) throw new WorkingChatScopeStaleError();
+  if (bindings.length > 0) {
+    await lockScope(queryable);
+    let scope: WorkingChatScope | undefined;
+    try { scope = await readScope(queryable); }
+    catch { throw new WorkingChatScopeStaleError(); }
+    if (scope?.state !== "active") throw new WorkingChatScopeStaleError();
+    const groups = new Set(scope.groups.map(group => group.chatId));
+    if (!groups.has(destinationChatId) || normalized.some(binding => binding.scopeVersion !== scope.version
+      || !groups.has(binding.sourceChatId))) throw new WorkingChatScopeStaleError();
+  }
+  const combined = new Map<string, string>();
+  for (const binding of normalized) combined.set(binding.messageId, JSON.stringify([binding.sourceChatId, binding.contentHash]));
+  for (const binding of localBindings) {
+    const identity = JSON.stringify([binding.chatId, binding.contentHash]);
+    if (combined.has(binding.messageId) && combined.get(binding.messageId) !== identity) throw new WorkingChatScopeStaleError();
+    combined.set(binding.messageId, identity);
+  }
 
   const runtime = await queryable.query(
     `SELECT revision, desired_global_enabled, disabled_group_ids, capabilities, updated_at, updated_by
@@ -124,7 +140,19 @@ export async function lockSharedChatSources(
       || normalized.some(binding => policy.disabledGroupIds.includes(binding.sourceChatId))) throw new WorkingChatScopeStaleError();
   } catch { throw new WorkingChatScopeStaleError(); }
 
-  await lockMessagesAndCheckTombstones(queryable, [...identities.keys(), ...additionalMessageIds]);
+  await lockMessagesAndCheckTombstones(queryable, [...combined.keys(), ...additionalMessageIds]);
+  if (localBindings.length > 0) {
+    const rows = (await queryable.query<Record<string, unknown>>(`SELECT id,provider,provider_message_id,chat_id FROM conversation_messages
+      WHERE id=ANY($1::text[]) OR (provider='feishu' AND provider_message_id=ANY($2::text[]))`,
+    [localBindings.map(source => `feishu:${source.messageId}`), localBindings.map(source => source.messageId)])).rows;
+    const expected = new Set(localBindings.map(source => source.messageId));
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (row.provider !== "feishu" || typeof row.provider_message_id !== "string" || !expected.has(row.provider_message_id)
+        || row.id !== `feishu:${row.provider_message_id}` || row.chat_id !== destinationChatId || seen.has(row.provider_message_id)) throw new WorkingChatScopeStaleError();
+      seen.add(row.provider_message_id);
+    }
+  }
 }
 
 async function lockMessagesAndCheckTombstones(queryable: WorkingChatScopeQueryable, values: readonly string[]): Promise<void> {

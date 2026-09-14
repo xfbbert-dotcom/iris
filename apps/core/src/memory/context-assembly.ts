@@ -1,5 +1,6 @@
 import { boundLiveAnalysisItems, MAX_LIVE_ANALYSIS_TOTAL_CHARS } from "./live-analysis-text.js";
 import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
+import type { LocalMessageSourceBinding } from "./local-message-source.js";
 import type {
   GroupMemoryCategory,
   GroupMemoryScope,
@@ -34,11 +35,13 @@ export type LiveChatMessage = {
   sourceSentAt?: string;
   sharedChatSource?: SharedChatSourceBinding;
   underlyingChatSources?: SharedChatSourceBinding[];
+  underlyingLocalMessageSources?: LocalMessageSourceBinding[];
   sharedChatRecap?: boolean;
 };
 
 export function copyLiveChatSourceMetadata(message: LiveChatMessage): Partial<LiveChatMessage> {
   return {
+    ...(message.underlyingLocalMessageSources === undefined ? {} : { underlyingLocalMessageSources: message.underlyingLocalMessageSources.map(source => ({ ...source })) }),
     ...(message.sharedChatRecap === undefined ? {} : { sharedChatRecap: message.sharedChatRecap }),
     ...(message.sourceChatId === undefined ? {} : { sourceChatId: message.sourceChatId }),
     ...(message.sourceChatName === undefined ? {} : { sourceChatName: message.sourceChatName }),
@@ -46,6 +49,14 @@ export function copyLiveChatSourceMetadata(message: LiveChatMessage): Partial<Li
     ...(message.sharedChatSource === undefined ? {} : { sharedChatSource: { ...message.sharedChatSource } }),
     ...(message.underlyingChatSources === undefined ? {} : { underlyingChatSources: message.underlyingChatSources.map(source => ({ ...source })) }),
   };
+}
+
+export function collectLocalMessageSources(messages: readonly LiveChatMessage[]): LocalMessageSourceBinding[] {
+  const sources = new Map<string, LocalMessageSourceBinding>();
+  for (const message of messages) for (const source of message.underlyingLocalMessageSources ?? []) {
+    sources.set(JSON.stringify([source.chatId, source.messageId, source.contentHash]), { ...source });
+  }
+  return [...sources.values()];
 }
 
 /** Source identity is durable provenance, independent of which facts receive Cn citations. */

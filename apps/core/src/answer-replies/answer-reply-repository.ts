@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
+import type { LocalMessageSourceBinding } from "../memory/local-message-source.js";
 
 export type AnswerReplyDeliveryState =
   | "prepared"
@@ -70,6 +71,7 @@ export type AnswerReplyReceipt = {
   delivery: AnswerReplyDelivery;
   sources: AnswerReplySourceTrace[];
   chatSources?: SharedChatSourceBinding[];
+  localMessageSources?: LocalMessageSourceBinding[];
   events: AnswerReplyDeliveryEvent[];
 };
 
@@ -82,6 +84,7 @@ export type PrepareAnswerReplyInput = {
   renderedText: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
   sharedChatSources?: readonly SharedChatSourceBinding[];
+  localMessageSources?: readonly LocalMessageSourceBinding[];
   blockedDocumentSourceIds?: readonly string[];
   knowledgeConflictCandidateId?: string;
   at: Date;

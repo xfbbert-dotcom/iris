@@ -4,6 +4,7 @@ import { readBoundedJsonResponse } from "../integrations/bounded-json-response.j
 import { readFeishuMessageText } from "./feishu-message-text.js";
 import type { AssistantDocumentSourceBinding } from "../memory/context-assembly.js";
 import type { SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
+import type { LocalMessageSourceBinding } from "../memory/local-message-source.js";
 
 export type FeishuChatHistoryMessage = {
   messageId: string;
@@ -16,6 +17,7 @@ export type FeishuChatHistoryMessage = {
   role?: "assistant";
   underlyingDocumentSources?: AssistantDocumentSourceBinding[];
   underlyingChatSources?: SharedChatSourceBinding[];
+  underlyingLocalMessageSources?: LocalMessageSourceBinding[];
   sharedChatRecap?: boolean;
 };
 

@@ -24,6 +24,40 @@ const firstSendAt = new Date("2026-08-02T02:01:00.000Z");
 const transitionAt = new Date("2026-08-02T02:02:00.000Z");
 
 describe("AnswerReplyReceiptValidator", () => {
+  it("keeps the pre-local-provenance v1 fingerprint golden unchanged", () => {
+    const legacy = { provider: "feishu" as const, incomingMessageId: "legacy-message", chatId: "legacy-chat",
+      renderedReplyFingerprint: "a".repeat(64), sourceTraces: [], sharedChatSources: [] };
+    expect(createAnswerReplySemanticFingerprint(legacy)).toBe("b1118eec5752888de020a9cd676f37b8cdd1229b69eaa3da0f232b7b8abb5c2b");
+    expect(createAnswerReplySemanticFingerprint({ ...legacy, localMessageSources: [] })).toBe("b1118eec5752888de020a9cd676f37b8cdd1229b69eaa3da0f232b7b8abb5c2b");
+  });
+  it("preserves existing fingerprint for empty local lineage but binds every nonempty field", () => {
+    const receipt = preparedReceipt();
+    const base = { provider: receipt.delivery.provider, incomingMessageId, chatId,
+      renderedReplyFingerprint: receipt.delivery.renderedReplyFingerprint, sourceTraces: receipt.sources, sharedChatSources: [] };
+    const source = { chatId, messageId: "original", contentHash: "a".repeat(64) };
+    expect(createAnswerReplySemanticFingerprint({ ...base, localMessageSources: [] })).toBe(createAnswerReplySemanticFingerprint(base));
+    const traced = createAnswerReplySemanticFingerprint({ ...base, localMessageSources: [source] });
+    expect(traced).not.toBe(createAnswerReplySemanticFingerprint(base));
+    for (const changed of [{ chatId: "other" }, { messageId: "other" }, { contentHash: "b".repeat(64) }]) {
+      expect(createAnswerReplySemanticFingerprint({ ...base, localMessageSources: [{ ...source, ...changed }] })).not.toBe(traced);
+    }
+  });
+  it.each(["missing rows", "changed hash", "wrong chat", "duplicate", "missing marker", "invalid hash"])("rejects %s in persisted local provenance", kind => {
+    const receipt = preparedReceipt();
+    receipt.delivery.chatProvenanceVersion = 1;
+    receipt.chatSources = [];
+    receipt.localMessageSources = [{ chatId, messageId: "original", contentHash: "a".repeat(64) }];
+    receipt.delivery.semanticFingerprint = createAnswerReplySemanticFingerprint({ provider: receipt.delivery.provider, incomingMessageId, chatId,
+      renderedReplyFingerprint: receipt.delivery.renderedReplyFingerprint, sourceTraces: receipt.sources, sharedChatSources: [], localMessageSources: receipt.localMessageSources });
+    expect(requireValidAnswerReplyReceipt(receipt)).toBe(receipt);
+    if (kind === "missing rows") delete receipt.localMessageSources;
+    if (kind === "changed hash") receipt.localMessageSources![0]!.contentHash = "b".repeat(64);
+    if (kind === "wrong chat") receipt.localMessageSources![0]!.chatId = "other";
+    if (kind === "duplicate") receipt.localMessageSources!.push({ ...receipt.localMessageSources![0]! });
+    if (kind === "missing marker") delete receipt.delivery.chatProvenanceVersion;
+    if (kind === "invalid hash") receipt.localMessageSources![0]!.contentHash = "bad";
+    expect(() => requireValidAnswerReplyReceipt(receipt)).toThrow();
+  });
   it("distinguishes verified-empty new provenance from legacy absence and binds every source field", () => {
     const receipt = preparedReceipt();
     const base = { provider: receipt.delivery.provider, incomingMessageId, chatId,

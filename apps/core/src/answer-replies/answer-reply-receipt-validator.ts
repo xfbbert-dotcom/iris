@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { MAX_SHARED_CHAT_SOURCE_BINDINGS, normalizeSharedChatSourceBinding, type SharedChatSourceBinding } from "../shared-chat/working-chat-scope.js";
+import type { LocalMessageSourceBinding } from "../memory/local-message-source.js";
+import { normalizeLocalMessageBinding } from "../memory/assistant-reply-receipt-provider.js";
 
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import {
@@ -73,6 +75,7 @@ export function createAnswerReplySemanticFingerprint(input: {
   knowledgeConflictCandidateId?: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
   sharedChatSources?: readonly SharedChatSourceBinding[];
+  localMessageSources?: readonly LocalMessageSourceBinding[];
 }): string {
   return fingerprint({
     provider: input.provider,
@@ -80,6 +83,7 @@ export function createAnswerReplySemanticFingerprint(input: {
     chatId: input.chatId,
     renderedReplyFingerprint: input.renderedReplyFingerprint,
     knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
+    ...((input.localMessageSources?.length ?? 0) === 0 ? {} : { localMessageSources: input.localMessageSources!.map(source => ({ chatId: source.chatId, messageId: source.messageId, contentHash: source.contentHash })) }),
     ...(input.sharedChatSources === undefined ? {} : { sharedChatSources: input.sharedChatSources.map(source => ({
       scopeId: source.scopeId, scopeVersion: source.scopeVersion, sourceChatId: source.sourceChatId,
       destinationChatId: source.destinationChatId, messageId: source.messageId, contentHash: source.contentHash,
@@ -149,6 +153,16 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
 
   const typedDelivery = delivery as AnswerReplyDelivery;
   requireChatSourceContract(value.chatSources, typedDelivery);
+  if (value.localMessageSources !== undefined) {
+    if (!Array.isArray(value.localMessageSources) || value.localMessageSources.length > 1000) throw new Error();
+    if (value.localMessageSources.length > 0 && typedDelivery.chatProvenanceVersion !== 1) throw new Error();
+    const seen = new Set<string>();
+    for (const source of value.localMessageSources) {
+      const normalized = normalizeLocalMessageBinding(source, typedDelivery.chatId);
+      if (seen.has(normalized.messageId)) throw new Error();
+      seen.add(normalized.messageId);
+    }
+  }
   if (
     typedDelivery.id !== createAnswerReplyDeliveryId(
       typedDelivery.provider,
@@ -328,6 +342,7 @@ function requireFingerprintContract(receipt: AnswerReplyReceipt): void {
       knowledgeConflictCandidateId: delivery.knowledgeConflictCandidateId,
       sourceTraces: sources,
       sharedChatSources: receipt.chatSources,
+      localMessageSources: receipt.localMessageSources,
     }) !== delivery.semanticFingerprint
   ) {
     throw new Error();
@@ -379,14 +394,14 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
       (documentSourceId) => authoritativeDocumentSourceIdSet.has(documentSourceId),
     );
     const validDocumentSourceIds = event.eventType === "permission_blocked"
-      ? (event.documentSourceIds.length >= 1 || (receipt.chatSources?.length ?? 0) > 0)
+      ? (event.documentSourceIds.length >= 1 || (receipt.chatSources?.length ?? 0) > 0 || (receipt.localMessageSources?.length ?? 0) > 0)
         && (
           externalDocumentSourceIds.length === 0
             ? isTraceOrderedSubset(event.documentSourceIds, authoritativeDocumentSourceIds)
             : traceDocumentSourceIds.length === 0
         )
       : event.eventType === "reconciliation_required"
-        ? (event.documentSourceIds.length >= 1 || (receipt.chatSources?.length ?? 0) > 0)
+        ? (event.documentSourceIds.length >= 1 || (receipt.chatSources?.length ?? 0) > 0 || (receipt.localMessageSources?.length ?? 0) > 0)
           && externalDocumentSourceIds.length === 0
           && isTraceOrderedSubset(event.documentSourceIds, authoritativeDocumentSourceIds)
         : arraysEqual(event.documentSourceIds, authoritativeDocumentSourceIds);
