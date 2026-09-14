@@ -1,13 +1,14 @@
 # 主动工作讨论：实施进度与测试环境
 
-开始记录：2026-09-14；最新更新：2026-09-15。对应[已批准设计](../superpowers/specs/2026-09-09-iris-proactive-discussion-design.md)和[8 项实施计划](../superpowers/plans/2026-09-14-iris-proactive-discussion.md)。这是未完成实施的交接记录；局部审查缺陷的处置不代表整个功能发布。
+开始记录：2026-09-14；最新更新：2026-09-15。对应[已批准设计](../superpowers/specs/2026-09-09-iris-proactive-discussion-design.md)和[8 项实施计划](../superpowers/plans/2026-09-14-iris-proactive-discussion.md)。Task 8 的有限端到端、保留失败、实模缺口与发布 runbook 集中在[最终门禁交接](iris-proactive-discussion.md)；本页保留 Tasks 1–7 的历史实测与审查，不以局部修复声称整个功能发布。
 
 ## 当前状态
 
 - 用户选择子任务实施与逐项审查。实现工作树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支 `codex/iris-daily-pilot-followup`；执行起点 `1f1a5efe`。
 - Task 1 基础实现 `24c090fc` 已通过独立审查；Task 2 候选 `9f9f51a0` 的长消息存储/实时身份混用已由 `4ec806d6` 修复并通过范围复审；Task 3 `23c08ba5` 的结构判断/草稿/范围复核通过本地测试与独立审查。没有真实模型验收、飞书发送或部署证据。
-- Task 4 候选 `12d1280b` 初审两处阻塞由 `b1c6564f` 修正并通过范围复审；Task 5 最终发送声明、结果未知保护与对账持久化 `30f75a98`、Task 6 连续追问来源 `1071dfc3`、Task 7 实际运行装配与控制面 `ab0f7dfe` 已通过独立规格/质量审查。下一步 Task 8，尚无实模、真实发送或生产启用验收。
+- Task 4 候选 `12d1280b` 初审两处阻塞由 `b1c6564f` 修正并通过范围复审；Task 5 最终发送声明、结果未知保护与对账持久化 `30f75a98`、Task 6 连续追问来源 `1071dfc3`、Task 7 实际运行装配与控制面 `ab0f7dfe` 已通过独立规格/质量审查。Task 8 本地端到端/runner/CI 与剩余门禁见[专项交接](iris-proactive-discussion.md)；模型配置未提供，尚无实模、真实发送或生产启用验收。
 - 已实现基础类型、消息完整内容哈希绑定、`0059_proactive_discussion.sql`、完整评估/反馈/发送 PostgreSQL repository，并以隔离 schema 运行真实数据库测试。发送 worker 的远端边界使用合成替身，没有接入生产入口。
+- Task 8 应用 `89f299f5`：端到端/两轮合成评估 CLI/CI 门禁；最终 Core 4607 通过 / 445 条件跳过、逐文件 PG 86 通过（83 真实 PG）、Python 181、pilot 脚本 182、类型/构建/Compose 通过。11 项并行 PG 超时的失败、顺序复跑、四处处置及未完成模型/独立审查/真实群门禁见[专项记录](iris-proactive-discussion.md)。文档单独提交，不替换应用 SHA。
 - 20:44 本机 Docker 已恢复启动；随后在独立 PostgreSQL 16.14 中取得实际缺表失败及修复后通过证据。数据库可用和基础测试通过仍不等于主动讨论端到端可用。
 
 ## 已取得的测试证据

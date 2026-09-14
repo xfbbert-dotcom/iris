@@ -36,7 +36,11 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   the [implementation plan](../superpowers/plans/2026-09-14-iris-proactive-discussion.md) maps the guards
   to bounded tasks and tests. Local foundation acceptance and context review findings are tracked
   in the [execution record](../development/iris-proactive-discussion-execution.md); no model or
-  production acceptance is claimed.
+  production acceptance is claimed. The [finite end-to-end and release record](../development/iris-proactive-discussion.md)
+  now records actual non-mention ingress/PG/worker/sent-receipt/ordinary-followup and member-stop/new-issue
+  gates, a synthetic-only evaluator with two distinct calls per case, and explicit CI database setup.
+  Model configuration is unavailable; deterministic fixtures and a fake HTTP provider cannot substitute
+  for real-model quality or real-group feedback acceptance. Retain every failed run separately.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,
