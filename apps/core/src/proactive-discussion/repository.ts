@@ -15,8 +15,10 @@ export interface PdRepository {
     job: PdJob; context: PdContext; assessment: PdAssessment; draft: PdDraft | null; at: Date;
   }): Promise<"prepared" | "skipped" | "stale" | "blocked">;
   failEvaluation(input: { job: PdJob; reason: string; retryable: boolean; at: Date }): Promise<void>;
+  requeueEvaluation(input: { job: PdJob; at: Date }): Promise<void>;
   applyFeedback(input: {
     job: PdJob; action: "pause" | "resume"; issueId: string;
+    expectedIssueVersion: number; verifiedReplyMessageId: string;
     actorOpenId: string; verifiedMessage: LocalMessageSourceBinding; at: Date;
   }): Promise<"applied" | "duplicate" | "blocked">;
   findIssueByReply(input: { chatId: string; replyMessageId: string }): Promise<PdIssue | null>;
@@ -38,6 +40,9 @@ export interface PdRepository {
 // tasks. The foundation factory never advertises methods it does not implement.
 export type PdFoundationRepository = Pick<PdRepository,
   "setPolicy" | "register" | "readState" | "claimEvaluation" | "failEvaluation" | "getStatus">;
+
+export type PdEvaluationRepository = PdFoundationRepository & Pick<PdRepository,
+  "commitEvaluation" | "requeueEvaluation" | "applyFeedback" | "findIssueByReply">;
 
 export class PdCatalogCapacityError extends Error {
   readonly code = "proactive_discussion_catalog_degraded";

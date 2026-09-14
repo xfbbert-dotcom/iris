@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { defaultMigrationsDir, runMigrations } from "../../src/database/migrate.js";
-import type { PdFoundationRepository } from "../../src/proactive-discussion/repository.js";
+import type { PdEvaluationRepository } from "../../src/proactive-discussion/repository.js";
 
 export async function openPdDatabase(): Promise<{
-  pool: pg.Pool; repository: PdFoundationRepository; close(): Promise<void>;
+  pool: pg.Pool; repository: PdEvaluationRepository; close(): Promise<void>;
 }> {
   const connectionString = process.env.IRIS_TEST_DATABASE_URL?.trim();
   if (!connectionString) throw new Error("IRIS_TEST_DATABASE_URL must name an isolated test database");

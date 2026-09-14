@@ -1,15 +1,169 @@
 import { randomUUID } from "node:crypto";
+import { decodeDurableRuntimeControlSnapshot } from "../admin/runtime-control-state-repository.js";
+import { lockConversationMessageIngestScope } from "../conversation/conversation-message-replay-guard.js";
 import type { PostgresConversationStateDataSource, TransactionClient } from "../conversation-state/postgres-conversation-state-repository.js";
 import { hashLocalMessageText } from "../memory/local-message-source.js";
-import { PD_PILOT_CHAT, type PdIssue, type PdJob, type PdPolicy, type PdSource } from "./contracts.js";
-import { PdCatalogCapacityError, type PdFoundationRepository } from "./repository.js";
+import { createPdSourceRef, PD_PILOT_CHAT, type PdIssue, type PdJob, type PdPolicy, type PdSource } from "./contracts.js";
+import { validatePdAssessment } from "./model.js";
+import { parsePdFeedback, removePdFeedbackMention } from "./feedback.js";
+import { PdCatalogCapacityError, type PdEvaluationRepository } from "./repository.js";
 
 type Row = Record<string, unknown>;
 
 export function createPostgresProactiveDiscussionRepository({ dataSource }: {
   dataSource: PostgresConversationStateDataSource;
-}): PdFoundationRepository {
+}): PdEvaluationRepository {
   return {
+    async commitEvaluation({ job, context, assessment, draft, at }) {
+      date(at);
+      return transaction(dataSource, async client => {
+        const authorized = await lockPolicyRuntime(client, job);
+        const trigger = await lockMessages(client, job, context.sources);
+        const group = (await client.query(`SELECT context_version,catalog_version FROM proactive_discussion_groups
+          WHERE chat_id=$1 FOR UPDATE`, [job.chatId])).rows[0];
+        const issues = (await client.query(`${issueSelect} WHERE i.chat_id=$1 ORDER BY i.id LIMIT 101 FOR UPDATE OF i`, [job.chatId])).rows.map(decodeIssue);
+        if (!await lockOwnedJob(client, job, at)) return "stale";
+        const finish = async (outcome: "prepared" | "skipped" | "blocked", reason: string | null) => {
+          const evaluationId = randomUUID();
+          await client.query(`INSERT INTO proactive_discussion_evaluations
+            (id,job_id,attempt,chat_id,context_version,catalog_version,policy_version,assessment,draft,outcome,created_at)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11)`,
+          [evaluationId, job.id, job.attempt, job.chatId, context.contextVersion, context.catalogVersion, job.policyVersion,
+            JSON.stringify(assessment), JSON.stringify(draft), outcome, at]);
+          await appendSources(client, "evaluation_id", evaluationId, context.sources);
+          await settleJob(client, job, outcome === "blocked" ? "cancelled" : "completed", reason, at);
+          return evaluationId;
+        };
+        if (!authorized || !trigger || job.purpose !== "assessment" || context.chatId !== job.chatId || context.triggerMessageId !== job.messageId
+          || context.policy.chatId !== job.chatId || !context.policy.enabled || context.policy.version !== job.policyVersion) {
+          await finish("blocked", "policy_or_trigger_invalid"); return "blocked";
+        }
+        if (!group || Number(group.context_version) !== context.contextVersion || Number(group.catalog_version) !== context.catalogVersion) {
+          await requeueOwnedJob(client, job, at, JSON.stringify({ reason: "context_stale",
+            expectedContext: context.contextVersion, currentContext: group?.context_version,
+            expectedCatalog: context.catalogVersion, currentCatalog: group?.catalog_version }));
+          return "stale";
+        }
+        if (issues.length > 100 || (issues.length === 100 && assessment.issueRef?.kind === "new")) {
+          await finish("blocked", "catalog_capacity_degraded"); return "blocked";
+        }
+        if (assessment.issueRef?.kind === "new" && issues.some(issue => !context.issues.some(supplied => supplied.id === issue.id))) {
+          await finish("blocked", "incomplete_catalog"); return "blocked";
+        }
+        const issueId = assessment.issueRef?.kind === "existing" ? assessment.issueRef.id : undefined;
+        const issue = issues.find(item => item.id === issueId);
+        const supplied = context.issues.find(item => item.id === issueId);
+        if (issueId && (!issue || !supplied || issue.version !== supplied.version || issue.basisVersion !== supplied.basisVersion)) {
+          await requeueOwnedJob(client, job, at, "issue_version_stale"); return "stale";
+        }
+        try {
+          if (context.sources.some(source => source.ref !== createPdSourceRef(source))
+            || context.items.some(item => !context.sources.some(source => source.ref === item.ref))) throw new Error("invalid source");
+          validatePdAssessment(assessment, { ...context, issues: issues.filter(item => context.issues.some(s => s.id === item.id)) });
+          if (assessment.decision === "intervene" && (draft === null || !draft.text.trim() || draft.text.length > 1200
+            || new Set(draft.evidenceRefs).size !== assessment.evidenceRefs.length
+            || draft.evidenceRefs.length !== assessment.evidenceRefs.length
+            || draft.evidenceRefs.some(ref => !assessment.evidenceRefs.includes(ref)))) throw new Error("invalid draft");
+          if (assessment.decision === "skip" && draft !== null) throw new Error("skip draft");
+          if (assessment.reason === "resolved" && (!issue || issue.state === "user_paused")) throw new Error("invalid resolution");
+        } catch {
+          await finish("blocked", "assessment_or_draft_invalid"); return "blocked";
+        }
+        if (assessment.decision === "skip") {
+          if (assessment.reason === "resolved" && issue && issue.state !== "resolved") {
+            await client.query(`UPDATE proactive_discussion_issues SET state='resolved',version=version+1,updated_at=$2 WHERE id=$1`, [issue.id, at]);
+            await advanceCatalog(client, job.chatId, at);
+            await cancelPrepared(client, issue.id, "issue_resolved", at);
+          }
+          await finish("skipped", assessment.reason); return "skipped";
+        }
+        const id = issue?.id ?? randomUUID();
+        const version = (issue?.version ?? 0) + 1;
+        const basis = (issue?.basisVersion ?? 0) + 1;
+        const basisSources = context.sources.filter(source => assessment.evidenceRefs.includes(source.ref));
+        if (issue) {
+          await client.query(`UPDATE proactive_discussion_issues SET state='observing',version=$2,basis_version=$3,
+            last_observation=$4,last_reasoning=$5,last_suggestion=$6,basis_sources=$7::jsonb,updated_at=$8 WHERE id=$1`,
+          [id, version, basis, assessment.observation, assessment.reasoning, assessment.suggestion, JSON.stringify(basisSources), at]);
+          await cancelPrepared(client, id, "basis_superseded", at);
+        } else {
+          await client.query(`INSERT INTO proactive_discussion_issues
+            (id,chat_id,description,state,version,basis_version,last_observation,last_reasoning,last_suggestion,basis_sources,created_at,updated_at)
+            VALUES($1,$2,$3,'observing',1,1,$4,$5,$6,$7::jsonb,$8,$8)`,
+          [id, job.chatId, assessment.issueRef!.kind === "new" ? assessment.issueRef!.description : "",
+            assessment.observation, assessment.reasoning, assessment.suggestion, JSON.stringify(basisSources), at]);
+        }
+        await advanceCatalog(client, job.chatId, at);
+        const evaluationId = await finish("prepared", null);
+        const deliveryId = randomUUID();
+        // The delivery INSERT audit event captures the real policy authorization.
+        await client.query(`INSERT INTO proactive_discussion_deliveries
+          (id,chat_id,issue_id,evaluation_id,issue_version,basis_version,policy_version,context_version,trigger_message_id,text,reply_uuid,authorization_kind,created_at,updated_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'policy',$12,$12)`,
+        [deliveryId, job.chatId, id, evaluationId, version, basis, job.policyVersion, context.contextVersion,
+          job.messageId, draft!.text, randomUUID(), at]);
+        await appendSources(client, "delivery_id", deliveryId, context.sources);
+        return "prepared";
+      });
+    },
+    async requeueEvaluation({ job, at }) {
+      date(at);
+      await transaction(dataSource, async client => {
+        const authorized = await lockPolicyRuntime(client, job);
+        const trigger = await lockMessages(client, job, []);
+        if (!await lockOwnedJob(client, job, at)) return;
+        if (!authorized || !trigger) { await settleJob(client, job, "cancelled", "policy_or_trigger_invalid", at); return; }
+        await requeueOwnedJob(client, job, at, "context_unavailable");
+      });
+    },
+    async applyFeedback({ job, action, issueId, expectedIssueVersion, actorOpenId, verifiedMessage, verifiedReplyMessageId, at }) {
+      date(at); safeInteger(expectedIssueVersion, 1);
+      return transaction(dataSource, async client => {
+        const authorized = await lockPolicyRuntime(client, job);
+        const trigger = await lockMessages(client, job, []);
+        await client.query("SELECT chat_id FROM proactive_discussion_groups WHERE chat_id=$1 FOR UPDATE", [job.chatId]);
+        const issueRow = (await client.query(`${issueSelect} WHERE i.id=$1 AND i.chat_id=$2 FOR UPDATE OF i`, [issueId, job.chatId])).rows[0];
+        const receipt = (await client.query(`SELECT id FROM proactive_discussion_deliveries
+          WHERE chat_id=$1 AND issue_id=$2 AND state='sent' AND reply_message_id=$3`, [job.chatId, issueId, verifiedReplyMessageId])).rows;
+        const row = (await client.query("SELECT * FROM proactive_discussion_jobs WHERE id=$1 FOR UPDATE", [job.id])).rows[0];
+        // JSONB key order is independent of the caller's property insertion order.
+        const feedback = row?.feedback as PdJob["feedback"];
+        const proofMatches = feedback && job.feedback && feedback.action === action && job.feedback.action === action
+          && feedback.replyMessageId === verifiedReplyMessageId && job.feedback.replyMessageId === verifiedReplyMessageId
+          && feedback.actorOpenId === actorOpenId && job.feedback.actorOpenId === actorOpenId
+          && feedback.irisMentionKey === job.feedback.irisMentionKey
+          && job.purpose === "feedback" && trigger?.sender_open_id === actorOpenId
+          && verifiedMessage.chatId === job.chatId && verifiedMessage.messageId === job.messageId
+          && verifiedMessage.contentHash === job.contentHash && typeof trigger.text === "string"
+          && parsePdFeedback(removePdFeedbackMention(trigger.text, feedback.irisMentionKey)) === action;
+        if (row?.state === "completed" && row.last_error === "feedback_applied" && proofMatches && receipt.length === 1) return "duplicate";
+        if (!await lockOwnedJob(client, job, at)) return "blocked";
+        if (!authorized || !proofMatches || !issueRow || receipt.length !== 1
+          || safeInteger(issueRow.version, 1) !== expectedIssueVersion) {
+          await settleJob(client, job, "cancelled", "feedback_blocked", at); return "blocked";
+        }
+        const issue = decodeIssue(issueRow);
+        const next = action === "pause" ? "user_paused" : "observing";
+        if (action === "resume" && issue.state !== "user_paused") {
+          await settleJob(client, job, "completed", "feedback_no_change", at); return "duplicate";
+        }
+        if (issue.state !== next) {
+          await client.query(`UPDATE proactive_discussion_issues SET state=$2,version=version+1,updated_at=$3 WHERE id=$1`, [issueId, next, at]);
+          await advanceCatalog(client, job.chatId, at);
+        }
+        // Both pause and resume invalidate any old pending advice. Resume waits
+        // for a future message with a materially new basis before preparing again.
+        await cancelPrepared(client, issueId, action === "pause" ? "user_paused" : "user_resumed", at);
+        await settleJob(client, job, "completed", "feedback_applied", at);
+        return "applied";
+      });
+    },
+    async findIssueByReply({ chatId, replyMessageId }) {
+      const rows = (await dataSource.query(`${issueSelect} WHERE i.chat_id=$1 AND EXISTS
+        (SELECT 1 FROM proactive_discussion_deliveries d WHERE d.issue_id=i.id AND d.chat_id=i.chat_id
+          AND d.state='sent' AND d.reply_message_id=$2) ORDER BY i.id LIMIT 2`, [chatId, replyMessageId])).rows;
+      return rows.length === 1 ? decodeIssue(rows[0]!) : null;
+    },
     async setPolicy({ policy, expectedVersion, at }) {
       if (policy.chatId !== PD_PILOT_CHAT) throw new Error("proactive discussion policy is restricted to the exact pilot");
       safeInteger(expectedVersion, 0);
@@ -40,6 +194,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
       if (input.purpose === "assessment" && input.feedback !== undefined) return "blocked";
       if (input.purpose === "feedback" && (!input.feedback || !["pause", "resume"].includes(input.feedback.action)
         || !isIdentifier(input.feedback.replyMessageId, 505) || !isIdentifier(input.feedback.actorOpenId, 512))) return "blocked";
+      if (input.feedback?.irisMentionKey !== undefined && !isIdentifier(input.feedback.irisMentionKey, 512)) return "blocked";
       date(input.at);
       return transaction(dataSource, async client => {
         // Caller holds the existing message replay guard across persistence and
@@ -55,7 +210,9 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
         [input.messageId, input.chatId, input.policyVersion]);
         const message = current.rows[0];
         if (!message || typeof message.text !== "string" || hashLocalMessageText(message.text) !== input.contentHash
-          || (input.feedback && message.sender_open_id !== input.feedback.actorOpenId)) return "blocked";
+          || (input.feedback && (message.sender_open_id !== input.feedback.actorOpenId
+            || parsePdFeedback(removePdFeedbackMention(message.text, input.feedback.irisMentionKey)) !== input.feedback.action
+            || (input.feedback.irisMentionKey !== undefined && removePdFeedbackMention(message.text, input.feedback.irisMentionKey) === message.text)))) return "blocked";
         const inserted = await client.query(`INSERT INTO proactive_discussion_jobs
           (id,chat_id,message_id,content_hash,policy_version,purpose,feedback,available_at,created_at,updated_at)
           VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$8,$8)
@@ -71,9 +228,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
       return transaction(dataSource, async client => {
         const policyRows = await client.query("SELECT * FROM proactive_discussion_policies WHERE chat_id=$1", [chatId]);
         const groupRows = await client.query("SELECT context_version,catalog_version FROM proactive_discussion_groups WHERE chat_id=$1", [chatId]);
-        const issueRows = await client.query(`SELECT i.*, EXISTS
-          (SELECT 1 FROM proactive_discussion_deliveries d WHERE d.issue_id=i.id AND d.state='outcome_unknown') AS unknown_delivery
-          FROM proactive_discussion_issues i WHERE i.chat_id=$1 ORDER BY i.id LIMIT 101`, [chatId]);
+        const issueRows = await client.query(`${issueSelect} WHERE i.chat_id=$1 ORDER BY i.id LIMIT 101`, [chatId]);
         if (issueRows.rows.length > 100) throw new PdCatalogCapacityError();
         const group = groupRows.rows[0];
         return { policy: policyRows.rows[0] ? decodePolicy(policyRows.rows[0]) : null,
@@ -120,6 +275,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
       date(at); identifier(job.id, 512); identifier(job.leaseToken, 512);
       safeInteger(job.attempt, 1); safeInteger(job.policyVersion, 1);
       const terminal = !retryable || job.attempt >= 3;
+      const feedbackBlocked = job.purpose === "feedback" && !retryable && reason === "feedback_blocked";
       const availableAt = new Date(at.getTime() + (job.attempt === 1 ? 1000 : 5000));
       date(availableAt);
       await transaction(dataSource, async client => {
@@ -128,7 +284,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           WHERE id=$1 AND chat_id=$2 AND policy_version=$3 AND lease_token=$4 AND attempts=$5
             AND state='processing' AND lease_until > $9`,
         [job.id, job.chatId, job.policyVersion, job.leaseToken, job.attempt,
-          terminal ? "dead_letter" : "retry", String(reason).slice(0, 2000), availableAt, at]);
+          feedbackBlocked ? "cancelled" : terminal ? "dead_letter" : "retry", String(reason).slice(0, 2000), availableAt, at]);
       });
     },
 
@@ -146,6 +302,73 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
         lastSuccessAt: row.last_success_at === null ? null : date(new Date(row.last_success_at as string | Date)) };
     },
   };
+}
+
+const issueSelect = `SELECT i.*, EXISTS (SELECT 1 FROM proactive_discussion_deliveries d
+  WHERE d.issue_id=i.id AND d.state IN ('sending','outcome_unknown')) AS unknown_delivery FROM proactive_discussion_issues i`;
+
+async function lockPolicyRuntime(client: TransactionClient, job: PdJob): Promise<boolean> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`iris:proactive-discussion:policy:${job.chatId}`]);
+  const policy = (await client.query(`SELECT version,enabled FROM proactive_discussion_policies WHERE chat_id=$1 FOR SHARE`, [job.chatId])).rows[0];
+  const row = (await client.query(`SELECT revision,desired_global_enabled,disabled_group_ids,capabilities,updated_at,updated_by
+    FROM runtime_control_state WHERE singleton_id=1 FOR SHARE`)).rows[0];
+  if (!row) return false;
+  const runtime = decodeDurableRuntimeControlSnapshot(row);
+  return job.chatId === PD_PILOT_CHAT && policy?.enabled === true && Number(policy.version) === job.policyVersion
+    && runtime.desiredGlobalEnabled && !runtime.disabledGroupIds.includes(job.chatId)
+    && runtime.capabilities.readGroupContext && runtime.capabilities.proactiveSpeech;
+}
+
+async function lockMessages(client: TransactionClient, job: PdJob, sources: PdSource[]): Promise<Row | null> {
+  const bindings = sources.filter(source => source.kind === "message");
+  if (bindings.some(source => source.binding.chatId !== job.chatId)) return null;
+  const ids = [...new Set([job.messageId, ...bindings.map(source => source.binding.messageId)])].sort();
+  for (const id of ids) await lockConversationMessageIngestScope({ queryable: client, conversationMessageId: `feishu:${id}` });
+  const rows = (await client.query(`SELECT m.provider_message_id,m.text,m.sender_open_id FROM conversation_messages m
+    WHERE m.id='feishu:' || m.provider_message_id AND m.provider='feishu' AND m.chat_id=$1 AND m.provider_message_id=ANY($2::text[])
+      AND NOT EXISTS(SELECT 1 FROM conversation_message_deletion_tombstones t WHERE t.provider='feishu' AND t.provider_message_id=m.provider_message_id)`,
+  [job.chatId, ids])).rows;
+  if (rows.length !== ids.length) return null;
+  const trigger = rows.find(row => row.provider_message_id === job.messageId);
+  // Event representation is bounded; full live source hashes are checked by the
+  // context builder outside this transaction, never against truncated text.
+  return trigger && typeof trigger.text === "string" && hashLocalMessageText(trigger.text) === job.contentHash ? trigger : null;
+}
+
+async function lockOwnedJob(client: TransactionClient, job: PdJob, at: Date): Promise<Row | null> {
+  return (await client.query(`SELECT * FROM proactive_discussion_jobs WHERE id=$1 AND chat_id=$2
+    AND message_id=$3 AND content_hash=$4 AND policy_version=$5 AND lease_token=$6 AND attempts=$7 AND purpose=$8
+    AND state='processing' AND lease_until>$9 FOR UPDATE`,
+  [job.id, job.chatId, job.messageId, job.contentHash, job.policyVersion, job.leaseToken, job.attempt, job.purpose, at])).rows[0] ?? null;
+}
+
+async function settleJob(client: TransactionClient, job: PdJob, state: "cancelled" | "completed", reason: string | null, at: Date): Promise<void> {
+  await client.query(`UPDATE proactive_discussion_jobs SET state=$2,version=version+1,
+    lease_token=NULL,lease_until=NULL,worker_id=NULL,last_error=$3,updated_at=$4 WHERE id=$1`, [job.id, state, reason, at]);
+}
+
+async function requeueOwnedJob(client: TransactionClient, job: PdJob, at: Date, reason: string): Promise<void> {
+  // A context conflict did not consume a technical attempt. The immutable job
+  // event retains it; terminal evaluations alone occupy UNIQUE(job_id,attempt).
+  await client.query(`UPDATE proactive_discussion_jobs SET state='pending',version=version+1,
+    lease_token=NULL,lease_until=NULL,worker_id=NULL,attempts=attempts-1,last_error=$2,available_at=$3,updated_at=$3 WHERE id=$1`,
+  [job.id, reason, at]);
+}
+
+async function appendSources(client: TransactionClient, column: "evaluation_id" | "delivery_id", id: string, sources: PdSource[]): Promise<void> {
+  for (const [index, source] of sources.entries()) {
+    await client.query(`INSERT INTO proactive_discussion_sources(${column},source_index,kind,ref,binding)
+      VALUES($1,$2,$3,$4,$5::jsonb)`, [id, index, source.kind, source.ref, JSON.stringify(source.binding)]);
+  }
+}
+
+async function advanceCatalog(client: TransactionClient, chatId: string, at: Date): Promise<void> {
+  await client.query("UPDATE proactive_discussion_groups SET catalog_version=catalog_version+1,updated_at=$2 WHERE chat_id=$1", [chatId, at]);
+}
+
+async function cancelPrepared(client: TransactionClient, issueId: string, reason: string, at: Date): Promise<void> {
+  await client.query(`UPDATE proactive_discussion_deliveries SET state='cancelled',version=version+1,
+    lease_token=NULL,lease_until=NULL,worker_id=NULL,last_error=$2,updated_at=$3 WHERE issue_id=$1 AND state='prepared'`, [issueId, reason, at]);
 }
 
 async function transaction<T>(source: PostgresConversationStateDataSource,

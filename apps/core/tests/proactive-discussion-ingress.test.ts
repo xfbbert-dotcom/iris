@@ -70,6 +70,7 @@ describe("proactive discussion ingress", () => {
         action: "resume",
         replyMessageId: "om-parent-not-root",
         actorOpenId: "ou_member",
+        irisMentionKey: "@_user_1",
       },
     }));
   });

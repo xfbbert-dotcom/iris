@@ -19,7 +19,7 @@ export type PdJob = {
   id: string; chatId: string; messageId: string; contentHash: string;
   policyVersion: number; leaseToken: string; attempt: number;
   purpose: "assessment" | "feedback";
-  feedback?: { action: "pause" | "resume"; replyMessageId: string; actorOpenId: string };
+  feedback?: { action: "pause" | "resume"; replyMessageId: string; actorOpenId: string; irisMentionKey?: string };
 };
 export type PdContext = {
   chatId: string; triggerMessageId: string; policy: PdPolicy;

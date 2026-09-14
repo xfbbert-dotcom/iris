@@ -1,7 +1,7 @@
 import type { ConversationMessage } from "../conversation/conversation-message-repository.js";
 import { hashLocalMessageText } from "../memory/local-message-source.js";
 import { PD_PILOT_CHAT } from "./contracts.js";
-import { parsePdFeedback } from "./feedback.js";
+import { parsePdFeedback, removePdFeedbackMention } from "./feedback.js";
 import type { PdRepository } from "./repository.js";
 
 export type PdRegistrar = {
@@ -30,24 +30,27 @@ export function createPdRegistrar({ repository, botOpenId, now }: {
         || message.text.trim().length === 0
       ) return;
 
-      const feedbackAction = parsePdFeedback(removeIrisMentionPrefix({
+      const irisMentionKey = findIrisMentionPrefix({
         text: message.text,
         mentions: message.mentions ?? [],
         botOpenId,
         mentionedIris: input.mentionedIris,
-      }));
+      });
+      const feedbackAction = parsePdFeedback(removePdFeedbackMention(message.text, irisMentionKey));
       const replyMessageId = input.parentMessageId ?? input.rootMessageId;
       let feedback: {
         action: "pause" | "resume";
         replyMessageId: string;
         actorOpenId: string;
+        irisMentionKey?: string;
       } | undefined;
       if (
         feedbackAction !== null
         && replyMessageId !== undefined
         && message.senderOpenId !== undefined
       ) {
-        feedback = { action: feedbackAction, replyMessageId, actorOpenId: message.senderOpenId };
+        feedback = { action: feedbackAction, replyMessageId, actorOpenId: message.senderOpenId,
+          ...(irisMentionKey === undefined ? {} : { irisMentionKey }) };
       }
       if (feedbackAction !== null && feedback === undefined) return;
       if (input.mentionedIris && feedback === undefined) return;
@@ -72,23 +75,19 @@ export function createPdRegistrar({ repository, botOpenId, now }: {
   };
 }
 
-function removeIrisMentionPrefix(input: {
+function findIrisMentionPrefix(input: {
   text: string;
   mentions: readonly { key: string; openId: string }[];
   botOpenId: string;
   mentionedIris: boolean;
-}): string {
-  if (!input.mentionedIris) return input.text;
+}): string | undefined {
+  if (!input.mentionedIris) return undefined;
   const keys = input.mentions
     .filter((mention) => mention.openId === input.botOpenId)
     .map((mention) => mention.key)
     .sort((left, right) => right.length - left.length);
   for (const key of keys) {
-    if (!input.text.startsWith(key)) continue;
-    const boundary = input.text.slice(key.length, key.length + 1);
-    if (boundary.length === 0 || /\s/u.test(boundary)) {
-      return input.text.slice(key.length).trimStart();
-    }
+    if (removePdFeedbackMention(input.text, key) !== input.text) return key;
   }
-  return input.text;
+  return undefined;
 }

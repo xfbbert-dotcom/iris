@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { openPdDatabase } from "./helpers/proactive-discussion-postgres.js";
-import { PILOT_CHAT, pdContext } from "./fixtures/proactive-discussion.js";
+import { PILOT_CHAT, pdAssessment, pdContext, pdSkipAssessment } from "./fixtures/proactive-discussion.js";
 import { hashLocalMessageText } from "../src/memory/local-message-source.js";
 import { createPdSourceRef } from "../src/proactive-discussion/contracts.js";
 import { createPostgresConversationMessageReplayGuard } from "../src/conversation/conversation-message-replay-guard.js";
@@ -40,6 +40,294 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion Postg
   }
   const registration = (id = "m1", text = "预算只有 10 万") => ({
     chatId: PILOT_CHAT, messageId: id, contentHash: hashLocalMessageText(text), policyVersion: 1, purpose: "assessment" as const, at,
+  });
+
+  test("concurrent synonymous new issues from one catalog prepare once and stale the other job", async () => {
+    const value = await enabled();
+    await value.pool.query(`UPDATE runtime_control_state SET desired_global_enabled=true,
+      capabilities=jsonb_set(jsonb_set(capabilities,'{readGroupContext}','true'),'{proactiveSpeech}','true')`);
+    await message(value);
+    await message(value, "m2", "按每人 8 万招两人，预算够");
+    await value.repository.register(registration());
+    await value.repository.register(registration("m2", "按每人 8 万招两人，预算够"));
+    const jobA = await value.repository.claimEvaluation({ workerId: "a", at, leaseUntil: time(10) });
+    const jobB = await value.repository.claimEvaluation({ workerId: "b", at, leaseUntil: time(10) });
+    const state = await value.repository.readState(PILOT_CHAT);
+    const context = { ...pdContext(), contextVersion: state.contextVersion, catalogVersion: state.catalogVersion };
+    const assessment = pdAssessment();
+    const results = await Promise.all([
+      value.repository.commitEvaluation({ job: jobA!, context: { ...context, triggerMessageId: jobA!.messageId }, assessment,
+        draft: { text: "两人共需 16 万，超出 10 万预算。建议先调整人数或预算。", evidenceRefs: assessment.evidenceRefs }, at }),
+      value.repository.commitEvaluation({ job: jobB!, context: { ...context, triggerMessageId: jobB!.messageId }, assessment,
+        draft: { text: "目前预算不够两人，请先核对。", evidenceRefs: assessment.evidenceRefs }, at }),
+    ]);
+    expect(results.sort()).toEqual(["prepared", "stale"]);
+    expect((await value.repository.readState(PILOT_CHAT)).issues).toHaveLength(1);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows).toHaveLength(1);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_jobs")).rows).toHaveLength(2);
+  });
+
+  async function evaluationSetup() {
+    const value = await enabled();
+    await value.pool.query("UPDATE runtime_control_state SET desired_global_enabled=true");
+    await message(value);
+    await message(value, "m2", "按每人 8 万招两人，预算够");
+    return value;
+  }
+  async function evaluation(value: Database, id = "m2", text = "按每人 8 万招两人，预算够", policyVersion = 1) {
+    await value.repository.register({ ...registration(id, text), policyVersion });
+    const job = await value.repository.claimEvaluation({ workerId: "evaluator", at, leaseUntil: time(30) });
+    const state = await value.repository.readState(PILOT_CHAT);
+    return { job: job!, context: { ...pdContext(), triggerMessageId: id, ...state, policy: state.policy! } };
+  }
+  const advice = (assessment = pdAssessment()) => ({ text: "请先核对招聘预算与人数。", evidenceRefs: assessment.evidenceRefs });
+
+  test("distinct issues can prepare consecutively and every exposed source and policy authorization is durable", async () => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    expect(await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at })).toBe("prepared");
+    const second = await evaluation(value, "m1", "预算只有 10 万");
+    const assessment = { ...pdAssessment(), issueRef: { kind: "new" as const, description: "成本计划缺少保险支出" } };
+    expect(await value.repository.commitEvaluation({ ...second, assessment, draft: advice(assessment), at })).toBe("prepared");
+    expect((await value.repository.readState(PILOT_CHAT)).issues).toHaveLength(2);
+    const deliveries = (await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows;
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries.every(row => row.authorization_kind === "policy" && row.state === "prepared")).toBe(true);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_sources WHERE evaluation_id IS NOT NULL")).rows).toHaveLength(4);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_sources WHERE delivery_id IS NOT NULL")).rows).toHaveLength(4);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_events WHERE entity_type='delivery' AND payload->>'authorization_kind'='policy'")).rows).toHaveLength(2);
+  });
+
+  test.each(["duplicate", "already_handled", "no_work_value"] as const)("%s records silence without new basis or delivery", async reason => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at });
+    const next = await evaluation(value, "m1", "预算只有 10 万");
+    const before = next.context.issues[0]!;
+    expect(await value.repository.commitEvaluation({ ...next,
+      assessment: { ...pdSkipAssessment(reason), issueRef: { kind: "existing", id: before.id } }, draft: null, at })).toBe("skipped");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toEqual(before);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows).toHaveLength(1);
+    expect((await value.pool.query("SELECT outcome FROM proactive_discussion_evaluations ORDER BY created_at,id")).rows.map(r => r.outcome).sort()).toEqual(["prepared", "skipped"]);
+  });
+
+  test("policy restart and rewritten explanation on unchanged bindings cannot advance a basis", async () => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at });
+    await value.repository.setPolicy({ policy: { ...first.context.policy, version: 2 }, expectedVersion: 1, at });
+    const next = await evaluation(value, "m2", "按每人 8 万招两人，预算够", 2);
+    const assessment = { ...pdAssessment(), issueRef: { kind: "existing" as const, id: next.context.issues[0]!.id },
+      materialChange: { kind: "new_evidence" as const, explanation: "换句话说总数仍然不够", evidenceRefs: pdAssessment().evidenceRefs } };
+    expect(await value.repository.commitEvaluation({ ...next, assessment, draft: advice(assessment), at })).toBe("blocked");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]!.basisVersion).toBe(1);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows).toHaveLength(1);
+  });
+
+  test("resolved skip cancels pending drafts and only materially new premises can reopen", async () => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at });
+    const resolution = await evaluation(value, "m1", "预算只有 10 万");
+    const issueId = resolution.context.issues[0]!.id;
+    expect(await value.repository.commitEvaluation({ ...resolution,
+      assessment: { ...pdSkipAssessment("resolved"), issueRef: { kind: "existing", id: issueId } }, draft: null, at })).toBe("skipped");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toMatchObject({ state: "resolved", basisVersion: 1, version: 2 });
+    expect((await value.pool.query("SELECT state FROM proactive_discussion_deliveries")).rows[0].state).toBe("cancelled");
+    await message(value, "m3", "新增强制设备成本 20 万");
+    const next = await evaluation(value, "m3", "新增强制设备成本 20 万");
+    const binding = { chatId: PILOT_CHAT, messageId: "m3", contentHash: hashLocalMessageText("新增强制设备成本 20 万") };
+    const source = { kind: "message" as const, ref: createPdSourceRef({ kind: "message", binding }), binding };
+    next.context.sources.push(source);
+    next.context.items.push({ ref: source.ref, text: "新增强制设备成本 20 万" });
+    const assessment = { ...pdAssessment(), issueRef: { kind: "existing" as const, id: issueId }, evidenceRefs: [source.ref],
+      materialChange: { kind: "new_evidence" as const, explanation: "新增强制成本使已解决的预算再次不足", evidenceRefs: [source.ref] } };
+    expect(await value.repository.commitEvaluation({ ...next, assessment, draft: advice(assessment), at })).toBe("prepared");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toMatchObject({ state: "observing", basisVersion: 2, version: 3 });
+  });
+
+  test("incomplete hidden catalog blocks new admission with an auditable reason", async () => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at });
+    const next = await evaluation(value, "m1", "预算只有 10 万");
+    next.context.issues = [];
+    expect(await value.repository.commitEvaluation({ ...next, assessment: pdAssessment(), draft: advice(), at })).toBe("blocked");
+    expect((await value.pool.query("SELECT last_error FROM proactive_discussion_jobs WHERE id=$1", [next.job.id])).rows[0].last_error).toBe("incomplete_catalog");
+    expect((await value.repository.readState(PILOT_CHAT)).issues).toHaveLength(1);
+  });
+
+  async function sentIssue(value: Database) {
+    const first = await evaluation(value);
+    await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at });
+    await value.pool.query(`UPDATE proactive_discussion_deliveries SET state='sent',reply_message_id='sent-reply',attempted_at=$1,sent_at=$1`, [at]);
+    return (await value.repository.readState(PILOT_CHAT)).issues[0]!;
+  }
+  async function feedbackJob(value: Database, id: string, action: "pause" | "resume") {
+    const text = action === "pause" ? "不再跟进这件事" : "恢复跟进这件事";
+    await message(value, id, text);
+    await value.repository.register({ ...registration(id, text), purpose: "feedback",
+      feedback: { action, actorOpenId: "test-human", replyMessageId: "sent-reply" } });
+    return (await value.repository.claimEvaluation({ workerId: "feedback", at, leaseUntil: time(30) }))!;
+  }
+  const feedbackInput = (job: Awaited<ReturnType<typeof feedbackJob>>, issueId: string, expectedIssueVersion: number) => ({
+    job, action: job.feedback!.action, issueId, expectedIssueVersion, verifiedReplyMessageId: "sent-reply",
+    actorOpenId: "test-human", verifiedMessage: { chatId: PILOT_CHAT, messageId: job.messageId, contentHash: job.contentHash }, at,
+  });
+
+  test("real receipt feedback pauses indefinitely, resumes observing and never resends old advice", async () => {
+    const value = await evaluationSetup();
+    const issue = await sentIssue(value);
+    expect(await value.repository.findIssueByReply({ chatId: PILOT_CHAT, replyMessageId: "forged" })).toBeNull();
+    expect(await value.repository.findIssueByReply({ chatId: "other", replyMessageId: "sent-reply" })).toBeNull();
+    expect(await value.repository.findIssueByReply({ chatId: PILOT_CHAT, replyMessageId: "sent-reply" })).toMatchObject({ id: issue.id });
+    const job = await feedbackJob(value, "pause", "pause");
+    const input = feedbackInput(job, issue.id, issue.version);
+    expect(await value.repository.applyFeedback(input)).toBe("applied");
+    expect(await value.repository.applyFeedback(input)).toBe("duplicate");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toMatchObject({ state: "user_paused", version: 2, basisVersion: 1 });
+    expect(await value.repository.claimEvaluation({ workerId: "much-later", at: time(1000000), leaseUntil: time(1000010) })).toBeNull();
+    const resume = await feedbackJob(value, "resume", "resume");
+    expect(await value.repository.applyFeedback(feedbackInput(resume, issue.id, 2))).toBe("applied");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toMatchObject({ state: "observing", version: 3, basisVersion: 1 });
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows).toHaveLength(1);
+    const events = (await value.pool.query("SELECT payload FROM proactive_discussion_events WHERE entity_type='job' AND entity_id=$1", [job.id])).rows;
+    expect(events.some(row => row.payload.feedback?.actorOpenId === "test-human" && row.payload.state === "completed")).toBe(true);
+  });
+
+  test.each(["version", "actor", "reply", "hash", "deleted"])("feedback transaction blocks changed %s proof", async invalid => {
+    const value = await evaluationSetup();
+    const issue = await sentIssue(value);
+    const job = await feedbackJob(value, "pause", "pause");
+    const input = feedbackInput(job, issue.id, issue.version);
+    if (invalid === "version") input.expectedIssueVersion += 1;
+    if (invalid === "actor") input.actorOpenId = "forger";
+    if (invalid === "reply") input.verifiedReplyMessageId = "forged";
+    if (invalid === "hash") input.verifiedMessage.contentHash = "a".repeat(64);
+    if (invalid === "deleted") await value.pool.query(`INSERT INTO conversation_message_deletion_tombstones
+      (provider,provider_message_id,conversation_message_id,chat_id) VALUES('feishu','pause','feishu:pause',$1)`, [PILOT_CHAT]);
+    expect(await value.repository.applyFeedback(input)).toBe("blocked");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toMatchObject({ state: "observing", version: 1 });
+  });
+
+  test.each(["sending", "outcome_unknown"])("%s blocks the same issue while an independent issue prepares immediately", async state => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at });
+    await value.pool.query("UPDATE proactive_discussion_deliveries SET state=$1,attempted_at=$2", [state, at]);
+    await message(value, "m3", "新的强制设备成本");
+    const next = await evaluation(value, "m3", "新的强制设备成本");
+    const binding = { chatId: PILOT_CHAT, messageId: "m3", contentHash: hashLocalMessageText("新的强制设备成本") };
+    const source = { kind: "message" as const, ref: createPdSourceRef({ kind: "message", binding }), binding };
+    next.context.sources.push(source);
+    next.context.items.push({ ref: source.ref, text: "新的强制设备成本" });
+    expect(next.context.issues[0]!.hasUnknownDelivery).toBe(true);
+    const assessment = { ...pdAssessment(), issueRef: { kind: "existing" as const, id: next.context.issues[0]!.id }, evidenceRefs: [source.ref],
+      materialChange: { kind: "new_evidence" as const, explanation: "设备成本实质扩大预算缺口", evidenceRefs: [source.ref] } };
+    // Even a caller hiding the derived flag cannot bypass durable state.
+    next.context.issues[0]!.hasUnknownDelivery = false;
+    expect(await value.repository.commitEvaluation({ ...next, assessment, draft: advice(assessment), at })).toBe("blocked");
+    await message(value, "m4", "新的独立成本风险");
+    const independent = await evaluation(value, "m4", "新的独立成本风险");
+    expect(await value.repository.commitEvaluation({ ...independent, assessment: pdAssessment(), draft: advice(), at })).toBe("prepared");
+    expect((await value.repository.readState(PILOT_CHAT)).issues).toHaveLength(2);
+  });
+
+  test("a user pause blocks model resolution and materially new evidence even after policy restart", async () => {
+    const value = await evaluationSetup();
+    const issue = await sentIssue(value);
+    const pause = await feedbackJob(value, "pause", "pause");
+    await value.repository.applyFeedback(feedbackInput(pause, issue.id, issue.version));
+    await value.repository.setPolicy({ policy: { chatId: PILOT_CHAT, version: 2, enabled: true, operatorId: "restart" }, expectedVersion: 1, at });
+    await message(value, "m3", "新增加 20 万强制成本");
+    const next = await evaluation(value, "m3", "新增加 20 万强制成本", 2);
+    const binding = { chatId: PILOT_CHAT, messageId: "m3", contentHash: hashLocalMessageText("新增加 20 万强制成本") };
+    const source = { kind: "message" as const, ref: createPdSourceRef({ kind: "message", binding }), binding };
+    next.context.sources.push(source);
+    next.context.items.push({ ref: source.ref, text: "新增加 20 万强制成本" });
+    const assessment = { ...pdAssessment(), issueRef: { kind: "existing" as const, id: issue.id }, evidenceRefs: [source.ref],
+      materialChange: { kind: "new_evidence" as const, explanation: "新成本扩大预算缺口", evidenceRefs: [source.ref] } };
+    expect(await value.repository.commitEvaluation({ ...next, assessment, draft: advice(assessment), at })).toBe("blocked");
+    const resolution = await evaluation(value, "m1", "预算只有 10 万", 2);
+    expect(await value.repository.commitEvaluation({ ...resolution,
+      assessment: { ...pdSkipAssessment("resolved"), issueRef: { kind: "existing", id: issue.id } }, draft: null, at })).toBe("blocked");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toMatchObject({ state: "user_paused", basisVersion: 1, version: 2 });
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows).toHaveLength(1);
+  });
+
+  test("full catalog blocks its 101st identity before it can degrade all future reads", async () => {
+    const value = await evaluationSetup();
+    await value.pool.query(`INSERT INTO proactive_discussion_issues
+      (id,chat_id,description,state,version,basis_version,last_observation,last_reasoning,last_suggestion,basis_sources)
+      SELECT 'bounded-' || i,$1,'budget','observing',1,1,'observation','reasoning','suggestion',$2::jsonb
+      FROM generate_series(1,100) AS i`, [PILOT_CHAT, JSON.stringify(pdContext().sources)]);
+    const next = await evaluation(value);
+    expect(await value.repository.commitEvaluation({ ...next, assessment: pdAssessment(), draft: advice(), at })).toBe("blocked");
+    expect((await value.repository.readState(PILOT_CHAT)).issues).toHaveLength(100);
+  });
+
+  test("feedback job cannot be repurposed by an assessment caller", async () => {
+    const value = await evaluationSetup();
+    const job = await feedbackJob(value, "pause", "pause");
+    const state = await value.repository.readState(PILOT_CHAT);
+    const context = { ...pdContext(), ...state, policy: state.policy!, triggerMessageId: job.messageId };
+    expect(await value.repository.commitEvaluation({ job, context, assessment: pdAssessment(), draft: advice(), at })).toBe("blocked");
+    expect((await value.repository.readState(PILOT_CHAT)).issues).toEqual([]);
+  });
+
+  test("verified mention registration round-trips and negative feedback proof cancels without technical dead letter", async () => {
+    const value = await evaluationSetup();
+    const issue = await sentIssue(value);
+    const text = "@_user_1 不再跟进这件事";
+    await message(value, "mention", text);
+    const input = { ...registration("mention", text), purpose: "feedback" as const,
+      feedback: { action: "pause" as const, replyMessageId: "sent-reply", actorOpenId: "test-human", irisMentionKey: "@_user_1" } };
+    expect(await value.repository.register({ ...input, feedback: { ...input.feedback, irisMentionKey: "@Iris" } })).toBe("blocked");
+    expect(await value.repository.register(input)).toBe("registered");
+    const job = (await value.repository.claimEvaluation({ workerId: "mention", at, leaseUntil: time(30) }))!;
+    expect(job.feedback?.irisMentionKey).toBe("@_user_1");
+    expect(await value.repository.applyFeedback(feedbackInput(job, issue.id, issue.version))).toBe("applied");
+    const bad = await feedbackJob(value, "negative", "pause");
+    await value.repository.failEvaluation({ job: bad, reason: "feedback_blocked", retryable: false, at });
+    expect((await value.pool.query("SELECT state FROM proactive_discussion_jobs WHERE id=$1", [bad.id])).rows[0].state).toBe("cancelled");
+    expect((await value.repository.getStatus()).deadLetter).toBe(0);
+  });
+
+  test("repeated stale contexts preserve technical attempts and let other jobs run without extending debounce", async () => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    await value.repository.failEvaluation({ job: first.job, reason: "technical", retryable: true, at });
+    let job = (await value.repository.claimEvaluation({ workerId: "retry", at: time(1), leaseUntil: time(30) }))!;
+    expect(job.attempt).toBe(2);
+    for (let index = 0; index < 5; index++) {
+      expect(await value.repository.commitEvaluation({ job, context: { ...first.context, contextVersion: 1 },
+        assessment: pdAssessment(), draft: advice(), at: time(index + 1) })).toBe("stale");
+      job = (await value.repository.claimEvaluation({ workerId: "retry", at: time(index + 2), leaseUntil: time(30) }))!;
+      expect(job.id).toBe(first.job.id);
+      expect(job.attempt).toBe(2);
+    }
+    await value.repository.register(registration("m1", "预算只有 10 万"));
+    await value.repository.requeueEvaluation({ job, at: time(7) });
+    const other = (await value.repository.claimEvaluation({ workerId: "other", at: time(7), leaseUntil: time(30) }))!;
+    expect(other.messageId).toBe("m1");
+    expect(await value.repository.commitEvaluation({ job: other, context: { ...first.context, triggerMessageId: "m1" },
+      assessment: pdSkipAssessment(), draft: null, at: time(7) })).toBe("skipped");
+    const last = (await value.repository.claimEvaluation({ workerId: "last", at: time(8), leaseUntil: time(30) }))!;
+    expect(await value.repository.commitEvaluation({ job: last, context: first.context, assessment: pdAssessment(), draft: advice(), at: time(8) })).toBe("prepared");
+    expect((await value.repository.getStatus()).deadLetter).toBe(0);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_evaluations WHERE job_id=$1", [first.job.id])).rows).toHaveLength(1);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_jobs")).rows).toHaveLength(2);
+  });
+
+  test.each(["policy", "changed", "deleted"])("context-null requeue cancels %s trigger identity", async invalid => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    if (invalid === "policy") await value.repository.setPolicy({ policy: { ...first.context.policy, version: 2 }, expectedVersion: 1, at });
+    if (invalid === "changed") await value.pool.query("UPDATE conversation_messages SET text='corrected' WHERE provider_message_id='m2'");
+    if (invalid === "deleted") await value.pool.query("DELETE FROM conversation_messages WHERE provider_message_id='m2'");
+    await value.repository.requeueEvaluation({ job: first.job, at });
+    expect((await value.pool.query("SELECT state FROM proactive_discussion_jobs WHERE id=$1", [first.job.id])).rows[0].state).toBe("cancelled");
+    expect(await value.repository.claimEvaluation({ workerId: "next", at: time(1), leaseUntil: time(30) })).toBeNull();
   });
 
   test("policy update uses CAS, starts absent and rejects unauthorized groups and invalid versions", async () => {
@@ -125,11 +413,12 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion Postg
 
   test("feedback registration preserves the direct actor identity and purpose without applying feedback", async () => {
     const value = await enabled();
-    await message(value);
+    await message(value, "m1", "不再跟进这件事");
+    const registerFeedback = { ...registration("m1", "不再跟进这件事"), purpose: "feedback" as const };
     const feedback = { action: "pause" as const, replyMessageId: "reply-1", actorOpenId: "test-human" };
-    expect(await value.repository.register({ ...registration(), purpose: "feedback" })).toBe("blocked");
-    expect(await value.repository.register({ ...registration(), purpose: "feedback", feedback: { ...feedback, actorOpenId: "forged" } })).toBe("blocked");
-    expect(await value.repository.register({ ...registration(), purpose: "feedback", feedback })).toBe("registered");
+    expect(await value.repository.register(registerFeedback)).toBe("blocked");
+    expect(await value.repository.register({ ...registerFeedback, feedback: { ...feedback, actorOpenId: "forged" } })).toBe("blocked");
+    expect(await value.repository.register({ ...registerFeedback, feedback })).toBe("registered");
     expect(await value.repository.claimEvaluation({ workerId: "w", at, leaseUntil: time(10) })).toMatchObject({ purpose: "feedback", feedback });
     expect((await value.repository.readState(PILOT_CHAT)).issues).toEqual([]);
   });
