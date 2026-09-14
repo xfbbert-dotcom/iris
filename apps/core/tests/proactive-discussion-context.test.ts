@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
+import { normalizeConversationMessageTextForStorage } from "../src/conversation/conversation-message-repository.js";
+import {
+  createPostgresConversationMessageRepository,
+  type Queryable,
+} from "../src/conversation/postgres-conversation-message-repository.js";
 import type {
   FeishuChatHistoryMessage,
   FeishuChatHistoryReader,
@@ -10,6 +15,8 @@ import {
   hashLocalMessageText,
 } from "../src/memory/local-message-source.js";
 import { createPdContextBuilder } from "../src/proactive-discussion/context-builder.js";
+import { createPdRegistrar } from "../src/proactive-discussion/registrar.js";
+import type { PdRepository } from "../src/proactive-discussion/repository.js";
 import {
   createPdSourceRef,
   PD_PILOT_CHAT,
@@ -150,6 +157,79 @@ describe("proactive source verification", () => {
 });
 
 describe("proactive same-group context", () => {
+  it("accepts an unchanged long live trigger registered from its stored representation", async () => {
+    const fullText = `${"A".repeat(8_500)} unchanged live tail`;
+    const createdAt = new Date("2026-09-14T10:00:01Z");
+    const queryable: Queryable = {
+      async query<T>(_sql: string, params?: unknown[]) {
+        return { rows: [{
+          id: "feishu:om-trigger",
+          provider: "feishu",
+          provider_message_id: "om-trigger",
+          chat_id: PD_PILOT_CHAT,
+          sender_id: "ou-member",
+          sender_open_id: "ou-member",
+          sender_union_id: null,
+          sender_user_id: null,
+          message_type: "text",
+          text: params?.[9],
+          sent_at: new Date("2026-09-14T10:00:00Z"),
+          raw_event_idempotency_key: "raw-event:long",
+          created_at: createdAt,
+          mentions: [],
+        }] as T[] };
+      },
+    };
+    const messages = createPostgresConversationMessageRepository({ queryable });
+    const persisted = await messages.upsertMessage({
+      provider: "feishu",
+      providerMessageId: "om-trigger",
+      chatId: PD_PILOT_CHAT,
+      senderId: "ou-member",
+      senderOpenId: "ou-member",
+      messageType: "text",
+      text: fullText,
+      sentAt: new Date("2026-09-14T10:00:00Z"),
+      rawEventIdempotencyKey: "raw-event:long",
+    });
+    expect(persisted.text).toContain("[truncated]");
+
+    let registration: Parameters<PdRepository["register"]>[0] | undefined;
+    const register: PdRepository["register"] = async (input) => {
+      registration = input;
+      return "registered";
+    };
+    const registrar = createPdRegistrar({
+      repository: { register, readState: stableRepository().readState },
+      botOpenId: "ou-iris",
+      now: () => createdAt,
+    });
+    await registrar.registerMessage({
+      conversationMessage: persisted,
+      senderType: "user",
+      mentionedIris: false,
+    });
+    expect(registration).toBeDefined();
+    if (registration === undefined) throw new Error("expected message registration");
+    const build = (liveText: string) => createPdContextBuilder({
+      repository: stableRepository(),
+      reader: {
+        listRecentMessages: async () => [historyMessage("om-trigger", liveText)],
+        readMessagesByIds: async () => [],
+      },
+      documents: () => emptyDocuments(),
+      sourceVerifier: { verify: async () => true },
+      canReadGroup: () => true,
+    });
+
+    const context = await build(fullText).load(job(registration.contentHash));
+
+    expect(context).not.toBeNull();
+    expect(context?.sources).toContainEqual(messageSource("om-trigger", fullText));
+    await expect(build(`changed ${fullText}`).load(job(registration.contentHash)))
+      .resolves.toBeNull();
+  });
+
   it("checks proactive authorization before reading live group or document content", async () => {
     const listRecentMessages = vi.fn(async () => [historyMessage("om-trigger", "must not be read")]);
     const buildContext = vi.fn(async () => ({
@@ -307,7 +387,8 @@ describe("proactive same-group context", () => {
       canReadGroup: () => true,
     });
 
-    const context = await builder.load(job(hashLocalMessageText(messages[0]!.text)));
+    const storedTriggerText = normalizeConversationMessageTextForStorage(messages[0]!.text)!;
+    const context = await builder.load(job(hashLocalMessageText(storedTriggerText)));
     const messageRefs = new Set(messages.map(({ messageId, text }) => messageSource(messageId, text).ref));
     const messageItems = context!.items.filter(({ ref }) => messageRefs.has(ref));
     const documentItems = context!.items.filter(({ ref }) => !messageRefs.has(ref));

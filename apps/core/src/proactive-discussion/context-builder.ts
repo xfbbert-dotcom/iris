@@ -1,4 +1,5 @@
 import type { RetrievedDocumentFragment } from "../documents/document-fragment-repository.js";
+import { normalizeConversationMessageTextForStorage } from "../conversation/conversation-message-repository.js";
 import type {
   FeishuChatHistoryMessage,
   FeishuChatHistoryReader,
@@ -64,7 +65,10 @@ export function createPdContextBuilder({
         if (eligible.length >= MAX_MESSAGES) eligible.pop();
         eligible.push(trigger);
       }
-      if (hashLocalMessageText(trigger.text) !== job.contentHash) return null;
+      const storedTriggerText = normalizeConversationMessageTextForStorage(trigger.text);
+      if (storedTriggerText === null || hashLocalMessageText(storedTriggerText) !== job.contentHash) {
+        return null;
+      }
 
       const messages = eligible.sort((left, right) => left.sentAt.getTime() - right.sentAt.getTime());
       const messageEntries = messages.map((message) => {

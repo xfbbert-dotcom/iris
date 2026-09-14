@@ -4,6 +4,7 @@ import type {
   ConversationMessageMention,
   ConversationMessageRepository,
 } from "./conversation-message-repository.js";
+import { normalizeConversationMessageTextForStorage } from "./conversation-message-repository.js";
 import { MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH } from "../events/raw-event-queue.js";
 
 export type Queryable = {
@@ -30,8 +31,6 @@ type ConversationMessageRow = {
 
 export const MAX_CONVERSATION_MESSAGE_ID_CHARS = 512;
 const MAX_CONVERSATION_MESSAGE_LIST_LIMIT = 100;
-const MAX_CONVERSATION_MESSAGE_TEXT_CHARS = 8000;
-const TRUNCATION_MARKER = " ... [truncated]";
 
 export function createPostgresConversationMessageRepository({
   queryable,
@@ -134,7 +133,7 @@ export function createPostgresConversationMessageRepository({
           senderUnionId,
           senderUserId,
           messageType,
-          normalizeMessageText(input.text),
+          normalizeConversationMessageTextForStorage(input.text),
           sentAt,
           rawEventIdempotencyKey,
           mentions.map((mention) => mention.key),
@@ -295,7 +294,7 @@ function mapRow(row: ConversationMessageRow): ConversationMessage {
     senderUnionId: row.sender_union_id ?? undefined,
     senderUserId: row.sender_user_id ?? undefined,
     messageType: row.message_type,
-    text: normalizeMessageText(row.text ?? undefined) ?? undefined,
+    text: normalizeConversationMessageTextForStorage(row.text ?? undefined) ?? undefined,
     ...(mentions === undefined ? {} : { mentions }),
     sentAt: row.sent_at,
     rawEventIdempotencyKey: row.raw_event_idempotency_key,
@@ -362,18 +361,6 @@ function readMentions(value: unknown): ConversationMessageMention[] | undefined 
     }
     return [{ key: mention.key, openId: mention.openId }];
   });
-}
-
-function normalizeMessageText(value: string | undefined): string | null {
-  if (value === undefined) {
-    return null;
-  }
-  if (value.length <= MAX_CONVERSATION_MESSAGE_TEXT_CHARS) {
-    return value;
-  }
-
-  const prefixChars = MAX_CONVERSATION_MESSAGE_TEXT_CHARS - TRUNCATION_MARKER.length;
-  return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
 function readOne<T>(rows: T[], errorMessage: string): T {
