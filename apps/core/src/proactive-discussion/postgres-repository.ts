@@ -18,7 +18,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
       date(at);
       return transaction(dataSource, async client => {
         const authorized = await lockPolicyRuntime(client, job);
-        const trigger = await lockMessages(client, job, context.sources);
+        const { trigger, sourcesValid } = await lockMessages(client, job, context.sources);
         const group = (await client.query(`SELECT context_version,catalog_version FROM proactive_discussion_groups
           WHERE chat_id=$1 FOR UPDATE`, [job.chatId])).rows[0];
         const issues = (await client.query(`${issueSelect} WHERE i.chat_id=$1 ORDER BY i.id LIMIT 101 FOR UPDATE OF i`, [job.chatId])).rows.map(decodeIssue);
@@ -38,8 +38,9 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           || context.policy.chatId !== job.chatId || !context.policy.enabled || context.policy.version !== job.policyVersion) {
           await finish("blocked", "policy_or_trigger_invalid"); return "blocked";
         }
-        if (!group || Number(group.context_version) !== context.contextVersion || Number(group.catalog_version) !== context.catalogVersion) {
+        if (!sourcesValid || !group || Number(group.context_version) !== context.contextVersion || Number(group.catalog_version) !== context.catalogVersion) {
           await requeueOwnedJob(client, job, at, JSON.stringify({ reason: "context_stale",
+            sourceProtectionValid: sourcesValid,
             expectedContext: context.contextVersion, currentContext: group?.context_version,
             expectedCatalog: context.catalogVersion, currentCatalog: group?.catalog_version }));
           return "stale";
@@ -77,6 +78,10 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           }
           await finish("skipped", assessment.reason); return "skipped";
         }
+        if (issue && !await hasUnconsumedIssueEvidence(client, issue,
+          context.sources.filter(source => assessment.materialChange.evidenceRefs.includes(source.ref)))) {
+          await finish("blocked", "issue_evidence_already_consumed"); return "blocked";
+        }
         const id = issue?.id ?? randomUUID();
         const version = (issue?.version ?? 0) + 1;
         const basis = (issue?.basisVersion ?? 0) + 1;
@@ -110,7 +115,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
       date(at);
       await transaction(dataSource, async client => {
         const authorized = await lockPolicyRuntime(client, job);
-        const trigger = await lockMessages(client, job, []);
+        const { trigger } = await lockMessages(client, job, []);
         if (!await lockOwnedJob(client, job, at)) return;
         if (!authorized || !trigger) { await settleJob(client, job, "cancelled", "policy_or_trigger_invalid", at); return; }
         await requeueOwnedJob(client, job, at, "context_unavailable");
@@ -120,7 +125,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
       date(at); safeInteger(expectedIssueVersion, 1);
       return transaction(dataSource, async client => {
         const authorized = await lockPolicyRuntime(client, job);
-        const trigger = await lockMessages(client, job, []);
+        const { trigger } = await lockMessages(client, job, []);
         await client.query("SELECT chat_id FROM proactive_discussion_groups WHERE chat_id=$1 FOR UPDATE", [job.chatId]);
         const issueRow = (await client.query(`${issueSelect} WHERE i.id=$1 AND i.chat_id=$2 FOR UPDATE OF i`, [issueId, job.chatId])).rows[0];
         const receipt = (await client.query(`SELECT id FROM proactive_discussion_deliveries
@@ -307,6 +312,22 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
 const issueSelect = `SELECT i.*, EXISTS (SELECT 1 FROM proactive_discussion_deliveries d
   WHERE d.issue_id=i.id AND d.state IN ('sending','outcome_unknown')) AS unknown_delivery FROM proactive_discussion_issues i`;
 
+async function hasUnconsumedIssueEvidence(client: TransactionClient, issue: PdIssue, candidates: PdSource[]): Promise<boolean> {
+  // Current basis prose stays bounded to its actual premises. Novelty also checks
+  // immutable earlier prepared assessments, including cancelled/resolved bases.
+  // Merely exposing a source to the model did not consume it as issue evidence.
+  const result = await client.query(`SELECT EXISTS (
+    SELECT 1 FROM jsonb_array_elements($3::jsonb) candidate WHERE NOT EXISTS (
+      SELECT 1 FROM proactive_discussion_deliveries d
+      JOIN proactive_discussion_evaluations e ON e.id=d.evaluation_id AND e.chat_id=d.chat_id
+      JOIN proactive_discussion_sources s ON s.evaluation_id=e.id
+      WHERE d.chat_id=$1 AND d.issue_id=$2 AND e.outcome='prepared'
+        AND (e.assessment->'evidenceRefs') ? s.ref
+        AND s.kind=candidate->>'kind' AND s.binding=candidate->'binding'
+    )) AS has_unconsumed`, [issue.chatId, issue.id, JSON.stringify(candidates)]);
+  return result.rows[0]?.has_unconsumed === true;
+}
+
 async function lockPolicyRuntime(client: TransactionClient, job: PdJob): Promise<boolean> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`iris:proactive-discussion:policy:${job.chatId}`]);
   const policy = (await client.query(`SELECT version,enabled FROM proactive_discussion_policies WHERE chat_id=$1 FOR SHARE`, [job.chatId])).rows[0];
@@ -319,20 +340,34 @@ async function lockPolicyRuntime(client: TransactionClient, job: PdJob): Promise
     && runtime.capabilities.readGroupContext && runtime.capabilities.proactiveSpeech;
 }
 
-async function lockMessages(client: TransactionClient, job: PdJob, sources: PdSource[]): Promise<Row | null> {
+async function lockMessages(client: TransactionClient, job: PdJob, sources: PdSource[]): Promise<{
+  trigger: Row | null; sourcesValid: boolean;
+}> {
   const bindings = sources.filter(source => source.kind === "message");
-  if (bindings.some(source => source.binding.chatId !== job.chatId)) return null;
   const ids = [...new Set([job.messageId, ...bindings.map(source => source.binding.messageId)])].sort();
   for (const id of ids) await lockConversationMessageIngestScope({ queryable: client, conversationMessageId: `feishu:${id}` });
-  const rows = (await client.query(`SELECT m.provider_message_id,m.text,m.sender_open_id FROM conversation_messages m
-    WHERE m.id='feishu:' || m.provider_message_id AND m.provider='feishu' AND m.chat_id=$1 AND m.provider_message_id=ANY($2::text[])
-      AND NOT EXISTS(SELECT 1 FROM conversation_message_deletion_tombstones t WHERE t.provider='feishu' AND t.provider_message_id=m.provider_message_id)`,
-  [job.chatId, ids])).rows;
-  if (rows.length !== ids.length) return null;
-  const trigger = rows.find(row => row.provider_message_id === job.messageId);
-  // Event representation is bounded; full live source hashes are checked by the
-  // context builder outside this transaction, never against truncated text.
-  return trigger && typeof trigger.text === "string" && hashLocalMessageText(trigger.text) === job.contentHash ? trigger : null;
+  const rows = (await client.query(`SELECT m.id,m.provider,m.provider_message_id,m.chat_id,m.text,m.sender_open_id
+    FROM conversation_messages m WHERE (m.provider='feishu' AND m.provider_message_id=ANY($1::text[]))
+      OR m.id=ANY($2::text[])`, [ids, ids.map(id => `feishu:${id}`)])).rows;
+  const deleted = new Set((await client.query(`SELECT provider_message_id FROM conversation_message_deletion_tombstones
+    WHERE provider='feishu' AND provider_message_id=ANY($1::text[])`, [ids])).rows.map(row => row.provider_message_id));
+  const rowsFor = (id: string) => rows.filter(row => row.provider_message_id === id || row.id === `feishu:${id}`);
+  const validIdentity = (row: Row, id: string) => row.id === `feishu:${id}` && row.provider === "feishu"
+    && row.provider_message_id === id && row.chat_id === job.chatId;
+  const triggerRows = rowsFor(job.messageId);
+  const trigger = triggerRows.length === 1 ? triggerRows[0] : undefined;
+  // Only the registered trigger requires a durable event row. Other sources can
+  // be freshly verified history-only messages; never backfill them as events.
+  // All IDs share deletion protection, and any existing row must still match.
+  // Local edits/deletes also invalidate the group context CAS. Full live hashes
+  // remain the context builder's transaction-external contract (stored text may
+  // be truncated and must not be compared with a full live source hash).
+  return {
+    trigger: trigger && validIdentity(trigger, job.messageId) && !deleted.has(job.messageId)
+      && typeof trigger.text === "string" && hashLocalMessageText(trigger.text) === job.contentHash ? trigger : null,
+    sourcesValid: bindings.every(source => source.binding.chatId === job.chatId && !deleted.has(source.binding.messageId)
+      && rowsFor(source.binding.messageId).every(row => validIdentity(row, source.binding.messageId))),
+  };
 }
 
 async function lockOwnedJob(client: TransactionClient, job: PdJob, at: Date): Promise<Row | null> {

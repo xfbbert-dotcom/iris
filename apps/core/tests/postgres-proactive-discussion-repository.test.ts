@@ -4,6 +4,8 @@ import { PILOT_CHAT, pdAssessment, pdContext, pdSkipAssessment } from "./fixture
 import { hashLocalMessageText } from "../src/memory/local-message-source.js";
 import { createPdSourceRef } from "../src/proactive-discussion/contracts.js";
 import { createPostgresConversationMessageReplayGuard } from "../src/conversation/conversation-message-replay-guard.js";
+import { createPdContextBuilder } from "../src/proactive-discussion/context-builder.js";
+import { createPdSourceVerifier } from "../src/proactive-discussion/source-verifier.js";
 
 const at = new Date("2026-09-14T00:00:00Z");
 const time = (seconds: number) => new Date(at.getTime() + seconds * 1000);
@@ -122,6 +124,91 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion Postg
     expect(await value.repository.commitEvaluation({ ...next, assessment, draft: advice(assessment), at })).toBe("blocked");
     expect((await value.repository.readState(PILOT_CHAT)).issues[0]!.basisVersion).toBe(1);
     expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows).toHaveLength(1);
+  });
+
+  test.each([false, true])("consumed issue evidence stays consumed across later bases, resolution cycle=%s", async resolve => {
+    const value = await evaluationSetup();
+    await message(value, "c", "增加 20 万强制设备成本");
+    const binding = { chatId: PILOT_CHAT, messageId: "c", contentHash: hashLocalMessageText("增加 20 万强制设备成本") };
+    const source = { kind: "message" as const, binding, ref: createPdSourceRef({ kind: "message", binding }) };
+    const first = await evaluation(value);
+    // Exposed context is not itself consumed issue evidence: C is uncited here.
+    first.context.sources.push(source);
+    first.context.items.push({ ref: source.ref, text: "增加 20 万强制设备成本" });
+    expect(await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at })).toBe("prepared");
+    const issueId = (await value.repository.readState(PILOT_CHAT)).issues[0]!.id;
+    if (resolve) {
+      const resolution = await evaluation(value, "m1", "预算只有 10 万");
+      expect(await value.repository.commitEvaluation({ ...resolution, assessment: { ...pdSkipAssessment("resolved"),
+        issueRef: { kind: "existing", id: issueId } }, draft: null, at })).toBe("skipped");
+    }
+    const next = await evaluation(value, "c", "增加 20 万强制设备成本");
+    next.context.sources.push(source);
+    next.context.items.push({ ref: source.ref, text: "增加 20 万强制设备成本" });
+    const changed = { ...pdAssessment(), issueRef: { kind: "existing" as const, id: issueId }, evidenceRefs: [source.ref],
+      materialChange: { kind: "new_evidence" as const, explanation: "强制设备成本扩大预算缺口", evidenceRefs: [source.ref] } };
+    expect(await value.repository.commitEvaluation({ ...next, assessment: changed, draft: advice(changed), at })).toBe("prepared");
+    const before = (await value.repository.readState(PILOT_CHAT)).issues[0]!;
+    expect(before.basisVersion).toBe(2);
+    expect(before.basisSources).toEqual([source]);
+    await message(value, "repeat", "再看看原来的预算");
+    const old = await evaluation(value, "repeat", "再看看原来的预算");
+    const originalRef = pdContext().sources[0]!.ref;
+    const repeated = { ...changed, evidenceRefs: [originalRef],
+      materialChange: { kind: "new_evidence" as const, explanation: "换个说法再次强调原来预算不足", evidenceRefs: [originalRef] } };
+    expect(await value.repository.commitEvaluation({ ...old, assessment: repeated, draft: advice(repeated), at })).toBe("blocked");
+    expect((await value.repository.readState(PILOT_CHAT)).issues[0]).toEqual(before);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries WHERE issue_id=$1", [issueId])).rows).toHaveLength(2);
+  });
+
+  test("fresh verified history-only context prepares without inventing local message facts", async () => {
+    const value = await enabled();
+    await value.pool.query("UPDATE runtime_control_state SET desired_global_enabled=true");
+    await message(value, "m2", "按每人 8 万招两人，预算够");
+    const { job } = await evaluation(value);
+    const history = pdContext().sources.map((source, index) => ({
+      messageId: source.kind === "message" ? source.binding.messageId : "invalid",
+      chatId: PILOT_CHAT, senderId: "test-human", text: pdContext().items[index]!.text, sentAt: at,
+    }));
+    const reader = { listRecentMessages: async () => history,
+      readMessagesByIds: async ({ messageIds }: { messageIds: string[] }) => history.filter(item => messageIds.includes(item.messageId)) };
+    const builder = createPdContextBuilder({ repository: value.repository, reader, canReadGroup: () => true,
+      documents: () => ({ buildContext: async () => ({ promptContext: "", allowedFragments: [], deniedDocumentIds: [],
+        retrievedFragmentCount: 0, usedGroupMemories: [] }) }),
+      sourceVerifier: createPdSourceVerifier({ reader, documents: { verify: async () => [] },
+        canReadGroup: () => true, canProactivelySpeak: () => true }) });
+    const context = await builder.load(job);
+    expect(context?.sources).toEqual(pdContext().sources);
+    expect(await value.repository.commitEvaluation({ job, context: context!, assessment: pdAssessment(), draft: advice(), at })).toBe("prepared");
+    expect((await value.pool.query("SELECT provider_message_id FROM conversation_messages ORDER BY provider_message_id")).rows).toEqual([{ provider_message_id: "m2" }]);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_sources WHERE delivery_id IS NOT NULL")).rows).toHaveLength(2);
+  });
+
+  test.each(["deleted", "tombstoned", "moved", "changed"])("nontrigger source %s requeues the same valid trigger against fresh context", async change => {
+    const value = await evaluationSetup();
+    const first = await evaluation(value);
+    if (change === "deleted") await value.pool.query("DELETE FROM conversation_messages WHERE provider_message_id='m1'");
+    if (change === "changed") await value.pool.query("UPDATE conversation_messages SET text='预算已调整' WHERE provider_message_id='m1'");
+    if (change === "moved") await value.pool.query("UPDATE conversation_messages SET chat_id='other' WHERE provider_message_id='m1'");
+    if (change === "tombstoned") {
+      await value.pool.query(`INSERT INTO conversation_message_deletion_tombstones
+        (provider,provider_message_id,conversation_message_id,chat_id) VALUES('feishu','m1','feishu:m1',$1)`, [PILOT_CHAT]);
+      // Tombstones must independently protect source IDs, even if a new builder
+      // snapshot has observed the group version while remote history lags deletion.
+      first.context.contextVersion = (await value.repository.readState(PILOT_CHAT)).contextVersion;
+    }
+    expect(await value.repository.commitEvaluation({ ...first, assessment: pdAssessment(), draft: advice(), at })).toBe("stale");
+    const saved = (await value.pool.query("SELECT state,attempts,last_error FROM proactive_discussion_jobs WHERE id=$1", [first.job.id])).rows[0];
+    expect(saved).toMatchObject({ state: "pending", attempts: 0 });
+    expect(saved.last_error).toContain("context_stale");
+    const retry = (await value.repository.claimEvaluation({ workerId: "fresh", at: time(1), leaseUntil: time(30) }))!;
+    expect(retry.id).toBe(first.job.id);
+    const state = await value.repository.readState(PILOT_CHAT);
+    const context = { ...first.context, ...state, policy: state.policy!,
+      sources: [pdContext().sources[1]!], items: [pdContext().items[1]!] };
+    expect(await value.repository.commitEvaluation({ job: retry, context, assessment: pdSkipAssessment("already_handled"), draft: null, at: time(1) })).toBe("skipped");
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_jobs")).rows).toHaveLength(1);
+    expect((await value.pool.query("SELECT * FROM proactive_discussion_deliveries")).rows).toHaveLength(0);
   });
 
   test("resolved skip cancels pending drafts and only materially new premises can reopen", async () => {
