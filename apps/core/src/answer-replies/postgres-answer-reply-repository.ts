@@ -7,8 +7,8 @@ import {
   KnowledgeConflictVersionConflictError,
   lockCurrentKnowledgeConflictCandidateForAnswerSend,
 } from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
-import { acquireManagedKnowledgeSourceLocks } from
-  "../documents/managed-knowledge-source-lock.js";
+import { lockAnswerDocumentSources, lockCurrentSourceGrantBindings, requireConsistentSourceGrantBindings,
+  type AnswerDocumentSourceLockBinding } from "./answer-document-source-locks.js";
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import {
   createAnswerReplyEventId,
@@ -223,7 +223,7 @@ export function createPostgresAnswerReplyRepository(input: {
         );
         await lockCurrentSourceGrantBindings(
           client,
-          normalized.sourceTraces,
+          normalized.sourceTraces.map(projectDocumentLockBinding),
           normalized.chatId,
         );
         const lockedCandidate = normalized.knowledgeConflictCandidateId === undefined
@@ -384,12 +384,8 @@ export function createPostgresAnswerReplyRepository(input: {
         await lockSharedChatSources(client, chatSources, initialDelivery.chatId, [initialDelivery.incomingMessageId]);
         await acquireAdvisoryLock(client, normalized.deliveryId);
         const prelockedSources = await loadSources(client, normalized.deliveryId);
-        await acquireManagedKnowledgeSourceLocks(
-          client,
-          prelockedSources.map(({ documentSourceId }) => documentSourceId),
-        );
-        await lockManagedSourceFreshness(client, prelockedSources);
-        await lockCurrentSourceGrantBindings(client, prelockedSources);
+        await lockAnswerDocumentSources({ client,
+          sources: prelockedSources.map(projectDocumentLockBinding), chatId: initialDelivery.chatId });
         const binding = await loadKnowledgeConflictBinding(client, normalized.deliveryId);
         const lockedCandidate = binding === undefined
           ? undefined
@@ -795,162 +791,6 @@ async function requireCurrentAnswerCandidate(
   }
 }
 
-type SourceGrantBinding = {
-  grantId: string;
-  version: number;
-  documentSourceId: string;
-  grantorGroupId: string;
-  granteeGroupId: string;
-};
-
-type ManagedSourceStateRow = {
-  linked_document_source_id: unknown;
-  state: unknown;
-  current_reconciled_snapshot_id: unknown;
-};
-
-async function lockManagedSourceFreshness(
-  client: AnswerReplyTransactionClient,
-  sources: readonly AnswerReplySourceTraceInput[],
-): Promise<void> {
-  const documentSourceIds = [...new Set(
-    sources.map(({ documentSourceId }) => documentSourceId),
-  )].sort();
-  if (documentSourceIds.length === 0) return;
-
-  const result = await client.query<ManagedSourceStateRow>(
-    `SELECT linked_document_source_id, state, current_reconciled_snapshot_id
-     FROM managed_knowledge_pages
-     WHERE linked_document_source_id = ANY($1::text[])
-     ORDER BY linked_document_source_id ASC
-     FOR SHARE`,
-    [documentSourceIds],
-  );
-  const requested = new Set(documentSourceIds);
-  const snapshotsBySource = new Map<string, Set<string>>();
-  for (const source of sources) {
-    const snapshotIds = snapshotsBySource.get(source.documentSourceId) ?? new Set<string>();
-    snapshotIds.add(source.documentSnapshotId);
-    snapshotsBySource.set(source.documentSourceId, snapshotIds);
-  }
-  const seen = new Set<string>();
-  for (const row of result.rows) {
-    if (
-      typeof row.linked_document_source_id !== "string"
-      || !requested.has(row.linked_document_source_id)
-      || seen.has(row.linked_document_source_id)
-      || row.state !== "active"
-      || snapshotsBySource.get(row.linked_document_source_id)?.size !== 1
-      || row.current_reconciled_snapshot_id
-        !== [...snapshotsBySource.get(row.linked_document_source_id)!][0]
-    ) {
-      throw new AnswerReplyGrantStaleError();
-    }
-    seen.add(row.linked_document_source_id);
-  }
-}
-
-async function lockCurrentSourceGrantBindings(
-  client: AnswerReplyTransactionClient,
-  sources: readonly AnswerReplySourceTraceInput[],
-  expectedGranteeGroupId?: string,
-): Promise<void> {
-  const bindings = collectSourceGrantBindings(sources);
-  if (
-    expectedGranteeGroupId !== undefined &&
-    bindings.some((binding) => binding.granteeGroupId !== expectedGranteeGroupId)
-  ) {
-    throw new AnswerReplyGrantStaleError();
-  }
-
-  const documentSourceIds = [...new Set(
-    bindings.map(({ documentSourceId }) => documentSourceId),
-  )].sort();
-  for (const documentSourceId of documentSourceIds) {
-    const sourceLock = await client.query<{ id: string }>(
-      `SELECT id FROM document_sources WHERE id = $1 FOR KEY SHARE`,
-      [documentSourceId],
-    );
-    if (sourceLock.rows.length !== 1) throw new AnswerReplyGrantStaleError();
-  }
-
-  for (const binding of [...bindings].sort((left, right) =>
-    left.grantId.localeCompare(right.grantId))) {
-    const result = await client.query<{ id: string }>(
-      `SELECT group_grant.id
-       FROM document_source_group_grants group_grant
-       JOIN document_sources source ON source.id = group_grant.document_source_id
-       WHERE group_grant.id = $1
-         AND group_grant.version = $2
-         AND group_grant.document_source_id = $3
-         AND group_grant.grantor_group_id = $4
-         AND group_grant.grantee_group_id = $5
-         AND group_grant.state = 'active'
-         AND source.source_type = 'group_visible_document'
-         AND (
-           source.origin_group_id = group_grant.grantor_group_id
-           OR EXISTS (
-             SELECT 1 FROM document_source_evidence evidence
-             WHERE evidence.document_source_id = source.id
-               AND evidence.kind = 'group_message'
-               AND evidence.group_id = group_grant.grantor_group_id
-           )
-         )
-       FOR UPDATE OF group_grant`,
-      [
-        binding.grantId,
-        binding.version,
-        binding.documentSourceId,
-        binding.grantorGroupId,
-        binding.granteeGroupId,
-      ],
-    );
-    if (result.rows.length !== 1) throw new AnswerReplyGrantStaleError();
-  }
-}
-
-function collectSourceGrantBindings(
-  sources: readonly AnswerReplySourceTraceInput[],
-): SourceGrantBinding[] {
-  requireConsistentSourceGrantBindings(sources);
-  const byGrantId = new Map<string, SourceGrantBinding>();
-  for (const source of sources) {
-    if (source.crossGroupGrantId === undefined) continue;
-    const binding: SourceGrantBinding = {
-      grantId: source.crossGroupGrantId,
-      version: source.crossGroupGrantVersion!,
-      documentSourceId: source.documentSourceId,
-      grantorGroupId: source.crossGroupGrantorGroupId!,
-      granteeGroupId: source.crossGroupGranteeGroupId!,
-    };
-    const existing = byGrantId.get(binding.grantId);
-    if (existing !== undefined && sourceGrantSignature(existing) !== sourceGrantSignature(binding)) {
-      throw new AnswerReplyGrantStaleError();
-    }
-    byGrantId.set(binding.grantId, binding);
-  }
-  return [...byGrantId.values()];
-}
-
-function requireConsistentSourceGrantBindings(
-  sources: readonly AnswerReplySourceTraceInput[],
-): void {
-  const byDocumentSourceId = new Map<string, string>();
-  for (const source of sources) {
-    const signature = JSON.stringify([
-      source.crossGroupGrantId,
-      source.crossGroupGrantVersion,
-      source.crossGroupGrantorGroupId,
-      source.crossGroupGranteeGroupId,
-    ]);
-    const existing = byDocumentSourceId.get(source.documentSourceId);
-    if (existing !== undefined && existing !== signature) {
-      throw new Error("sourceTrace cross-group grant is inconsistent");
-    }
-    byDocumentSourceId.set(source.documentSourceId, signature);
-  }
-}
-
 function requireSameSourceGrantBindings(
   left: readonly AnswerReplySourceTraceInput[],
   right: readonly AnswerReplySourceTraceInput[],
@@ -978,15 +818,6 @@ function sourceGrantTraceSignature(source: AnswerReplySourceTraceInput): string 
     source.crossGroupGrantVersion,
     source.crossGroupGrantorGroupId,
     source.crossGroupGranteeGroupId,
-  ]);
-}
-
-function sourceGrantSignature(binding: SourceGrantBinding): string {
-  return JSON.stringify([
-    binding.version,
-    binding.documentSourceId,
-    binding.grantorGroupId,
-    binding.granteeGroupId,
   ]);
 }
 
@@ -1848,4 +1679,15 @@ function isContentFreeDomainError(error: unknown): boolean {
     || error instanceof AnswerReplyGrantStaleError
     || error instanceof AnswerReplyTransitionError
     || error instanceof AnswerReplyNotFoundError;
+}
+
+
+function projectDocumentLockBinding(source: AnswerReplySourceTraceInput): AnswerDocumentSourceLockBinding {
+  return {
+    documentSourceId: source.documentSourceId, documentSnapshotId: source.documentSnapshotId,
+    ...(source.crossGroupGrantId === undefined ? {} : { crossGroupGrantId: source.crossGroupGrantId }),
+    ...(source.crossGroupGrantVersion === undefined ? {} : { crossGroupGrantVersion: source.crossGroupGrantVersion }),
+    ...(source.crossGroupGrantorGroupId === undefined ? {} : { crossGroupGrantorGroupId: source.crossGroupGrantorGroupId }),
+    ...(source.crossGroupGranteeGroupId === undefined ? {} : { crossGroupGranteeGroupId: source.crossGroupGranteeGroupId }),
+  };
 }

@@ -22,8 +22,8 @@ export interface PdRepository {
     actorOpenId: string; verifiedMessage: LocalMessageSourceBinding; at: Date;
   }): Promise<"applied" | "duplicate" | "blocked">;
   findIssueByReply(input: { chatId: string; replyMessageId: string }): Promise<PdIssue | null>;
-  claimDelivery(input: { workerId: string; at: Date; leaseUntil: Date }): Promise<PdDelivery | null>;
-  beginSend(input: { delivery: PdDelivery; checkedContextVersion: number; at: Date }): Promise<"sending" | "stale" | "blocked">;
+  claimDelivery(input: { workerId: string; at: Date; leaseUntil: Date }): Promise<PdClaimedDelivery | null>;
+  beginSend(input: { delivery: PdClaimedDelivery; checkedContextVersion: number; at: Date }): Promise<"sending" | "stale" | "blocked">;
   cancelDelivery(input: { delivery: PdDelivery; reason: string; at: Date }): Promise<void>;
   finishSend(input: {
     delivery: PdDelivery; outcome: "sent" | "outcome_unknown";
@@ -35,6 +35,9 @@ export interface PdRepository {
   }): Promise<"applied" | "conflict" | "blocked">;
   getStatus(): Promise<PdStatus>;
 }
+
+// Claim-local runtime proof, never fabricated for an ordinary read-only DTO.
+export type PdClaimedDelivery = PdDelivery & { checkedRuntimeRevision: number };
 
 // Evaluation/feedback and send transitions are supplied by later implementation
 // tasks. The foundation factory never advertises methods it does not implement.

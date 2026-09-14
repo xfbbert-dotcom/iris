@@ -1,19 +1,124 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { lockAnswerDocumentSources, type AnswerDocumentSourceLockBinding } from "../answer-replies/answer-document-source-locks.js";
+import { AnswerReplyGrantStaleError } from "../answer-replies/answer-reply-repository.js";
+import { acquireManagedKnowledgeSourceLocks } from "../documents/managed-knowledge-source-lock.js";
 import { decodeDurableRuntimeControlSnapshot } from "../admin/runtime-control-state-repository.js";
 import { lockConversationMessageIngestScope } from "../conversation/conversation-message-replay-guard.js";
 import type { PostgresConversationStateDataSource, TransactionClient } from "../conversation-state/postgres-conversation-state-repository.js";
 import { hashLocalMessageText } from "../memory/local-message-source.js";
-import { createPdSourceRef, PD_PILOT_CHAT, type PdIssue, type PdJob, type PdPolicy, type PdSource } from "./contracts.js";
+import { createPdSourceRef, PD_PILOT_CHAT, type PdDelivery, type PdIssue, type PdJob, type PdPolicy, type PdSource } from "./contracts.js";
 import { validatePdAssessment } from "./model.js";
 import { parsePdFeedback, removePdFeedbackMention } from "./feedback.js";
-import { PdCatalogCapacityError, type PdEvaluationRepository } from "./repository.js";
+import { PdCatalogCapacityError, type PdRepository } from "./repository.js";
 
 type Row = Record<string, unknown>;
 
 export function createPostgresProactiveDiscussionRepository({ dataSource }: {
   dataSource: PostgresConversationStateDataSource;
-}): PdEvaluationRepository {
+}): PdRepository {
   return {
+    async claimDelivery({ workerId, at, leaseUntil }) {
+      identifier(workerId, 256); date(at); date(leaseUntil);
+      if (leaseUntil <= at) throw new Error("lease must end after claim time");
+      return transaction(dataSource, async client => {
+        // Only the delivery suffix is locked here. Recovery never retries a send,
+        // and reads its runtime proof without waiting for an upstream row lock.
+        await client.query(`UPDATE proactive_discussion_deliveries SET state='outcome_unknown',version=version+1,
+          last_error='send_lease_expired',updated_at=$1 WHERE id IN
+          (SELECT id FROM proactive_discussion_deliveries WHERE state='sending' AND lease_until<=$1
+            ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED)`, [at]);
+        const row = (await client.query(`SELECT * FROM proactive_discussion_deliveries
+          WHERE state='prepared' AND attempted_at IS NULL AND (lease_until IS NULL OR lease_until<=$1)
+          ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`, [at])).rows[0];
+        if (!row) return null;
+        const runtime = await readRuntime(client, false);
+        if (!runtime) return null;
+        const claimed = (await client.query(`UPDATE proactive_discussion_deliveries SET lease_token=$2,
+          worker_id=$3,lease_until=$4,version=version+1,updated_at=$5 WHERE id=$1 RETURNING *`,
+        [row.id, randomUUID(), workerId, leaseUntil, at])).rows[0]!;
+        return { ...decodeDelivery(claimed, await deliverySources(client, String(row.id))), checkedRuntimeRevision: runtime.revision };
+      });
+    },
+    async beginSend({ delivery, checkedContextVersion, at }) {
+      date(at);
+      return transaction(dataSource, async client => {
+        const initial = (await client.query("SELECT * FROM proactive_discussion_deliveries WHERE id=$1", [delivery.id])).rows[0];
+        if (!initial) return "stale";
+        const sources = await deliverySources(client, delivery.id);
+        const saved = decodeDelivery(initial, sources);
+        const evaluationJob = (await client.query(`SELECT j.* FROM proactive_discussion_jobs j
+          JOIN proactive_discussion_evaluations e ON e.job_id=j.id WHERE e.id=$1`, [initial.evaluation_id])).rows[0]!;
+        const job = { chatId: saved.chatId, policyVersion: saved.policyVersion,
+          messageId: saved.triggerMessageId, contentHash: String(evaluationJob.content_hash) };
+        const authorized = await lockPolicyRuntime(client, job, delivery.checkedRuntimeRevision);
+        const messages = await lockMessages(client, job, sources);
+        const documentsValid = await lockDeliveryDocuments(client, sources, saved.chatId);
+        const group = (await client.query("SELECT context_version FROM proactive_discussion_groups WHERE chat_id=$1 FOR UPDATE", [saved.chatId])).rows[0];
+        const issue = (await client.query(`${issueSelect} WHERE i.id=$1 FOR UPDATE OF i`, [saved.issueId])).rows[0];
+        const row = (await client.query("SELECT * FROM proactive_discussion_deliveries WHERE id=$1 FOR UPDATE", [saved.id])).rows[0]!;
+        if (row.state !== "prepared" || row.attempted_at !== null || row.lease_token !== delivery.leaseToken
+          || !row.lease_until || new Date(row.lease_until as string) <= at
+          || !sameDelivery(delivery, decodeDelivery(row, sources))) return "stale";
+        const blocked = !authorized || !documentsValid || !issue || issue.state === "user_paused" || issue.state === "resolved"
+          || issue.has_unknown_delivery === true || issue.unknown_delivery === true;
+        const stale = !messages.trigger || !messages.sourcesValid || !group
+          || Number(group.context_version) !== checkedContextVersion || checkedContextVersion !== saved.contextVersion
+          || Number(issue?.version) !== saved.issueVersion || Number(issue?.basis_version) !== saved.basisVersion;
+        if (blocked || stale) {
+          await cancelOwnedDelivery(client, delivery, blocked ? "send_gate_blocked" : "context_stale", at, stale && !blocked);
+          return blocked ? "blocked" : "stale";
+        }
+        await client.query(`UPDATE proactive_discussion_deliveries SET state='sending',attempted_at=$2,
+          version=version+1,updated_at=$2 WHERE id=$1`, [delivery.id, at]);
+        return "sending";
+      });
+    },
+    async cancelDelivery({ delivery, reason, at }) {
+      date(at);
+      await transaction(dataSource, async client => {
+        await lockDeliveryParents(client, delivery.id);
+        await cancelOwnedDelivery(client, delivery, String(reason).slice(0, 2000), at, reason === "context_stale");
+      });
+    },
+    async finishSend({ delivery, outcome, replyMessageId, reason, at }) {
+      date(at);
+      if (outcome === "sent") identifier(replyMessageId, 505);
+      await transaction(dataSource, async client => {
+        await lockDeliveryParents(client, delivery.id);
+        const changed = (await client.query(`UPDATE proactive_discussion_deliveries SET state=$3,
+          reply_message_id=$4,sent_at=$5,last_error=$6,version=version+1,updated_at=$7
+          WHERE id=$1 AND lease_token=$2 AND state IN ('sending','outcome_unknown') RETURNING issue_id,chat_id`,
+        [delivery.id, delivery.leaseToken, outcome, outcome === "sent" ? replyMessageId : null,
+          outcome === "sent" ? at : null, reason?.slice(0, 2000) ?? null, at])).rows[0];
+        if (!changed) throw new Error("proactive send receipt ownership lost");
+        if (outcome === "sent") {
+          await client.query(`UPDATE proactive_discussion_issues SET state='surfaced',version=version+1,updated_at=$2
+            WHERE id=$1 AND state='observing'`, [changed.issue_id, at]);
+          await advanceCatalog(client, String(changed.chat_id), at);
+        }
+      });
+    },
+    // Trusted internal boundary only. Task 7 authenticates the operator and freshly
+    // validates receipt chat/sender/body/reply target before calling this method.
+    async reconcile({ deliveryId, expectedVersion, operatorId, outcome, replyMessageId, evidence, at }) {
+      identifier(operatorId, 256); identifier(evidence, 4000); safeInteger(expectedVersion, 1); date(at);
+      if (outcome === "sent") identifier(replyMessageId, 505);
+      if (outcome !== "sent" && outcome !== "not_sent") return "blocked";
+      return transaction(dataSource, async client => {
+        await lockDeliveryParents(client, deliveryId);
+        const row = (await client.query("SELECT * FROM proactive_discussion_deliveries WHERE id=$1 FOR UPDATE", [deliveryId])).rows[0];
+        if (!row || Number(row.version) !== expectedVersion) return "conflict";
+        if (row.state !== "outcome_unknown") return "blocked";
+        await client.query(`UPDATE proactive_discussion_deliveries SET state=$2,reply_message_id=$3,sent_at=$4,
+          lease_token=NULL,lease_until=NULL,worker_id=NULL,last_error=$5,version=version+1,updated_at=$6 WHERE id=$1`,
+        [deliveryId, outcome === "sent" ? "sent" : "cancelled", outcome === "sent" ? replyMessageId : null,
+          outcome === "sent" ? at : null, JSON.stringify({ operatorId, evidence, outcome }), at]);
+        if (outcome === "sent") await client.query(`UPDATE proactive_discussion_issues SET state='surfaced',version=version+1,
+          updated_at=$2 WHERE id=$1 AND state='observing'`, [row.issue_id, at]);
+        await advanceCatalog(client, String(row.chat_id), at);
+        return "applied";
+      });
+    },
     async commitEvaluation({ job, context, assessment, draft, at }) {
       date(at);
       return transaction(dataSource, async client => {
@@ -106,7 +211,7 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           (id,chat_id,issue_id,evaluation_id,issue_version,basis_version,policy_version,context_version,trigger_message_id,text,reply_uuid,authorization_kind,created_at,updated_at)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'policy',$12,$12)`,
         [deliveryId, job.chatId, id, evaluationId, version, basis, job.policyVersion, context.contextVersion,
-          job.messageId, draft!.text, randomUUID(), at]);
+          job.messageId, draft!.text, "pd-" + createHash("sha256").update(deliveryId).digest("hex").slice(0, 40), at]);
         await appendSources(client, "delivery_id", deliveryId, context.sources);
         return "prepared";
       });
@@ -328,19 +433,25 @@ async function hasUnconsumedIssueEvidence(client: TransactionClient, issue: PdIs
   return result.rows[0]?.has_unconsumed === true;
 }
 
-async function lockPolicyRuntime(client: TransactionClient, job: PdJob): Promise<boolean> {
+async function readRuntime(client: TransactionClient, lock: boolean) {
+  const row = (await client.query(`SELECT revision,desired_global_enabled,disabled_group_ids,capabilities,updated_at,updated_by
+    FROM runtime_control_state WHERE singleton_id=1${lock ? " FOR SHARE" : ""}`)).rows[0];
+  return row ? decodeDurableRuntimeControlSnapshot(row) : null;
+}
+
+async function lockPolicyRuntime(client: TransactionClient, job: Pick<PdJob, "chatId" | "policyVersion">,
+  checkedRuntimeRevision?: number): Promise<boolean> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`iris:proactive-discussion:policy:${job.chatId}`]);
   const policy = (await client.query(`SELECT version,enabled FROM proactive_discussion_policies WHERE chat_id=$1 FOR SHARE`, [job.chatId])).rows[0];
-  const row = (await client.query(`SELECT revision,desired_global_enabled,disabled_group_ids,capabilities,updated_at,updated_by
-    FROM runtime_control_state WHERE singleton_id=1 FOR SHARE`)).rows[0];
-  if (!row) return false;
-  const runtime = decodeDurableRuntimeControlSnapshot(row);
+  const runtime = await readRuntime(client, true);
+  if (!runtime) return false;
+  if (arguments.length >= 3 && (!Number.isSafeInteger(checkedRuntimeRevision) || checkedRuntimeRevision !== runtime.revision)) return false;
   return job.chatId === PD_PILOT_CHAT && policy?.enabled === true && Number(policy.version) === job.policyVersion
     && runtime.desiredGlobalEnabled && !runtime.disabledGroupIds.includes(job.chatId)
     && runtime.capabilities.readGroupContext && runtime.capabilities.proactiveSpeech;
 }
 
-async function lockMessages(client: TransactionClient, job: PdJob, sources: PdSource[]): Promise<{
+async function lockMessages(client: TransactionClient, job: Pick<PdJob, "chatId" | "messageId" | "contentHash">, sources: PdSource[]): Promise<{
   trigger: Row | null; sourcesValid: boolean;
 }> {
   const bindings = sources.filter(source => source.kind === "message");
@@ -368,6 +479,85 @@ async function lockMessages(client: TransactionClient, job: PdJob, sources: PdSo
     sourcesValid: bindings.every(source => source.binding.chatId === job.chatId && !deleted.has(source.binding.messageId)
       && rowsFor(source.binding.messageId).every(row => validIdentity(row, source.binding.messageId))),
   };
+}
+
+async function lockDeliveryDocuments(client: TransactionClient, sources: PdSource[], chatId: string): Promise<boolean> {
+  const bindings: AnswerDocumentSourceLockBinding[] = sources.flatMap(source => source.kind !== "document" ? [] : [{
+    documentSourceId: source.binding.documentSourceId, documentSnapshotId: source.binding.documentSnapshotId,
+    ...(source.binding.crossGroupGrantId === undefined ? {} : { crossGroupGrantId: source.binding.crossGroupGrantId }),
+    ...(source.binding.crossGroupGrantVersion === undefined ? {} : { crossGroupGrantVersion: source.binding.crossGroupGrantVersion }),
+    ...(source.binding.crossGroupGrantorGroupId === undefined ? {} : { crossGroupGrantorGroupId: source.binding.crossGroupGrantorGroupId }),
+    ...(source.binding.crossGroupGranteeGroupId === undefined ? {} : { crossGroupGranteeGroupId: source.binding.crossGroupGranteeGroupId }),
+  }]);
+  if (bindings.length === 0) return true;
+  // Acquire the stronger ordinary-source lock before grants. Grant writers lock
+  // source FOR UPDATE before grant rows, so upgrading after grants can deadlock.
+  const ids = [...new Set(bindings.map(source => source.documentSourceId))].sort();
+  await acquireManagedKnowledgeSourceLocks(client, ids);
+  // FOR UPDATE also blocks the FK KEY SHARE taken by new snapshot inserts.
+  const rows = (await client.query(`SELECT * FROM document_sources WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, [ids])).rows;
+  if (rows.length !== ids.length) return false;
+  for (const binding of bindings) {
+    const row = rows.find(source => source.id === binding.documentSourceId)!;
+    if (row.permission_state !== "readable" || row.sync_state !== "synced" || row.can_use_for_answering !== true) return false;
+    if (binding.crossGroupGrantId === undefined && row.source_type === "group_visible_document"
+      && row.origin_group_id !== chatId && !(await client.query(`SELECT id FROM document_source_evidence
+        WHERE document_source_id=$1 AND kind='group_message' AND group_id=$2 LIMIT 1`, [row.id, chatId])).rows.length) return false;
+    const snapshot = (await client.query(`SELECT id FROM document_snapshots WHERE document_source_id=$1
+      AND fetch_status='succeeded' ORDER BY fetched_at DESC,id ASC LIMIT 1 FOR SHARE`, [row.id])).rows[0];
+    if (snapshot?.id !== binding.documentSnapshotId) return false;
+  }
+  try { await lockAnswerDocumentSources({ client, sources: bindings, chatId }); }
+  catch (error) { if (error instanceof AnswerReplyGrantStaleError) return false; throw error; }
+  return true;
+}
+
+async function deliverySources(client: TransactionClient, id: string): Promise<PdSource[]> {
+  return (await client.query(`SELECT kind,ref,binding FROM proactive_discussion_sources
+    WHERE delivery_id=$1 ORDER BY source_index`, [id])).rows.map(row => {
+    const source = row as PdSource;
+    if (source.ref !== createPdSourceRef(source)) throw new Error("invalid durable proactive source");
+    return source;
+  });
+}
+
+async function lockDeliveryParents(client: TransactionClient, deliveryId: string): Promise<void> {
+  const row = (await client.query("SELECT chat_id,issue_id FROM proactive_discussion_deliveries WHERE id=$1", [deliveryId])).rows[0];
+  if (!row) return;
+  await client.query("SELECT chat_id FROM proactive_discussion_groups WHERE chat_id=$1 FOR UPDATE", [row.chat_id]);
+  await client.query("SELECT id FROM proactive_discussion_issues WHERE id=$1 FOR UPDATE", [row.issue_id]);
+}
+
+async function cancelOwnedDelivery(client: TransactionClient, delivery: PdDelivery, reason: string, at: Date, requeue: boolean) {
+  const row = (await client.query(`UPDATE proactive_discussion_deliveries SET state='cancelled',version=version+1,
+    lease_token=NULL,lease_until=NULL,worker_id=NULL,last_error=$3,updated_at=$4
+    WHERE id=$1 AND lease_token=$2 AND state='prepared' AND attempted_at IS NULL RETURNING evaluation_id`,
+  [delivery.id, delivery.leaseToken, reason, at])).rows[0];
+  if (row && requeue) {
+    // Reuse the existing trigger job. Its next claim advances the attempt, so the
+    // immutable prior evaluation and consumed evidence history stay intact.
+    await client.query(`UPDATE proactive_discussion_jobs SET state='pending',version=version+1,
+      available_at=$2,last_error='delivery_context_stale',updated_at=$2 WHERE state='completed' AND id IN
+      (SELECT job_id FROM proactive_discussion_evaluations WHERE id=$1)`, [row.evaluation_id, at]);
+  }
+}
+
+function decodeDelivery(row: Row, sources: PdSource[]): PdDelivery {
+  if (!["prepared", "sending", "sent", "cancelled", "outcome_unknown"].includes(String(row.state))) throw new Error("invalid delivery state");
+  return { id: identifier(row.id, 512), chatId: identifier(row.chat_id, 512), issueId: identifier(row.issue_id, 512),
+    issueVersion: safeInteger(row.issue_version, 1), basisVersion: safeInteger(row.basis_version, 1),
+    policyVersion: safeInteger(row.policy_version, 1), contextVersion: safeInteger(row.context_version, 1),
+    triggerMessageId: identifier(row.trigger_message_id, 505), text: String(row.text), sources,
+    uuid: identifier(row.reply_uuid, 128), state: row.state as PdDelivery["state"], leaseToken: row.lease_token === null ? "" : identifier(row.lease_token, 512) };
+}
+
+function sameDelivery(left: PdDelivery, right: PdDelivery): boolean {
+  return left.id === right.id && left.chatId === right.chatId && left.issueId === right.issueId
+    && left.issueVersion === right.issueVersion && left.basisVersion === right.basisVersion
+    && left.policyVersion === right.policyVersion && left.contextVersion === right.contextVersion
+    && left.triggerMessageId === right.triggerMessageId && left.text === right.text && left.uuid === right.uuid
+    && left.sources.length === right.sources.length && left.sources.every((source, index) => source.ref === right.sources[index]?.ref
+      && source.ref === createPdSourceRef(source));
 }
 
 async function lockOwnedJob(client: TransactionClient, job: PdJob, at: Date): Promise<Row | null> {
