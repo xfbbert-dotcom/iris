@@ -22,8 +22,8 @@
 | IRIS-CORE-002 | Iris 被拉入群后持续接收群消息，即使未被 @ 也理解讨论 | 内部 MVP 已实现 | Feishu Gateway ack-first；Raw Event Queue；消息事实持久化；普通非 @ 文本异步抽取；同群证据绑定；semantic thread 的 candidate/open/resolved/reopened/merged 生命周期；显式 commitment/action 生命周期；回答时当前群检索；真实六步非 @ 消息灰度形成唯一 thread/action 且无主动发言 | 在受控日常 pilot 中观察业务语言覆盖；失败进入可重试/DLQ，不扩大到未启用群 |
 | IRIS-CORE-003 | Iris 随时间学习，用户不必重复解释业务背景 | 内部 MVP 已实现 | Postgres `group_memories`、`discussion_threads`、`action_items` 与 append-only events/evidence；置信度与候选隔离；幂等、重试、冷却、DLQ 与 projection repair；版本化纠错；当前群 bounded retrieval；真实六步灰度验证 create/promote/resolve/reopen 与 action create/complete | 先通过真实日常使用校准抽取质量；广泛跨群记忆共享仍保持关闭 |
 | IRIS-CORE-004 | 在授权后跨群和跨数据源学习 | 首个跨群文档回答闭环已实现（默认拒绝） | 精确 SHA CI（含真实 PostgreSQL 迁移/并发）通过；真实三群验收验证授权前隔离、精确授权后受权群回答、对照群隔离、撤销后立即拒绝、重新授权与幂等重放，并完成默认拒绝回滚；当前群文档、授权知识库、用户手动提交文档继续使用统一文档源和权限策略 | 跨群记忆和跨群知识草稿仍缺失；主动跨群使用、任务/知识库写入、通配授权和广泛发布仍未实现，后续必须分别设计、验收且继续默认隔离 |
-| IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 内部 MVP 已实现（默认关闭） | Phase 6A `proactive_signal_candidates`、candidate evidence/events、preview/scan/govern/dismiss/approve API、delivery outbox、bounded Feishu card renderer、dispatcher loop、双重 `canProactivelySpeak(groupId)` 门禁、发送记录、重试/永久失败/outcome_unknown 分类、状态页组件；真实 Feishu 灰度完成一次受控投递、helpful/irrelevant 反馈和精确抑制 | 日常 pilot 只允许显式 allowlist 小群和人工批准投递；继续用真实反馈校准误报率与阈值，默认不向其他群主动发言 |
-| IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 内部 MVP 已实现（默认关闭） | 主动扫描读取当前群 `discussion_threads` 与 `action_items`，生成 quiet open thread / overdue action 候选；候选具备幂等 key、版本、证据计数、去重、治理状态、delivery outbox 和不泄露原文的群卡片；真实 Feishu 灰度验证单次投递、反馈、重复抑制和暂停后的 fail-closed | 日常 pilot 中继续观察沉寂阈值与打扰频率；未经显式 allowlist、人工批准和 runtime permission 不得主动发言 |
+| IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 部分实现：旧人工提醒已验收；主动讨论判断待实现 | Phase 6A 候选、人工批准、delivery outbox、双重 runtime 门禁、真实 Feishu 单次提醒/反馈/抑制已验收；这些只证明旧时间触发链路。[2026-09-09 主动讨论设计](2026-09-09-iris-proactive-discussion-design.md)已获整体方案确认，书面设计待审阅 | 补无 @ 的实质风险/矛盾判断、理由与建议、允许合理怀疑、按问题新依据去重、发送前已纠正检查及策略授权投递；不设固定冷却阻挡新问题。代码、模型验收和生产启用均未完成 |
+| IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 旧提醒链路已实现（默认关闭）；非本轮产品目标 | 现有同群 thread/action 时间扫描、版本绑定、幂等候选、人工批准和一次真实反馈/暂停验收仍保留 | 2026-09-09 用户明确不以重复催办作为主动参与；飞书任务负责原生提醒。不扩建或启用该旧链路，也不以它替代 IRIS-CORE-005 的新验收 |
 | IRIS-CORE-007 | Iris 将讨论整理成内容，先发群里让用户确认 | 已实现 | Phase 5A Postgres 知识草稿事实层；5B-1 版本绑定群确认/修改/拒绝卡片；5B-2A `ActionProposal`、风险矩阵、目标策略、角色 grant、负责人/管理员审批卡片、实时授权、治理 API、幂等 callback 与 readiness；5B-2B 飞书 OAuth + PKCE、完整正文/哈希审阅、append-only attestation 与批准前精确门禁；真实 Feishu pilot 已覆盖群确认、请求修改、负责人/管理员批准、撤销和私聊审批卡；Admin Console 已具备知识草稿状态/列表摘要、安全请求修改/拒绝入口，以及发布/action proposal 队列治理入口 | 批量审批、复杂协作编辑和更细的 reviewer 映射进入 backlog |
 | IRIS-CORE-008 | 用户确认后同步到飞书知识库 | 已实现 | 5B-3 飞书知识库发布执行器、授权 wiki root、幂等 publication execution、失败恢复/对账、回群结果和真实 Feishu pilot；未经确认、审阅和所需批准不会写入 | 后续补充批量发布、冲突检测、发布模板和更友好的发布历史页面；核心写入闭环已成立 |
 | IRIS-CORE-009 | Iris 回答时读取授权飞书知识库 | 已实现 | 授权 Wiki 注册、解析、同步、向量检索、实时权限二次校验、引用和真实飞书验收 | 后续补充知识冲突识别和知识更新草稿，不影响当前已实现判定 |
@@ -33,6 +33,14 @@
 | IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 通用审批、完整正文审阅、知识发布与受治理建任务均已通过真实 pilot | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实，并已通过真实 Feishu OAuth review pilot；5B-3 已把首个批准后的 `publish_knowledge_draft` proposal 幂等发布到授权 Feishu wiki root；`create_feishu_task` 真实单群 pilot 复用了同一 proposal/review/approval 契约，并验证精确 assignee、task-spec hash、Task v2 client token、唯一远端任务、官方回读、唯一结果卡和最终安全关闭；内部 API 不能伪造人工批准 | 跨群通知、批量审批、复杂协作编辑和更细 reviewer 映射进入 backlog；日常 pilot 继续观察可读性与业务语言质量 |
 | IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 最小 Admin Console 已实现 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收；`/admin` 浏览器控制台可读取系统状态、readiness、runtime control，并可操作全局、群和 capability 开关；同一控制台可查看文档源摘要、同步健康、权限状态，并可按源切换回答/知识草稿策略与触发手动同步；知识草稿和正式任务草稿/执行仅暴露内容无关摘要，并提供安全请求修改/拒绝/回查入口；action proposal 队列可查看 pending/approved/executing/failed/reconciliation work 并执行安全请求修改/拒绝；主动候选治理可扫描单个显式群、查看候选并执行 dismiss / approve delivery；审计摘要视图可按事件类型/文档过滤查看 retained/dropped/inspected/matching 与聚合事件窗口；Caddy 仅放行精确静态 console 路由，`/internal/*` 仍保持 404 | 仍需增加持久化审计仓库和正式管理员身份模型；当前版本先满足 20-30 人内部运行控制 |
 | IRIS-CORE-015 | 多人安装和多公司使用 | 按白皮书延期 | 白皮书演进阶段 4 明确 multi-company / multi-tenant productization | 内部 MVP 稳定后增加 tenant ID、安装流程、租户密钥/数据隔离、租户管理员和计费 |
+
+## Status Amendment - 2026-09-09 Proactive Discussion Design
+
+- 用户已确认 Iris 应主动发现工作讨论中的明显问题并表达理由、专业判断和建议；有依据但未证实的风险可明确表述为怀疑，不要求知识库已有答案。
+- 固定每日两条、同事项 24 小时冷却及重复飞书逾期提醒的提案已被否定；新问题不被固定间隔挡住，同一问题按实质新依据、已回应/已解决状态和用户反馈去重。
+- [专项设计](2026-09-09-iris-proactive-discussion-design.md)限定原试点单群，采用独立消息事件评估和真实策略授权，不伪造逐条人工审批；不扩大跨群主动来源或高影响执行权限。
+- 当前仅完成产品/整体方案确认与文档同步，书面设计待用户审阅。尚无新实现、应用测试、模型验收或部署证据；原三群问答的已记录发布不变。
+- 本修订澄清 IRIS-CORE-005 的实际缺口，不抹去旧 IRIS-CORE-006 和历史 P1 灰度成果，也不将“旧提醒卡能发送”写成语义主动协作已完成。
 
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 

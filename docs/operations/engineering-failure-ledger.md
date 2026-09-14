@@ -15,6 +15,30 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 
 ## Product Delivery
 
+### Proactive collaboration is not a deadline reminder
+
+- **Observed design failure (2026-09-09):** The next proactive pilot was proposed as quiet-thread
+  and overdue-task reminders with a two-per-day budget and a 24-hour cooldown. The user rejected
+  this: Iris should notice material problems in ongoing work and explain its own assessment;
+  Feishu tasks already own deadline reminders.
+- **Confirmed cause:** The existing planner has only time-based thread/action signals and
+  operator-reviewed delivery. Treating that accepted historical loop as the whole proactive
+  requirement hid the missing semantic decision to intervene. This is a product/design gap, not
+  evidence of a newly diagnosed production outage.
+- **Prevention rule:** Define participation by useful new reasoning and issue/evidence state, not
+  timers or keyword matches. Allow explicitly uncertain, reasoned concerns; do not demand an
+  existing Wiki answer or present professional inference as a company fact. Keep task execution
+  separate and distinguish policy authorization from human approval.
+- **Planned guard, not yet implemented:** Independent exact-group event-driven assessment,
+  same-issue novelty checks, pre-send correction/source/pause checks, provenance-safe follow-ups
+  and durable nonduplicating delivery. The [approved direction and written design](../superpowers/specs/2026-09-09-iris-proactive-discussion-design.md)
+  records the contract and four-place documentation dispositions.
+- **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
+  discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
+  duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,
+  real-model drafts and one-group real-Feishu acceptance must be recorded separately before this
+  feature is declared delivered.
+
 ### A working discussion is not required to become formal knowledge before it can be shared
 
 - **Observed gap:** In the pilot, Iris could describe material in its source group but could not

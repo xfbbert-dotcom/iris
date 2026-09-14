@@ -457,12 +457,41 @@ Proactivity must be controlled by strategy:
 - discussion speed;
 - whether humans are already driving the issue;
 - whether a decision, task, risk, or blocker appeared;
-- time since Iris last proactively spoke;
+- whether Iris has a materially new, useful contribution on this issue;
 - user feedback on Iris's behavior.
+
+The user-approved 2026-09-09 [proactive discussion design](2026-09-09-iris-proactive-discussion-design.md)
+defines content-triggered participation, not a second deadline-reminder system. Iris may point out
+factual contradictions, reasoning gaps, important missing conditions and credible risks without
+waiting for an @ mention. A reasoned but unproven concern is allowed when clearly expressed as
+uncertain; company-specific premises still require authorized sources. Professional reasoning and
+advice do not require the knowledge base to contain an existing answer. Iris explains its reasons
+and suggestions rather than merely quoting material or asserting that it is right.
+
+Do not impose a fixed conversational cooldown or daily speech quota that suppresses a distinct
+important issue or materially new evidence. Avoid repetition through issue identity, evidence
+versions, human responses, resolution and explicit user feedback. Elapsed time alone cannot make
+an old intervention worth repeating. Technical backpressure, platform limits and fault containment
+remain necessary but must be observable and must not masquerade as ordinary conversational policy.
+Before sending, recheck whether the issue has already been corrected and whether the sources and
+audience are still authorized. Model or verification failures do not produce unsolicited error
+messages in the group.
+
+An explicitly enabled, versioned, exact-group low-risk discussion policy may authorize these
+interventions without per-message human review. Record policy authorization truthfully; never
+manufacture a human approval or use the legacy reminder approval API as an automatic-send shortcut.
+Legacy operator-reviewed reminders keep their separate contract. Shared Q&A scope does not grant
+unsolicited cross-group participation, and ordinary suggestions do not authorize high-impact
+actions. Requested task creation belongs to the governed Feishu task path, with reminders handled
+by Feishu rather than duplicated by this discussion loop.
+
+This is an approved product direction with a written design awaiting review, not a claim that the
+new runtime has been implemented or deployed. First activation is limited to the original pilot
+group; current Q&A and other groups remain unchanged.
 
 Constitutional principle:
 
-> Iris can be proactive, but every proactive behavior must be explainable, configurable, rate-limited, auditable, and pausable. Iris cannot use "I remember" as a substitute for "I am allowed to know."
+> Iris can be proactive, but every proactive behavior must be explainable, configurable, protected against repetition and technical overload, auditable, and pausable. Novel, important contributions are not blocked by arbitrary time intervals. Iris cannot use "I remember" as a substitute for "I am allowed to know."
 
 ## 7. Knowledge Governance
 

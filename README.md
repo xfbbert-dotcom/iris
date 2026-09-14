@@ -29,6 +29,13 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The next approved direction is [content-triggered proactive discussion](docs/superpowers/specs/2026-09-09-iris-proactive-discussion-design.md):
+Iris notices material work risks, explains its reasoning and suggests improvements, including
+clearly qualified concerns. It is not duplicate deadline reminding and has no fixed conversational
+cooldown that blocks a distinct important issue. The first scope is the original pilot group.
+The written design awaits user review; implementation, model/Feishu acceptance and deployment
+are not complete. The four-place documentation dispositions are in the design's final section.
+
 The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
 is deployed as `f6a6dd41` after passing exact-SHA CI (including PostgreSQL), all nine internal
 real-model checks and manual answer review. On 2026-09-09 at 07:43:52 UTC, public ingress was
@@ -38,7 +45,8 @@ The linked record preserves two earlier failed acceptance runs and revocations; 
 new Feishu test-message delivery. Other groups, proactive speech and external-action gates remain
 outside this activation; known nonblocking wording and migration follow-ups are recorded.
 
-All ten required P1 product loops have historical bounded real-Feishu acceptance evidence. The
+All ten previously defined P1 product loops have historical bounded real-Feishu acceptance evidence;
+that evidence does not cover the newly clarified semantic proactive-discussion requirement. The
 rollout began with a controlled 3-5 person, single-group daily pilot; consult the dated current
 handoff and fresh runtime checks for present activation and group scope. This does not authorize expansion to all
 20-30 employees; expansion follows only after ordinary pilot use contains no unresolved P0 or P1
@@ -86,9 +94,11 @@ intentional governed session; the acceptance evidence is recorded in
 `docs/superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md` and the operating
 contract remains `docs/runbooks/iris-governed-feishu-task-acceptance.md`.
 
-High-impact capabilities remain bounded: proactive deliveries require human review, knowledge-base
-writes open only for an intentional governed session, and groups outside the exact approved pilot
-scope must remain disabled. Accepted capability coverage does not imply that a runtime gate is on.
+High-impact capabilities remain bounded: knowledge-base writes open only for an intentional
+governed session, and groups outside the exact approved pilot scope must remain disabled. Legacy
+proactive reminders still require human review; the proposed low-risk discussion loop will use
+separate explicit policy authorization, not fabricated human approval. It is not enabled by this
+documentation change. Accepted capability coverage does not imply that a runtime gate is on.
 
 ## Local Development
 
