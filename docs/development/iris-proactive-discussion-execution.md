@@ -6,7 +6,7 @@
 
 - 用户选择子任务实施与逐项审查。实现工作树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支 `codex/iris-daily-pilot-followup`；执行起点 `1f1a5efe`。
 - Task 1 基础实现 `24c090fc` 已通过独立审查；Task 2 候选 `9f9f51a0` 的长消息存储/实时身份混用已由 `4ec806d6` 修复并通过范围复审；Task 3 `23c08ba5` 的结构判断/草稿/范围复核通过本地测试与独立审查。没有真实模型验收、飞书发送或部署证据。
-- Task 4 候选 `12d1280b` 初审两处阻塞由 `b1c6564f` 修正并通过范围复审；Task 5 最终发送声明、结果未知保护与对账持久化 `30f75a98`、Task 6 连续追问来源 `1071dfc3` 已通过独立规格/质量审查。下一步 Task 7–8，尚无生产运行装配、真实发送或实模验收。
+- Task 4 候选 `12d1280b` 初审两处阻塞由 `b1c6564f` 修正并通过范围复审；Task 5 最终发送声明、结果未知保护与对账持久化 `30f75a98`、Task 6 连续追问来源 `1071dfc3`、Task 7 实际运行装配与控制面 `ab0f7dfe` 已通过独立规格/质量审查。下一步 Task 8，尚无实模、真实发送或生产启用验收。
 - 已实现基础类型、消息完整内容哈希绑定、`0059_proactive_discussion.sql`、完整评估/反馈/发送 PostgreSQL repository，并以隔离 schema 运行真实数据库测试。发送 worker 的远端边界使用合成替身，没有接入生产入口。
 - 20:44 本机 Docker 已恢复启动；随后在独立 PostgreSQL 16.14 中取得实际缺表失败及修复后通过证据。数据库可用和基础测试通过仍不等于主动讨论端到端可用。
 
@@ -73,7 +73,7 @@ Task 2 初审范围为 `8a557ed7..9f9f51a0`：只接可选处理器登记、严�
 - 实际行为 RED：初轮 5 失败 / 19 通过，本群绑定丢失或来源变化/无 verifier 仍复用正文；持久化/发送阶段 7 失败 / 175 名称过滤跳过，复现缺 trace、运行关闭仍发送和校验缺失。实际删除操作的 send-first 场景又复现局部 trace 没进未决发送保护；补精确 OR EXISTS 后沿用既有冲突与结算语义。错误的 prepare 返回形状、直接 SQL 删除及 embedding 数量测试替身已修正并保留于执行报告，不能当作生产故障。
 - 聚焦命令：`npm --workspace apps/core test -- proactive-discussion-lineage.test.ts assistant-source-lineage.test.ts shared-chat-source-propagation.test.ts answer-reply-delivery-service.test.ts answer-reply-receipt-validator.test.ts assistant-conversation-context.test.ts feishu-mention-answer-responder.test.ts`：297 通过 / 0 跳过。单独设置专用 PG URL 后运行 `postgres-proactive-discussion-concurrency.test.ts postgres-shared-chat-answer-concurrency.test.ts`：42 通过 / 0 跳过，59.46 秒。真实 SQL 覆盖主动 sent → 两次普通 responder/service/repository 改写、来源变化排除、trace 不可变、history-only 无伪造补录、混合来源互引及运行关闭/删除竞争。
 - 完整 Core `npm --workspace apps/core test`：4585 通过 / 435 条件跳过（245 文件通过 / 11 跳过），29.55 秒；`npm run typecheck` 和 diff 检查退出 0。全量和聚焦有重叠，不叠加计数；pg warning 与既有负向日志保留。独立审查 `e4a242cf..1071dfc3` 规格/质量通过，0 Critical / 0 Important / 1 Minor（既有测试日志）。
-- 边界：Task 7 仍须完成 answer-draft-runtime → app → event-worker 的普通本群 verifier 与主动 receipt provider 接线，包括两处 delivery-service 装配；本提交不证明运行应用自动启用，也没有生产/真实模型/飞书外发。已测领域链与生产装配分开验收。
+- 边界：Task 7 仍须完成 answer-draft-runtime → app → event-worker 的普通本群 verifier 与主动 receipt provider 接线，包括 mention-responder helper 及其内部 delivery-service 的两级传递（不是新增第二个 service）；本提交不证明运行应用自动启用，也没有生产/真实模型/飞书外发。已测领域链与生产装配分开验收。
 
 | Task 6 四处核对项 | 处置 |
 |---|---|
@@ -81,6 +81,36 @@ Task 2 初审范围为 `8a557ed7..9f9f51a0`：只接可选处理器登记、严�
 | 工程故障台账 | updated：[发送锁与完整派生来源](../operations/engineering-failure-ledger.md#check-the-outer-message-transaction-when-adding-cross-source-send-locks)补本群 trace 删除保护、混合来源锁与两次真实持久化改写证据 |
 | 需求/验收基线 | updated：[IRIS-CORE-005](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)推进到 Task 6 本地链通过，保留 Task 7 接线和实模/生产缺口 |
 | 开工入口 | updated：[当前交接](current-handoff.md)指向 Task 7–8 和实际证据；reviewed-unchanged：[README](../../README.md)、[AGENTS](../../AGENTS.md)现有定位、文档同步和有限门禁规则仍有效，不需要为内部类型扩展新增安装指引 |
+
+### Task 7：默认关闭装配与控制面（本地门禁完成）
+
+应用提交 `ab0f7dfe` 完成独立 runtime、已登记队列的后台 worker、受保护状态/策略/恢复/对账 API，以及 Task 6 的普通问答 provider/verifier 实际接线。精确配置仍默认关闭，群集合为空；只有原试点群可配置启用，现有普通问答、共享群聊及旧提醒/任务/Wiki 开关不变。独立审查 `dbcf9a97..ab0f7dfe` 的规格与质量两项通过，无 Critical/Important，1 项既有验证日志 Minor 留作有限后续；尚不据此宣称整功能完成。
+
+- 本地实际装配回归暴露并修正：普通文档可读判定不能代替精确 grant、最新成功 snapshot 或来源资格证明；旧问题正文在来源换版、授权撤销、同步失效或 Wiki 能力关闭后仍可能进入模型。主动路径现在在实时权限请求前后核对这些证明，排除不可用旧问题正文；原目录不完整门禁保留，不能借此新建同一问题。普通 Q&A 的权限实现未被放宽或重构。
+- 操作者来自服务端 `IRIS_INTERNAL_API_AUDIT_ACTOR`，记录 `internal-api:` 角色，不信任请求自填真人身份；sent 对账重新读取并核对 Iris、精确群、正文及回复目标。operator resume 使用同一状态 SQL，但事件来源与真实成员反馈区分，不自动发旧稿。
+- 关闭只承诺有界等待，不承诺强制终止已开始远端 I/O。停止后禁止新模型/范围复核/发送入口，已有发送可结算；超时显式 `drainPending`/降级，自有连接池在实际收尾后只关闭一次，sending/unknown 不返回 prepared。
+
+| 验证 | 实际结果与边界 |
+|---|---|
+| 来源权限实际 RED/GREEN | 合成 transport＋真实 PG 的工厂测试复现模型输入中出现已失效正文；最后 Wiki/同步资格两项 RED 为 2 失败 / 37 按名跳过，修正后工厂 7 通过 / 32 按名跳过。最初 Wiki fixture 因无效跨群授权提前拒绝而无效转绿，已修正为真正执行撤销的本地 Wiki fixture，未把无效绿灯算作证据 |
+| 运行时/控制面六文件 | 84 项通过，覆盖默认关闭、认证、生命周期、状态、启动和事件桥接；已包含在全量，不重复累计 |
+| 首次完整 Core | 4602 通过 / 3 失败 / 441 条件跳过；3 项旧状态快照仍预期 15 组件，新组件实际为第 16 项。只修正期望后两文件 185 项通过，原失败保留 |
+| 首次并行真实 PG | 81 通过 / 13 项超时，均报告原 5 秒测试预算耗尽；并行迁移负载是可能原因，未独立追踪证明。随后串行 30 秒有界测试预算 94/94 通过；未更改产品超时或历史迁移 |
+| 最终完整 Core | `npm --workspace apps/core test`：4605 通过 / 443 条件跳过，247 文件通过 / 11 跳过，30.25 秒；最终应用修改后运行 |
+| 最终真实 PG | `npm --workspace apps/core test -- postgres-proactive-discussion-concurrency.test.ts postgres-proactive-discussion-repository.test.ts proactive-discussion-delivery.test.ts --fileParallelism=false --testTimeout=30000 --hookTimeout=30000`：96 通过 / 0 跳过，168.04 秒；命令级测试库变量指向专用本机库 |
+| 不重复计数 | 最终两组联合为 4700 项不同用例通过，348 项其他条件测试未执行；96 中的 1 项非 PG 单测已在完整 Core 中运行 |
+| 构建与配置 | 最终代码 `npm run typecheck`、`npm run build`、根和 pilot 的 `docker compose ... config --quiet`、`git diff --check` 均退出 0；不打印合并配置。既有 pg 同连接并发 query 告警、负向测试日志和 LF/CRLF 提示仍保留 |
+
+根 Compose 仅含基础服务，无需添加虚构 Core；新配置接实际 pilot Core。通用状态汇总器已经遍历完整组件 map 并复制全部字段，reviewed-unchanged，实际 app/API 快照覆盖新增组件。这里是测试边界与文件处置，不是生产健康声明。
+
+| 四处同步 | 处置 |
+|---|---|
+| 白皮书 | reviewed-unchanged：[第 6 节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)已有来源失效、权限复验、独立开关和不伪造审批规则；本轮补实际装配与证明，不改变稳定授权 |
+| 工程故障台账 | updated：[回答时权限复验](../operations/engineering-failure-ledger.md#recheck-permissions-at-answer-time)补精确授权/快照/来源资格与旧派生正文的真实工厂回归 |
+| 需求/验收基线 | updated：[IRIS-CORE-005](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)记录 Task 7 本地与独立审查通过，Task 8 实模与真实群门禁仍缺 |
+| 开工入口 | updated：[当前交接](current-handoff.md)记录候选与下步；reviewed-unchanged：[README](../../README.md)、[AGENTS](../../AGENTS.md)仍准确说明实施未全部完成、正确工作树与有限验收边界 |
+
+没有真实模型、实时飞书消息、SSH、推送、部署、生产操作者配置或能力启用。Task 8 继续端到端语料/脚本及有限验收；真实模型配置路径仍缺，不用合成结果替代。
 
 ## 历史：本机环境阻塞及已做的操作
 
@@ -156,6 +186,8 @@ Task 3 审查 P2：直接手工构造零来源 `PdContext` 时 schema 的 `enum:
 | Task 7 复用现有配置/客户端工厂，使用 PD 自有生命周期和同一仓储；增加可选内部 control facade 供 API 使用 | 既有 Q&A runtime 不暴露底层实例，计划的 runtime 又未暴露 API 所需仓储 | 少量类型扩展及独立 token cache；不新增服务，禁用时不创建隐形第二连接 |
 | 非法启用群配置仍拒绝启动；禁用模式无依赖，启用后的运行故障只将 PD 标记 stopped/degraded，不中止 Q&A | 原共享 onReady 链会传播拒绝；必填 registrar 又可能误迫使禁用模式初始化依赖 | 新增局部生命周期/有界关闭测试；Q&A 可用不代表 PD 健康，状态不能伪造成功计数 |
 | 根 Compose 仅数据库/Redis，保持不变并记录原因；环境变量接实际 pilot Core；独立文档上下文仍按既有精确目的群授权校验 | 不为修改清单新增无关服务，也不能把已授权文档混同为跨群原始聊天 | 一项文件处置；授权证明缺失则拒绝来源，不自动创建授权、不读取他群原始/派生聊天 |
+| 关闭采用有界等待及最小 worker 停机检查；已有 I/O 结算后再关闭自有 pool，超时明确待收尾/降级 | 既有传输没有取消合同，不为停机扩建整套 AbortSignal 基础设施或包裹所有仓储方法 | 关闭等待返回后仍可能有已开始 I/O 和延后资源释放；不得声称已清理完毕，sending/unknown 不得重发 |
+| Task 7 的通用状态汇总器保持不变，由 app 提供新增组件并更新实际 API 期望 | 现有 Object.entries 汇总与递归字段复制已承载新状态，无需为文件清单制造无效修改 | 若后续增加非通用字段仍需定向调整；当前装配测试必须证明新增组件及降级状态实际可见 |
 
 ## 四处文档处置（未关闭功能）
 

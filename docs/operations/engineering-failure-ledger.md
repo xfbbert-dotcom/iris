@@ -483,6 +483,16 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   fragments reach the model. Denial is a normal security outcome, not a retriable model error.
 - **Guard:** Source-policy retrieval, content-free permission audit records, and revoked-access
   regression tests.
+- **Unshipped implementation finding (2026-09-15):** The new proactive factory reused a permission
+  verifier that normalized bindings but did not itself prove an ordinary latest snapshot or exact
+  database grant. Actual synthetic-transport/real-PG tests exposed revoked document text and restored
+  issue prose to the model; source sync/Wiki capability changes during remote permission also
+  required fresh eligibility checks. The PD-only wrapper now verifies exact successful snapshots,
+  grants, current source eligibility and runtime read gates around the live probe, including
+  persisted derived premises. This does not relax ordinary Q&A or claim remote atomicity.
+  Candidate `ab0f7dfe`, meaningful failed/passed factory cases and independent review status are in
+  the [execution record](../development/iris-proactive-discussion-execution.md). Do not treat an early
+  fixture rejection before its intended revocation as proof of that revocation scenario.
 - **Exit condition:** Revoked content is absent from the prompt and cannot be reconstructed from a
   different source.
 
