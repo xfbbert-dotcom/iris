@@ -5,9 +5,9 @@
 ## 当前状态
 
 - 用户选择子任务实施与逐项审查。实现工作树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支 `codex/iris-daily-pilot-followup`；执行起点 `1f1a5efe`。
-- Task 1 进行中，Task 2–8 未开始。尚无本轮应用提交、任务审查通过、模型验收、飞书发送或部署证据。
-- 已写基础类型、消息内容规范化与哈希绑定，以及数据库行为测试/隔离 schema fixture；它们目前是未提交的工作区草稿。`0059_proactive_discussion.sql` 和 PostgreSQL repository 实现尚未创建，不能把测试骨架当成可用功能。
-- 20:44 本机 Docker 已恢复启动、独立 PostgreSQL 测试库已就绪，Task 1 在原草稿上继续。不得跳过真实缺表失败测试、使用生产库代替测试库，或把条件跳过记为 PG 通过。
+- Task 1 基础实现已提交为 `24c090fc`，独立审查已通过规格与质量两项，无阻塞发现；Task 2–8 尚未开始。没有模型验收、飞书发送或部署证据。
+- 已实现基础类型、消息完整内容哈希绑定、`0059_proactive_discussion.sql` 和六方法 foundation PostgreSQL repository，并以隔离 schema 运行真实数据库测试。评估/反馈状态转换和发送方法仍分别属于 Task 4/5，没有占位运行方法，也没有接入生产入口。
+- 20:44 本机 Docker 已恢复启动；随后在独立 PostgreSQL 16.14 中取得实际缺表失败及修复后通过证据。数据库可用和基础测试通过仍不等于主动讨论端到端可用。
 
 ## 已取得的测试证据
 
@@ -16,9 +16,13 @@
 | 开发前基线 | `npm test -- --reporter=dot`：4486 通过 / 345 条件跳过，239 测试文件通过 / 9 跳过，52.20 秒 | npm 将 reporter 参数识别为配置并警告；后续直接调用 workspace 测试。不是新增代码通过 |
 | 初始测试骨架 | `npm --workspace apps/core test -- migration-runner.test.ts postgres-proactive-discussion-repository.test.ts`：1 失败 / 39 通过 / 12 条件跳过，另有缺模块导致的 suite 失败 | 缺迁移预约及模块只证明骨架为红，不是真实 PG 缺表证明；该次计数对应当时草稿 |
 | 消息绑定聚焦测试 | `npm --workspace apps/core test -- postgres-proactive-discussion-repository.test.ts -t 'message bindings'`：1 通过；移除 CRLF 规范化时实际 SHA 不匹配，恢复后通过 | 单元/变异证据，不是 PG 行为、最终完整回归或任务验收 |
-| 停止前聚焦测试 | 20:28 再运行上述两个测试文件：40 通过 / 1 预期失败 / 23 条件跳过；`npm run typecheck` 唯一 TS2307 为尚不存在的具体仓储模块 | 当前草稿不通过完整开发门禁；没有真实 PG 证据。未重跑完整套件 |
+| 历史停止前聚焦测试 | 20:28 再运行上述两个测试文件：40 通过 / 1 预期失败 / 23 条件跳过；`npm run typecheck` 唯一 TS2307 为当时不存在的具体仓储模块 | 当时草稿未通过开发门禁；这次没有真实 PG 证据 |
+| 恢复后真实 SQL RED | 20:46，在 0059 尚不存在时运行 `npm --workspace apps/core test -- migration-runner.test.ts -t 'migrates proactive discussion tables once'`：实际迁移旧 schema 后查询新表报 PostgreSQL `42P01`；1 失败 / 51 按测试名过滤跳过 | 实际缺表失败，不是缺模块或条件跳过证明 |
+| 首轮真实 PG 回归失败 | 两个聚焦文件：49 通过 / 15 失败；14 项受到 vector 扩展在临时 schema 中并发创建/清理影响，1 项先被 FK 拒绝而未到达预期 TRUNCATE trigger | 保留失败；只在专用测试库初始化 public 扩展并修正测试断言，不改历史应用迁移 |
+| Task 1 真实 PG GREEN | `npm --workspace apps/core test -- migration-runner.test.ts postgres-proactive-discussion-repository.test.ts`：64 通过 / 0 跳过，13.30 秒；`npm run typecheck` 退出 0 | PostgreSQL 16.14 / vector 0.8.5，基础持久化与并发/回滚验证，不是评估或发送验收 |
+| Task 1 完整 Core 回归 | `npm --workspace apps/core test -- --reporter=dot`：4488 通过 / 357 条件跳过，240 文件通过 / 9 跳过，47.79 秒 | 此命令未设置数据库环境变量；新增 12 个条件 PG 用例已在上行单独实际运行。其余服务条件跳过不算通过 |
 
-恢复时重新运行聚焦测试；不要将本页开发前的完整绿色基线套用到当前未完成草稿。
+以上最终验证对应 `24c090fc` 的 Task 1 应用改动；既有事件/OAuth 负向用例日志保留为基线噪声。独立审查已确认局部规格与质量通过；扩展 bootstrap、进度文档及基线日志的 P2 发现分别记录在本页或交给 Task 8。不把本页开发前基线替代新增代码证据。
 
 ## 历史：本机环境阻塞及已做的操作
 
@@ -45,13 +49,15 @@ Windows 版本为 `10.0.26200`，与[上游相同错误报告](https://github.co
 
 新建本任务专用容器 `iris-pd-test-20260914`，使用本机已有镜像 `pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb`，仅绑定 `127.0.0.1:55439`，数据库目录是 1 GiB tmpfs，不挂载任何既有数据卷。SQL 核对为 PostgreSQL **16.14**、可用 pgvector **0.8.5**。测试库是 `iris_pd_test`，不存在生产数据；服务就绪不等于新迁移已通过。
 
+恢复后的并发测试发现既有 0003 迁移在扩展不存在时将 vector 安装到当前临时 schema，随后清理会影响并发 fixture。在专用 `iris_pd_test` 中确认扩展尚不存在后，执行一次 `CREATE EXTENSION vector WITH SCHEMA public` 并核对 0.8.5/public。后续聚焦测试通过；该测试库 bootstrap 需在 Task 8 的 CI/runbook 中复现，不能改写历史迁移或混用生产库。
+
 ## 继续实施
 
-本机数据库阻塞已解除，已恢复原 Task 1 实施者。若测试容器以后停止，tmpfs 数据将消失，重新核对隔离环境后运行测试，不恢复或混用生产数据：
+本机数据库阻塞已解除，Task 1 已提交并通过独立审查。若测试容器以后停止，tmpfs 数据将消失，重新核对隔离环境后运行测试，不恢复或混用生产数据：
 
-1. 从[当前接手入口](current-handoff.md)规定的 git/文档核对开始，保留当前草稿。
-2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md` 与 `task-1-report.md`；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重新派发已存在的 Task 1 草稿。
-3. 在 0059 仍不存在时，运行 migration runner 的真实缺表失败测试，再继续 Task 1；通过真实 PG 与类型检查后进行独立审查，随后按序执行其余任务。
+1. 从[当前接手入口](current-handoff.md)规定的 git/文档核对开始，保留已有提交和用户改动。
+2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、`task-1-report.md` 和审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已提交的 Task 1。
+3. 已通过的审查范围为原执行起点 `1f1a5efe` 至 `24c090fc`，不是只看最后一笔文档提交。继续 Task 2–8；不得为重现 RED 删除或改写已提交的 0059。Task 4 需处理 100 条目录容量中保留 resolved 身份的生命周期，不能静默丢弃去重身份。
 4. 未经当前任务新的部署授权，不推送、部署、发飞书消息或开放任何能力。
 
 ## 已作的实现裁决
@@ -61,6 +67,7 @@ Windows 版本为 `10.0.26200`，与[上游相同错误报告](https://github.co
 | Task 1 声明最终仓储合同，但只实现策略、登记、读状态、领取/失败评估与状态统计的 foundation 子集；其余行为分别留给 Task 4/5；0059 一次建立所需全部表 | 避免在发送门禁依赖尚未就绪时放入占位方法或重复后续任务 | 后续消费者需要显式扩展返回类型，可能少量返工 |
 | 迁移/CLI 验证必须断言实际数据库或进程行为；文件名/缺 import 不算完整红绿证据 | 防止源码字符串匹配或测试跳过制造完成假象 | 聚焦测试稍长，环境依赖明确暴露 |
 | resolved 问题只有出现经验证的实质新前提才可重开；user_paused 不因模型、策略版本或时间自动恢复 | 按已批准设计解决计划中简写注释的歧义 | 需额外显式状态转换测试或返工 |
+| Task 2 依赖实际需要的 register/readState 子合同；历史读取显式扩展 user 类型并保留既有语义 | 避免要求尚未实现的 Task 4/5 方法或放入假方法，同时满足本群人类来源复验 | 少量依赖类型调整和历史 reader 定向回归 |
 
 ## 四处文档处置（未关闭功能）
 
