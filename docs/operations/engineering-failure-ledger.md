@@ -135,6 +135,15 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   distinguishes actual SQL RED/GREEN, scoped review, fixture timeouts and old pg warnings.
   This is a pre-release concurrency fix, not evidence of a production failure or deployment.
 
+- **Local lineage extension:** `1071dfc3` carries full local bindings through real sent receipts,
+  two ordinary persisted rewrites and source revalidation. Its SQL RED also found that the
+  existing unresolved-send deletion query omitted new local traces; the same exact chat/message
+  conflict now covers them. Mixed local/shared IDs use one sorted lock set, with no-source legacy
+  behavior preserved. The actual two-rewrite PG and reciprocal deletion/runtime cases passed;
+  [Task 6's record](../development/iris-proactive-discussion-execution.md#task-6-连续追问的完整来源本地审查通过)
+  retains the failed attempts and compatibility boundaries. Production runtime wiring remains
+  Task 7, not implied by successful dependency-injected integration tests.
+
 ### Do not confuse hardening with product completion
 
 - **Failure:** Work continued through increasingly narrow robustness checks while whitepaper core

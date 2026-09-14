@@ -6,7 +6,7 @@
 
 - 用户选择子任务实施与逐项审查。实现工作树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支 `codex/iris-daily-pilot-followup`；执行起点 `1f1a5efe`。
 - Task 1 基础实现 `24c090fc` 已通过独立审查；Task 2 候选 `9f9f51a0` 的长消息存储/实时身份混用已由 `4ec806d6` 修复并通过范围复审；Task 3 `23c08ba5` 的结构判断/草稿/范围复核通过本地测试与独立审查。没有真实模型验收、飞书发送或部署证据。
-- Task 4 候选 `12d1280b` 初审两处阻塞由 `b1c6564f` 修正并通过范围复审；Task 5 最终发送声明、结果未知保护与对账持久化 `30f75a98` 已通过独立规格/质量审查。下一步 Task 6–8，尚无运行时装配、真实发送或端到端验收。
+- Task 4 候选 `12d1280b` 初审两处阻塞由 `b1c6564f` 修正并通过范围复审；Task 5 最终发送声明、结果未知保护与对账持久化 `30f75a98`、Task 6 连续追问来源 `1071dfc3` 已通过独立规格/质量审查。下一步 Task 7–8，尚无生产运行装配、真实发送或实模验收。
 - 已实现基础类型、消息完整内容哈希绑定、`0059_proactive_discussion.sql`、完整评估/反馈/发送 PostgreSQL repository，并以隔离 schema 运行真实数据库测试。发送 worker 的远端边界使用合成替身，没有接入生产入口。
 - 20:44 本机 Docker 已恢复启动；随后在独立 PostgreSQL 16.14 中取得实际缺表失败及修复后通过证据。数据库可用和基础测试通过仍不等于主动讨论端到端可用。
 
@@ -67,6 +67,21 @@ Task 2 初审范围为 `8a557ed7..9f9f51a0`：只接可选处理器登记、严�
 | 需求/验收基线 | updated：[IRIS-CORE-005](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)推进到 Task 5 局部发送门禁通过，保留连续追问/装配/实模/部署缺口 |
 | 开工入口 | updated：[当前交接](current-handoff.md)指向 Task 6–8；reviewed-unchanged：[README](../../README.md)及[AGENTS](../../AGENTS.md)的工作树、交接和四处闭环规则仍正确，没有新增安装或生产启用步骤 |
 
+### Task 6 连续追问的完整来源（本地审查通过）
+
+- 应用提交 `1071dfc3`：从实际 sent 主动回执读取严格 v1 来源，和旧被动回执合并排序后最多取 2 条；实时读取 Iris 正文前后复验全部文档/本群/共享来源。完整本群绑定通过两次改写、实际 responder prepare、fingerprint、不可变 trace、最终发送和再读取延续，不靠引用选句保存依据。旧 markerless 文档回执只在非严格模式保留原授权校验；未知来源不升级。
+- 实际行为 RED：初轮 5 失败 / 19 通过，本群绑定丢失或来源变化/无 verifier 仍复用正文；持久化/发送阶段 7 失败 / 175 名称过滤跳过，复现缺 trace、运行关闭仍发送和校验缺失。实际删除操作的 send-first 场景又复现局部 trace 没进未决发送保护；补精确 OR EXISTS 后沿用既有冲突与结算语义。错误的 prepare 返回形状、直接 SQL 删除及 embedding 数量测试替身已修正并保留于执行报告，不能当作生产故障。
+- 聚焦命令：`npm --workspace apps/core test -- proactive-discussion-lineage.test.ts assistant-source-lineage.test.ts shared-chat-source-propagation.test.ts answer-reply-delivery-service.test.ts answer-reply-receipt-validator.test.ts assistant-conversation-context.test.ts feishu-mention-answer-responder.test.ts`：297 通过 / 0 跳过。单独设置专用 PG URL 后运行 `postgres-proactive-discussion-concurrency.test.ts postgres-shared-chat-answer-concurrency.test.ts`：42 通过 / 0 跳过，59.46 秒。真实 SQL 覆盖主动 sent → 两次普通 responder/service/repository 改写、来源变化排除、trace 不可变、history-only 无伪造补录、混合来源互引及运行关闭/删除竞争。
+- 完整 Core `npm --workspace apps/core test`：4585 通过 / 435 条件跳过（245 文件通过 / 11 跳过），29.55 秒；`npm run typecheck` 和 diff 检查退出 0。全量和聚焦有重叠，不叠加计数；pg warning 与既有负向日志保留。独立审查 `e4a242cf..1071dfc3` 规格/质量通过，0 Critical / 0 Important / 1 Minor（既有测试日志）。
+- 边界：Task 7 仍须完成 answer-draft-runtime → app → event-worker 的普通本群 verifier 与主动 receipt provider 接线，包括两处 delivery-service 装配；本提交不证明运行应用自动启用，也没有生产/真实模型/飞书外发。已测领域链与生产装配分开验收。
+
+| Task 6 四处核对项 | 处置 |
+|---|---|
+| 白皮书 | reviewed-unchanged：[第 6 节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)的完整来源、派生回答复验和失权不复用规则继续适用；空集合兼容与统一锁属于实现，不改变产品权限 |
+| 工程故障台账 | updated：[发送锁与完整派生来源](../operations/engineering-failure-ledger.md#check-the-outer-message-transaction-when-adding-cross-source-send-locks)补本群 trace 删除保护、混合来源锁与两次真实持久化改写证据 |
+| 需求/验收基线 | updated：[IRIS-CORE-005](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)推进到 Task 6 本地链通过，保留 Task 7 接线和实模/生产缺口 |
+| 开工入口 | updated：[当前交接](current-handoff.md)指向 Task 7–8 和实际证据；reviewed-unchanged：[README](../../README.md)、[AGENTS](../../AGENTS.md)现有定位、文档同步和有限门禁规则仍有效，不需要为内部类型扩展新增安装指引 |
+
 ## 历史：本机环境阻塞及已做的操作
 
 `IRIS_TEST_DATABASE_URL` 未设置，未找到已运行的本地 PostgreSQL/pgvector。Docker Desktop 启动日志确认 Windows Unix listener 的旧运行时描述符无法访问，错误反复出现；没有就绪的 Docker engine。
@@ -104,12 +119,13 @@ Task 4 后续 SQL 回归出现连接终止、recovery mode，随后本机 TCP `S
 
 新库初始化 `vector` 到 `public`，SQL 确认 PostgreSQL 16.14 / vector 0.8.5；主机 TCP `SELECT 1` 成功。配置测试库 `max_wal_size=256MB`、`min_wal_size=64MB`、`checkpoint_timeout=60s`，不用固定小内存盘承受连续迁移测试。原失败记录保留，Task 4 恢复后必须重新取得受影响用例的实际 RED/GREEN 和最终回归，不能沿用早前 59 通过作为终态。
 
-本机数据库阻塞再次解除，Task 1–5 已提交并通过独立审查。后续使用上述新磁盘卷实例；若再次停止，先核对本任务容器和数据卷，不恢复或混用生产数据：
+本机数据库阻塞再次解除，Task 1–6 已提交并通过独立审查。后续使用上述新磁盘卷实例；若再次停止，先核对本任务容器和数据卷，不恢复或混用生产数据：
 
 1. 从[当前接手入口](current-handoff.md)规定的 git/文档核对开始，保留已有提交和用户改动。
-2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、各任务 report 与审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已完成的 Task 1–5。
+2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、各任务 report 与审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已完成的 Task 1–6。
 3. Task 1 已审查 `1f1a5efe..24c090fc`；Task 2 初审 `8a557ed7..9f9f51a0` 后复审 `9f9f51a0..4ec806d6`；Task 3 审查 `3484159d..23c08ba5` 无阻塞发现；Task 4 初审 `16c7ab8d..12d1280b` 后复审 `12d1280b..b1c6564f` 通过；Task 5 审查 `1d9a6a44..30f75a98` 通过。继续 Task 6–8；不得为重现 RED 删除或改写已提交的 0059。100 条目录容量与 resolved 身份生命周期列为有界后续，不能静默丢弃身份，也不在本轮扩建归档系统。
-4. 未经当前任务新的部署授权，不推送、部署、发飞书消息或开放任何能力。
+4. Task 6 审查 `e4a242cf..1071dfc3` 通过；继续 Task 7–8，落实已记录的 runtime 三文件接线，不能因注入测试通过就遗漏真实应用装配。
+5. 未经当前任务新的部署授权，不推送、部署、发飞书消息或开放任何能力。当前还缺已配置本地模型的可用路径，已请求用户提供路径而非密钥；先完成其余获准本地工作，到实模门禁仍缺配置则如实停在该边界。
 
 Task 3 审查 P2：直接手工构造零来源 `PdContext` 时 schema 的 `enum: []` 非法；当前 builder 返回上下文前必须找到触发消息，因此正常生产构建器不可达。留给 Task 8 场景/最终审查判断是否进入修复，不写成已解决。LF/CRLF 提示单独作为本机基线噪声保留。
 
@@ -133,6 +149,13 @@ Task 3 审查 P2：直接手工构造零来源 `PdContext` 时 schema 的 `enum:
 | Task 5 实时最近人类窗口须包含于保存的完整来源绑定，并独立复验所有已保存来源；不要求与旧问题依据的并集相等 | 没有另存窗口快照，旧有效前提可能在最近窗口之外 | 辅助来源失效也可能保守取消；不增加 schema，也不声称远端原子快照 |
 | 领取投递新增 checkedRuntimeRevision，最终发送在锁内比对且检查实际开关；普通只读 DTO 不伪造领取证明 | 原接口缺少领取时的真实修订，无法正确比较 | 小型类型/测试调整；配置来回变化也会取消重评 |
 | 主动文档门禁先 managed advisory，再排序来源 FOR UPDATE/快照，再复用 freshness/grant helper；被动路径不变 | 避免与 source→grant 写入顺序倒置，FOR SHARE 又不足以阻挡快照 FK 插入 | 短事务暂时串行化来源写入；网络和模型均在事务外 |
+| Task 6 的空本群来源数组在 fingerprint 中规范为省略，非空集合必须完整计入；v1 下完整零行查询表示已知空，旧 null 不升级 | 历史回执没有区分显式空/省略空的新标记，不能让升级改变旧 fingerprint | 不区分两种空表示；丢失非空来源仍须拒绝，不新增迁移 |
+| 既有共享消息锁 helper 增加有界 typed local bindings；统一排序共享/本群/传入消息，一次完成 runtime 与墓碑门禁 | 分开追加本群锁会倒序，复制 runtime SQL 会使规则漂移 | 一个内部接口/文件扩展；本群派生回答新增普通读/回复门禁，旧无源行为不变 |
+| Task 7 完成 answer-draft-runtime → app → event-worker 的本群 verifier/provider 生产接线，Task 6 只闭合领域与真实测试链 | 三份 runtime 文件已归属下一装配任务，不能只有注入测试而漏实际应用 | Task 6 单独提交还不能自动生效；该接线是 Task 7 必需项 |
+| 本群派生回答的未决发送加入既有内部证据删除冲突查询，保留相同状态与锁序 | 原检查只覆盖 incoming/shared，遗漏新增本群 trace | 多一条精确查询；在途派生回答需结算后才能完成内部删除，不承诺撤回远端消息 |
+| Task 7 复用现有配置/客户端工厂，使用 PD 自有生命周期和同一仓储；增加可选内部 control facade 供 API 使用 | 既有 Q&A runtime 不暴露底层实例，计划的 runtime 又未暴露 API 所需仓储 | 少量类型扩展及独立 token cache；不新增服务，禁用时不创建隐形第二连接 |
+| 非法启用群配置仍拒绝启动；禁用模式无依赖，启用后的运行故障只将 PD 标记 stopped/degraded，不中止 Q&A | 原共享 onReady 链会传播拒绝；必填 registrar 又可能误迫使禁用模式初始化依赖 | 新增局部生命周期/有界关闭测试；Q&A 可用不代表 PD 健康，状态不能伪造成功计数 |
+| 根 Compose 仅数据库/Redis，保持不变并记录原因；环境变量接实际 pilot Core；独立文档上下文仍按既有精确目的群授权校验 | 不为修改清单新增无关服务，也不能把已授权文档混同为跨群原始聊天 | 一项文件处置；授权证明缺失则拒绝来源，不自动创建授权、不读取他群原始/派生聊天 |
 
 ## 四处文档处置（未关闭功能）
 
