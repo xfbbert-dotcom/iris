@@ -1,4 +1,9 @@
-import { createPdSourceRef, type PdAssessment, type PdContext } from "../../src/proactive-discussion/contracts.js";
+import {
+  createPdSourceRef,
+  type PdAssessment,
+  type PdContext,
+  type PdIssue,
+} from "../../src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../src/memory/local-message-source.js";
 
 export const PILOT_CHAT = "oc_637a9aca45f01943477f4e17f1fc5b9a";
@@ -19,4 +24,41 @@ export function pdAssessment(): PdAssessment {
     evidenceRefs: refs, observation: "预算为 10 万，两人各 8 万合计 16 万。", reasoning: "总费用超过预算 6 万。",
     suggestion: "建议先确认是否有追加预算，再确定招聘人数。", uncertainty: "fact",
     materialChange: { kind: "new_issue", explanation: "发现预算与招聘成本矛盾。", evidenceRefs: refs } };
+}
+
+export function pdSkipAssessment(
+  reason: Exclude<PdAssessment["reason"], "material_issue"> = "no_work_value",
+): PdAssessment {
+  return {
+    decision: "skip",
+    reason,
+    issueRef: null,
+    evidenceRefs: [],
+    observation: "",
+    reasoning: "",
+    suggestion: "",
+    uncertainty: "fact",
+    materialChange: { kind: "none", explanation: "", evidenceRefs: [] },
+  };
+}
+
+export function pdContextWithIssue(
+  issueOverrides: Partial<PdIssue> = {},
+): PdContext {
+  const context = pdContext();
+  const issue: PdIssue = {
+    id: "issue-1",
+    chatId: context.chatId,
+    description: "招聘预算不足",
+    state: "surfaced",
+    version: 1,
+    basisVersion: 1,
+    lastObservation: "预算和招聘计划可能不匹配。",
+    lastReasoning: "现有计划可能超过预算。",
+    lastSuggestion: "核对招聘总成本。",
+    basisSources: [context.sources[0]!],
+    hasUnknownDelivery: false,
+    ...issueOverrides,
+  };
+  return { ...context, issues: [issue] };
 }
