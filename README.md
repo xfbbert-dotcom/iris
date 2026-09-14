@@ -33,8 +33,9 @@ The next approved direction is [content-triggered proactive discussion](docs/sup
 Iris notices material work risks, explains its reasoning and suggests improvements, including
 clearly qualified concerns. It is not duplicate deadline reminding and has no fixed conversational
 cooldown that blocks a distinct important issue. The first scope is the original pilot group.
-The written design awaits user review; implementation, model/Feishu acceptance and deployment
-are not complete. The four-place documentation dispositions are in the design's final section.
+The written design is approved and the [implementation plan](docs/superpowers/plans/2026-09-14-iris-proactive-discussion.md)
+is written; coding, model/Feishu acceptance and deployment are not complete. The plan records
+the four-place documentation dispositions and bounded execution/acceptance steps.
 
 The approved three-group [shared working-chat extension](docs/development/iris-shared-working-chat.md)
 is deployed as `f6a6dd41` after passing exact-SHA CI (including PostgreSQL), all nine internal

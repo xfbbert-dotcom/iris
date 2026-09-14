@@ -32,7 +32,9 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 - **Planned guard, not yet implemented:** Independent exact-group event-driven assessment,
   same-issue novelty checks, pre-send correction/source/pause checks, provenance-safe follow-ups
   and durable nonduplicating delivery. The [approved direction and written design](../superpowers/specs/2026-09-09-iris-proactive-discussion-design.md)
-  records the contract and four-place documentation dispositions.
+  records the contract and four-place documentation dispositions. Its written review is complete;
+  the [implementation plan](../superpowers/plans/2026-09-14-iris-proactive-discussion.md) maps the guards
+  to bounded tasks and tests, but no new application/production acceptance is claimed yet.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

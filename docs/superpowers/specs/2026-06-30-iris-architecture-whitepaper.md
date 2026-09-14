@@ -485,7 +485,8 @@ unsolicited cross-group participation, and ordinary suggestions do not authorize
 actions. Requested task creation belongs to the governed Feishu task path, with reminders handled
 by Feishu rather than duplicated by this discussion loop.
 
-This is an approved product direction with a written design awaiting review, not a claim that the
+The written design is approved and the [implementation plan](../plans/2026-09-14-iris-proactive-discussion.md)
+is written; this is not a claim that the
 new runtime has been implemented or deployed. First activation is limited to the original pilot
 group; current Q&A and other groups remain unchanged.
 
