@@ -126,6 +126,15 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   passed all nine real-PG concurrency/provenance cases, including persisted two-step rewrites;
   that does not claim a real Feishu send or a production race was exercised.
 
+- **2026-09-15 local extension:** Proactive Task 5 SQL RED showed ordinary source `FOR SHARE`
+  still allowed a concurrent snapshot INSERT's FK `KEY SHARE` after the old snapshot check.
+  `30f75a98` takes sorted source `FOR UPDATE` before grants, preserving the existing writer
+  order; remote reads/sends stay outside transactions and passive behavior is unchanged.
+  Both snapshot-first and send-first races passed, plus the existing passive revoke/send case.
+  [Task 5's record](../development/iris-proactive-discussion-execution.md#task-5-发送门禁与结果未知本地审查通过)
+  distinguishes actual SQL RED/GREEN, scoped review, fixture timeouts and old pg warnings.
+  This is a pre-release concurrency fix, not evidence of a production failure or deployment.
+
 ### Do not confuse hardening with product completion
 
 - **Failure:** Work continued through increasingly narrow robustness checks while whitepaper core

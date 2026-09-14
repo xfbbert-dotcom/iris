@@ -6,8 +6,8 @@
 
 - 用户选择子任务实施与逐项审查。实现工作树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支 `codex/iris-daily-pilot-followup`；执行起点 `1f1a5efe`。
 - Task 1 基础实现 `24c090fc` 已通过独立审查；Task 2 候选 `9f9f51a0` 的长消息存储/实时身份混用已由 `4ec806d6` 修复并通过范围复审；Task 3 `23c08ba5` 的结构判断/草稿/范围复核通过本地测试与独立审查。没有真实模型验收、飞书发送或部署证据。
-- Task 4 候选 `12d1280b` 已完成状态机/反馈实现与局部真实 PG；初审两处阻塞由 `b1c6564f` 修正，范围复审确认两项已解决、无新增阻塞。下一步 Task 5–8，尚无发送/运行时装配验收。
-- 已实现基础类型、消息完整内容哈希绑定、`0059_proactive_discussion.sql`、基础及评估/反馈 PostgreSQL repository，并以隔离 schema 运行真实数据库测试。发送方法仍属于 Task 5，没有占位运行方法，也没有接入生产入口。
+- Task 4 候选 `12d1280b` 初审两处阻塞由 `b1c6564f` 修正并通过范围复审；Task 5 最终发送声明、结果未知保护与对账持久化 `30f75a98` 已通过独立规格/质量审查。下一步 Task 6–8，尚无运行时装配、真实发送或端到端验收。
+- 已实现基础类型、消息完整内容哈希绑定、`0059_proactive_discussion.sql`、完整评估/反馈/发送 PostgreSQL repository，并以隔离 schema 运行真实数据库测试。发送 worker 的远端边界使用合成替身，没有接入生产入口。
 - 20:44 本机 Docker 已恢复启动；随后在独立 PostgreSQL 16.14 中取得实际缺表失败及修复后通过证据。数据库可用和基础测试通过仍不等于主动讨论端到端可用。
 
 ## 已取得的测试证据
@@ -52,6 +52,21 @@ Task 2 初审范围为 `8a557ed7..9f9f51a0`：只接可选处理器登记、严�
 | 需求/验收基线 | updated：[IRIS-CORE-005](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)链接 Task 3–4 局部实现/修复证据，保持整条链路未完成 |
 | 开工入口 | updated：[当前交接](current-handoff.md)保留候选、发现、修复与下一步；reviewed-unchanged：[README](../../README.md)仍指向当前手册且未声称新功能完成，[AGENTS](../../AGENTS.md)的实际工作树、四处闭环和有限出口仍有效 |
 
+### Task 5 发送门禁与结果未知（本地审查通过）
+
+- 应用提交 `30f75a98`：领取时绑定真实运行修订；发送前实时复验全部来源和最近人类讨论，再在短事务内核对策略、运行状态、消息/墓碑、文档/授权、上下文、问题及领取身份。实际发送调用只在 `sending` 提交后发生一次，稳定 UUID 由投递身份生成；超时、空回执或回执写入失败保持 sending/unknown，不自动重发。同问题所有版本受未知结果约束，独立新问题不受固定冷却影响。
+- 开发中实际 SQL 发现普通来源 `FOR SHARE` 不会阻止新快照 INSERT 的 FK `KEY SHARE`，会让旧快照检查后出现新快照。修为仅主动路径提前按排序获取来源 `FOR UPDATE`，保持来源先于 grant 的既有写入顺序；原被动问答仅抽取最小字段公共锁 helper，不改变行为。
+- 回归：`npm --workspace apps/core test -- proactive-discussion-delivery.test.ts postgres-proactive-discussion-concurrency.test.ts postgres-proactive-discussion-repository.test.ts` 为 81 通过 / 0 跳过；运行中新增的反向快照竞争另以 `-t 'snapshot insert holds source FK lock first'` 得到 1 通过 / 24 名称过滤跳过。共覆盖当前 82 个不同测试，其中 81 个真实 PG、1 个纯绑定单测。旧 `postgres-answer-reply-repository.test.ts` 的 `round-trips an exact grant binding and serializes send start against revoke` 另取得 1 项真实 PG 通过 / 103 名称过滤跳过。两种快照先后顺序、纠正先后顺序、丢失租约、回滚、结果未知和外部 await 不持事务均有实际断言。
+- 完整 Core：`npm --workspace apps/core test` 为 4558 通过 / 427 条件跳过（244 文件通过 / 11 跳过），26.93 秒；`npm run typecheck` 退出 0。此全量未设置 PG URL，PG 接受证据来自上一行，不能将条件跳过计为通过。早期 4 项 5 秒迁移/fixture 超时保留；新测试文件预算改为 30 秒，SQL statement timeout 仍为 3 秒，随后有限回归通过。旧 pg 并发查询 deprecation warning 作为非阻塞既有测试噪声保留，不抑制。
+- 独立审查 `1d9a6a44..30f75a98`：规格与质量通过，0 Critical / 0 Important / 1 Minor（上述 pg warning）。内部仓储对账不证明真人身份或远端回执真实性，Task 7 必须补受保护 API 的真实 Iris 身份、群、正文和回复目标核验；运行装配、实模和真实投递均未声明完成。
+
+| Task 5 四处核对项 | 处置 |
+|---|---|
+| 白皮书 | reviewed-unchanged：[第 6 节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)已要求最终复验、明确本地线性化边界与未知不重发；本次只是落实短事务锁和领取证明，不改变授权/产品语义 |
+| 工程故障台账 | updated：[发送锁的外层事务与写入顺序](../operations/engineering-failure-ledger.md#check-the-outer-message-transaction-when-adding-cross-source-send-locks)补快照 FK 锁的实际 RED/GREEN 和反向竞争，保留既有事故边界 |
+| 需求/验收基线 | updated：[IRIS-CORE-005](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)推进到 Task 5 局部发送门禁通过，保留连续追问/装配/实模/部署缺口 |
+| 开工入口 | updated：[当前交接](current-handoff.md)指向 Task 6–8；reviewed-unchanged：[README](../../README.md)及[AGENTS](../../AGENTS.md)的工作树、交接和四处闭环规则仍正确，没有新增安装或生产启用步骤 |
+
 ## 历史：本机环境阻塞及已做的操作
 
 `IRIS_TEST_DATABASE_URL` 未设置，未找到已运行的本地 PostgreSQL/pgvector。Docker Desktop 启动日志确认 Windows Unix listener 的旧运行时描述符无法访问，错误反复出现；没有就绪的 Docker engine。
@@ -89,11 +104,11 @@ Task 4 后续 SQL 回归出现连接终止、recovery mode，随后本机 TCP `S
 
 新库初始化 `vector` 到 `public`，SQL 确认 PostgreSQL 16.14 / vector 0.8.5；主机 TCP `SELECT 1` 成功。配置测试库 `max_wal_size=256MB`、`min_wal_size=64MB`、`checkpoint_timeout=60s`，不用固定小内存盘承受连续迁移测试。原失败记录保留，Task 4 恢复后必须重新取得受影响用例的实际 RED/GREEN 和最终回归，不能沿用早前 59 通过作为终态。
 
-本机数据库阻塞再次解除，Task 1–4 已提交并通过独立审查。后续使用上述新磁盘卷实例；若再次停止，先核对本任务容器和数据卷，不恢复或混用生产数据：
+本机数据库阻塞再次解除，Task 1–5 已提交并通过独立审查。后续使用上述新磁盘卷实例；若再次停止，先核对本任务容器和数据卷，不恢复或混用生产数据：
 
 1. 从[当前接手入口](current-handoff.md)规定的 git/文档核对开始，保留已有提交和用户改动。
-2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、各任务 report 与审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已完成的 Task 1–4。
-3. Task 1 已审查 `1f1a5efe..24c090fc`；Task 2 初审 `8a557ed7..9f9f51a0` 后复审 `9f9f51a0..4ec806d6`；Task 3 审查 `3484159d..23c08ba5` 无阻塞发现；Task 4 初审 `16c7ab8d..12d1280b` 后复审 `12d1280b..b1c6564f` 通过。继续 Task 5–8；不得为重现 RED 删除或改写已提交的 0059。100 条目录容量与 resolved 身份生命周期列为有界后续，不能静默丢弃身份，也不在本轮扩建归档系统。
+2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、各任务 report 与审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已完成的 Task 1–5。
+3. Task 1 已审查 `1f1a5efe..24c090fc`；Task 2 初审 `8a557ed7..9f9f51a0` 后复审 `9f9f51a0..4ec806d6`；Task 3 审查 `3484159d..23c08ba5` 无阻塞发现；Task 4 初审 `16c7ab8d..12d1280b` 后复审 `12d1280b..b1c6564f` 通过；Task 5 审查 `1d9a6a44..30f75a98` 通过。继续 Task 6–8；不得为重现 RED 删除或改写已提交的 0059。100 条目录容量与 resolved 身份生命周期列为有界后续，不能静默丢弃身份，也不在本轮扩建归档系统。
 4. 未经当前任务新的部署授权，不推送、部署、发飞书消息或开放任何能力。
 
 Task 3 审查 P2：直接手工构造零来源 `PdContext` 时 schema 的 `enum: []` 非法；当前 builder 返回上下文前必须找到触发消息，因此正常生产构建器不可达。留给 Task 8 场景/最终审查判断是否进入修复，不写成已解决。LF/CRLF 提示单独作为本机基线噪声保留。
@@ -115,6 +130,9 @@ Task 3 审查 P2：直接手工构造零来源 `PdContext` 时 schema 的 `enum:
 | Task 4 为 @ 反馈持久化 registrar 真正匹配到的 Iris mention key；实时同人同群正文身份匹配后才可按该字面前缀解析 | 登记器支持 @+停止，worker 却缺少已验证 mention 信息，不能靠去掉任意 @ 字样补齐 | 小型内部 proof 字段及共享解析器；它证明原入口元数据与未变正文，不声称实时 reader 又核验了 mention 映射 |
 | Task 4/5 只要求触发消息具有本地事实；其他已实时验证的历史来源不强制先入库，仍锁身份/墓碑并按上下文变化重评 | 实际历史生产者不保证本地行存在，不能把计划中“全部来源检查”误写成全部入库条件 | 依赖明确的实时读取＋本地线性化边界；不声称远端修改与本地发送原子 |
 | 历次已消费的问题依据通过既有不可变历史查询，不把所有旧源并入当前 basis | 仅记上一轮会遗忘更早依据；全并入当前模型上下文又会扩大失权影响 | 多一次历史检查；已消费的未变依据不能在 resolved/reopen 后重新授权，但真正新依据仍可使用 |
+| Task 5 实时最近人类窗口须包含于保存的完整来源绑定，并独立复验所有已保存来源；不要求与旧问题依据的并集相等 | 没有另存窗口快照，旧有效前提可能在最近窗口之外 | 辅助来源失效也可能保守取消；不增加 schema，也不声称远端原子快照 |
+| 领取投递新增 checkedRuntimeRevision，最终发送在锁内比对且检查实际开关；普通只读 DTO 不伪造领取证明 | 原接口缺少领取时的真实修订，无法正确比较 | 小型类型/测试调整；配置来回变化也会取消重评 |
+| 主动文档门禁先 managed advisory，再排序来源 FOR UPDATE/快照，再复用 freshness/grant helper；被动路径不变 | 避免与 source→grant 写入顺序倒置，FOR SHARE 又不足以阻挡快照 FK 插入 | 短事务暂时串行化来源写入；网络和模型均在事务外 |
 
 ## 四处文档处置（未关闭功能）
 
