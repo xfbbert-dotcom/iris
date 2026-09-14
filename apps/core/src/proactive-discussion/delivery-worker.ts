@@ -5,9 +5,10 @@ import type { PdClaimedDelivery, PdRepository } from "./repository.js";
 import type { PdSourceVerifier } from "./source-verifier.js";
 import { hashLocalMessageText } from "../memory/local-message-source.js";
 
-export function createPdDeliveryWorker({ repository, sourceVerifier, reader, replier, now, workerId }: {
+export function createPdDeliveryWorker({ repository, sourceVerifier, reader, replier, now, workerId, isStopping = () => false }: {
   repository: PdRepository; sourceVerifier: PdSourceVerifier; reader: FeishuChatHistoryReader;
   replier: FeishuMessageReplier; now: () => Date; workerId: string;
+  isStopping?: () => boolean;
 }): { runOnce(): Promise<"idle" | "processed" | "failed"> } {
   return {
     async runOnce() {
@@ -15,18 +16,23 @@ export function createPdDeliveryWorker({ repository, sourceVerifier, reader, rep
       let declared = false;
       let receiptRecorded = false;
       try {
+        if (isStopping()) return "idle";
         const at = now();
         delivery = await repository.claimDelivery({ workerId, at, leaseUntil: new Date(at.getTime() + 60_000) });
         if (!delivery) return "idle";
+        if (isStopping()) throw new Error("runtime stopping");
         const state = await repository.readState(delivery.chatId);
+        if (isStopping()) throw new Error("runtime stopping");
         if (state.contextVersion !== delivery.contextVersion
           || !await sourceVerifier.verify({ chatId: delivery.chatId, sources: delivery.sources })
-          || !await currentWindowMatches(delivery)) {
+          || isStopping() || !await currentWindowMatches(delivery)) {
           await repository.cancelDelivery({ delivery, reason: "context_stale", at: now() });
           return "processed";
         }
+        if (isStopping()) throw new Error("runtime stopping");
         if (await repository.beginSend({ delivery, checkedContextVersion: state.contextVersion, at: now() }) !== "sending") return "processed";
         declared = true;
+        if (isStopping()) throw new Error("runtime stopping");
         // Exactly one invocation after the durable declaration. A missing receipt
         // or uncertain database response can never restore a prepared delivery.
         const uuid = "pd-" + createHash("sha256").update(delivery.id).digest("hex").slice(0, 40);

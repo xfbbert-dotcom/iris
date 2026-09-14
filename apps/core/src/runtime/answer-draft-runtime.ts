@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { createLocalMessageSourceVerifier, type LocalMessageSourceVerifier } from "../memory/local-message-source.js";
+import { createPdReceiptProvider } from "../proactive-discussion/receipt-provider.js";
 import { createPostgresWorkingChatScopeRepository, type WorkingChatScopeDataSource } from "../shared-chat/postgres-working-chat-scope-repository.js";
 import { createSharedChatSourceVerifier } from "../shared-chat/shared-chat-source-verifier.js";
 import type { WorkingChatScopeRepository, SharedChatSourceVerifier } from "../shared-chat/working-chat-scope.js";
@@ -151,6 +153,7 @@ import {
 export type AnswerDraftRuntime = {
   workingChatScopes?: WorkingChatScopeRepository;
   sharedChatVerifier?: SharedChatSourceVerifier;
+  localMessageVerifier?: LocalMessageSourceVerifier;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
     & Partial<Pick<
       AnswerDraftOrchestrator,
@@ -396,6 +399,9 @@ export function createAnswerDraftRuntime({
         managedSourceQueryable: pool,
       })
     : createUnavailableAnswerSourcePermissionVerifier();
+  const localMessageVerifier = feishuAnswerSources?.historyReader === undefined ? undefined
+    : createLocalMessageSourceVerifier({ reader: feishuAnswerSources.historyReader,
+      canReadGroup: sharedChatRuntimeGate.canReadGroupContext });
   const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({
     delegate: dependencies.createLiveChatContextProvider?.({ repository: conversationMessages })
       ?? (feishuAnswerSources?.historyReader === undefined
@@ -410,6 +416,8 @@ export function createAnswerDraftRuntime({
             }),
             assistantReplies: createAssistantConversationContextProvider({ queryable: pool,
               reader: feishuAnswerSources.historyReader, verifier: answerSourcePermissionVerifier,
+              ...(localMessageVerifier === undefined ? {} : { localMessageVerifier }),
+              proactiveReceipts: createPdReceiptProvider({ queryable: pool }),
               ...(sharedChatVerifier === undefined ? {} : { sharedChatVerifier, requireChatProvenance: true }),
               ...(crossGroupGrantValidator === undefined ? {} : { grants: crossGroupGrantValidator }),
             }),
@@ -548,6 +556,7 @@ export function createAnswerDraftRuntime({
     answerSourcePermissionVerifier,
     ...(workingChatScopes === undefined ? {} : { workingChatScopes }),
     ...(sharedChatVerifier === undefined ? {} : { sharedChatVerifier }),
+    ...(localMessageVerifier === undefined ? {} : { localMessageVerifier }),
     chatKnowledgeDraftGenerator: createChatKnowledgeDraftGenerator({
       repository: conversationMessages,
       model,
@@ -1006,7 +1015,7 @@ function normalizeCurrentGroupId(groupId: string | undefined): string | undefine
   return normalized;
 }
 
-async function resolveRuntimeEmbedding({
+export async function resolveRuntimeEmbedding({
   embeddingConfig,
   profiles,
   createEmbeddingProvider,

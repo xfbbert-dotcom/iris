@@ -17,6 +17,27 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
   dataSource: PostgresConversationStateDataSource;
 }): PdRepository {
   return {
+    async readDelivery(deliveryId) {
+      identifier(deliveryId, 512);
+      return transaction(dataSource, async client => {
+        const row = (await client.query("SELECT * FROM proactive_discussion_deliveries WHERE id=$1", [deliveryId])).rows[0];
+        return row ? { ...decodeDelivery(row, await deliverySources(client, deliveryId)),
+          version: safeInteger(row.version, 1), replyMessageId: row.reply_message_id === null ? null : identifier(row.reply_message_id, 505) } : null;
+      }, true);
+    },
+    async resumeByOperator({ chatId, issueId, expectedVersion, operatorId, at }) {
+      if (chatId !== PD_PILOT_CHAT) return "blocked";
+      identifier(issueId, 512); identifier(operatorId, 256); safeInteger(expectedVersion, 1); date(at);
+      return transaction(dataSource, async client => {
+        await client.query("SELECT chat_id FROM proactive_discussion_groups WHERE chat_id=$1 FOR UPDATE", [chatId]);
+        const row = (await client.query(`${issueSelect} WHERE i.id=$1 AND i.chat_id=$2 FOR UPDATE OF i`, [issueId, chatId])).rows[0];
+        if (!row || safeInteger(row.version, 1) !== expectedVersion) return "conflict";
+        if (row.state !== "user_paused" || row.unknown_delivery === true) return "blocked";
+        await changeIssueParticipation(client, { chatId, issueId, action: "resume", at,
+          origin: "operator", actorId: operatorId });
+        return "applied";
+      });
+    },
     async claimDelivery({ workerId, at, leaseUntil }) {
       identifier(workerId, 256); date(at); date(leaseUntil);
       if (leaseUntil <= at) throw new Error("lease must end after claim time");
@@ -258,8 +279,8 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           await settleJob(client, job, "completed", "feedback_no_change", at); return "duplicate";
         }
         if (issue.state !== next) {
-          await client.query(`UPDATE proactive_discussion_issues SET state=$2,version=version+1,updated_at=$3 WHERE id=$1`, [issueId, next, at]);
-          await advanceCatalog(client, job.chatId, at);
+          await changeIssueParticipation(client, { chatId: job.chatId, issueId, action, at,
+            origin: "feishu_member", actorId: actorOpenId });
         }
         // Both pause and resume invalidate any old pending advice. Resume waits
         // for a future message with a materially new basis before preparing again.
@@ -416,6 +437,19 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
 
 const issueSelect = `SELECT i.*, EXISTS (SELECT 1 FROM proactive_discussion_deliveries d
   WHERE d.issue_id=i.id AND d.state IN ('sending','outcome_unknown')) AS unknown_delivery FROM proactive_discussion_issues i`;
+
+async function changeIssueParticipation(client: TransactionClient, input: {
+  chatId: string; issueId: string; action: "pause" | "resume"; at: Date; origin: "operator" | "feishu_member"; actorId: string;
+}) {
+  await client.query(`UPDATE proactive_discussion_issues SET state=$2,version=version+1,updated_at=$3 WHERE id=$1`,
+    [input.issueId, input.action === "pause" ? "user_paused" : "observing", input.at]);
+  await advanceCatalog(client, input.chatId, input.at);
+  await cancelPrepared(client, input.issueId, input.action === "pause" ? "user_paused" : "user_resumed", input.at);
+  await client.query(`INSERT INTO proactive_discussion_events(chat_id,entity_type,entity_id,operation,payload,created_at)
+    VALUES($1,'issue',$2,'UPDATE',$3::jsonb,$4)`, [input.chatId, input.issueId,
+    JSON.stringify({ origin: input.origin, action: input.action,
+      ...(input.origin === "operator" ? { operatorId: input.actorId } : { actorOpenId: input.actorId }) }), input.at]);
+}
 
 async function hasUnconsumedIssueEvidence(client: TransactionClient, issue: PdIssue, candidates: PdSource[]): Promise<boolean> {
   // Current basis prose stays bounded to its actual premises. Novelty also checks

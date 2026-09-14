@@ -19,6 +19,11 @@ import { createAnswerDraftOrchestrator } from "../src/agent/answer-draft-orchest
 import { createDocumentRetrievalContextBuilder } from "../src/memory/document-retrieval-context.js";
 import { createAnswerReplyDeliveryService } from "../src/answer-replies/answer-reply-delivery-service.js";
 import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
+import { createProactiveDiscussionRuntime } from "../src/runtime/proactive-discussion-runtime.js";
+import { RuntimeController } from "../src/admin/runtime-controller.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
+import { createDocumentFragmentRepository } from "../src/documents/document-fragment-repository.js";
+import { createEmbeddingProfileRepository } from "../src/documents/embedding-profile-repository.js";
 import type { FeishuChatHistoryMessage, FeishuChatHistoryReader } from "../src/feishu/feishu-chat-history-reader.js";
 
 // Each case migrates an isolated schema; SQL lock waits remain capped at 3s.
@@ -41,6 +46,143 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion final
       sharedChatSources: [], localMessageSources: sources, at });
     return { repository, receipt, sources };
   }
+  test.each(["normal", "stop-before-review", "granted-document", "grant-revoked", "snapshot-replaced", "restored-wiki-disabled", "restored-source-disabled"])("actual PD factory runs registered work and honors transport lifecycle: %s", async mode => {
+    db = await openPdDatabase();
+    const context = pdContext();
+    await db.repository.setPolicy({ policy: context.policy, expectedVersion: 0, at });
+    await db.pool.query("UPDATE runtime_control_state SET desired_global_enabled=true, capabilities=jsonb_set(jsonb_set(capabilities,'{readGroupContext}','true'),'{proactiveSpeech}','true')");
+    for (const [index, item] of context.items.entries()) {
+      await db.pool.query(`INSERT INTO conversation_messages(id,provider,provider_message_id,chat_id,message_type,text,sender_open_id,sent_at,raw_event_idempotency_key)
+        VALUES($1,'feishu',$2,$3,'text',$4,'human',$5,$2)`, [`feishu:m${index + 1}`, `m${index + 1}`, PILOT_CHAT, item.text, at]);
+    }
+    await db.repository.register({ chatId: PILOT_CHAT, messageId: "m2", contentHash: hashLocalMessageText(context.items[1]!.text), policyVersion: 1, purpose: "assessment", at });
+    const sends: unknown[] = [];
+    const modelInputs: string[] = [];
+    const controller = new RuntimeController(createDefaultRuntimeConfig({}));
+    const restoredPermissionChange = mode.startsWith("restored-");
+    let revoke: (() => Promise<unknown>) | undefined;
+    if (["granted-document", "grant-revoked", "snapshot-replaced"].includes(mode) || restoredPermissionChange) {
+      await db.pool.query(`INSERT INTO document_sources(id,source_type,source_uri,origin_group_id,permission_state,sync_state,can_use_for_answering,can_use_for_knowledge_drafts,created_at,updated_at)
+        VALUES('runtime-doc','group_visible_document','https://synthetic.feishu.cn/docx/runtimeDoc','owner','readable','synced',true,false,$1,$1)`, [at]);
+      await db.pool.query(`INSERT INTO document_snapshots(id,document_source_id,source_uri,fetch_status,body_text,fetched_at,created_at)
+        VALUES('runtime-snapshot','runtime-doc','https://synthetic.feishu.cn/docx/runtimeDoc','succeeded','grant-test-document-secret',$1,$1)`, [at]);
+      const grants = createPostgresDocumentSourceGroupGrantRepository({ dataSource: db.pool });
+      const grant = await grants.grant({ documentSourceId: "runtime-doc", grantorGroupId: "owner", granteeGroupId: PILOT_CHAT,
+        expectedVersion: 0, operationKey: "runtime-grant", actorRef: "operator", at });
+      await createDocumentFragmentRepository({ queryable: db.pool, embeddingProfiles: createEmbeddingProfileRepository({ queryable: db.pool }) })
+        .replaceFragmentsForSnapshot({ documentSourceId: "runtime-doc", documentSnapshotId: "runtime-snapshot",
+          sourceUri: "https://synthetic.feishu.cn/docx/runtimeDoc", embeddingProfileId: "static-dev-6d",
+          chunks: [{ chunkIndex: 0, text: "grant-test-document-secret" }], embeddings: [[1,0,0,0,0,0]] });
+      if (mode === "grant-revoked") revoke = () => grants.revoke({ grantId: grant.grant.id, expectedVersion: 1,
+        operationKey: "runtime-revoke", actorRef: "operator", at });
+      if (mode === "snapshot-replaced" || restoredPermissionChange) {
+        const binding = { documentSourceId: "runtime-doc", documentSnapshotId: "runtime-snapshot",
+          ...(mode === "restored-wiki-disabled" ? {} : { crossGroupGrantId: grant.grant.id,
+            crossGroupGrantVersion: 1, crossGroupGrantorGroupId: "owner", crossGroupGranteeGroupId: PILOT_CHAT }) };
+        await db.pool.query(`INSERT INTO proactive_discussion_issues(id,chat_id,description,state,version,basis_version,last_observation,last_reasoning,last_suggestion,basis_sources)
+          VALUES('restored-issue',$1,'restored-issue-secret','surfaced',1,1,'restored-issue-secret','restored-issue-secret','restored-issue-secret',$2::jsonb)`,
+          [PILOT_CHAT, JSON.stringify([{ kind: "document", binding, ref: createPdSourceRef({ kind: "document", binding }) }])]);
+        if (mode === "snapshot-replaced") await db.pool.query(`INSERT INTO document_snapshots(id,document_source_id,source_uri,fetch_status,body_text,fetched_at,created_at)
+          VALUES('new-runtime-snapshot','runtime-doc','https://synthetic.feishu.cn/docx/runtimeDoc','succeeded','new current source',$1,$1)`, [time(1)]);
+        if (restoredPermissionChange) {
+          // Only the restored premise is exposed, so mutate during its own final remote proof.
+          await db.pool.query("DELETE FROM document_fragments WHERE document_source_id='runtime-doc'");
+          if (mode === "restored-wiki-disabled") {
+            await db.pool.query("UPDATE document_sources SET source_type='authorized_wiki_document',origin_group_id=$1 WHERE id='runtime-doc'", [PILOT_CHAT]);
+            revoke = async () => controller.setCapability("retrieveKnowledgeBase", false);
+          } else revoke = () => db.pool.query("UPDATE document_sources SET sync_state='failed' WHERE id='runtime-doc'");
+        }
+      }
+    }
+    let receiptSender = "app-id", receiptChat = PILOT_CHAT, receiptText = "两人需要 16 万，建议先核对预算。", receiptTarget = "m2";
+    const modelOutputs = [pdAssessment(), { text: receiptText, evidenceRefs: pdAssessment().evidenceRefs }, { supported: true, reason: "supported" }];
+    let runtime: ReturnType<typeof createProactiveDiscussionRuntime>;
+    const messages = context.items.map((item, index) => ({ message_id: `m${index + 1}`, chat_id: PILOT_CHAT,
+      deleted: false, sender: { sender_type: "user", id: "human" }, msg_type: "text",
+      body: { content: JSON.stringify({ text: item.text }) }, create_time: String(at.getTime()) }));
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith("/chat/completions")) {
+        modelInputs.push(String(init?.body));
+        const output = modelOutputs.shift();
+        if (mode === "stop-before-review" && modelOutputs.length === 1) void runtime.close();
+        return Response.json({ choices: [{ message: { content: JSON.stringify(output) } }] });
+      }
+      if (path.includes("/docx/v1/documents/")) {
+        const mutate = revoke; revoke = undefined; await mutate?.();
+        return Response.json({ code: 0, data: {} });
+      }
+      if (path.includes("tenant_access_token")) return Response.json({ code: 0, tenant_access_token: "synthetic", expire: 7200 });
+      if (path.endsWith("/reply")) { sends.push(JSON.parse(String(init?.body))); return Response.json({ code: 0, data: { message_id: "receipt" } }); }
+      if (path.endsWith("/receipt")) return Response.json({ code: 0, data: { items: [{ ...messages[0], message_id: "receipt", chat_id: receiptChat,
+        sender: { sender_type: "app", id: receiptSender }, body: { content: JSON.stringify({ text: receiptText }) }, parent_id: receiptTarget }] } });
+      if (path.includes("/messages?")) return Response.json({ code: 0, data: { items: messages, has_more: false } });
+      const message = messages.find(item => path.endsWith(`/${item.message_id}`));
+      if (message) return Response.json({ code: 0, data: { items: [message] } });
+      throw new Error(`unexpected synthetic endpoint: ${path}`);
+    }) as unknown as typeof globalThis.fetch;
+    runtime = createProactiveDiscussionRuntime({ env: {
+      IRIS_PROACTIVE_DISCUSSION_ENABLED: "true", IRIS_PROACTIVE_DISCUSSION_GROUP_IDS: PILOT_CHAT,
+      IRIS_PROACTIVE_DISCUSSION_POLL_INTERVAL_MS: "10", DATABASE_URL: process.env.IRIS_TEST_DATABASE_URL,
+      FEISHU_APP_ID: "app-id", FEISHU_APP_SECRET: "synthetic", FEISHU_OPEN_BASE_URL: "http://127.0.0.1:1",
+      IRIS_FEISHU_BOT_OPEN_ID: "ou_bot", IRIS_MODEL_PROVIDER: "openai-compatible", IRIS_MODEL_BASE_URL: "http://127.0.0.1:1/v1",
+      IRIS_MODEL_API_KEY: "synthetic", IRIS_MODEL_NAME: "synthetic" },
+      runtimeController: controller, now: () => at,
+      dependencies: { createPostgresPool: () => Object.assign(Object.create(db.pool), { end: async () => undefined }), fetch },
+    } as Parameters<typeof createProactiveDiscussionRuntime>[0]);
+    try {
+      await runtime.start();
+      expect(await runtime.getStatus()).toMatchObject({ enabled: true, running: true, ok: true });
+      if (mode === "stop-before-review") {
+        await vi.waitFor(async () => expect((await db.pool.query("SELECT state FROM proactive_discussion_jobs")).rows[0].state).toBe("retry"), { timeout: 3000 });
+        expect(modelOutputs).toHaveLength(1);
+        expect(sends).toHaveLength(0);
+        return;
+      }
+      if (mode === "grant-revoked") {
+        await vi.waitFor(() => expect(modelInputs.length).toBeGreaterThan(0), { timeout: 3000 });
+        expect(modelInputs.join(" ")).not.toContain("grant-test-document-secret");
+      }
+      if (mode === "snapshot-replaced" || restoredPermissionChange) {
+        await vi.waitFor(() => expect(modelInputs.length).toBeGreaterThan(0), { timeout: 3000 });
+        if (restoredPermissionChange) expect(revoke).toBeUndefined();
+        expect(modelInputs.join(" ")).not.toContain("restored-issue-secret");
+        await vi.waitFor(async () => expect((await db.pool.query("SELECT last_error FROM proactive_discussion_jobs")).rows[0].last_error).toBe("incomplete_catalog"));
+        expect(sends).toHaveLength(0);
+        return;
+      }
+      await vi.waitFor(async () => expect((await db.pool.query("SELECT state FROM proactive_discussion_deliveries")).rows[0].state).toBe("sent"), { timeout: 3000 });
+      expect(sends).toHaveLength(1);
+      expect(modelOutputs).toHaveLength(0);
+      if (mode === "granted-document") expect(modelInputs.join(" ")).toContain("grant-test-document-secret");
+      if (mode === "grant-revoked") expect(modelInputs.join(" ")).not.toContain("grant-test-document-secret");
+      const delivery = (await db.pool.query("SELECT id FROM proactive_discussion_deliveries")).rows[0];
+      const saved = (await runtime.control!.repository.readDelivery(delivery.id))!;
+      expect(await runtime.control!.verifySentReceipt(saved, "receipt")).toBe(true);
+      for (const mutate of [() => { receiptSender = "foreign-app"; }, () => { receiptChat = "foreign-chat"; },
+        () => { receiptText = "edited"; }, () => { receiptTarget = "other-parent"; }]) {
+        mutate(); expect(await runtime.control!.verifySentReceipt(saved, "receipt")).toBe(false);
+        receiptSender = "app-id"; receiptChat = PILOT_CHAT; receiptText = saved.text; receiptTarget = "m2";
+      }
+    } finally { await runtime.close(); }
+  });
+  test("operator resume uses issue CAS, records truthful origin, cancels old draft and never creates a job", async () => {
+    const delivery = await setup();
+    await db.pool.query("UPDATE proactive_discussion_issues SET state='user_paused',version=version+1 WHERE id=$1", [delivery.issueId]);
+    const issue = (await db.repository.readState(PILOT_CHAT)).issues[0]!;
+    const input = { chatId: PILOT_CHAT, issueId: issue.id, expectedVersion: issue.version, operatorId: "internal-api:operations", at };
+    expect(typeof db.repository.resumeByOperator).toBe("function");
+    expect(await Promise.all([db.repository.resumeByOperator(input), db.repository.resumeByOperator(input)]))
+      .toEqual(expect.arrayContaining(["applied", "conflict"]));
+    expect((await db.repository.readState(PILOT_CHAT)).issues[0]).toMatchObject({ state: "observing", version: issue.version + 1 });
+    expect(await db.repository.readDelivery(delivery.id)).toMatchObject({ state: "cancelled", replyMessageId: null, version: expect.any(Number) });
+    expect(await db.repository.readDelivery(delivery.id)).not.toHaveProperty("checkedRuntimeRevision");
+    expect((await db.pool.query("SELECT count(*)::integer AS n FROM proactive_discussion_jobs")).rows[0].n).toBe(1);
+    const audit = await db.pool.query("SELECT payload FROM proactive_discussion_events WHERE entity_type='issue' AND payload->>'origin'='operator'");
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0].payload).toMatchObject({ operatorId: "internal-api:operations", action: "resume" });
+    expect(await db.repository.resumeByOperator({ ...input, chatId: "other" })).toBe("blocked");
+  });
   test("passive local trace roundtrip is immutable and rereads complete sent provenance", async () => {
     const { repository, receipt, sources } = await preparePassive();
     expect(receipt.localMessageSources).toEqual(sources);

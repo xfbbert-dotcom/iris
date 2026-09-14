@@ -8,18 +8,21 @@ import { hashLocalMessageText } from "../memory/local-message-source.js";
 import { parsePdFeedback, removePdFeedbackMention } from "./feedback.js";
 import type { PdJob } from "./contracts.js";
 
-export function createPdEvaluationWorker({ repository, contextBuilder, model, membership, reader, now, workerId }: {
+export function createPdEvaluationWorker({ repository, contextBuilder, model, membership, reader, now, workerId, isStopping = () => false }: {
   repository: PdEvaluationRepository; contextBuilder: PdContextBuilder; model: PdModel;
   membership: Pick<FeishuGroupMembershipChecker, "isCurrentMember">;
   reader: FeishuChatHistoryReader; now: () => Date; workerId: string;
+  isStopping?: () => boolean;
 }): { runOnce(): Promise<"idle" | "processed" | "failed"> } {
   return {
     async runOnce() {
       let job: PdJob | null = null;
       try {
+        if (isStopping()) return "idle";
         const at = now();
         job = await repository.claimEvaluation({ workerId, at, leaseUntil: new Date(at.getTime() + 60_000) });
         if (job === null) return "idle";
+        if (isStopping()) throw new Error("runtime stopping");
         if (job.purpose === "feedback") {
           const feedbackJob = job;
           const block = async () => {
@@ -28,6 +31,7 @@ export function createPdEvaluationWorker({ repository, contextBuilder, model, me
           };
           if (!job.feedback || !reader.readMessagesByIds) return await block();
           const messages = await reader.readMessagesByIds({ chatId: job.chatId, messageIds: [job.messageId], sender: "user" });
+          if (isStopping()) throw new Error("runtime stopping");
           const message = messages.length === 1 ? messages[0] : undefined;
           const storedText = message && normalizeConversationMessageTextForStorage(message.text);
           if (!message || message.messageId !== job.messageId || message.chatId !== job.chatId
@@ -38,16 +42,21 @@ export function createPdEvaluationWorker({ repository, contextBuilder, model, me
             || parsePdFeedback(removePdFeedbackMention(message.text, job.feedback.irisMentionKey)) !== job.feedback.action) return await block();
           const issue = await repository.findIssueByReply({ chatId: job.chatId, replyMessageId: job.feedback.replyMessageId });
           if (!issue || issue.chatId !== job.chatId) return await block();
+          if (isStopping()) throw new Error("runtime stopping");
           if (!await membership.isCurrentMember({ chatId: job.chatId, openId: job.feedback.actorOpenId })) return await block();
+          if (isStopping()) throw new Error("runtime stopping");
           await repository.applyFeedback({ job, action: job.feedback.action, issueId: issue.id, expectedIssueVersion: issue.version,
             actorOpenId: job.feedback.actorOpenId, verifiedReplyMessageId: job.feedback.replyMessageId,
             verifiedMessage: { chatId: job.chatId, messageId: message.messageId, contentHash: hashLocalMessageText(message.text) }, at: now() });
           return "processed";
         }
         const context = await contextBuilder.load(job);
+        if (isStopping()) throw new Error("runtime stopping");
         if (context === null) { await repository.requeueEvaluation({ job, at: now() }); return "processed"; }
         const assessment = await model.assess(context);
+        if (isStopping()) throw new Error("runtime stopping");
         const draft = assessment.decision === "intervene" ? await model.render({ context, assessment }) : null;
+        if (isStopping()) throw new Error("runtime stopping");
         await repository.commitEvaluation({ job, context, assessment, draft, at: now() });
         return "processed";
       } catch {

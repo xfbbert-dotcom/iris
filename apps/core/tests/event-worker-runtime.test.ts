@@ -248,6 +248,7 @@ describe("createEventWorkerRuntime", () => {
     };
     const tokenProvider = { getTenantAccessToken: vi.fn() };
     const replier = { replyText: vi.fn() };
+    const localMessageVerifier = { verify: vi.fn(async () => false) };
     const mentionAnswerResponder = { maybeRespond: vi.fn() };
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const knowledgeDraftCommand = { execute: vi.fn() };
@@ -324,6 +325,7 @@ describe("createEventWorkerRuntime", () => {
       runtimeController,
       answerDraftOrchestrator,
       sharedChatVerifier,
+      localMessageVerifier,
       knowledgeDraftCommand,
       formalTaskDraftCommand,
       now,
@@ -355,6 +357,7 @@ describe("createEventWorkerRuntime", () => {
       replier,
       verifier: expect.any(Object),
       sharedChatVerifier,
+      localMessageVerifier,
       now,
     });
     await expect(deliveryServiceVerifier?.verify({

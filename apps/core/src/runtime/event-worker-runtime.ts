@@ -71,6 +71,8 @@ import type { ChatKnowledgeDraftCommand } from "../knowledge-governance/chat-kno
 import type { ChatFormalTaskDraftCommand } from
   "../formal-tasks/chat-formal-task-draft-command.js";
 import { closeRuntimeResources } from "./runtime-close.js";
+import type { LocalMessageSourceVerifier } from "../memory/local-message-source.js";
+import type { PdRegistrar } from "../proactive-discussion/registrar.js";
 import { observeStartupPromise } from "./startup-promise.js";
 
 export type EventWorkerRuntime = {
@@ -160,6 +162,8 @@ export async function createEventWorkerRuntime({
   answerDraftOrchestrator,
   answerSourcePermissionVerifier,
   sharedChatVerifier,
+  localMessageVerifier,
+  proactiveDiscussionRegistrar,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
   formalTaskDraftCommand,
@@ -171,6 +175,8 @@ export async function createEventWorkerRuntime({
   answerDraftOrchestrator?: MentionAnswerDraftOrchestrator;
   answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   sharedChatVerifier?: SharedChatSourceVerifier;
+  localMessageVerifier?: LocalMessageSourceVerifier;
+  proactiveDiscussionRegistrar?: PdRegistrar;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
   formalTaskDraftCommand?: Pick<ChatFormalTaskDraftCommand, "execute">;
@@ -189,6 +195,8 @@ export async function createEventWorkerRuntime({
     answerDraftOrchestrator,
     answerSourcePermissionVerifier,
     sharedChatVerifier,
+    localMessageVerifier,
+    proactiveDiscussionRegistrar,
     memoryExtractionPlanner,
     knowledgeDraftCommand,
     formalTaskDraftCommand,
@@ -204,6 +212,8 @@ async function createEnabledEventWorkerRuntime({
   answerDraftOrchestrator,
   answerSourcePermissionVerifier,
   sharedChatVerifier,
+  localMessageVerifier,
+  proactiveDiscussionRegistrar,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
   formalTaskDraftCommand,
@@ -216,6 +226,8 @@ async function createEnabledEventWorkerRuntime({
   answerDraftOrchestrator: MentionAnswerDraftOrchestrator | undefined;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
   sharedChatVerifier: SharedChatSourceVerifier | undefined;
+  localMessageVerifier: LocalMessageSourceVerifier | undefined;
+  proactiveDiscussionRegistrar: PdRegistrar | undefined;
   memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   formalTaskDraftCommand: Pick<ChatFormalTaskDraftCommand, "execute"> | undefined;
@@ -295,6 +307,7 @@ async function createEnabledEventWorkerRuntime({
       answerSourcePermissionVerifier:
         answerSourcePermissionVerifier ?? createUnavailableAnswerSourcePermissionVerifier(),
       sharedChatVerifier,
+      localMessageVerifier,
       knowledgeDraftCommand,
       formalTaskDraftCommand,
       runtimeController,
@@ -313,6 +326,8 @@ async function createEnabledEventWorkerRuntime({
       syncPlanner,
     });
     const processor = createProcessor({
+      ...(proactiveDiscussionRegistrar === undefined ? {} : { proactiveDiscussionRegistrar,
+        proactiveDiscussionBotOpenId: readOptionalFeishuBotOpenId(env) }),
       messages,
       messageReplayGuard,
       documentLinkExtractor,
@@ -416,6 +431,7 @@ function createOptionalMentionAnswerResponder({
   answerDraftOrchestrator,
   answerSourcePermissionVerifier,
   sharedChatVerifier,
+  localMessageVerifier,
   knowledgeDraftCommand,
   formalTaskDraftCommand,
   runtimeController,
@@ -432,6 +448,7 @@ function createOptionalMentionAnswerResponder({
   answerDraftOrchestrator: MentionAnswerDraftOrchestrator | undefined;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   sharedChatVerifier: SharedChatSourceVerifier | undefined;
+  localMessageVerifier: LocalMessageSourceVerifier | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   formalTaskDraftCommand: Pick<ChatFormalTaskDraftCommand, "execute"> | undefined;
   runtimeController: RuntimeGate | undefined;
@@ -475,6 +492,7 @@ function createOptionalMentionAnswerResponder({
     repository: answerReplyRepository,
     verifier: answerSourcePermissionVerifier,
     ...(sharedChatVerifier === undefined ? {} : { sharedChatVerifier }),
+    ...(localMessageVerifier === undefined ? {} : { localMessageVerifier }),
     replier,
     now,
   });

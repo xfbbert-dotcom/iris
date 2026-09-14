@@ -907,6 +907,7 @@ describe("GET /internal/status", () => {
       schemaVersion: 1,
       generatedAt: "2026-07-03T07:30:00.000Z",
       componentOrder: [
+        "proactiveDiscussion",
         "audit",
         "runtimeControl",
         "answerDraft",
@@ -924,13 +925,14 @@ describe("GET /internal/status", () => {
         "proactiveSignals",
       ],
       summary: {
-        componentCount: 15,
+        componentCount: 16,
         healthyComponentCount: 3,
         degradedComponentCount: 3,
         degradedComponents: ["eventWorker", "documentSync", "reindex"],
         enabledComponentCount: 6,
-        disabledComponentCount: 9,
+        disabledComponentCount: 10,
         disabledComponents: [
+          "proactiveDiscussion",
           "answerDraft",
           "agentExecutionLedger",
           "memoryExtraction",
@@ -947,7 +949,7 @@ describe("GET /internal/status", () => {
         stoppedEnabledRuntimeComponents: ["reindex"],
         componentStatusCounts: {
           healthy: 3,
-          disabled: 9,
+          disabled: 10,
           degraded: 2,
           stopped: 1,
         },
@@ -955,6 +957,7 @@ describe("GET /internal/status", () => {
           { name: "eventWorker", status: "degraded" },
           { name: "documentSync", status: "degraded" },
           { name: "reindex", status: "stopped" },
+          { name: "proactiveDiscussion", status: "disabled" },
           { name: "answerDraft", status: "disabled" },
           { name: "agentExecutionLedger", status: "disabled" },
           { name: "memoryExtraction", status: "disabled" },
@@ -965,12 +968,14 @@ describe("GET /internal/status", () => {
           { name: "managedKnowledgeUpdates", status: "disabled" },
           { name: "proactiveSignals", status: "disabled" },
         ],
-        attentionComponentCount: 12,
+        attentionComponentCount: 13,
         requiresOperatorAttention: true,
         primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
         attentionSeverity: "critical",
       },
       components: {
+        proactiveDiscussion: { status: "disabled", enabled: false, running: false, ok: true,
+          pending: 0, failed: 0, deadLetter: 0, unknown: 0, lastSuccessAt: null },
         audit: {
           status: "healthy",
           ok: true,
@@ -1696,13 +1701,14 @@ describe("GET /internal/status", () => {
     expect(response.json().ok).toBe(false);
     expect(response.json().status).toBe("degraded");
     expect(response.json().summary).toEqual({
-      componentCount: 15,
+      componentCount: 16,
       healthyComponentCount: 3,
       degradedComponentCount: 2,
       degradedComponents: ["eventWorker", "documentSync"],
       enabledComponentCount: 5,
-      disabledComponentCount: 10,
+      disabledComponentCount: 11,
       disabledComponents: [
+        "proactiveDiscussion",
         "answerDraft",
         "agentExecutionLedger",
         "memoryExtraction",
@@ -1720,13 +1726,14 @@ describe("GET /internal/status", () => {
       stoppedEnabledRuntimeComponents: ["eventWorker"],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 10,
+        disabled: 11,
         degraded: 2,
         stopped: 0,
       },
       attentionComponents: [
         { name: "eventWorker", status: "degraded" },
         { name: "documentSync", status: "degraded" },
+        { name: "proactiveDiscussion", status: "disabled" },
         { name: "answerDraft", status: "disabled" },
         { name: "agentExecutionLedger", status: "disabled" },
         { name: "memoryExtraction", status: "disabled" },
@@ -1738,7 +1745,7 @@ describe("GET /internal/status", () => {
         { name: "managedKnowledgeUpdates", status: "disabled" },
         { name: "proactiveSignals", status: "disabled" },
       ],
-      attentionComponentCount: 12,
+      attentionComponentCount: 13,
       requiresOperatorAttention: true,
       primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
       attentionSeverity: "critical",

@@ -308,6 +308,7 @@ describe("memory extraction internal API", () => {
     const consolidated = await app.inject({ method: "GET", url: "/internal/status" });
     expect(consolidated.statusCode).toBe(200);
     expect(consolidated.json().componentOrder).toEqual([
+      "proactiveDiscussion",
       "audit",
       "runtimeControl",
       "answerDraft",
@@ -325,11 +326,12 @@ describe("memory extraction internal API", () => {
       "proactiveSignals",
     ]);
     expect(consolidated.json().summary).toMatchObject({
-      componentCount: 15,
+      componentCount: 16,
       healthyComponentCount: 3,
       enabledComponentCount: 3,
-      disabledComponentCount: 12,
+      disabledComponentCount: 13,
       disabledComponents: [
+        "proactiveDiscussion",
         "answerDraft",
         "agentExecutionLedger",
         "memoryExtraction",
@@ -345,7 +347,7 @@ describe("memory extraction internal API", () => {
       ],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 12,
+        disabled: 13,
         degraded: 0,
         stopped: 0,
       },

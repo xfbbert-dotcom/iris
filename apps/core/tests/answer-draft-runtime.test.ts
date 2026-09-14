@@ -10,6 +10,8 @@ import type { GroupMemory, GroupMemoryRepository } from "../src/memory/group-mem
 import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
 import type { EvidencePlanner } from "../src/model/openai-compatible-evidence-planner.js";
 import type { GroundedAnswerRenderer } from "../src/model/openai-compatible-grounded-answer-renderer.js";
+import { createPdSourceRef } from "../src/proactive-discussion/contracts.js";
+import type { FeishuChatHistoryMessage } from "../src/feishu/feishu-chat-history-reader.js";
 import {
   createAnswerDraftRuntime as createProductionAnswerDraftRuntime,
 } from "../src/runtime/answer-draft-runtime.js";
@@ -35,6 +37,57 @@ function createAnswerDraftRuntime(input: RuntimeInput = {}) {
 }
 
 describe("createAnswerDraftRuntime", () => {
+  it("ordinary runtime consumes actual PD receipt provider and carries its human source with proactive disabled", async () => {
+    const sentAt = new Date(Date.now() - 1000);
+    const binding = { chatId: "ordinary-group", messageId: "human-source", contentHash: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" };
+    const source = { kind: "message" as const, binding };
+    const { planner, renderer } = createDirectTaskReasoningDoubles();
+    const runtime = createAnswerDraftRuntime({ env: { ...enabledEnv(), IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      FEISHU_APP_ID: "app-id", FEISHU_APP_SECRET: "synthetic", IRIS_PROACTIVE_DISCUSSION_ENABLED: "false" },
+      runtimeController: { canReadDocuments: () => true, canRetrieveKnowledgeBase: () => true,
+        canReadGroupContext: () => true, canProcessGroupMessage: () => true },
+      dependencies: {
+        createPostgresPool: () => ({ query: async <T>(sql: string) => ({ rows: (
+          sql.includes("FROM proactive_discussion_deliveries") ? [{ id: "pd-delivery", chat_id: binding.chatId, reply_message_id: "pd-reply", sent_at: sentAt, state: "sent", source_count: 1 }]
+            : sql.includes("FROM proactive_discussion_sources") ? [{ delivery_id: "pd-delivery", source_index: 0, kind: "message", binding, ref: createPdSourceRef(source) }] : []
+        ) as T[] }), end: async () => undefined }),
+        createFeishuChatHistoryReader: () => ({ listRecentMessages: async () => [], readMessagesByIds: async input => input.sender === "assistant"
+          ? [{ messageId: "pd-reply", chatId: binding.chatId, senderId: "app-id", role: "assistant", text: "先核对招聘预算。", sentAt } as FeishuChatHistoryMessage]
+          : [{ messageId: "human-source", chatId: binding.chatId, senderId: "human", text: "hello", sentAt }] }),
+        createDocumentFragmentRepository: () => ({ searchSimilarFragments: async () => [] }),
+        createEmbeddingProfileRepository: () => ({ getStaticDevelopmentProfile: async () => profile(), findOrCreateProfile: vi.fn(), getProfileById: vi.fn() }),
+        createEvidencePlanner: () => planner, createGroundedAnswerRenderer: () => renderer,
+        createModelProvider: () => ({ generateAnswerDraft: async () => ({ answerText: "继续核对预算。" }) }),
+      } });
+    try {
+      const answer = await runtime!.answerDraftOrchestrator.generateDraft({ question: "沿用刚才的招聘预算讨论，继续解释", chatId: binding.chatId, liveChatMessages: [] });
+      expect(answer.localMessageSources).toEqual([binding]);
+      expect(JSON.stringify(vi.mocked(planner.plan).mock.calls)).toContain("先核对招聘预算");
+    } finally { await runtime!.close(); }
+  });
+
+  it("freshly verifies ordinary local sources without proactive permission", async () => {
+    let readable = true;
+    const runtime = createAnswerDraftRuntime({
+      env: { ...enabledEnv(), IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy", FEISHU_APP_ID: "app-id", FEISHU_APP_SECRET: "app-secret" },
+      runtimeController: { canReadDocuments: () => true, canRetrieveKnowledgeBase: () => true,
+        canReadGroupContext: () => readable, canProcessGroupMessage: () => true },
+      dependencies: {
+        createPostgresPool: () => ({ query: async () => ({ rows: [] }), end: async () => undefined }),
+        createFeishuChatHistoryReader: () => ({ listRecentMessages: async () => [],
+          readMessagesByIds: async () => [{ chatId: "ordinary-group", messageId: "m1", senderId: "human", text: "hello", sentAt: new Date() }] }),
+      },
+    });
+    const verifier = (runtime as unknown as { localMessageVerifier?: { verify(input: unknown): Promise<boolean> } }).localMessageVerifier;
+    expect(verifier).toBeDefined();
+    const input = { chatId: "ordinary-group", sources: [{ chatId: "ordinary-group", messageId: "m1",
+      contentHash: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" }] };
+    await expect(verifier!.verify(input)).resolves.toBe(true);
+    readable = false;
+    await expect(verifier!.verify(input)).resolves.toBe(false);
+    await runtime!.close();
+  });
+
   it("returns undefined when runtime is disabled", () => {
     expect(createAnswerDraftRuntime({ env: {} })).toBeUndefined();
   });

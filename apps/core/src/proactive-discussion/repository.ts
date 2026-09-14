@@ -2,6 +2,8 @@ import type { LocalMessageSourceBinding } from "../memory/local-message-source.j
 import type { PdAssessment, PdContext, PdDelivery, PdDraft, PdIssue, PdJob, PdPolicy, PdStatus } from "./contracts.js";
 
 export interface PdRepository {
+  resumeByOperator(input: { chatId: string; issueId: string; expectedVersion: number; operatorId: string; at: Date }): Promise<"applied" | "conflict" | "blocked">;
+  readDelivery(deliveryId: string): Promise<(PdDelivery & { version: number; replyMessageId: string | null }) | null>;
   setPolicy(input: { policy: PdPolicy; expectedVersion: number; at: Date }): Promise<"applied" | "conflict">;
   register(input: {
     chatId: string; messageId: string; contentHash: string; policyVersion: number;

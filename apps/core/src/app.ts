@@ -171,12 +171,18 @@ import {
   type AgentExecutionLedgerRuntime,
 } from "./runtime/agent-execution-ledger-runtime.js";
 import { observeStartupPromise } from "./runtime/startup-promise.js";
+import type { LocalMessageSourceVerifier } from "./memory/local-message-source.js";
+import { createProactiveDiscussionRuntime, type ProactiveDiscussionRuntime } from "./runtime/proactive-discussion-runtime.js";
+import { registerProactiveDiscussionApi, readInternalApiAuditActor } from "./proactive-discussion/api.js";
+import { readProactiveDiscussionConfig } from "./config/runtime-config.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   sharedChatVerifier?: SharedChatSourceVerifier;
+  localMessageVerifier?: LocalMessageSourceVerifier;
+  proactiveDiscussionRegistrar?: ProactiveDiscussionRuntime["registrar"];
   memoryExtractionPlanner?: MemoryExtractionRuntime["planner"];
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
   formalTaskDraftCommand?: Pick<ChatFormalTaskDraftCommand, "execute">;
@@ -193,6 +199,8 @@ export type RuntimeControlDependency = {
 };
 
 export type BuildAppDependencies = {
+  createProactiveDiscussionRuntime?: typeof createProactiveDiscussionRuntime;
+  internalApiAuditActor?: string;
   queue?: EventQueue;
   rawEventQueue?: Pick<RawEventQueue, "enqueue"> &
     Partial<Pick<RawEventQueue, "getPendingCount">>;
@@ -410,6 +418,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   let agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
   let composedKnowledgeConflictRuntime: KnowledgeConflictRuntime | undefined;
   let answerDraftRuntime: AnswerDraftRuntime | undefined;
+  let proactiveDiscussionRuntime: ProactiveDiscussionRuntime | undefined;
+  let proactiveDiscussionStartup: Promise<void> | undefined;
+  let proactiveDiscussionFailed = false;
   let answerDraftOrchestrator = dependencies.answerDraftOrchestrator;
   let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
   let memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
@@ -625,10 +636,17 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
           (proactiveSignalPlannerStartup ?? actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
             .then(() => proactiveSignalDeliveryRuntime!.start()),
         );
+    const proactiveDiscussionConfig = readProactiveDiscussionConfig(process.env);
+    try {
+      proactiveDiscussionRuntime = (dependencies.createProactiveDiscussionRuntime ?? createProactiveDiscussionRuntime)({ runtimeController });
+      proactiveDiscussionStartup = observeStartupPromise(Promise.resolve().then(() => proactiveDiscussionRuntime!.start())
+        .catch(() => { proactiveDiscussionFailed = true; }));
+    } catch { proactiveDiscussionFailed = true; }
     eventWorkerRuntime = await (
       dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime
     )({
       runtimeController,
+      ...(!proactiveDiscussionConfig.enabled || proactiveDiscussionRuntime === undefined ? {} : { proactiveDiscussionRegistrar: proactiveDiscussionRuntime.registrar }),
       ...(answerDraftOrchestrator === undefined
         ? {}
         : { answerDraftOrchestrator }),
@@ -644,6 +662,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       ...(answerDraftRuntime?.sharedChatVerifier === undefined
         ? {}
         : { sharedChatVerifier: answerDraftRuntime.sharedChatVerifier }),
+      ...(answerDraftRuntime?.localMessageVerifier === undefined
+        ? {}
+        : { localMessageVerifier: answerDraftRuntime.localMessageVerifier }),
       ...(chatKnowledgeDraftCommand === undefined
         ? {}
         : { knowledgeDraftCommand: chatKnowledgeDraftCommand }),
@@ -698,6 +719,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   startupApp = app;
 
   if (
+    proactiveDiscussionStartup !== undefined ||
     knowledgeCardStartup !== undefined ||
     actionApprovalStartup !== undefined ||
     knowledgeConflictStartup !== undefined ||
@@ -706,6 +728,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     eventWorkerStartup !== undefined
   ) {
     app.addHook("onReady", async () => {
+      await proactiveDiscussionStartup;
       await knowledgeCardStartup;
       await actionApprovalStartup;
       await knowledgeConflictStartup;
@@ -858,6 +881,11 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  registerProactiveDiscussionApi(app, proactiveDiscussionRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    auditActor: readInternalApiAuditActor(dependencies.internalApiAuditActor ?? process.env.IRIS_INTERNAL_API_AUDIT_ACTOR), now,
+  });
+
   app.get("/internal/audit/status", async () => ({
     ok: true,
     enabled: true,
@@ -887,6 +915,12 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       delivery: proactiveSignalDeliveryRuntime,
     });
     const components = {
+      proactiveDiscussion: await (async () => {
+        try {
+          if (proactiveDiscussionFailed || !proactiveDiscussionRuntime) throw new Error("unavailable");
+          return await proactiveDiscussionRuntime.getStatus();
+        } catch { return { ok: false, enabled: true, running: false, degradedReason: "proactive_discussion_unavailable" }; }
+      })(),
       audit: {
         ok: true,
         enabled: true,
@@ -2149,6 +2183,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       return;
     }
     await closeRuntimeResources([
+      () => proactiveDiscussionRuntime?.close(),
       () => gateway.close(),
       () => documentSyncRuntime?.close(),
       () => eventWorkerRuntime?.close(),
@@ -2176,6 +2211,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   return app;
   } catch (error) {
     const cleanup = scheduleRuntimeStartupCleanup({
+      proactiveDiscussionRuntime,
       app: startupApp,
       gateway: startupGateway,
       agentExecutionLedgerRuntime,
@@ -2620,6 +2656,7 @@ async function closeRuntimeResources(
 }
 
 function scheduleRuntimeStartupCleanup({
+  proactiveDiscussionRuntime,
   app,
   gateway,
   agentExecutionLedgerRuntime,
@@ -2641,6 +2678,7 @@ function scheduleRuntimeStartupCleanup({
   knowledgeDraftRuntime,
   formalTaskRuntime,
 }: {
+  proactiveDiscussionRuntime: ProactiveDiscussionRuntime | undefined;
   app: Pick<FastifyInstance, "close"> | undefined;
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
@@ -2663,6 +2701,7 @@ function scheduleRuntimeStartupCleanup({
   formalTaskRuntime: FormalTaskRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
+    () => proactiveDiscussionRuntime?.close(),
     () => gateway?.close(),
     () => documentSyncRuntime?.close(),
     () => eventWorkerRuntime?.close(),
@@ -3917,6 +3956,7 @@ export async function startServer({
   createRuntimeControlRuntime = createDefaultRuntimeControlRuntime,
 }: StartServerOptions = {}) {
   const internalApiToken = readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
+  readInternalApiAuditActor(process.env.IRIS_INTERNAL_API_AUDIT_ACTOR);
   const feishuAuthConfig = readFeishuAuthConfig();
   const host = resolveServerListenHost(
     internalApiToken,
@@ -3942,6 +3982,7 @@ export async function startServer({
     app = await buildApp({
       ...productionAppDependencies,
       internalApiToken,
+      internalApiAuditActor: process.env.IRIS_INTERNAL_API_AUDIT_ACTOR,
       runtimeControl: runtimeControlRuntime.runtimeControl,
       closeRuntimeControl: () => runtimeControlRuntime.close(),
       onRuntimeStartupCleanup: (cleanup) => {
