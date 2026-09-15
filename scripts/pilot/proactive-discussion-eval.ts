@@ -14,6 +14,35 @@ export type PdEvalDiagnostic = {
 };
 export type PdEvalResult = { caseId: string; round: number; assessment: PdAssessment | null; draft: PdDraft | null; error: string | null; diagnostic: PdEvalDiagnostic | null };
 
+export function createRequestPacedFetch({
+  fetch,
+  requestIntervalMs,
+  now = Date.now,
+  sleep = sleepForPacing,
+}: {
+  fetch: typeof globalThis.fetch;
+  requestIntervalMs: number;
+  now?: () => number;
+  sleep?: (milliseconds: number, signal?: AbortSignal | null) => Promise<void>;
+}): typeof globalThis.fetch {
+  if (!Number.isSafeInteger(requestIntervalMs) || requestIntervalMs < 0 || requestIntervalMs > 60_000) {
+    throw new Error("request interval must be 0..60000");
+  }
+  let lastRequestStartedAt: number | undefined;
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (signal?.aborted) throw pacingAbortError();
+    if (lastRequestStartedAt !== undefined && requestIntervalMs > 0) {
+      const elapsed = Math.max(0, now() - lastRequestStartedAt);
+      const remaining = requestIntervalMs - elapsed;
+      if (remaining > 0) await sleep(remaining, signal);
+    }
+    if (signal?.aborted) throw pacingAbortError();
+    lastRequestStartedAt = now();
+    return fetch(input, init);
+  }) as typeof globalThis.fetch;
+}
+
 export async function runProactiveDiscussionEval({ model, cases, rounds }: {
   model: PdModel; cases: readonly PdEvalCase[]; rounds: number;
 }): Promise<PdEvalResult[]> {
@@ -116,21 +145,16 @@ export function createProactiveDiscussionEvalCases(): PdEvalCase[] {
 }
 
 async function main() {
-  let rounds = 2;
   try {
-    const args = process.argv.slice(2);
-    if (args.length) {
-      if (args.length !== 2 || args[0] !== "--rounds" || !/^[1-9]\d*$/u.test(args[1]!)) throw new Error("invalid arguments");
-      rounds = Number(args[1]);
-    }
-    if (rounds > 10) throw new Error("invalid rounds");
+    const { rounds, requestIntervalMs } = parseArguments(process.argv.slice(2));
     const config = readModelProviderConfig();
     if (!config) throw new Error("missing model config");
     const cases = createProactiveDiscussionEvalCases();
-    const results = await runProactiveDiscussionEval({ model: createPdModel({ client: createOpenAICompatibleChatCompletionsClient({ config }) }), cases, rounds });
+    const fetch = createRequestPacedFetch({ fetch: globalThis.fetch, requestIntervalMs });
+    const results = await runProactiveDiscussionEval({ model: createPdModel({ client: createOpenAICompatibleChatCompletionsClient({ config, fetch }) }), cases, rounds });
     const decisionMismatches = results.filter(r => r.assessment !== null && r.assessment.decision !== cases.find(c => c.id === r.caseId)!.expectedDecision)
       .map(r => `${r.caseId}:${r.round}`);
-    const report = { kind: "proactive-discussion-synthetic-model-eval", rounds, manualReview: "pending",
+    const report = { kind: "proactive-discussion-synthetic-model-eval", rounds, requestIntervalMs, manualReview: "pending",
       acceptance: "provider execution only; human semantic review and live-group acceptance remain separate",
       cases: cases.map(({ id, expectedDecision, reviewCriteria }) => ({ id, expectedDecision, reviewCriteria })), results, decisionMismatches };
     // No config/headers/upstream error body is logged. Protect even accidental key echoes in provider prose.
@@ -138,9 +162,40 @@ async function main() {
       typeof value === "string" ? value.replaceAll(config.apiKey, "[REDACTED]") : value, 2));
     process.exitCode = results.some(r => r.error !== null) || decisionMismatches.length ? 1 : 0;
   } catch {
-    console.error("proactive-eval configuration/arguments unavailable; use IRIS_MODEL_PROVIDER, IRIS_MODEL_BASE_URL, IRIS_MODEL_API_KEY, IRIS_MODEL_NAME and --rounds 1..10");
+    console.error("proactive-eval configuration/arguments unavailable; use IRIS_MODEL_PROVIDER, IRIS_MODEL_BASE_URL, IRIS_MODEL_API_KEY, IRIS_MODEL_NAME, --rounds 1..10 and --request-interval-ms 0..60000");
     process.exitCode = 2;
   }
+}
+
+function parseArguments(args: readonly string[]): { rounds: number; requestIntervalMs: number } {
+  let rounds = 2, requestIntervalMs = 0;
+  const seen = new Set<string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index], value = args[index + 1];
+    if (value === undefined || flag === undefined || seen.has(flag)) throw new Error("invalid arguments");
+    seen.add(flag);
+    if (flag === "--rounds" && /^[1-9]\d*$/u.test(value)) rounds = Number(value);
+    else if (flag === "--request-interval-ms" && /^\d+$/u.test(value)) requestIntervalMs = Number(value);
+    else throw new Error("invalid arguments");
+  }
+  if (!Number.isSafeInteger(rounds) || rounds > 10
+    || !Number.isSafeInteger(requestIntervalMs) || requestIntervalMs > 60_000) throw new Error("invalid arguments");
+  return { rounds, requestIntervalMs };
+}
+
+function sleepForPacing(milliseconds: number, signal?: AbortSignal | null): Promise<void> {
+  if (signal?.aborted) return Promise.reject(pacingAbortError());
+  return new Promise((resolve, reject) => {
+    const finish = () => { cleanup(); resolve(); };
+    const abort = () => { clearTimeout(timer); cleanup(); reject(pacingAbortError()); };
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const timer = setTimeout(finish, milliseconds);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function pacingAbortError(): Error {
+  return Object.assign(new Error("request pacing aborted"), { name: "AbortError" });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
