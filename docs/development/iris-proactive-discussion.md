@@ -4,17 +4,23 @@
 
 ## 当前边界
 
+最新修复 `68f16e04` → `fbd18724` 的固定合成trace、来源优先阶段合同与唯一触发绑定、回归和
+run4/run5实际结果见[本次诊断记录](iris-proactive-discussion-model-trace-20260915.md)。
+run5的30个决策全部正确，但完整语义口径26通过/2失败/2未完整，尚未通过或部署；
+下一步先确认有限的判断/文案联合复核设计，不以内部文案正确覆盖assessment错误。
+下文 run1–3 与 Task 8 记录保留，最新下一步以本次记录和[当前交接](current-handoff.md)为准。
+
 2026-09-15 后续全分支审查发现的四项 Important 已合并修复并通过唯一一次范围复审，见[修复与回归记录](iris-proactive-discussion-final-fixes.md)。
-下文 Task 8 数字保留为当时证据；最新应用 SHA、0060 迁移、保留失败与有限复审出口以修复记录为准，
+下文Task8数字保留为当时证据；该次应用SHA、0060迁移、保留失败与有限复审出口以其修复记录为准，
 不能把旧局部绿灯当成这四项原本不存在。
 
 随后用户明确授权就地复用服务端模型配置，[2026-09-15 首次两轮实模](iris-proactive-discussion-model-eval-20260915.md)
 已运行但未通过：23 次 assessment_failed、1 次 render_failed，另有完整结果未明确原定数值差额。
 7 个可见决策均正确；24 个不完整结果不算错误决策，也不能补猜为通过。配置已找到且未下载密钥，
 后续诊断一次 HTTP 200 不说明原失败原因。随后 `d9200703`/`d2db25be` 的诊断、数值、介入边界及
-eval-only pacing 修复和新复测见[最新有限修复记录](iris-proactive-discussion-model-fixes-20260915.md)，
+eval-only pacing修复和当时复测见[此前run1–3有限修复记录](iris-proactive-discussion-model-fixes-20260915.md)，
 保留 run2 的 21 个 HTTP429 和两个真实漏报；run3 无429，但24通过/4失败/2未完整，仍未通过。
-未部署、启用或发群消息；下一步以最新记录的具体失效与安全诊断方案为准，不盲重跑。
+当时未部署、启用或发群消息；当前下一步以[run4/run5后的有限边界](iris-proactive-discussion-model-trace-20260915.md#下一步有限边界)为准，不盲重跑。
 
 已实现新的独立主动讨论链，默认关闭且名单为空；首轮只允许 `oc_637a9aca45f01943477f4e17f1fc5b9a`。触发来自本群非 @ 人类讨论，来源为本群及已授权文档，按问题和实质依据去重，无固定发言冷却或日额度。发送依据是 `authorizationKind=policy`，不伪造人工批准。
 

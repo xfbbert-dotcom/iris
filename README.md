@@ -38,11 +38,14 @@ is implemented through the local end-to-end path and a synthetic-only model eval
 the [finite acceptance and release handoff](docs/development/iris-proactive-discussion.md) records
 actual tests, retained failures and four-place dispositions. The [first failed real-model run](docs/development/iris-proactive-discussion-model-eval-20260915.md)
 and the subsequent [bounded model/evaluator repairs and repeated evaluation](docs/development/iris-proactive-discussion-model-fixes-20260915.md)
-are recorded separately. Latest application repair is `d2db25be`; complete local Core regression is
-4622 passed / 463 conditionally skipped. This fixes diagnostics and clarifies numerical/risk reasoning;
+are recorded separately. The latest [synthetic trace, stage-contract and trigger-binding repairs](docs/development/iris-proactive-discussion-model-trace-20260915.md)
+are `68f16e04` → `fbd18724`; complete local Core regression is 4631 passed / 463 conditionally skipped.
+They preserve bounded diagnostics, distinguish structural validation from semantic approval and explicitly bind the trigger to its source text;
 evaluation-only HTTP pacing does not add a production conversational cooldown.
-Configuration is available, but latest run3 still fails semantic acceptance: 24 pass, 4 fail and 2
-incomplete, with no HTTP 429 in that run. Exact-SHA CI and real-Feishu deployment/acceptance remain
+Configuration is available. Run4 was 25 pass / 5 fail / 0 incomplete; latest run5 has all 30 decisions correct,
+but complete semantic acceptance is still 26 pass / 2 fail / 2 incomplete. Remaining assessment overclaims
+and mixed-quality draft rejection require a bounded joint-review design, not further unchanged sampling.
+Exact-SHA CI and real-Feishu deployment/acceptance remain
 pending and require current authorization; proactive discussion has not been activated.
 The 2026-09-15 [final-review fixes](docs/development/iris-proactive-discussion-final-fixes.md)
 address issue-prose provenance, unattempted stale drafts, owned lease renewal and startup registration;

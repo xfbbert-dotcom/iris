@@ -65,6 +65,22 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   draft/review and bounded validation evidence inside synthetic evaluation before selecting another
   mechanism change. A qualified label cannot repair an unconditional claim, and correct arithmetic
   cannot justify changing a cost category or inventing a company approval rule.
+  The [synthetic trace and stage-contract repair](../development/iris-proactive-discussion-model-trace-20260915.md)
+  separates successful provider candidates from locally accepted outputs, including rejected drafts
+  and both assessment attempts. Structural/reference validation is not semantic approval: downstream
+  rewriting and review must check the authorized source, including errors inherited from assessment,
+  rather than treating agreement with an upstream model as confirmation. Trace replay is diagnostic,
+  not evidence of the model's private reasoning or a replacement for semantic acceptance.
+  Run4 also exposed a serialization gap: the trigger message ID survived, but its link to the
+  material ref/body did not. Derive the trigger material from its unique trusted binding, never
+  from array order or an old issue description; missing/ambiguous/unavailable trigger material
+  must fail before model execution. This input repair does not prove every semantic miss fixed.
+  Run5 made all 30 decisions correctly but still had two semantic failures and two rejected drafts.
+  A source-grounded final draft cannot retroactively validate a retained assessment. Review must
+  distinguish a suggested verification step from a claim that an action or approval occurred;
+  a refusal is neither automatically a safety success nor a useful delivered intervention.
+  Use the retained failures for a bounded joint-review design before adding any repair loop;
+  keep an explicit maximum and stop on repeated failure rather than sampling until green.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,
