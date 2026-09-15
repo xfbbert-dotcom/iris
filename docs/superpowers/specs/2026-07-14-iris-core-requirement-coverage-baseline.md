@@ -22,7 +22,7 @@
 | IRIS-CORE-002 | Iris 被拉入群后持续接收群消息，即使未被 @ 也理解讨论 | 内部 MVP 已实现 | Feishu Gateway ack-first；Raw Event Queue；消息事实持久化；普通非 @ 文本异步抽取；同群证据绑定；semantic thread 的 candidate/open/resolved/reopened/merged 生命周期；显式 commitment/action 生命周期；回答时当前群检索；真实六步非 @ 消息灰度形成唯一 thread/action 且无主动发言 | 在受控日常 pilot 中观察业务语言覆盖；失败进入可重试/DLQ，不扩大到未启用群 |
 | IRIS-CORE-003 | Iris 随时间学习，用户不必重复解释业务背景 | 内部 MVP 已实现 | Postgres `group_memories`、`discussion_threads`、`action_items` 与 append-only events/evidence；置信度与候选隔离；幂等、重试、冷却、DLQ 与 projection repair；版本化纠错；当前群 bounded retrieval；真实六步灰度验证 create/promote/resolve/reopen 与 action create/complete | 先通过真实日常使用校准抽取质量；广泛跨群记忆共享仍保持关闭 |
 | IRIS-CORE-004 | 在授权后跨群和跨数据源学习 | 首个跨群文档回答闭环已实现（默认拒绝） | 精确 SHA CI（含真实 PostgreSQL 迁移/并发）通过；真实三群验收验证授权前隔离、精确授权后受权群回答、对照群隔离、撤销后立即拒绝、重新授权与幂等重放，并完成默认拒绝回滚；当前群文档、授权知识库、用户手动提交文档继续使用统一文档源和权限策略 | 跨群记忆和跨群知识草稿仍缺失；主动跨群使用、任务/知识库写入、通配授权和广泛发布仍未实现，后续必须分别设计、验收且继续默认隔离 |
-| IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 部分实现：旧人工提醒已验收；主动讨论本地链已验证 | Phase 6A 旧时间触发提醒的真实验收保留。[主动讨论设计](2026-09-09-iris-proactive-discussion-design.md)与[实施计划](../plans/2026-09-14-iris-proactive-discussion.md)已批准；Task 1–7 基础/上下文/模型边界/状态/发送/连续追问/实际装配通过局部真实 PG 与独立审查，见[执行记录](../../development/iris-proactive-discussion-execution.md)。Task 8 `89f299f5` 端到端/runner/CI 配置通过 Core 4607 项、逐文件门禁 86 项（83 真实 PG）、Python 181、pilot 脚本 182 及类型/构建/Compose，失败与边界见[专项记录](../../development/iris-proactive-discussion.md) | 独立审查、两轮真实模型人工审阅、精确 SHA CI 与当次授权的真实单群投递/停止/恢复尚待；模型配置缺失、生产未启用，不设固定冷却阻挡新问题 |
+| IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 部分实现：旧人工提醒已验收；主动讨论本地链已验证，首次实模未通过 | Phase 6A 旧时间触发提醒的真实验收保留。[主动讨论设计](2026-09-09-iris-proactive-discussion-design.md)与[实施计划](../plans/2026-09-14-iris-proactive-discussion.md)已批准；Task 1–7 基础/上下文/模型边界/状态/发送/连续追问/实际装配通过局部真实 PG 与独立审查，见[执行记录](../../development/iris-proactive-discussion-execution.md)。Task 8 `89f299f5` 端到端/runner/CI 配置通过 Core 4607 项、逐文件门禁 86 项（83 真实 PG）、Python 181、pilot 脚本 182 及类型/构建/Compose，后续 `7a0a2e38` 修复和唯一范围复审通过，见[专项记录](../../development/iris-proactive-discussion.md) | 配置已找到，[两轮实模已运行未通过](../../development/iris-proactive-discussion-model-eval-20260915.md)：24 项缺完整结果、另有完整结果数值差额遗漏；可见决策不等于整体质量通过。精确 SHA CI 与当次授权的真实单群投递/停止/恢复仍待；生产未启用，不设固定冷却阻挡新问题 |
 | IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 旧提醒链路已实现（默认关闭）；非本轮产品目标 | 现有同群 thread/action 时间扫描、版本绑定、幂等候选、人工批准和一次真实反馈/暂停验收仍保留 | 2026-09-09 用户明确不以重复催办作为主动参与；飞书任务负责原生提醒。不扩建或启用该旧链路，也不以它替代 IRIS-CORE-005 的新验收 |
 | IRIS-CORE-007 | Iris 将讨论整理成内容，先发群里让用户确认 | 已实现 | Phase 5A Postgres 知识草稿事实层；5B-1 版本绑定群确认/修改/拒绝卡片；5B-2A `ActionProposal`、风险矩阵、目标策略、角色 grant、负责人/管理员审批卡片、实时授权、治理 API、幂等 callback 与 readiness；5B-2B 飞书 OAuth + PKCE、完整正文/哈希审阅、append-only attestation 与批准前精确门禁；真实 Feishu pilot 已覆盖群确认、请求修改、负责人/管理员批准、撤销和私聊审批卡；Admin Console 已具备知识草稿状态/列表摘要、安全请求修改/拒绝入口，以及发布/action proposal 队列治理入口 | 批量审批、复杂协作编辑和更细的 reviewer 映射进入 backlog |
 | IRIS-CORE-008 | 用户确认后同步到飞书知识库 | 已实现 | 5B-3 飞书知识库发布执行器、授权 wiki root、幂等 publication execution、失败恢复/对账、回群结果和真实 Feishu pilot；未经确认、审阅和所需批准不会写入 | 后续补充批量发布、冲突检测、发布模板和更友好的发布历史页面；核心写入闭环已成立 |
@@ -47,6 +47,18 @@
   迁移/旧未知来源限制、四处处置和一次范围复审边界见该记录。IRIS-CORE-005 不提升为完成，
   实模、exact-SHA CI 与真实单群投递/停止/恢复仍未验收。
 - 本修订澄清 IRIS-CORE-005 的实际缺口，不抹去旧 IRIS-CORE-006 和历史 P1 灰度成果，也不将“旧提醒卡能发送”写成语义主动协作已完成。
+
+### 2026-09-15 首次两轮实模未通过
+
+- 用户明确授权后在服务器独立进程中就地复用既有模型配置，未下载密钥或读取生产群历史。
+  被评估应用 `7a0a2e38`、模型 gemini-3.5-flash-lite，固定 15 例两轮退出 1；
+  [原始报告、逐例语义复核和边界](../../development/iris-proactive-discussion-model-eval-20260915.md)受版本控制保存。
+- 7 个可见决策均正确，但 23 次 assessment_failed、1 次 render_failed；1 个完整结果缺明确 6 万差额，
+  另 1 个不完整结果的 assessment 缺总成本增量 8 万。5 项通过、1 项失败、24 项未可完整评估，
+  没有场景两轮通过。空 assessment 不能写成模型错误决策；稍后一次 HTTP 200 不能归因原失败。
+- 本地审查已经完成、配置不再缺失，但实模门禁仍未通过，IRIS-CORE-005 不提升为交付。
+  无部署、外发、开关变更或新健康/队列验收；只读容器/配置身份未变不替代生产验收。
+  下次仅处理失败分类和数值表达后复跑原有限集，不重开既有 I1–I4 范围审查或无限加固。
 
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 

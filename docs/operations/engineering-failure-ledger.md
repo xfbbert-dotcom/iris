@@ -39,8 +39,16 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   production acceptance is claimed. The [finite end-to-end and release record](../development/iris-proactive-discussion.md)
   now records actual non-mention ingress/PG/worker/sent-receipt/ordinary-followup and member-stop/new-issue
   gates, a synthetic-only evaluator with two distinct calls per case, and explicit CI database setup.
-  Model configuration is unavailable; deterministic fixtures and a fake HTTP provider cannot substitute
-  for real-model quality or real-group feedback acceptance. Retain every failed run separately.
+  The [2026-09-15 two-round real-model run](../development/iris-proactive-discussion-model-eval-20260915.md)
+  reused existing server configuration in an explicitly authorized isolated model process without
+  copying credentials. It failed acceptance: 23 assessment failures, one render failure, and an
+  explicit numeric-difference omission in one complete answer. All seven visible decisions matched
+  expectations; null assessments in decisionMismatches are missing results, not wrong decisions.
+  Error-stage labels alone do not establish HTTP/parse/validation root cause; a later single HTTP 200
+  does not diagnose earlier failures. Preserve safe phase/status evidence, review numeric completeness
+  against the original criteria, and distinguish risk qualification in prose from structured labels.
+  Deterministic fixtures and a fake HTTP provider cannot substitute for real-model quality or
+  real-group feedback acceptance. Retain every failed run separately; do not rerun blindly or lower gates.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

@@ -8,9 +8,14 @@
 下文 Task 8 数字保留为当时证据；最新应用 SHA、0060 迁移、保留失败与有限复审出口以修复记录为准，
 不能把旧局部绿灯当成这四项原本不存在。
 
+随后用户明确授权就地复用服务端模型配置，[2026-09-15 首次两轮实模](iris-proactive-discussion-model-eval-20260915.md)
+已运行但未通过：23 次 assessment_failed、1 次 render_failed，另有完整结果未明确原定数值差额。
+7 个可见决策均正确；24 个不完整结果不算错误决策，也不能补猜为通过。配置已找到且未下载密钥，
+后续诊断一次 HTTP 200 不说明原失败原因。仍未部署、启用或发群消息；下一步以该记录为准。
+
 已实现新的独立主动讨论链，默认关闭且名单为空；首轮只允许 `oc_637a9aca45f01943477f4e17f1fc5b9a`。触发来自本群非 @ 人类讨论，来源为本群及已授权文档，按问题和实质依据去重，无固定发言冷却或日额度。发送依据是 `authorizationKind=policy`，不伪造人工批准。
 
-Task 8 应用/测试/CI 提交为 `89f299f5e00b0a4db4389a712d33a15700a8f466`；本记录为随后独立文档提交，不能用文档 SHA 替代应用 SHA。截至本次本地执行，真实模型配置路径未提供，`npm run pilot:proactive-eval -- --rounds 2` 实际退出 2，没有模型 assessment/draft 报告；没有 production/SSH/push/部署/真实飞书外发/单群开关操作。尚不能称“实现与内部验收完成”，更不能称“真实单群验收通过”。代码审查已完成，下一步是有限实模门禁和人工答案核对，之后按当次授权执行下文 runbook。
+Task 8 应用/测试/CI 提交为 `89f299f5e00b0a4db4389a712d33a15700a8f466`；本记录为随后独立文档提交，不能用文档 SHA 替代应用 SHA。该次本地执行时真实模型配置路径未提供，`npm run pilot:proactive-eval -- --rounds 2` 实际退出 2，没有模型 assessment/draft 报告；当时没有 production/SSH/push/部署/真实飞书外发/单群开关操作。这些历史事实不被后续实模运行覆盖。尚不能称“实现与内部验收完成”，更不能称“真实单群验收通过”。代码审查已完成，后续实模失败和具体下一门禁见本节顶部，再按当次授权执行下文 runbook。
 
 观察症状与已确认原因：旧 planner 只有沉寂线程和到期行动项的时间触发，已验收的人工提醒回路不能承担本群正在讨论的事实矛盾、推理缺口和限定风险判断。这是已批准的产品能力缺口，不是新诊断出的线上事故。Task 1–7 的发现、修复、失败和审查证据均保留在[执行记录](iris-proactive-discussion-execution.md)。本次补齐有限端到端门禁、无发送评估入口和发布边界，不重开已完成任务。
 
@@ -52,6 +57,7 @@ Tasks 1–7 的完整失败、候选与审查范围见[执行记录](iris-proact
 
 ### 保留的红灯与失败
 
+- Task 8 本地实际 `npm run pilot:proactive-eval -- --rounds 2` 因缺配置退出 2，无模型输出；后续授权服务端运行退出 1 的[独立报告](iris-proactive-discussion-model-eval-20260915.md)另存，不抹去两次不同层级的失败。
 - 新 runner 未创建时，两项 Vitest 和四项 CLI 测试因模块不存在失败。它只是缺入口的红灯；不把缺模块冒充实际数据库行为失败。
 - e2e 初稿误将 worker 的 `processed` 返回值写成 `sent`，两项失败；按实际合同修正后检查真实 delivery 行和外部回复次数。该失败归于测试预期，不归于产品。
 - 明确变异验证：临时禁用实际 processor 的登记分支并把 runner 限为一轮，4 项均失败；PG worker 实际得到 `idle`，runner 实际仅调用一次、缺第二轮结果。恢复后 4 项通过；变异未提交。
@@ -62,7 +68,7 @@ Tasks 1–7 的完整失败、候选与审查范围见[执行记录](iris-proact
 
 ## 两轮真实模型门禁
 
-CLI 仅接受现有 `IRIS_MODEL_PROVIDER=openai-compatible`、`IRIS_MODEL_BASE_URL`、`IRIS_MODEL_API_KEY`、`IRIS_MODEL_NAME` 和可选 timeout，默认运行固定合成集、两轮；没有飞书 reader/replier/token provider import，不加载生产群历史，不接受从消息里指定来源/工具/目标群。配置应通过用户指出的现有本地配置安全加载到进程，或用 Node 的 `--env-file` 指向该确切路径，再执行脚本。不要把密钥写到命令参数、报告或聊天，不搜索凭据库或从生产取钥匙。
+CLI 仅接受现有 `IRIS_MODEL_PROVIDER=openai-compatible`、`IRIS_MODEL_BASE_URL`、`IRIS_MODEL_API_KEY`、`IRIS_MODEL_NAME` 和可选 timeout，默认运行固定合成集、两轮；没有飞书 reader/replier/token provider import，不加载生产群历史，不接受从消息里指定来源/工具/目标群。可通过用户指定的现有本地模型配置安全加载；如用户明确授权服务端就地复用，则先核实实际配置路径，在独立模型进程中只读解析、仅传递上述模型字段，不复制密钥到本地、不继承生产飞书/数据库/Node 选项。实际安全边界和首次运行见[服务端评估记录](iris-proactive-discussion-model-eval-20260915.md#服务端就地使用配置没有复制密钥)。不要把密钥写到命令参数、报告或聊天，不搜索凭据库，不能从历史文档自行推定服务端取用授权。
 
 ```text
 npm run pilot:proactive-eval -- --rounds 2
@@ -112,4 +118,4 @@ P2：Task 3 手工零源 JSON Schema 的域边缘问题；已有 pg 同 client �
 | 核心覆盖基线 | updated：[IRIS-CORE-005](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2-核心需求追踪)与[本轮修订](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#status-amendment---2026-09-09-proactive-discussion-design)补本地门禁/runner/CI配置，保留模型和生产缺口，不提升为全功能完成 |
 | 仓库入口 | updated：[README](../../README.md#current-product-state)、[当前交接](current-handoff.md#当前正在推进)及[执行记录](iris-proactive-discussion-execution.md)保持最新状态/分支/本 runbook 可发现；reviewed-unchanged：[AGENTS](../../AGENTS.md)的工作树核验、有限出口、四处闭环仍正确，无新规则需复制 |
 
-文档 QA：本次 6 份 Markdown 共 143 个本地路径链接、27 个标题锚点实际校验通过；`git diff --check` 通过。上文 8 项任务逐行对照已有提交与实际证据；既有失败、零源 P2、pg warning 和未完成模型/CI/真实群门禁均保留。本轮无新的模型或生产授权，后续只能从这些明确门禁继续。
+文档 QA：该次 6 份 Markdown 共 143 个本地路径链接、27 个标题锚点实际校验通过；`git diff --check` 通过。上文 8 项任务逐行对照已有提交与实际证据；既有失败、零源 P2、pg warning 和未完成模型/CI/真实群门禁均保留。该次无模型或生产授权；后续独立模型授权、失败报告和本次文档处置见[2026-09-15 实模记录](iris-proactive-discussion-model-eval-20260915.md)，不构成部署/开关授权。

@@ -1,0 +1,12 @@
+{
+  "observedAt": "2026-09-15T08:59:45.196Z",
+  "status": 200,
+  "retryAfterSeconds": null,
+  "errorMentionsQuotaOrBalance": false,
+  "errorMentionsRateLimit": false,
+  "errorMentionsDailyLimit": false,
+  "errorMentionsPermissionOrAuth": false,
+  "errorMentionsModelUnavailable": false,
+  "rawBodyOmitted": true,
+  "attempts": 1
+}
