@@ -1,8 +1,11 @@
 import { pathToFileURL } from "node:url";
 import { readModelProviderConfig } from "../../apps/core/src/config/env.js";
-import { createOpenAICompatibleChatCompletionsClient } from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
+import {
+  createOpenAICompatibleChatCompletionsClient,
+  type OpenAICompatibleChatCompletionsClient,
+} from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider-error.js";
-import { createPdModel, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
+import { createPdModel, validatePdAssessment, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 
@@ -13,6 +16,30 @@ export type PdEvalDiagnostic = {
   statusCode?: number;
 };
 export type PdEvalResult = { caseId: string; round: number; assessment: PdAssessment | null; draft: PdDraft | null; error: string | null; diagnostic: PdEvalDiagnostic | null };
+
+type SyntheticTraceStage = "assessment" | "draft" | "scope_review";
+type SyntheticTraceSanitization = {
+  truncatedFields: string[];
+  droppedFields: string[];
+  droppedReferenceCount: number;
+};
+type SyntheticTraceRecord = {
+  caseId: string;
+  round: number;
+  callIndex: number;
+  stage: SyntheticTraceStage;
+  attempt: number;
+  candidate: Record<string, unknown> | null;
+  replayValidation: { accepted: boolean; reason: string };
+  sanitization: SyntheticTraceSanitization;
+  acceptedDraft?: boolean;
+};
+export type SyntheticPdEvalTrace = {
+  complete: boolean;
+  validationBasis: "diagnostic_replay_not_runtime_error_detail";
+  recordsDropped: number;
+  records: SyntheticTraceRecord[];
+};
 
 export function createRequestPacedFetch({
   fetch,
@@ -144,31 +171,438 @@ export function createProactiveDiscussionEvalCases(): PdEvalCase[] {
   return cases;
 }
 
+const MAX_SYNTHETIC_TRACE_RECORDS = 600;
+const MAX_SYNTHETIC_TRACE_TEXT_CHARS = 500;
+const MAX_SYNTHETIC_TRACE_REFS = 32;
+const MAX_SYNTHETIC_TRACE_MARKERS = 32;
+
+type ActiveSyntheticTraceCall = {
+  caseId: string;
+  round: number;
+  context: PdContext;
+  assessment?: PdAssessment;
+  attempts: Record<SyntheticTraceStage, number>;
+};
+
+/**
+ * Runs only the checked-in synthetic catalog. The generic evaluator deliberately
+ * has no trace option so callers cannot accidentally retain arbitrary contexts.
+ */
+export async function runSyntheticProactiveDiscussionEval({
+  client,
+  rounds,
+  includeTrace,
+  traceRedactions = [],
+}: {
+  client: OpenAICompatibleChatCompletionsClient;
+  rounds: number;
+  includeTrace: boolean;
+  traceRedactions?: readonly string[];
+}): Promise<{ cases: PdEvalCase[]; results: PdEvalResult[]; syntheticTrace: SyntheticPdEvalTrace | null }> {
+  const cases = createProactiveDiscussionEvalCases();
+  if (!includeTrace) {
+    return { cases, results: await runProactiveDiscussionEval({ model: createPdModel({ client }), cases, rounds }), syntheticTrace: null };
+  }
+
+  const trace: SyntheticPdEvalTrace = {
+    complete: true,
+    validationBasis: "diagnostic_replay_not_runtime_error_detail",
+    recordsDropped: 0,
+    records: [],
+  };
+  const caseByTrigger = new Map(cases.map(entry => [entry.context.triggerMessageId, entry.id]));
+  const roundsByCase = new Map<string, number>();
+  const callByContext = new WeakMap<PdContext, ActiveSyntheticTraceCall>();
+  let active: ActiveSyntheticTraceCall | undefined;
+  let callIndex = 0;
+  const redactions = traceRedactions.filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  const tracedClient: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      const currentCallIndex = ++callIndex;
+      const content = await client.complete(messages, options);
+      try {
+        const stage = traceStage(options?.responseFormat?.json_schema.name);
+        if (stage === null || active === undefined) {
+          markSyntheticTraceIncomplete(trace);
+        } else {
+          const attempt = ++active.attempts[stage];
+          appendSyntheticTraceRecord(trace, replaySyntheticOutput({
+            active,
+            attempt,
+            callIndex: currentCallIndex,
+            content,
+            redactions,
+            stage,
+          }));
+        }
+      } catch {
+        markSyntheticTraceIncomplete(trace);
+      }
+      return content;
+    },
+  };
+  const baseModel = createPdModel({ client: tracedClient });
+  const model: PdModel = {
+    async assess(context, assertActive) {
+      const caseId = caseByTrigger.get(context.triggerMessageId);
+      if (caseId === undefined) {
+        markSyntheticTraceIncomplete(trace);
+        return baseModel.assess(context, assertActive);
+      }
+      const round = (roundsByCase.get(caseId) ?? 0) + 1;
+      roundsByCase.set(caseId, round);
+      const invocation: ActiveSyntheticTraceCall = {
+        caseId,
+        round,
+        context,
+        attempts: { assessment: 0, draft: 0, scope_review: 0 },
+      };
+      callByContext.set(context, invocation);
+      active = invocation;
+      try {
+        const assessment = await baseModel.assess(context, assertActive);
+        invocation.assessment = assessment;
+        return assessment;
+      } finally {
+        active = undefined;
+      }
+    },
+    async render(input, assertActive) {
+      const invocation = callByContext.get(input.context);
+      if (invocation === undefined) {
+        markSyntheticTraceIncomplete(trace);
+        return baseModel.render(input, assertActive);
+      }
+      invocation.assessment = input.assessment;
+      active = invocation;
+      try {
+        const draft = await baseModel.render(input, assertActive);
+        const draftRecord = [...trace.records].reverse().find(record => record.caseId === invocation.caseId
+          && record.round === invocation.round && record.stage === "draft");
+        if (draftRecord) draftRecord.acceptedDraft = draft !== null;
+        else markSyntheticTraceIncomplete(trace);
+        return draft;
+      } finally {
+        active = undefined;
+      }
+    },
+  };
+  const results = await runProactiveDiscussionEval({ model, cases, rounds });
+  return { cases, results, syntheticTrace: trace };
+}
+
+function traceStage(name: string | undefined): SyntheticTraceStage | null {
+  if (name === "iris_proactive_discussion_assessment") return "assessment";
+  if (name === "iris_proactive_discussion_draft") return "draft";
+  if (name === "iris_proactive_discussion_scope_review") return "scope_review";
+  return null;
+}
+
+function replaySyntheticOutput({ active, attempt, callIndex, content, redactions, stage }: {
+  active: ActiveSyntheticTraceCall;
+  attempt: number;
+  callIndex: number;
+  content: string;
+  redactions: readonly string[];
+  stage: SyntheticTraceStage;
+}): SyntheticTraceRecord {
+  const sanitization: SyntheticTraceSanitization = { truncatedFields: [], droppedFields: [], droppedReferenceCount: 0 };
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    addTraceMarker(sanitization.droppedFields, "$raw");
+    return baseSyntheticTraceRecord(active, attempt, callIndex, stage, null, false, "json_invalid", sanitization);
+  }
+
+  if (stage === "assessment") {
+    const replayValidation = replayAssessmentValidation(value, active.context);
+    return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
+      sanitizeAssessmentCandidate(value, active.context, redactions, sanitization),
+      replayValidation.accepted, replayValidation.reason, sanitization);
+  }
+  if (stage === "draft") {
+    const replayValidation = replayDraftValidation(value, active.assessment?.evidenceRefs ?? []);
+    return { ...baseSyntheticTraceRecord(active, attempt, callIndex, stage,
+      sanitizeDraftCandidate(value, active.context, redactions, sanitization),
+      replayValidation.accepted, replayValidation.reason, sanitization), acceptedDraft: false };
+  }
+  const replayValidation = replayScopeReviewValidation(value);
+  return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
+    sanitizeScopeCandidate(value, redactions, sanitization),
+    replayValidation.accepted, replayValidation.reason, sanitization);
+}
+
+function baseSyntheticTraceRecord(
+  active: ActiveSyntheticTraceCall,
+  attempt: number,
+  callIndex: number,
+  stage: SyntheticTraceStage,
+  candidate: Record<string, unknown> | null,
+  accepted: boolean,
+  reason: string,
+  sanitization: SyntheticTraceSanitization,
+): SyntheticTraceRecord {
+  return { caseId: active.caseId, round: active.round, callIndex, stage, attempt, candidate,
+    replayValidation: { accepted, reason }, sanitization };
+}
+
+function replayAssessmentValidation(value: unknown, context: PdContext): { accepted: boolean; reason: string } {
+  try {
+    validatePdAssessment(value, context);
+    return { accepted: true, reason: "accepted" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const referenceFailures = new Set([
+      "assessment evidence references are invalid",
+      "material-change evidence references are invalid",
+    ]);
+    const relationFailures = new Set([
+      "material-change evidence must be assessment evidence",
+      "skip cannot use material_issue",
+      "skip cannot claim a material change",
+      "skip cannot propose a new issue",
+      "intervene requires material_issue",
+      "intervene requires an issue reference",
+      "intervene requires evidence, observation, reasoning, and suggestion",
+      "intervene requires a material change",
+      "a new issue requires new_issue material change",
+      "an existing issue requires new_evidence material change",
+      "an existing issue requires a materially new source binding",
+    ]);
+    const stateFailures = new Set([
+      "existing issue is not in the supplied catalog",
+      "an issue with unknown delivery cannot be advanced",
+      "a user-paused issue cannot be reopened automatically",
+      "first intervention requires proven unattempted stale history",
+    ]);
+    if (message === "assessment shape is invalid") return { accepted: false, reason: "shape_invalid" };
+    if (referenceFailures.has(message)) return { accepted: false, reason: "reference_invalid" };
+    if (relationFailures.has(message)) return { accepted: false, reason: "relation_invalid" };
+    if (stateFailures.has(message)) return { accepted: false, reason: "state_invalid" };
+    if (message === "proactive discussion context catalog is invalid") return { accepted: false, reason: "context_invalid" };
+    return { accepted: false, reason: "unknown" };
+  }
+}
+
+function replayDraftValidation(value: unknown, expectedRefs: readonly string[]): { accepted: boolean; reason: string } {
+  if (!isPlainRecord(value) || !hasExactKeys(value, ["evidenceRefs", "text"])
+    || typeof value.text !== "string" || value.text.normalize("NFC").trim().length === 0
+    || value.text.length > 1_200 || !Array.isArray(value.evidenceRefs)
+    || value.evidenceRefs.some(ref => typeof ref !== "string")) {
+    return { accepted: false, reason: "shape_invalid" };
+  }
+  const refs = value.evidenceRefs as string[];
+  if (refs.length !== expectedRefs.length || new Set(refs).size !== refs.length
+    || refs.some(ref => !expectedRefs.includes(ref))) return { accepted: false, reason: "reference_invalid" };
+  return { accepted: true, reason: "accepted" };
+}
+
+function replayScopeReviewValidation(value: unknown): { accepted: boolean; reason: string } {
+  if (!isPlainRecord(value) || !hasExactKeys(value, ["reason", "supported"])
+    || typeof value.supported !== "boolean" || typeof value.reason !== "string"
+    || value.reason.normalize("NFC").trim().length === 0 || value.reason.length > 2_000) {
+    return { accepted: false, reason: "shape_invalid" };
+  }
+  return { accepted: true, reason: "accepted" };
+}
+
+function sanitizeAssessmentCandidate(
+  value: unknown,
+  context: PdContext,
+  redactions: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  noteUnknownFields(value, ["decision", "reason", "issueRef", "evidenceRefs", "observation", "reasoning", "suggestion", "uncertainty", "materialChange"], sanitization);
+  const candidate: Record<string, unknown> = {};
+  copyEnum(candidate, value, "decision", ["intervene", "skip"], sanitization);
+  copyEnum(candidate, value, "reason", ["material_issue", "no_work_value", "insufficient_basis", "already_handled", "duplicate", "resolved"], sanitization);
+  copyEnum(candidate, value, "uncertainty", ["fact", "qualified_inference"], sanitization);
+  for (const field of ["observation", "reasoning", "suggestion"] as const) {
+    if (typeof value[field] === "string") candidate[field] = sanitizeTraceText(value[field], field, redactions, sanitization);
+    else if (value[field] !== undefined) addTraceMarker(sanitization.droppedFields, field);
+  }
+  const allowedRefs = new Set(context.sources.map(source => source.ref));
+  candidate.evidenceRefs = sanitizeTraceRefs(value.evidenceRefs, allowedRefs, "evidenceRefs", sanitization);
+  candidate.issueRef = sanitizeIssueRef(value.issueRef, context, redactions, sanitization);
+  if (isPlainRecord(value.materialChange)) {
+    noteUnknownFields(value.materialChange, ["kind", "explanation", "evidenceRefs"], sanitization);
+    const materialChange: Record<string, unknown> = {};
+    copyEnum(materialChange, value.materialChange, "kind", ["none", "new_issue", "new_evidence", "unattempted_first"], sanitization);
+    if (typeof value.materialChange.explanation === "string") materialChange.explanation = sanitizeTraceText(
+      value.materialChange.explanation, "materialChange.explanation", redactions, sanitization);
+    else if (value.materialChange.explanation !== undefined) addTraceMarker(sanitization.droppedFields, "materialChange.explanation");
+    materialChange.evidenceRefs = sanitizeTraceRefs(value.materialChange.evidenceRefs, allowedRefs,
+      "materialChange.evidenceRefs", sanitization);
+    candidate.materialChange = materialChange;
+  } else if (value.materialChange !== undefined) addTraceMarker(sanitization.droppedFields, "materialChange");
+  return candidate;
+}
+
+function sanitizeIssueRef(
+  value: unknown,
+  context: PdContext,
+  redactions: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): Record<string, unknown> | null {
+  if (value === null) return null;
+  if (!isPlainRecord(value)) {
+    if (value !== undefined) addTraceMarker(sanitization.droppedFields, "issueRef");
+    return null;
+  }
+  if (value.kind === "existing" && typeof value.id === "string") {
+    noteUnknownFields(value, ["kind", "id"], sanitization);
+    if (context.issues.some(issue => issue.id === value.id)) return { kind: "existing", id: value.id };
+    sanitization.droppedReferenceCount += 1;
+    return null;
+  }
+  if (value.kind === "new" && typeof value.description === "string") {
+    noteUnknownFields(value, ["kind", "description"], sanitization);
+    return { kind: "new", description: sanitizeTraceText(value.description, "issueRef.description", redactions, sanitization) };
+  }
+  addTraceMarker(sanitization.droppedFields, "issueRef");
+  return null;
+}
+
+function sanitizeDraftCandidate(
+  value: unknown,
+  context: PdContext,
+  redactions: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  noteUnknownFields(value, ["text", "evidenceRefs"], sanitization);
+  const candidate: Record<string, unknown> = {};
+  if (typeof value.text === "string") candidate.text = sanitizeTraceText(value.text, "text", redactions, sanitization);
+  else if (value.text !== undefined) addTraceMarker(sanitization.droppedFields, "text");
+  candidate.evidenceRefs = sanitizeTraceRefs(value.evidenceRefs, new Set(context.sources.map(source => source.ref)),
+    "evidenceRefs", sanitization);
+  return candidate;
+}
+
+function sanitizeScopeCandidate(
+  value: unknown,
+  redactions: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  noteUnknownFields(value, ["supported", "reason"], sanitization);
+  const candidate: Record<string, unknown> = {};
+  if (typeof value.supported === "boolean") candidate.supported = value.supported;
+  else if (value.supported !== undefined) addTraceMarker(sanitization.droppedFields, "supported");
+  if (typeof value.reason === "string") candidate.reason = sanitizeTraceText(value.reason, "reason", redactions, sanitization);
+  else if (value.reason !== undefined) addTraceMarker(sanitization.droppedFields, "reason");
+  return candidate;
+}
+
+function sanitizeTraceRefs(
+  value: unknown,
+  allowedRefs: ReadonlySet<string>,
+  field: string,
+  sanitization: SyntheticTraceSanitization,
+): string[] {
+  if (!Array.isArray(value)) {
+    if (value !== undefined) addTraceMarker(sanitization.droppedFields, field);
+    return [];
+  }
+  const refs: string[] = [];
+  for (const ref of value) {
+    if (typeof ref === "string" && allowedRefs.has(ref) && !refs.includes(ref) && refs.length < MAX_SYNTHETIC_TRACE_REFS) refs.push(ref);
+    else sanitization.droppedReferenceCount += 1;
+  }
+  if (value.length > MAX_SYNTHETIC_TRACE_REFS) addTraceMarker(sanitization.truncatedFields, field);
+  return refs;
+}
+
+function sanitizeTraceText(
+  value: string,
+  field: string,
+  redactions: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): string {
+  let sanitized = value.normalize("NFC");
+  for (const redaction of redactions) sanitized = sanitized.replaceAll(redaction, "[REDACTED]");
+  if (sanitized.length > MAX_SYNTHETIC_TRACE_TEXT_CHARS) {
+    addTraceMarker(sanitization.truncatedFields, field);
+    sanitized = sanitized.slice(0, MAX_SYNTHETIC_TRACE_TEXT_CHARS);
+  }
+  return sanitized;
+}
+
+function copyEnum(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  field: string,
+  allowed: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): void {
+  if (typeof source[field] === "string" && allowed.includes(source[field])) target[field] = source[field];
+  else if (source[field] !== undefined) addTraceMarker(sanitization.droppedFields, field);
+}
+
+function noteUnknownFields(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): void {
+  if (Object.keys(value).some(key => !allowed.includes(key))) addTraceMarker(sanitization.droppedFields, "$unknownFields");
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  return keys.length === expected.length && keys.every((key, index) => key === [...expected].sort()[index]);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function addTraceMarker(markers: string[], marker: string): void {
+  if (markers.length < MAX_SYNTHETIC_TRACE_MARKERS && !markers.includes(marker)) markers.push(marker);
+}
+
+function appendSyntheticTraceRecord(trace: SyntheticPdEvalTrace, record: SyntheticTraceRecord): void {
+  if (trace.records.length < MAX_SYNTHETIC_TRACE_RECORDS) trace.records.push(record);
+  else markSyntheticTraceIncomplete(trace);
+}
+
+function markSyntheticTraceIncomplete(trace: SyntheticPdEvalTrace): void {
+  trace.complete = false;
+  trace.recordsDropped = Math.min(MAX_SYNTHETIC_TRACE_RECORDS, trace.recordsDropped + 1);
+}
+
 async function main() {
   try {
-    const { rounds, requestIntervalMs } = parseArguments(process.argv.slice(2));
+    const { rounds, requestIntervalMs, includeSyntheticTrace } = parseArguments(process.argv.slice(2));
     const config = readModelProviderConfig();
     if (!config) throw new Error("missing model config");
-    const cases = createProactiveDiscussionEvalCases();
     const fetch = createRequestPacedFetch({ fetch: globalThis.fetch, requestIntervalMs });
-    const results = await runProactiveDiscussionEval({ model: createPdModel({ client: createOpenAICompatibleChatCompletionsClient({ config, fetch }) }), cases, rounds });
+    const { cases, results, syntheticTrace } = await runSyntheticProactiveDiscussionEval({
+      client: createOpenAICompatibleChatCompletionsClient({ config, fetch }),
+      rounds,
+      includeTrace: includeSyntheticTrace,
+      traceRedactions: [config.apiKey, config.baseUrl, config.model],
+    });
     const decisionMismatches = results.filter(r => r.assessment !== null && r.assessment.decision !== cases.find(c => c.id === r.caseId)!.expectedDecision)
       .map(r => `${r.caseId}:${r.round}`);
-    const report = { kind: "proactive-discussion-synthetic-model-eval", rounds, requestIntervalMs, manualReview: "pending",
+    const report = { kind: "proactive-discussion-synthetic-model-eval", rounds, requestIntervalMs, includeSyntheticTrace, manualReview: "pending",
       acceptance: "provider execution only; human semantic review and live-group acceptance remain separate",
-      cases: cases.map(({ id, expectedDecision, reviewCriteria }) => ({ id, expectedDecision, reviewCriteria })), results, decisionMismatches };
+      cases: cases.map(({ id, expectedDecision, reviewCriteria }) => ({ id, expectedDecision, reviewCriteria })), results, decisionMismatches,
+      ...(syntheticTrace === null ? {} : { syntheticTrace }) };
     // No config/headers/upstream error body is logged. Protect even accidental key echoes in provider prose.
     console.log(JSON.stringify(report, (_key, value: unknown) =>
       typeof value === "string" ? value.replaceAll(config.apiKey, "[REDACTED]") : value, 2));
     process.exitCode = results.some(r => r.error !== null) || decisionMismatches.length ? 1 : 0;
   } catch {
-    console.error("proactive-eval configuration/arguments unavailable; use IRIS_MODEL_PROVIDER, IRIS_MODEL_BASE_URL, IRIS_MODEL_API_KEY, IRIS_MODEL_NAME, --rounds 1..10 and --request-interval-ms 0..60000");
+    console.error("proactive-eval configuration/arguments unavailable; use IRIS_MODEL_PROVIDER, IRIS_MODEL_BASE_URL, IRIS_MODEL_API_KEY, IRIS_MODEL_NAME, --rounds 1..10, --request-interval-ms 0..60000 and --include-synthetic-trace true|false");
     process.exitCode = 2;
   }
 }
 
-function parseArguments(args: readonly string[]): { rounds: number; requestIntervalMs: number } {
-  let rounds = 2, requestIntervalMs = 0;
+function parseArguments(args: readonly string[]): { rounds: number; requestIntervalMs: number; includeSyntheticTrace: boolean } {
+  let rounds = 2, requestIntervalMs = 0, includeSyntheticTrace = false;
   const seen = new Set<string>();
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index], value = args[index + 1];
@@ -176,11 +610,12 @@ function parseArguments(args: readonly string[]): { rounds: number; requestInter
     seen.add(flag);
     if (flag === "--rounds" && /^[1-9]\d*$/u.test(value)) rounds = Number(value);
     else if (flag === "--request-interval-ms" && /^\d+$/u.test(value)) requestIntervalMs = Number(value);
+    else if (flag === "--include-synthetic-trace" && /^(?:true|false)$/u.test(value)) includeSyntheticTrace = value === "true";
     else throw new Error("invalid arguments");
   }
   if (!Number.isSafeInteger(rounds) || rounds > 10
     || !Number.isSafeInteger(requestIntervalMs) || requestIntervalMs > 60_000) throw new Error("invalid arguments");
-  return { rounds, requestIntervalMs };
+  return { rounds, requestIntervalMs, includeSyntheticTrace };
 }
 
 function sleepForPacing(milliseconds: number, signal?: AbortSignal | null): Promise<void> {
