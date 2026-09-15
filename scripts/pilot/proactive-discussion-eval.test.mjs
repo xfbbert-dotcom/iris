@@ -64,6 +64,9 @@ test("provider failures preserve both complete rounds and a failed exit without 
     const result = await run(["--rounds", "2"], env); const report = JSON.parse(result.stdout);
     assert.equal(result.code, 1); assert.equal(requests.length, 30); assert.equal(report.results.length, 30);
     assert.ok(report.results.every(r => r.error === "assessment_failed" && r.assessment === null));
+    assert.deepEqual(report.decisionMismatches, []);
+    assert.ok(report.results.every(r => r.diagnostic?.phase === "assessment"
+      && r.diagnostic?.category === "http" && r.diagnostic?.statusCode === 401));
     assert.ok(!JSON.stringify(result).includes("synthetic-secret"));
   }, true);
 });

@@ -1,12 +1,18 @@
 import { pathToFileURL } from "node:url";
 import { readModelProviderConfig } from "../../apps/core/src/config/env.js";
 import { createOpenAICompatibleChatCompletionsClient } from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
+import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider-error.js";
 import { createPdModel, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 
 export type PdEvalCase = { id: string; context: PdContext; expectedDecision: "intervene" | "skip"; reviewCriteria: string[] };
-export type PdEvalResult = { caseId: string; round: number; assessment: PdAssessment | null; draft: PdDraft | null; error: string | null };
+export type PdEvalDiagnostic = {
+  phase: "assessment" | "render";
+  category: "http" | "assessment_validation" | "draft_validation" | "scope_review_validation" | "unknown";
+  statusCode?: number;
+};
+export type PdEvalResult = { caseId: string; round: number; assessment: PdAssessment | null; draft: PdDraft | null; error: string | null; diagnostic: PdEvalDiagnostic | null };
 
 export async function runProactiveDiscussionEval({ model, cases, rounds }: {
   model: PdModel; cases: readonly PdEvalCase[]; rounds: number;
@@ -17,21 +23,38 @@ export async function runProactiveDiscussionEval({ model, cases, rounds }: {
   const results: PdEvalResult[] = [];
   for (let round = 1; round <= rounds; round++) {
     for (const entry of cases) {
-      const result: PdEvalResult = { caseId: entry.id, round, assessment: null, draft: null, error: null };
+      const result: PdEvalResult = { caseId: entry.id, round, assessment: null, draft: null, error: null, diagnostic: null };
       // A fresh context and actual call per case per round; provider output is never reused.
       const context = structuredClone(entry.context);
       try { result.assessment = await model.assess(context); }
-      catch { result.error = "assessment_failed"; }
+      catch (error) { result.error = "assessment_failed"; result.diagnostic = safeDiagnostic("assessment", error); }
       if (result.assessment?.decision === "intervene") {
         try {
           result.draft = await model.render({ context, assessment: result.assessment });
           if (result.draft === null) result.error = "draft_rejected";
-        } catch { result.error = "render_failed"; }
+        } catch (error) { result.error = "render_failed"; result.diagnostic = safeDiagnostic("render", error); }
       }
       results.push(result);
     }
   }
   return results;
+}
+
+function safeDiagnostic(phase: PdEvalDiagnostic["phase"], error: unknown): PdEvalDiagnostic {
+  // Only typed HTTP status and fixed local failure labels may enter a retained report.
+  // Never serialize message/cause/body/headers or guess a cause from upstream prose.
+  if (error instanceof ModelProviderHttpError && Number.isInteger(error.statusCode)
+    && error.statusCode >= 100 && error.statusCode <= 599) {
+    return { phase, category: "http", statusCode: error.statusCode };
+  }
+  const categories: Readonly<Record<string, PdEvalDiagnostic["category"]>> = {
+    "proactive discussion assessment was invalid": "assessment_validation",
+    "proactive discussion draft was invalid": "draft_validation",
+    "proactive discussion scope review was invalid": "scope_review_validation",
+  };
+  const category = error instanceof Error && Object.hasOwn(categories, error.message)
+    ? categories[error.message]! : "unknown";
+  return { phase, category };
 }
 
 function validateContext(context: PdContext) {
@@ -105,7 +128,7 @@ async function main() {
     if (!config) throw new Error("missing model config");
     const cases = createProactiveDiscussionEvalCases();
     const results = await runProactiveDiscussionEval({ model: createPdModel({ client: createOpenAICompatibleChatCompletionsClient({ config }) }), cases, rounds });
-    const decisionMismatches = results.filter(r => r.assessment?.decision !== cases.find(c => c.id === r.caseId)!.expectedDecision)
+    const decisionMismatches = results.filter(r => r.assessment !== null && r.assessment.decision !== cases.find(c => c.id === r.caseId)!.expectedDecision)
       .map(r => `${r.caseId}:${r.round}`);
     const report = { kind: "proactive-discussion-synthetic-model-eval", rounds, manualReview: "pending",
       acceptance: "provider execution only; human semantic review and live-group acceptance remain separate",
