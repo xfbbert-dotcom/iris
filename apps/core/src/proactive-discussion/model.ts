@@ -305,9 +305,17 @@ function parseScopeReviewContent(content: string): z.infer<typeof scopeReviewSch
 function modelContext(context: PdContext) {
   assertContextCatalog(context);
   const availableRefs = new Set(context.sources.map(source => source.ref));
+  const triggerSources = context.sources.filter(source =>
+    source.kind === "message" && source.binding.messageId === context.triggerMessageId);
+  if (triggerSources.length !== 1) throw new Error("proactive discussion context is invalid");
+  const triggerItems = context.items.filter(item => item.ref === triggerSources[0]!.ref);
+  if (triggerItems.length !== 1 || triggerItems[0]!.text.trim().length === 0) {
+    throw new Error("proactive discussion context is invalid");
+  }
   return {
     chatId: context.chatId,
     triggerMessageId: context.triggerMessageId,
+    triggerMaterial: { ref: triggerSources[0]!.ref, text: triggerItems[0]!.text },
     contextVersion: context.contextVersion,
     catalogVersion: context.catalogVersion,
     sourceCatalog: context.sources.map(source => ({ ref: source.ref, kind: source.kind })),

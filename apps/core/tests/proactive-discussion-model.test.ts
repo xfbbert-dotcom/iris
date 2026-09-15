@@ -9,6 +9,8 @@ import {
   validatePdAssessment,
 } from "../src/proactive-discussion/model.js";
 import type { PdAssessment, PdContext } from "../src/proactive-discussion/contracts.js";
+import { createPdSourceRef } from "../src/proactive-discussion/contracts.js";
+import { hashLocalMessageText } from "../src/memory/local-message-source.js";
 import {
   pdAssessment,
   pdContext,
@@ -175,6 +177,51 @@ describe("PdModel.assess", () => {
         }),
       },
     });
+  });
+
+  it("binds the current trigger body to its source ref despite material ordering and older issue prose", async () => {
+    const original = pdContextWithIssue();
+    const context = {
+      ...original,
+      sources: [...original.sources].reverse(),
+      items: [...original.items].reverse(),
+    };
+    const triggerRef = original.sources.find(source =>
+      source.kind === "message" && source.binding.messageId === original.triggerMessageId)!.ref;
+    const client = completionClient(JSON.stringify(pdSkipAssessment()));
+
+    await createPdModel({ client }).assess(context);
+
+    const payload = JSON.parse(client.complete.mock.calls[0]?.[0]?.[1]?.content ?? "{}");
+    expect(payload.triggerMaterial).toEqual({
+      ref: triggerRef,
+      text: "按每人 8 万招两人，预算够",
+    });
+  });
+
+  it.each([
+    ["missing trigger binding", () => ({ ...pdContext(), triggerMessageId: "missing-trigger" })],
+    ["multiple trigger bindings", () => {
+      const context = pdContext();
+      const binding = {
+        chatId: context.chatId,
+        messageId: context.triggerMessageId,
+        contentHash: hashLocalMessageText("conflicting trigger body"),
+      };
+      const source = { kind: "message" as const, binding, ref: createPdSourceRef({ kind: "message", binding }) };
+      return { ...context, sources: [...context.sources, source], items: [...context.items, { ref: source.ref, text: "conflicting trigger body" }] };
+    }],
+    ["unavailable trigger body", () => {
+      const context = pdContext();
+      const triggerRef = context.sources.find(source =>
+        source.kind === "message" && source.binding.messageId === context.triggerMessageId)!.ref;
+      return { ...context, items: context.items.filter(item => item.ref !== triggerRef) };
+    }],
+  ] as const)("rejects %s before asking the model", async (_label, buildContext) => {
+    const client = completionClient(JSON.stringify(pdSkipAssessment()));
+
+    await expect(createPdModel({ client }).assess(buildContext())).rejects.toThrow("context");
+    expect(client.complete).not.toHaveBeenCalled();
   });
 
   it.each([
