@@ -11,7 +11,10 @@
 随后用户明确授权就地复用服务端模型配置，[2026-09-15 首次两轮实模](iris-proactive-discussion-model-eval-20260915.md)
 已运行但未通过：23 次 assessment_failed、1 次 render_failed，另有完整结果未明确原定数值差额。
 7 个可见决策均正确；24 个不完整结果不算错误决策，也不能补猜为通过。配置已找到且未下载密钥，
-后续诊断一次 HTTP 200 不说明原失败原因。仍未部署、启用或发群消息；下一步以该记录为准。
+后续诊断一次 HTTP 200 不说明原失败原因。随后 `d9200703`/`d2db25be` 的诊断、数值、介入边界及
+eval-only pacing 修复和新复测见[最新有限修复记录](iris-proactive-discussion-model-fixes-20260915.md)，
+保留 run2 的 21 个 HTTP429 和两个真实漏报；run3 无429，但24通过/4失败/2未完整，仍未通过。
+未部署、启用或发群消息；下一步以最新记录的具体失效与安全诊断方案为准，不盲重跑。
 
 已实现新的独立主动讨论链，默认关闭且名单为空；首轮只允许 `oc_637a9aca45f01943477f4e17f1fc5b9a`。触发来自本群非 @ 人类讨论，来源为本群及已授权文档，按问题和实质依据去重，无固定发言冷却或日额度。发送依据是 `authorizationKind=policy`，不伪造人工批准。
 
@@ -73,6 +76,10 @@ CLI 仅接受现有 `IRIS_MODEL_PROVIDER=openai-compatible`、`IRIS_MODEL_BASE_U
 ```text
 npm run pilot:proactive-eval -- --rounds 2
 ```
+
+run2 确认 HTTP429 后，CLI 增加可选 `--request-interval-ms 0..60000`（默认 0），
+仅为顺序合成评估的实际 HTTP 请求设置间隔并记录到报告；run3 使用 6000。
+这不是生产发言冷却、不是共享配额保证，也不新增自动429重试。等待计入原模型 timeout，取消后不发请求。
 
 输出 JSON 到 stdout，含每个 case/round 的 assessment、draft、error 与具体人工审阅标准。退出 2 表示参数/配置不可用；退出 1 表示模型调用/草稿拒绝或预期决策不符；退出 0 仅表示自动检查未失败。`manualReview=pending` 必须经审阅者逐例确认，不因退出 0 自动提升为质量通过。为每次运行保存独立报告和模型/日期/应用 SHA 元数据；人工审阅结论另存，不覆盖失败报告，也不缓存第一轮输出作第二轮。
 

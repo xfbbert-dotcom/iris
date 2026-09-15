@@ -36,10 +36,14 @@ cooldown that blocks a distinct important issue. The first scope is the original
 The written design is approved and the [implementation plan](docs/superpowers/plans/2026-09-14-iris-proactive-discussion.md)
 is implemented through the local end-to-end path and a synthetic-only model evaluation CLI;
 the [finite acceptance and release handoff](docs/development/iris-proactive-discussion.md) records
-actual tests, retained failures and four-place dispositions. On 2026-09-15, user-authorized in-place
-reuse of server-side model configuration produced a [failed two-round synthetic real-model run](docs/development/iris-proactive-discussion-model-eval-20260915.md):
-24 of 30 results were incomplete, and one complete result omitted the required explicit numeric difference.
-Configuration is available, but internal model acceptance, exact-SHA CI and real-Feishu deployment/acceptance remain pending.
+actual tests, retained failures and four-place dispositions. The [first failed real-model run](docs/development/iris-proactive-discussion-model-eval-20260915.md)
+and the subsequent [bounded model/evaluator repairs and repeated evaluation](docs/development/iris-proactive-discussion-model-fixes-20260915.md)
+are recorded separately. Latest application repair is `d2db25be`; complete local Core regression is
+4622 passed / 463 conditionally skipped. This fixes diagnostics and clarifies numerical/risk reasoning;
+evaluation-only HTTP pacing does not add a production conversational cooldown.
+Configuration is available, but latest run3 still fails semantic acceptance: 24 pass, 4 fail and 2
+incomplete, with no HTTP 429 in that run. Exact-SHA CI and real-Feishu deployment/acceptance remain
+pending and require current authorization; proactive discussion has not been activated.
 The 2026-09-15 [final-review fixes](docs/development/iris-proactive-discussion-final-fixes.md)
 address issue-prose provenance, unattempted stale drafts, owned lease renewal and startup registration;
 the record distinguishes their local regression evidence from the pending model and live gates.

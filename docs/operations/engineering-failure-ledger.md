@@ -49,6 +49,22 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   against the original criteria, and distinguish risk qualification in prose from structured labels.
   Deterministic fixtures and a fake HTTP provider cannot substitute for real-model quality or
   real-group feedback acceptance. Retain every failed run separately; do not rerun blindly or lower gates.
+- **Model/evaluator repair evidence (2026-09-15):** The [bounded repair record](../development/iris-proactive-discussion-model-fixes-20260915.md)
+  separates safe typed diagnostics from wrong decisions. Run2 confirms 21 HTTP 429 failures and two
+  genuine missed interventions; it does not retroactively attribute run1's unknown failures. The
+  numeric totals/differences are now explicit in the available arithmetic/update outputs, but a
+  successful local regression is not semantic acceptance. Decision prompts must positively explain
+  when unsupported conclusions or unverified premises behind definite commitments merit intervention;
+  requiring an already-observed loss would miss preventive value. Distinguish direct arithmetic
+  from inferred feasibility/outcomes throughout assessment and prose. Any evaluation request pacing
+  is technical capacity handling only, not a product cooldown; retain failure results and the exact
+  pacing parameter rather than retrying silently until the report turns green.
+  The same-model run3 with explicit evaluation pacing had no HTTP429, but still produced two missed
+  interventions, two unsupported semantic expansions and two incomplete results (24 pass / 4 fail /
+  2 incomplete). Positive prompt rules alone did not establish stable behavior; retain rejected
+  draft/review and bounded validation evidence inside synthetic evaluation before selecting another
+  mechanism change. A qualified label cannot repair an unconditional claim, and correct arithmetic
+  cannot justify changing a cost category or inventing a company approval rule.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,
