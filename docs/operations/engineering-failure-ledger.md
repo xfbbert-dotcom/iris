@@ -81,6 +81,15 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   a refusal is neither automatically a safety success nor a useful delivered intervention.
   Use the retained failures for a bounded joint-review design before adding any repair loop;
   keep an explicit maximum and stop on repeated failure rather than sampling until green.
+- **Joint-review closure (2026-09-16):** The [bounded pair repair](../development/iris-proactive-discussion-joint-review-20260916.md)
+  makes both the real worker and synthetic evaluator consume the same reviewed assessment/draft.
+  Permit one semantic correction and one final review, not separate drifting consumer loops.
+  A finally rejected pair must terminate before freshness-based requeue, including concurrent
+  context/catalog/issue/source changes; preserve it only as blocked audit. Mutable new-issue
+  wording needs comparison with the original issue in final review, not merely unchanged refs:
+  one source can contain multiple distinct problems. Fixed identifiers/references remain locally
+  enforced, while semantic review itself still requires real-model acceptance. No deployment is
+  implied by the regression or CI configuration; current evidence and remaining gates are in the record.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

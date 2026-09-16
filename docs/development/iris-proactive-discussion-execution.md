@@ -1,10 +1,16 @@
 # 主动工作讨论：实施进度与测试环境
 
-开始记录：2026-09-14；最新更新：2026-09-15。对应[已批准设计](../superpowers/specs/2026-09-09-iris-proactive-discussion-design.md)和[8 项实施计划](../superpowers/plans/2026-09-14-iris-proactive-discussion.md)。Task 8 的有限端到端、保留失败、实模缺口与发布 runbook 集中在[最终门禁交接](iris-proactive-discussion.md)；本页保留 Tasks 1–7 的历史实测与审查，不以局部修复声称整个功能发布。
+开始记录：2026-09-14；最新更新：2026-09-16。对应[已批准设计](../superpowers/specs/2026-09-09-iris-proactive-discussion-design.md)和[8 项实施计划](../superpowers/plans/2026-09-14-iris-proactive-discussion.md)。Task 8 的有限端到端、保留失败、实模缺口与发布 runbook 集中在[最终门禁交接](iris-proactive-discussion.md)；本页保留 Tasks 1–7 的历史实测与审查，不以局部修复声称整个功能发布。
 
 ## 当前状态
 
-- 最新 `68f16e04` → `fbd18724` 的[合成 trace、阶段合同与触发绑定修复](iris-proactive-discussion-model-trace-20260915.md)
+- 最新[2026-09-16联合复核修复](iris-proactive-discussion-joint-review-20260916.md)为ee9a8ae2：
+  worker/evaluator接收相同最终判断/文案，最多一次修正和一次最终复核，成功路径不加调用。
+  拒绝后重排和同refs换题经有限修复/复审；Core4649/469条件跳过、PG门禁110通过（107真实PG）、
+  CLI7及类型/构建通过。run6决策正确但语义26通过/4失败/0未完整；下一步决定模型/校验方案，
+  没有部署、外发或启用。以下为run1–5和Tasks1–8的历史，不是最新待办。
+
+- 此前 `68f16e04` → `fbd18724` 的[合成 trace、阶段合同与触发绑定修复](iris-proactive-discussion-model-trace-20260915.md)
   已通过Core4631/463条件跳过、CLI7、类型/构建及有限复审。run4为25通过/5失败/0未完整，
   最新run5为26通过/2失败/2未完整；30个决策均正确，但assessment扩写及拒稿问题尚未解决。
   下一步是待确认的有限联合复核设计；没有部署、外发、开权限或原样继续抽样。
@@ -180,7 +186,7 @@ Task 4 后续 SQL 回归出现连接终止、recovery mode，随后本机 TCP `S
 2. 读取本计划的 `.superpowers/sdd/2026-09-14-iris-proactive-discussion/progress.md`、各任务 report 与审查记录；这是忽略的本机执行记录，不能作为唯一跨机器证据。不要重做已完成的 Task 1–6。
 3. Task 1 已审查 `1f1a5efe..24c090fc`；Task 2 初审 `8a557ed7..9f9f51a0` 后复审 `9f9f51a0..4ec806d6`；Task 3 审查 `3484159d..23c08ba5` 无阻塞发现；Task 4 初审 `16c7ab8d..12d1280b` 后复审 `12d1280b..b1c6564f` 通过；Task 5 审查 `1d9a6a44..30f75a98` 通过。继续 Task 6–8；不得为重现 RED 删除或改写已提交的 0059。100 条目录容量与 resolved 身份生命周期列为有界后续，不能静默丢弃身份，也不在本轮扩建归档系统。
 4. Task 6 审查 `e4a242cf..1071dfc3` 通过；继续 Task 7–8，落实已记录的 runtime 三文件接线，不能因注入测试通过就遗漏真实应用装配。
-5. 未经当前任务新的部署授权，不推送、部署、发飞书消息或开放任何能力。该次交接尚缺模型配置；现已获准服务端就地复用并实际运行，未下载密钥。当前继续点为[run4/run5实模修复记录](iris-proactive-discussion-model-trace-20260915.md#下一步有限边界)，此前run1–3仍独立保留，不再要求用户寻找本地配置路径。
+5. 未经当前任务新的部署授权，不推送、部署、发飞书消息或开放任何能力。该次交接尚缺模型配置；现已获准服务端就地复用并实际运行，未下载密钥。当前继续点为[2026-09-16联合复核与run6门禁](iris-proactive-discussion-joint-review-20260916.md)，此前run1–5仍独立保留，不再要求用户寻找本地配置路径或再次批准同一设计。
 
 Task 3 审查 P2：直接手工构造零来源 `PdContext` 时 schema 的 `enum: []` 非法；当前 builder 返回上下文前必须找到触发消息，因此正常生产构建器不可达。留给 Task 8 场景/最终审查判断是否进入修复，不写成已解决。LF/CRLF 提示单独作为本机基线噪声保留。
 

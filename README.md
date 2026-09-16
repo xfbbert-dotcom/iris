@@ -29,7 +29,17 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
-The next approved direction is [content-triggered proactive discussion](docs/superpowers/specs/2026-09-09-iris-proactive-discussion-design.md):
+The approved [assessment/draft joint-review repair](docs/development/iris-proactive-discussion-joint-review-20260916.md)
+is committed as `ee9a8ae2`: one paired correction and one final review at most, one accepted result for
+worker and evaluator, no added calls on the ordinary successful path. Core 4649 passed / 469 conditional
+skips, 110 separate database-gate cases passed (107 real PG), CLI7 and build/type gates passed.
+Same-model run6 produced 30 correct decisions and no execution errors, but full semantic review is
+**26 pass / 4 fail / 0 incomplete**. Numeric omissions and assessment overclaims still pass model review;
+successful execution is not quality acceptance. The next bounded model/checking approach needs a decision,
+not unchanged resampling. The run1–5 status below is historical, not a request to reapprove this repair.
+No push, deployment, real-Feishu sending or proactive activation occurred.
+
+The approved direction is [content-triggered proactive discussion](docs/superpowers/specs/2026-09-09-iris-proactive-discussion-design.md):
 Iris notices material work risks, explains its reasoning and suggests improvements, including
 clearly qualified concerns. It is not duplicate deadline reminding and has no fixed conversational
 cooldown that blocks a distinct important issue. The first scope is the original pilot group.
@@ -38,7 +48,7 @@ is implemented through the local end-to-end path and a synthetic-only model eval
 the [finite acceptance and release handoff](docs/development/iris-proactive-discussion.md) records
 actual tests, retained failures and four-place dispositions. The [first failed real-model run](docs/development/iris-proactive-discussion-model-eval-20260915.md)
 and the subsequent [bounded model/evaluator repairs and repeated evaluation](docs/development/iris-proactive-discussion-model-fixes-20260915.md)
-are recorded separately. The latest [synthetic trace, stage-contract and trigger-binding repairs](docs/development/iris-proactive-discussion-model-trace-20260915.md)
+are recorded separately. The preceding [synthetic trace, stage-contract and trigger-binding repairs](docs/development/iris-proactive-discussion-model-trace-20260915.md)
 are `68f16e04` → `fbd18724`; complete local Core regression is 4631 passed / 463 conditionally skipped.
 They preserve bounded diagnostics, distinguish structural validation from semantic approval and explicitly bind the trigger to its source text;
 evaluation-only HTTP pacing does not add a production conversational cooldown.

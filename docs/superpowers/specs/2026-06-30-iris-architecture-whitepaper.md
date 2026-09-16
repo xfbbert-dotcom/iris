@@ -477,6 +477,17 @@ Before sending, recheck whether the issue has already been corrected and whether
 audience are still authorized. Model or verification failures do not produce unsolicited error
 messages in the group.
 
+The retained assessment and user-facing draft must be reviewed together against authorized
+sources and returned as the same accepted pair. Correct draft wording cannot validate an incorrect
+assessment retained for future issue state. The approved [bounded joint-review repair](../../development/iris-proactive-discussion-joint-review-20260916.md)
+permits at most one paired correction and one final review after an initial semantic rejection;
+the ordinary successful path adds no calls. Corrections may improve wording and qualifications,
+but cannot change the issue, source references, decision or authorization. Final review compares
+the original issue with the corrected pair. Repeated rejection ends this evaluation without issue
+updates or delivery; context changes must not turn that semantic rejection into a durable retry.
+Rejected candidates may remain explicitly marked in append-only audit, never as accepted evidence.
+Bounded technical-error recovery and fresh independently triggered work remain separate.
+
 An explicitly enabled, versioned, exact-group low-risk discussion policy may authorize these
 interventions without per-message human review. Record policy authorization truthfully; never
 manufacture a human approval or use the legacy reminder approval API as an automatic-send shortcut.
