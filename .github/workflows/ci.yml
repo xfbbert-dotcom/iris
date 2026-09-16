@@ -72,6 +72,7 @@ jobs:
           npm --workspace apps/core test -- postgres-proactive-discussion-concurrency.test.ts
           npm --workspace apps/core test -- proactive-discussion-e2e.test.ts
           npm --workspace apps/core test -- proactive-discussion-final-fixes.test.ts
+          npm --workspace apps/core test -- proactive-discussion-reviewed-pair.test.ts
           npm --workspace apps/core test -- postgres-conversation-state-evidence-deletion.test.ts
           npm --workspace apps/core test -- agent-execution-ledger.test.ts
           npm --workspace apps/core test -- postgres-formal-task-repository.test.ts

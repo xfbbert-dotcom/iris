@@ -293,7 +293,7 @@ describe("PdModel.render", () => {
 
     const result = await createPdModel({ client }).render({ context, assessment });
 
-    expect(result).toEqual(draft);
+    expect(result).toEqual({ assessment: pdAssessment(), draft });
     expect(client.complete).toHaveBeenCalledTimes(2);
     const [proseMessages, proseOptions] = client.complete.mock.calls[0] ?? [];
     expect(proseMessages[0]?.content).toContain("自然中文工作交流");

@@ -35,7 +35,7 @@ test("bounded close prevents late assessment rendering and drains owned pool onc
     const create = await factory();
     let resolve!: (value: ReturnType<typeof pdAssessment>) => void;
     const pending = new Promise<ReturnType<typeof pdAssessment>>(done => { resolve = done; });
-    const render = vi.fn(async () => ({ text: "late", evidenceRefs: [] }));
+    const render = vi.fn(async () => ({ assessment: pdAssessment(), draft: { text: "late", evidenceRefs: [] } }));
     const commit = vi.fn(async () => "prepared");
     const close = vi.fn(async () => undefined);
     const context = pdContext();

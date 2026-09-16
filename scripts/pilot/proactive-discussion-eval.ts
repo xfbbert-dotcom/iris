@@ -5,7 +5,7 @@ import {
   type OpenAICompatibleChatCompletionsClient,
 } from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider-error.js";
-import { createPdModel, validatePdAssessment, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
+import { createPdModel, validatePdAssessment, validatePdRepairedIntervention, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 
@@ -17,7 +17,7 @@ export type PdEvalDiagnostic = {
 };
 export type PdEvalResult = { caseId: string; round: number; assessment: PdAssessment | null; draft: PdDraft | null; error: string | null; diagnostic: PdEvalDiagnostic | null };
 
-type SyntheticTraceStage = "assessment" | "draft" | "scope_review";
+type SyntheticTraceStage = "assessment" | "draft" | "scope_review" | "pair_repair";
 type SyntheticTraceSanitization = {
   truncatedFields: string[];
   droppedFields: string[];
@@ -86,8 +86,9 @@ export async function runProactiveDiscussionEval({ model, cases, rounds }: {
       catch (error) { result.error = "assessment_failed"; result.diagnostic = safeDiagnostic("assessment", error); }
       if (result.assessment?.decision === "intervene") {
         try {
-          result.draft = await model.render({ context, assessment: result.assessment });
-          if (result.draft === null) result.error = "draft_rejected";
+          const reviewed = await model.render({ context, assessment: result.assessment });
+          if (reviewed === null) result.error = "draft_rejected";
+          else { result.assessment = reviewed.assessment; result.draft = reviewed.draft; }
         } catch (error) { result.error = "render_failed"; result.diagnostic = safeDiagnostic("render", error); }
       }
       results.push(result);
@@ -256,7 +257,7 @@ export async function runSyntheticProactiveDiscussionEval({
         caseId,
         round,
         context,
-        attempts: { assessment: 0, draft: 0, scope_review: 0 },
+        attempts: { assessment: 0, draft: 0, scope_review: 0, pair_repair: 0 },
       };
       callByContext.set(context, invocation);
       active = invocation;
@@ -277,12 +278,12 @@ export async function runSyntheticProactiveDiscussionEval({
       invocation.assessment = input.assessment;
       active = invocation;
       try {
-        const draft = await baseModel.render(input, assertActive);
+        const reviewed = await baseModel.render(input, assertActive);
         const draftRecord = [...trace.records].reverse().find(record => record.caseId === invocation.caseId
-          && record.round === invocation.round && record.stage === "draft");
-        if (draftRecord) draftRecord.acceptedDraft = draft !== null;
+          && record.round === invocation.round && (record.stage === "draft" || record.stage === "pair_repair"));
+        if (draftRecord) draftRecord.acceptedDraft = reviewed !== null;
         else markSyntheticTraceIncomplete(trace);
-        return draft;
+        return reviewed;
       } finally {
         active = undefined;
       }
@@ -296,6 +297,7 @@ function traceStage(name: string | undefined): SyntheticTraceStage | null {
   if (name === "iris_proactive_discussion_assessment") return "assessment";
   if (name === "iris_proactive_discussion_draft") return "draft";
   if (name === "iris_proactive_discussion_scope_review") return "scope_review";
+  if (name === "iris_proactive_discussion_pair_repair") return "pair_repair";
   return null;
 }
 
@@ -328,6 +330,23 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
       sanitizeDraftCandidate(value, active.context, redactions, sanitization),
       replayValidation.accepted, replayValidation.reason, sanitization), acceptedDraft: false };
   }
+  if (stage === "pair_repair") {
+    let accepted = false;
+    if (active.assessment) {
+      try { validatePdRepairedIntervention(value, active.context, active.assessment); accepted = true; }
+      catch { /* Fixed diagnostic only; never retain arbitrary thrown details. */ }
+    }
+    let candidate: Record<string, unknown> | null = null;
+    if (isPlainRecord(value)) {
+      noteUnknownFields(value, ["assessment", "draft"], sanitization);
+      candidate = {
+        assessment: sanitizeAssessmentCandidate(value.assessment, active.context, redactions, sanitization),
+        draft: sanitizeDraftCandidate(value.draft, active.context, redactions, sanitization),
+      };
+    }
+    return baseSyntheticTraceRecord(active, attempt, callIndex, stage, candidate,
+      accepted, accepted ? "accepted" : "repair_invalid", sanitization);
+  }
   const replayValidation = replayScopeReviewValidation(value);
   return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
     sanitizeScopeCandidate(value, redactions, sanitization),
@@ -345,7 +364,8 @@ function baseSyntheticTraceRecord(
   sanitization: SyntheticTraceSanitization,
 ): SyntheticTraceRecord {
   return { caseId: active.caseId, round: active.round, callIndex, stage, attempt, candidate,
-    replayValidation: { accepted, reason }, sanitization };
+    replayValidation: { accepted, reason }, sanitization,
+    ...(stage === "draft" || stage === "pair_repair" ? { acceptedDraft: false } : {}) };
 }
 
 function replayAssessmentValidation(value: unknown, context: PdContext): { accepted: boolean; reason: string } {

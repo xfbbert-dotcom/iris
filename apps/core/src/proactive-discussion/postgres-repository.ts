@@ -164,6 +164,11 @@ export function createPostgresProactiveDiscussionRepository({ dataSource }: {
           || context.policy.chatId !== job.chatId || !context.policy.enabled || context.policy.version !== job.policyVersion) {
           await finish("blocked", "policy_or_trigger_invalid"); return "blocked";
         }
+        // A final semantic rejection is terminal even if concurrent changes made
+        // this context stale; requeueing would start another model repair cycle.
+        if (assessment.decision === "intervene" && draft === null) {
+          await finish("blocked", "assessment_or_draft_invalid"); return "blocked";
+        }
         if (!sourcesValid || !group || Number(group.context_version) !== context.contextVersion || Number(group.catalog_version) !== context.catalogVersion) {
           await requeueOwnedJob(client, job, at, JSON.stringify({ reason: "context_stale",
             sourceProtectionValid: sourcesValid,

@@ -11,7 +11,7 @@ const evalPath = "../../../scripts/pilot/proactive-discussion-eval.ts";
 
 type SyntheticRun = {
   cases: Array<{ id: string }>;
-  results: Array<{ caseId: string; round: number; error: string | null; draft: unknown }>;
+  results: Array<{ caseId: string; round: number; error: string | null; draft: unknown; assessment: Record<string, unknown> | null }>;
   syntheticTrace: null | {
     complete: boolean;
     validationBasis: string;
@@ -47,6 +47,9 @@ function scriptedClient({ scopeSupported = true }: { scopeSupported?: boolean } 
       }
       if (stage === "iris_proactive_discussion_scope_review") {
         return JSON.stringify({ supported: scopeSupported, reason: scopeSupported ? "内容受材料支持。" : "候选遗漏必要限定。" });
+      }
+      if (stage === "iris_proactive_discussion_pair_repair") {
+        return JSON.stringify({ assessment: input.assessment, draft: input.draft });
       }
       throw new Error("unexpected response format");
     },
@@ -166,6 +169,75 @@ test("HTTP failures remain unchanged and do not serialize error details into tra
   expect(run.syntheticTrace!.records.some(record => record.caseId === "arithmetic")).toBe(false);
   expect(JSON.stringify(run.syntheticTrace)).not.toContain(secret);
   expect(run.syntheticTrace!.records.length).toBeLessThanOrEqual(600);
+});
+
+function repairingClient(finalSupported: boolean, invalidRepair = false) {
+  const base = scriptedClient();
+  const requests: unknown[] = [];
+  let scopeCalls = 0;
+  const client: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      requests.push(structuredClone({ messages, options }));
+      const input = JSON.parse(messages[1]!.content);
+      const stage = options?.responseFormat?.json_schema.name;
+      if (stage === "iris_proactive_discussion_scope_review") {
+        scopeCalls += 1;
+        return JSON.stringify({ supported: scopeCalls % 2 === 0 && finalSupported, reason: "请保留已核算的预算差额，限定未来影响。" });
+      }
+      if (stage === "iris_proactive_discussion_pair_repair") {
+        return JSON.stringify({
+          assessment: { ...input.assessment, reasoning: "按现有材料，两人总成本比预算多6万元。" },
+          draft: { text: "两人共16万元，较预算多6万元。建议确认预算或调整人数。", evidenceRefs: input.assessment.evidenceRefs },
+          ...(invalidRepair ? { privateField: "PAIR-PRIVATE-SECRET" } : {}),
+        });
+      }
+      return base.client.complete(messages, options);
+    },
+  };
+  return { client, requests };
+}
+
+test("trace follows one pair repair and marks only its final reviewed draft accepted", async () => {
+  const offClient = repairingClient(true);
+  const onClient = repairingClient(true);
+  const off = await runSynthetic({ client: offClient.client, rounds: 1, includeTrace: false });
+  const on = await runSynthetic({ client: onClient.client, rounds: 1, includeTrace: true });
+  expect(on.results).toEqual(off.results);
+  expect(onClient.requests).toEqual(offClient.requests);
+  expect(on.syntheticTrace).toMatchObject({ complete: true, recordsDropped: 0 });
+  const records = on.syntheticTrace!.records.filter(record => record.caseId === "arithmetic");
+  expect(records.map(record => record.stage)).toEqual(["assessment", "draft", "scope_review", "pair_repair", "scope_review"]);
+  expect(records[1]).toMatchObject({ acceptedDraft: false });
+  expect(records[3]).toMatchObject({ acceptedDraft: true, attempt: 1,
+    candidate: { assessment: { reasoning: "按现有材料，两人总成本比预算多6万元。" }, draft: { text: "两人共16万元，较预算多6万元。建议确认预算或调整人数。" } },
+    replayValidation: { accepted: true, reason: "accepted" } });
+  expect(records[4]).toMatchObject({ attempt: 2, candidate: { supported: true } });
+  expect(on.results.find(result => result.caseId === "arithmetic")).toMatchObject({
+    assessment: { reasoning: "按现有材料，两人总成本比预算多6万元。" },
+    draft: { text: "两人共16万元，较预算多6万元。建议确认预算或调整人数。" }, error: null,
+  });
+});
+
+test("trace retains a twice-rejected pair without labelling either draft as accepted", async () => {
+  const { client } = repairingClient(false);
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  const records = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic");
+  expect(records).toHaveLength(5);
+  expect(records.filter(record => record.stage === "scope_review").map(record => record.candidate.supported)).toEqual([false, false]);
+  expect(records.filter(record => record.stage === "draft" || record.stage === "pair_repair").map(record => record.acceptedDraft)).toEqual([false, false]);
+  expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject({ draft: null, error: "draft_rejected" });
+});
+
+test("invalid pair repair is diagnosed by the runtime validator and unknown content is not retained", async () => {
+  const { client } = repairingClient(true, true);
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  const records = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic");
+  expect(records).toHaveLength(4);
+  expect(records[3]).toMatchObject({ stage: "pair_repair", acceptedDraft: false,
+    replayValidation: { accepted: false, reason: "repair_invalid" },
+    sanitization: { droppedFields: ["$unknownFields"] } });
+  expect(JSON.stringify(run.syntheticTrace)).not.toContain("PAIR-PRIVATE-SECRET");
+  expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject({ draft: null, error: "draft_rejected" });
 });
 
 function skipAssessment() {

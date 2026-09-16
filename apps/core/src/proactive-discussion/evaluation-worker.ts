@@ -76,9 +76,10 @@ export function createPdEvaluationWorker({ repository, contextBuilder, model, me
         if (context === null) { await repository.requeueEvaluation({ job, at: now() }); return "processed"; }
         const assessment = await model.assess(context, assertActive);
         await assertActive();
-        const draft = assessment.decision === "intervene" ? await model.render({ context, assessment }, assertActive) : null;
+        const reviewed = assessment.decision === "intervene" ? await model.render({ context, assessment }, assertActive) : null;
         await assertActive();
-        const outcome = await repository.commitEvaluation({ job, context, assessment, draft, at: now() });
+        const outcome = await repository.commitEvaluation({ job, context,
+          assessment: reviewed?.assessment ?? assessment, draft: reviewed?.draft ?? null, at: now() });
         return outcome === "lease_lost" ? "failed" : "processed";
       } catch {
         // If persistence itself failed, the durable lease remains recoverable;

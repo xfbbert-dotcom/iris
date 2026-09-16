@@ -42,8 +42,8 @@ test("eval retains earlier output when later render fails, redacts errors and re
   const { runProactiveDiscussionEval } = await evaluator();
   let calls = 0;
   const model: PdModel = { assess: async () => { calls++; return pdAssessment(); },
-    render: async () => { if (calls === 2) throw new Error("API key secret-production-history");
-      return { text: "两人共 16 万，建议核对预算。", evidenceRefs: pdAssessment().evidenceRefs }; } };
+    render: async ({ assessment }) => { if (calls === 2) throw new Error("API key secret-production-history");
+      return { assessment, draft: { text: "两人共 16 万，建议核对预算。", evidenceRefs: assessment.evidenceRefs } }; } };
   const cases = [{ id: "arithmetic", context: pdContext(), expectedDecision: "intervene", reviewCriteria: ["16 万"] }];
   const results = await runProactiveDiscussionEval({ model, cases, rounds: 2 });
   expect(results[0].draft.text).toContain("16 万");
@@ -89,8 +89,8 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion ingre
           issueRef: permission ? { kind: "new", description: "客户数据权限未确认" } : existing ? { kind: "existing", id: existing.id } : pdAssessment().issueRef,
           materialChange: { kind: permission || !existing ? "new_issue" : "new_evidence", explanation: "合成新依据", evidenceRefs: refs } };
       },
-      async render({ assessment }) { return { text: assessment.issueRef?.kind === "new" && assessment.issueRef.description.includes("权限")
-        ? "客户数据权限尚未确认，建议先核对授权范围。" : "两人共 16 万，比 10 万预算多 6 万，建议先核对预算。", evidenceRefs: assessment.evidenceRefs }; },
+      async render({ assessment }) { return { assessment, draft: { text: assessment.issueRef?.kind === "new" && assessment.issueRef.description.includes("权限")
+        ? "客户数据权限尚未确认，建议先核对授权范围。" : "两人共 16 万，比 10 万预算多 6 万，建议先核对预算。", evidenceRefs: assessment.evidenceRefs } }; },
     };
     const sent: { messageId: string; text: string }[] = [];
     const replier = { async replyText(input: { messageId: string; text: string }) {

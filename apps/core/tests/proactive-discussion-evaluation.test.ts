@@ -6,6 +6,39 @@ import type { PdJob } from "../src/proactive-discussion/contracts.js";
 import type { FeishuChatHistoryMessage } from "../src/feishu/feishu-chat-history-reader.js";
 import { hashLocalMessageText } from "../src/memory/local-message-source.js";
 
+test.each(["accepted", "rejected"] as const)("%s joint review commits the final pair or only the blocked candidate audit", async outcome => {
+  const context = pdContext();
+  const at = new Date("2026-09-14T00:00:00Z");
+  const job: PdJob = { id: "job", chatId: context.chatId, messageId: "m2", contentHash: "a".repeat(64),
+    policyVersion: 1, leaseToken: "lease", attempt: 1, purpose: "assessment" };
+  const candidate = { ...pdAssessment(), reasoning: "预算缺口会导致项目失败。" };
+  const reviewed = { assessment: { ...candidate,
+    observation: "两人各 8 万共 16 万，当前预算 10 万。", reasoning: "预算相差 6 万，可能影响招聘计划。",
+    suggestion: "建议先确认能否追加 6 万预算。", uncertainty: "qualified_inference" as const },
+  draft: { text: "两人共 16 万，比预算多 6 万，可能影响招聘计划，建议先确认能否追加预算。", evidenceRefs: candidate.evidenceRefs } };
+  const committed: Parameters<PdRepository["commitEvaluation"]>[0][] = [];
+  const failures: Parameters<PdRepository["failEvaluation"]>[0][] = [];
+  const repository = { claimEvaluation: async () => job,
+    commitEvaluation: async (input: Parameters<PdRepository["commitEvaluation"]>[0]) => {
+      committed.push(input); return outcome === "accepted" ? "prepared" : "blocked";
+    },
+    failEvaluation: async (input: Parameters<PdRepository["failEvaluation"]>[0]) => { failures.push(input); },
+  } as unknown as PdRepository;
+  const render = vi.fn(async () => outcome === "accepted" ? reviewed : null);
+  const worker = createPdEvaluationWorker({ repository, contextBuilder: { load: async () => context },
+    model: { assess: async () => candidate, render },
+    membership: { isCurrentMember: async () => false }, reader: { listRecentMessages: async () => [] },
+    now: () => at, workerId: "joint-review" });
+
+  expect(await worker.runOnce()).toBe("processed");
+  expect(render).toHaveBeenCalledOnce();
+  expect(render).toHaveBeenCalledWith({ context, assessment: candidate }, expect.any(Function));
+  expect(committed).toEqual([{ job, context, at,
+    assessment: outcome === "accepted" ? reviewed.assessment : candidate,
+    draft: outcome === "accepted" ? reviewed.draft : null }]);
+  expect(failures).toEqual([]);
+});
+
 test("skip assessment completes its job without calling prose rendering", async () => {
   const context = pdContext();
   const job = { id: "job", chatId: context.chatId, messageId: "m2", contentHash: "a".repeat(64),
@@ -127,7 +160,7 @@ test("null context releases the same job and a model failure does not stop subse
   const worker = createPdEvaluationWorker({ repository,
     contextBuilder: { load: async job => job.id === "job-1" ? null : context },
     model: { assess: async () => { if (++attempts === 1) throw new Error("model offline"); return pdAssessment(); },
-      render: async () => ({ text: "先核对预算。", evidenceRefs: pdAssessment().evidenceRefs }) },
+      render: async ({ assessment }) => ({ assessment, draft: { text: "先核对预算。", evidenceRefs: assessment.evidenceRefs } }) },
     membership: { isCurrentMember: async () => false }, reader: { listRecentMessages: async () => [] },
     now: () => new Date("2026-09-14T00:00:00Z"), workerId: "isolated" });
   expect(await worker.runOnce()).toBe("processed");
@@ -170,8 +203,8 @@ test("default heartbeat renews slow in-flight model work and releases its timer 
     } as unknown as PdRepository;
     const delay = () => new Promise<void>(resolve => setTimeout(resolve, 25_000));
     const worker = createPdEvaluationWorker({ repository, contextBuilder: { load: async () => context },
-      model: { assess: async () => { await delay(); return pdAssessment(); }, render: async (_input, active) => {
-        await delay(); await active?.(); await delay(); return { text: "核对预算", evidenceRefs: pdAssessment().evidenceRefs }; } },
+      model: { assess: async () => { await delay(); return pdAssessment(); }, render: async ({ assessment }, active) => {
+        await delay(); await active?.(); await delay(); return { assessment, draft: { text: "核对预算", evidenceRefs: assessment.evidenceRefs } }; } },
       membership: { isCurrentMember: async () => false }, reader: { listRecentMessages: async () => [] }, now: () => new Date(), workerId: "slow" });
     const result = worker.runOnce();
     await vi.advanceTimersByTimeAsync(75_000);

@@ -1,0 +1,220 @@
+import { expect, test, vi } from "vitest";
+
+import type {
+  OpenAICompatibleChatCompletionOptions,
+  OpenAICompatibleChatMessage,
+} from "../src/model/openai-compatible-chat-completions-client.js";
+import { createPdModel } from "../src/proactive-discussion/model.js";
+import type { PdAssessment, PdContext, PdDraft } from "../src/proactive-discussion/contracts.js";
+import { pdAssessment, pdContext, pdContextWithIssue } from "./fixtures/proactive-discussion.js";
+
+const originalDraft: PdDraft = {
+  text: "两人总成本为 16 万元，比 10 万元预算多 6 万元，并会影响项目执行。建议先核对预算。",
+  evidenceRefs: pdAssessment().evidenceRefs,
+};
+
+function correctedPair() {
+  const original = pdAssessment();
+  return {
+    assessment: {
+      ...original,
+      issueRef: { kind: "new" as const, description: "招聘计划可能存在预算缺口" },
+      reasoning: "两人总成本为 16 万元，比 10 万元预算多 6 万元；若均由该预算承担，可能影响计划。",
+      suggestion: "建议先核对预算口径，再决定是否调整人数或预算。",
+      uncertainty: "qualified_inference" as const,
+      materialChange: { ...original.materialChange, explanation: "发现可直接核算的 6 万元差额及有待核实的影响。" },
+    },
+    draft: {
+      text: "两人总成本为 16 万元，比 10 万元预算多 6 万元；若均由该预算承担，可能影响计划。建议先核对预算口径。",
+      evidenceRefs: original.evidenceRefs,
+    },
+  };
+}
+
+test("returns one jointly reviewed assessment and draft without adding a successful-path call", async () => {
+  const assessment = pdAssessment();
+  const client = sequenceClient([
+    JSON.stringify(originalDraft),
+    JSON.stringify({ supported: true, reason: "assessment 与 draft 均受来源支持。" }),
+  ]);
+
+  const result = await createPdModel({ client }).render({ context: pdContext(), assessment });
+
+  expect(result).toEqual({ assessment, draft: originalDraft });
+  expect(client.complete).toHaveBeenCalledTimes(2);
+  const reviewMessages = client.complete.mock.calls[1]?.[0] ?? [];
+  const reviewInput = JSON.parse(reviewMessages[1]?.content ?? "{}");
+  expect(reviewInput).toMatchObject({ assessment, draft: originalDraft });
+  expect(reviewInput).not.toHaveProperty("originalAssessment");
+  expect(reviewMessages[0]?.content).toContain("assessment 和 draft");
+  expect(reviewMessages[0]?.content).toContain("建议核实");
+  expect(reviewMessages[0]?.content).toContain("已经执行");
+});
+
+test("repairs semantic text once, re-reviews it, and returns only the accepted pair", async () => {
+  const repaired = correctedPair();
+  const active = vi.fn(async () => undefined);
+  const client = sequenceClient([
+    JSON.stringify(originalDraft),
+    JSON.stringify({ supported: false, reason: "assessment 和 draft 把未来影响写成确定事实。" }),
+    JSON.stringify(repaired),
+    JSON.stringify({ supported: true, reason: "修正后的 pair 保留算术事实并限定未来影响。" }),
+  ]);
+
+  const result = await createPdModel({ client }).render({
+    context: pdContext(),
+    assessment: pdAssessment(),
+  }, active);
+
+  expect(result).toEqual(repaired);
+  expect(client.complete).toHaveBeenCalledTimes(4);
+  expect(active).toHaveBeenCalledTimes(5);
+  expect(client.complete.mock.calls[2]?.[1]?.responseFormat?.json_schema.name)
+    .toBe("iris_proactive_discussion_pair_repair");
+  const repairInput = JSON.parse(client.complete.mock.calls[2]?.[0]?.[1]?.content ?? "{}");
+  expect(repairInput).toMatchObject({ assessment: pdAssessment(), draft: originalDraft,
+    review: { supported: false } });
+  const finalReviewInput = JSON.parse(client.complete.mock.calls[3]?.[0]?.[1]?.content ?? "{}");
+  expect(finalReviewInput).toMatchObject({ ...repaired, originalAssessment: pdAssessment() });
+});
+
+test("lets the final model review reject a repair that switches to another issue within the same references", async () => {
+  const switched = correctedPair();
+  switched.assessment.issueRef = { kind: "new", description: "权限审批流程存在风险" };
+  switched.assessment.observation = "权限审批流程尚未明确。";
+  switched.assessment.reasoning = "权限风险可能影响招聘计划。";
+  switched.assessment.suggestion = "建议先核实权限审批流程。";
+  switched.assessment.materialChange.explanation = "发现权限审批风险。";
+  switched.draft.text = "权限审批流程尚未明确，建议先核实审批要求。";
+  let callIndex = 0;
+  const client = {
+    complete: vi.fn(async (messages: readonly OpenAICompatibleChatMessage[]) => {
+      callIndex += 1;
+      if (callIndex === 1) return JSON.stringify(originalDraft);
+      if (callIndex === 2) {
+        return JSON.stringify({ supported: false, reason: "原 pair 对影响表述过于确定。" });
+      }
+      if (callIndex === 3) return JSON.stringify(switched);
+
+      const input = JSON.parse(messages[1]?.content ?? "{}");
+      const switchedIssueDetected = input.originalAssessment?.issueRef?.description === "招聘预算不足"
+        && input.assessment?.issueRef?.description === "权限审批流程存在风险";
+      return JSON.stringify({
+        supported: !switchedIssueDetected,
+        reason: switchedIssueDetected ? "修正结果切换成了另一个问题。" : "没有原始问题可供比较。",
+      });
+    }),
+  };
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() }))
+    .resolves.toBeNull();
+  expect(client.complete).toHaveBeenCalledTimes(4);
+});
+
+test("the runtime repair validator permits semantic corrections but locks structural identity and refs", async () => {
+  const validate = await repairValidator();
+  const context = pdContext();
+  const original = pdAssessment();
+  const repaired = correctedPair();
+
+  expect(validate(repaired, context, original)).toEqual(repaired);
+  expect(() => validate({
+    ...repaired,
+    assessment: { ...repaired.assessment, evidenceRefs: [original.evidenceRefs[0]],
+      materialChange: { ...repaired.assessment.materialChange, evidenceRefs: [original.evidenceRefs[0]] } },
+    draft: { ...repaired.draft, evidenceRefs: [original.evidenceRefs[0]] },
+  }, context, original)).toThrow("proactive discussion pair repair was invalid");
+  expect(() => validate({
+    ...repaired,
+    assessment: { ...repaired.assessment, issueRef: { kind: "existing", id: "issue-1" } },
+  }, context, original)).toThrow("proactive discussion pair repair was invalid");
+
+  const contextWithIssue = pdContextWithIssue();
+  const secondIssue = { ...contextWithIssue.issues[0]!, id: "issue-2", description: "另一个有效问题" };
+  const twoIssueContext = { ...contextWithIssue, issues: [...contextWithIssue.issues, secondIssue] };
+  const existingOriginal: PdAssessment = {
+    ...original,
+    issueRef: { kind: "existing", id: "issue-1" },
+    materialChange: { ...original.materialChange, kind: "new_evidence" },
+  };
+  const switchedExisting = {
+    ...repaired,
+    assessment: { ...repaired.assessment, issueRef: { kind: "existing" as const, id: "issue-2" },
+      materialChange: { ...repaired.assessment.materialChange, kind: "new_evidence" as const } },
+  };
+  expect(() => validate(switchedExisting, twoIssueContext, existingOriginal))
+    .toThrow("proactive discussion pair repair was invalid");
+});
+
+test.each([
+  ["malformed pair repair", ["not-json"]],
+  ["invalid structural pair repair", [JSON.stringify({ ...correctedPair(), assessment: {
+    ...correctedPair().assessment, evidenceRefs: [pdAssessment().evidenceRefs[0]],
+  } })]],
+  ["second semantic rejection", [JSON.stringify(correctedPair()), JSON.stringify({ supported: false, reason: "仍不受支持。" })]],
+  ["malformed final review", [JSON.stringify(correctedPair()), "not-json"]],
+] as const)("returns null after one %s without another correction", async (_label, tail) => {
+  const client = sequenceClient([
+    JSON.stringify(originalDraft),
+    JSON.stringify({ supported: false, reason: "需要修正。" }),
+    ...tail,
+  ]);
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() }))
+    .resolves.toBeNull();
+  expect(client.complete).toHaveBeenCalledTimes(tail.length + 2);
+});
+
+test("propagates a technical repair failure instead of treating it as a semantic rejection", async () => {
+  const transportError = new TypeError("network unavailable");
+  const client = sequenceClient([
+    JSON.stringify(originalDraft),
+    JSON.stringify({ supported: false, reason: "需要修正。" }),
+    transportError,
+  ]);
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() }))
+    .rejects.toBe(transportError);
+  expect(client.complete).toHaveBeenCalledTimes(3);
+});
+
+test("checks the active lease after the final review before returning an accepted pair", async () => {
+  const leaseLost = new Error("lease lost");
+  let checks = 0;
+  const client = sequenceClient([
+    JSON.stringify(originalDraft),
+    JSON.stringify({ supported: true, reason: "受支持。" }),
+  ]);
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() }, async () => {
+    checks += 1;
+    if (checks === 3) throw leaseLost;
+  })).rejects.toBe(leaseLost);
+  expect(client.complete).toHaveBeenCalledTimes(2);
+});
+
+type RepairValidator = (
+  value: unknown,
+  context: PdContext,
+  originalAssessment: PdAssessment,
+) => { assessment: PdAssessment; draft: PdDraft };
+
+async function repairValidator(): Promise<RepairValidator> {
+  const module = await import("../src/proactive-discussion/model.js") as unknown as Record<string, unknown>;
+  expect(module.validatePdRepairedIntervention).toBeTypeOf("function");
+  return module.validatePdRepairedIntervention as RepairValidator;
+}
+
+function sequenceClient(responses: Array<string | Error>) {
+  let index = 0;
+  return {
+    complete: vi.fn(async (
+      _messages: readonly OpenAICompatibleChatMessage[],
+      _options?: OpenAICompatibleChatCompletionOptions,
+    ) => {
+      const response = responses[index++] ?? responses.at(-1)!;
+      if (response instanceof Error) throw response;
+      return response;
+    }),
+  };
+}
