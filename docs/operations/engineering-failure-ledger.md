@@ -90,6 +90,17 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   one source can contain multiple distinct problems. Fixed identifiers/references remain locally
   enforced, while semantic review itself still requires real-model acceptance. No deployment is
   implied by the regression or CI configuration; current evidence and remaining gates are in the record.
+- **Contract diagnostic (2026-09-17):** Before blaming or replacing a model, hold model, input and
+  settings fixed and separate direct answering, assessment and downstream review. The
+  [local diagnostic and repair](../development/iris-prompt-contract-diagnostic-20260917.md) found
+  missing decision/issue/material-change relations in model instructions despite stricter local
+  validation, and numeric-preservation rules absent from paired correction. Make the model-facing
+  contract explicit, preserve source-grounded arithmetic and treat review reasons as fallible
+  diagnoses rather than authority to delete correct facts. Never repair by echoing invalid private
+  output or promoting malformed silence to an intervention. Prompt-contract tests passed, but the
+  fixed local case still failed after recognizing the problem because issueRef remained null;
+  shape-only schemas and improved raw decisions are not end-to-end acceptance. Preserve this
+  result and design the output/state boundary before another mechanism change, not repeated sampling.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

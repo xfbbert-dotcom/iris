@@ -93,6 +93,16 @@ run6虽然30个决策正确、无执行错误，完整语义仍26通过/4失败/
 IRIS-CORE-005仍部分实现，代码/PG/真实模型/CI/真实飞书分别验收，不等于已部署或启用。
 此前run1–5及未通过事实保留，不原样重跑直到绿色。
 
+### 2026-09-17 同模型合同诊断
+
+用户批准先查自身集成后，[分层诊断与修复](../../development/iris-prompt-contract-diagnostic-20260917.md)
+应用`01ee7c31`补齐模型输入字段关系、复核/修正的授权算术与数值保真规则，未放宽validator、
+未增加调用。Core4651通过/469条件跳过，CLI7、类型/构建和有限审查通过；没有重跑真实PG或远端CI。
+固定本地Qwen/同题/seed1709，修复前后都能直接识别预算问题；修复后原始决策改善，但issueRef仍null，
+两次原完整链仍未完整，隔离手工assessment后的文案通过不可替代。只10次本地合成请求，模型服务已停止。
+IRIS-CORE-005仍部分实现、未通过完整实模和真实单群投递门禁，未部署/启用；下一步明确结构化输出与
+程序状态边界，不将合同回归或单次原始判断提升为交付，不盲换模型或反复抽样。历史失败保留。
+
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 
 - Managed existing-page update code is implemented and locally verified behind the independent

@@ -488,6 +488,15 @@ updates or delivery; context changes must not turn that semantic rejection into 
 Rejected candidates may remain explicitly marked in append-only audit, never as accepted evidence.
 Bounded technical-error recovery and fresh independently triggered work remain separate.
 
+Model-facing contracts must state the decision, issue and evidence relationships required by
+runtime validation; a shape-only JSON Schema is not proof those relationships or semantics hold.
+Source-grounded, comparable arithmetic and business ratios need not appear verbatim in a source
+to be valid reasoning. Review diagnoses are fallible, not new authority over the original evidence:
+correction must preserve necessary supported quantities, units and qualifications, while keeping
+future implications uncertain. Do not echo invalid/private candidate output to repair a contract
+failure. The [same-model diagnostic](../../development/iris-prompt-contract-diagnostic-20260917.md)
+records a bounded prompt repair separately from unresolved structured-output and semantic gates.
+
 An explicitly enabled, versioned, exact-group low-risk discussion policy may authorize these
 interventions without per-message human review. Record policy authorization truthfully; never
 manufacture a human approval or use the legacy reminder approval API as an automatic-send shortcut.

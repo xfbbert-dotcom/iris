@@ -29,6 +29,17 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Latest work is the [2026-09-17 same-model integration diagnostic](docs/development/iris-prompt-contract-diagnostic-20260917.md),
+after the user asked whether our own system was the problem. Application `01ee7c31` aligns model-facing
+decision relations and preserves source-grounded arithmetic through review/repair, without relaxing
+validation or adding calls. Core4651 passed/469 conditional skips, CLI7 and type/build passed.
+The fixed local model can answer the plain budget question; after the prompt repair its raw decision
+changes from skip to intervene, but null issueRef still prevents a valid final assessment. Both full
+single-case attempts remain incomplete. No full model suite, deployment or proactive activation is
+claimed. Next is a bounded output/state-contract design, not another blind model swap or cloud probe.
+All10 requests were local and synthetic; the server is stopped, with no API cost or production changes.
+The following free-probe and run1–6 records are preserved history.
+
 The user authorized a **free-model-only isolated comparison**, not a paid upgrade or production
 switch. The [2026-09-17 setup/probe record](docs/development/iris-free-model-probe-20260917.md)
 retains the initial two capacity failures and two further single-request windows explicitly resumed
