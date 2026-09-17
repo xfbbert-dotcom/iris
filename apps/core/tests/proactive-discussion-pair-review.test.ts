@@ -241,7 +241,7 @@ test("uses the existing pair repair when an affirmative review cites the 6 insid
       { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "6万元" },
     ], adviceQuote: "建议先核对预算" }),
     JSON.stringify(repaired),
-    JSON.stringify({ supported: true, reason: "修正草稿含明确差额。", ...budgetReceipts }),
+    JSON.stringify({ supported: true, reason: "修正草稿含明确差额。", ...budgetReceipts, numberRevisions: [] }),
   ]);
 
   await expect(createPdModel({ client }).render({ context: pdContext(), assessment: originalAssessment })).resolves.toEqual(repaired);

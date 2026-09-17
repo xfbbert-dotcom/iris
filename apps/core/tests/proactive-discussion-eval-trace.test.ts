@@ -235,6 +235,61 @@ test("scope receipt trace bounds nested evidence and redacts text without retain
   expect(JSON.stringify(run.syntheticTrace)).not.toMatch(/PRIVATE-RECEIPT|NEVER-RETAIN/u);
 });
 
+test.each([false, true])("final trace uses prior numeric diagnoses and records explicit revisions (corrected=%s)", async corrected => {
+  const base = scriptedClient().client;
+  let reviews = 0;
+  const client: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      if (options?.responseFormat?.json_schema.name !== "iris_proactive_discussion_scope_review") return base.complete(messages, options);
+      reviews += 1;
+      const input = JSON.parse(messages[1]!.content);
+      const receipt = { label: "差额", expectedValue: "60", unit: "万", draftQuote: null };
+      if (reviews === 1) return JSON.stringify({ supported: false, reason: "初审要求60万。", requiredNumbers: [receipt], adviceQuote: null });
+      return JSON.stringify({ supported: true, reason: "当前差额为6万。",
+        requiredNumbers: [{ ...receipt, expectedValue: "6", draftQuote: "多 6 万" }], adviceQuote: "建议核对预算。",
+        numberRevisions: corrected ? [{ previousIndex: 0, replacementIndex: 0, reason: "初审算错，16减10为6。",
+          sourceRef: input.evidence[0].ref, sourceQuote: input.evidence[0].text }] : [] });
+    },
+  };
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  const records = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic");
+  expect(run.syntheticTrace!.complete).toBe(true);
+  const final = records.filter(record => record.stage === "scope_review").at(-1)!;
+  expect(final).toMatchObject({ candidate: { supported: true },
+    replayValidation: { accepted: corrected, reason: corrected ? "accepted" : "receipt_invalid" } });
+  expect(final.candidate.numberRevisions).toHaveLength(corrected ? 1 : 0);
+  if (corrected) expect(final.candidate.numberRevisions[0]).toMatchObject({ previousIndex: 0, replacementIndex: 0, reason: "初审算错，16减10为6。" });
+  expect(records.find(record => record.stage === "pair_repair")!.acceptedDraft).toBe(corrected);
+  expect(run.results.find(result => result.caseId === "arithmetic")!.error).toBe(corrected ? null : "draft_rejected");
+});
+
+test("revision trace bounds and redacts diagnostics while dropping unknown source identities", async () => {
+  const base = scriptedClient().client;
+  let reviews = 0;
+  const client: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      if (options?.responseFormat?.json_schema.name !== "iris_proactive_discussion_scope_review") return base.complete(messages, options);
+      if (++reviews === 1) return JSON.stringify({ supported: false, reason: "核对差额。", requiredNumbers: [
+        { label: "差额", expectedValue: "60", unit: "万", draftQuote: null },
+      ], adviceQuote: null });
+      return JSON.stringify({ supported: true, reason: "复核。", requiredNumbers: [], adviceQuote: "建议核对预算。",
+        numberRevisions: Array.from({ length: 10 }, () => ({ previousIndex: 0, replacementIndex: null,
+          reason: `PRIVATE-REVISION${"长".repeat(600)}`, sourceRef: "PRIVATE-SOURCE", sourceQuote: "PRIVATE-REVISION",
+          hidden: "NEVER-RETAIN" })) });
+    },
+  };
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true, traceRedactions: ["PRIVATE-REVISION"] });
+  const final = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic" && record.stage === "scope_review").at(-1)!;
+  expect(final.replayValidation).toEqual({ accepted: false, reason: "shape_invalid" });
+  expect(final.candidate.numberRevisions).toHaveLength(8);
+  expect(final.candidate.numberRevisions[0].reason).toHaveLength(500);
+  expect(final.candidate.numberRevisions[0].sourceQuote).toBe("[REDACTED]");
+  expect(final.candidate.numberRevisions[0]).not.toHaveProperty("sourceRef");
+  expect(final.sanitization.droppedReferenceCount).toBe(8);
+  expect(final.sanitization.truncatedFields).toContain("numberRevisions");
+  expect(JSON.stringify(run.syntheticTrace)).not.toMatch(/PRIVATE-|NEVER-RETAIN/u);
+});
+
 test("assessment diagnostic replay maps invalid decision-field relations to a fixed local reason", async () => {
   let arithmeticAttempts = 0;
   const client: OpenAICompatibleChatCompletionsClient = {

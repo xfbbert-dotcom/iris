@@ -25,12 +25,30 @@ const scopeReviewSchema = z.object({
   adviceQuote: quoteSchema,
 }).strict();
 
-export type PdScopeReview = z.infer<typeof scopeReviewSchema>;
+const numberRevisionSchema = z.object({
+  previousIndex: z.number().int().min(0).max(MAX_NUMBER_RECEIPTS - 1),
+  replacementIndex: z.number().int().min(0).max(MAX_NUMBER_RECEIPTS - 1).nullable(),
+  reason: z.string().min(1).max(MAX_REASON_CHARS).refine(value => value.trim().length > 0),
+  sourceRef: z.string().min(1).max(200),
+  sourceQuote: quoteSchema.unwrap(),
+}).strict();
+const finalScopeReviewSchema = scopeReviewSchema.extend({
+  numberRevisions: z.array(numberRevisionSchema).max(MAX_NUMBER_RECEIPTS),
+});
 
-export function validatePdScopeReview(value: unknown, draftText: string): PdScopeReview {
-  const parsed = scopeReviewSchema.safeParse(value);
+export type PdScopeReview = z.infer<typeof scopeReviewSchema> & {
+  numberRevisions?: z.infer<typeof numberRevisionSchema>[];
+};
+export type PdScopeReviewHistory = {
+  previousNumbers: PdScopeReview["requiredNumbers"];
+  evidence: readonly { ref: string; text: string }[];
+};
+
+export function validatePdScopeReview(value: unknown, draftText: string, history?: PdScopeReviewHistory): PdScopeReview {
+  const hasHistory = history !== undefined && history.previousNumbers.length > 0;
+  const parsed = (hasHistory ? finalScopeReviewSchema : scopeReviewSchema).safeParse(value);
   if (!parsed.success) throw new Error("proactive discussion scope review was invalid");
-  const review = parsed.data;
+  const review: PdScopeReview = parsed.data;
   if (!review.supported) return review;
   // This proves only the returned quote claims, not that the model listed every
   // necessary number or correctly assessed the meaning of the quoted text.
@@ -40,7 +58,26 @@ export function validatePdScopeReview(value: unknown, draftText: string): PdScop
     return { ...review, supported: false,
       reason: "复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。" };
   }
+  if (hasHistory && !numberHistoryAccountedFor(review, history)) {
+    return { ...review, supported: false, reason: "最终复核未完整处理此前数字核对项。" };
+  }
   return review;
+}
+
+function numberHistoryAccountedFor(review: PdScopeReview, history: PdScopeReviewHistory): boolean {
+  const revised = new Set<number>();
+  for (const revision of review.numberRevisions ?? []) {
+    if (revision.previousIndex >= history.previousNumbers.length || revised.has(revision.previousIndex)) return false;
+    const sources = history.evidence.filter(source => source.ref === revision.sourceRef);
+    if (sources.length !== 1 || !sources[0]!.text.includes(revision.sourceQuote)) return false;
+    if (revision.replacementIndex !== null && review.requiredNumbers[revision.replacementIndex] === undefined) return false;
+    revised.add(revision.previousIndex);
+  }
+  // A previous diagnosis is fallible. Revisions must explicitly account for it
+  // using current authorized source text, rather than silently dropping it or
+  // forcing its value into the draft. Literal support is not semantic proof.
+  return history.previousNumbers.every((prior, index) => revised.has(index)
+    || review.requiredNumbers.some(current => current.expectedValue === prior.expectedValue && current.unit === prior.unit));
 }
 
 function numberQuoteMatches(draftText: string, number: PdScopeReview["requiredNumbers"][number]): boolean {
@@ -62,7 +99,7 @@ function numberQuoteMatches(draftText: string, number: PdScopeReview["requiredNu
   return false;
 }
 
-export function createPdScopeReviewJsonSchema(draftText: string): Record<string, unknown> {
+export function createPdScopeReviewJsonSchema(draftText: string, history?: PdScopeReviewHistory): Record<string, unknown> {
   // Every candidate is an unchanged span of this draft, never source or assessment
   // text. The whole draft also permits quoting evidence that crosses a boundary.
   const quoteChoices = [...new Set([
@@ -73,10 +110,12 @@ export function createPdScopeReviewJsonSchema(draftText: string): Record<string,
     { type: "string", minLength: 1, maxLength: MAX_QUOTE_CHARS, enum: quoteChoices },
     { type: "null" },
   ] };
+  const hasHistory = history !== undefined && history.previousNumbers.length > 0;
+  const sourceRefs = history?.evidence.map(source => source.ref) ?? [];
   return {
     type: "object",
     additionalProperties: false,
-    required: ["supported", "reason", "requiredNumbers", "adviceQuote"],
+    required: ["supported", "reason", "requiredNumbers", "adviceQuote", ...(hasHistory ? ["numberRevisions"] : [])],
     properties: {
       supported: { type: "boolean" },
       reason: { type: "string", minLength: 1, maxLength: MAX_REASON_CHARS },
@@ -94,6 +133,20 @@ export function createPdScopeReviewJsonSchema(draftText: string): Record<string,
         },
       },
       adviceQuote: quote,
+      ...(hasHistory ? { numberRevisions: {
+        type: "array", maxItems: MAX_NUMBER_RECEIPTS,
+        items: {
+          type: "object", additionalProperties: false,
+          required: ["previousIndex", "replacementIndex", "reason", "sourceRef", "sourceQuote"],
+          properties: {
+            previousIndex: { type: "integer", minimum: 0, maximum: history.previousNumbers.length - 1 },
+            replacementIndex: { anyOf: [{ type: "integer", minimum: 0, maximum: MAX_NUMBER_RECEIPTS - 1 }, { type: "null" }] },
+            reason: { type: "string", minLength: 1, maxLength: MAX_REASON_CHARS },
+            sourceRef: { type: "string", minLength: 1, maxLength: 200, ...(sourceRefs.length ? { enum: sourceRefs } : {}) },
+            sourceQuote: { type: "string", minLength: 1, maxLength: MAX_QUOTE_CHARS },
+          },
+        },
+      } } : {}),
     },
   };
 }
