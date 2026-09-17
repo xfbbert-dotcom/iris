@@ -101,6 +101,14 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   fixed local case still failed after recognizing the problem because issueRef remained null;
   shape-only schemas and improved raw decisions are not end-to-end acceptance. Preserve this
   result and design the output/state boundary before another mechanism change, not repeated sampling.
+- **Generation contract repair (2026-09-17):** Independent field enums admitted contradictory
+  decisions even after prompt repair. [Legal generation branches and a strict envelope](../development/iris-assessment-wire-fix-20260917.md)
+  fix that adapter defect without filling missing model fields or relaxing local provenance/state
+  checks. Keep runtime and trace decoding aligned. Test the actual emitted schema, including
+  realistic UUID catalogs: duplicated ID sets exceeded the preexisting transport byte limit and
+  required shared definitions. A complete assessment/draft/review chain can still omit or misstate
+  arithmetic and receive a false-positive model review; never equate structural completion with
+  semantic acceptance or enable production on that basis.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

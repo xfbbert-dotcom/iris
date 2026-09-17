@@ -103,6 +103,15 @@ IRIS-CORE-005仍部分实现，代码/PG/真实模型/CI/真实飞书分别验�
 IRIS-CORE-005仍部分实现、未通过完整实模和真实单群投递门禁，未部署/启用；下一步明确结构化输出与
 程序状态边界，不将合同回归或单次原始判断提升为交付，不盲换模型或反复抽样。历史失败保留。
 
+### 2026-09-17 主动判断输出适配
+
+[本轮修复与验收记录](../../development/iris-assessment-wire-fix-20260917.md)把独立字段生成改成合法分支，
+严格解包后仍使用原validator；不改变外部PdAssessment、权限、沉默判断或调用上限。
+同一本地免费模型在最终提交的有限推理配置下已走通原arithmetic完整链，但仍漏6万差额且被复核误放行；
+原60秒配置的最终两条复测超时，结构修复不代表语义或生产时延通过。
+尺寸优化前候选的原15例两轮为19通过/8失败/3未完整，证据与剩余门禁见专项记录。
+IRIS-CORE-005仍部分实现；未部署、启用主动发言或重跑云端。
+
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 
 - Managed existing-page update code is implemented and locally verified behind the independent

@@ -29,7 +29,15 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
-Latest work is the [2026-09-17 same-model integration diagnostic](docs/development/iris-prompt-contract-diagnostic-20260917.md),
+The latest [assessment output-adapter repair](docs/development/iris-assessment-wire-fix-20260917.md)
+constrains complete generation branches and strictly unwraps them into the unchanged runtime
+contract. The final commit completes the original arithmetic chain in a bounded local thinking
+profile, but numeric omissions and false-positive review still fail semantic acceptance; two
+normal-profile final probes timed out. See the record for full-suite
+evidence and remaining gates; no production proactive activation or paid API test is implied.
+Earlier prompt-only diagnosis below remains retained history, not the current structure implementation.
+
+Prior work was the [2026-09-17 same-model integration diagnostic](docs/development/iris-prompt-contract-diagnostic-20260917.md),
 after the user asked whether our own system was the problem. Application `01ee7c31` aligns model-facing
 decision relations and preserves source-grounded arithmetic through review/repair, without relaxing
 validation or adding calls. Core4651 passed/469 conditional skips, CLI7 and type/build passed.

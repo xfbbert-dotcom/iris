@@ -490,6 +490,13 @@ Bounded technical-error recovery and fresh independently triggered work remain s
 
 Model-facing contracts must state the decision, issue and evidence relationships required by
 runtime validation; a shape-only JSON Schema is not proof those relationships or semantics hold.
+The assessment adapter constrains generation to complete silence/new-issue/existing-new-evidence/
+eligible-unattempted branches inside a strict transport envelope. It never invents missing fields
+or promotes invalid silence. Runtime validation remains authoritative for provenance, evidence
+subsets/novelty, normalized text and issue state. Shared definitions must preserve the bounded
+response-format size; synthetic replay uses the same envelope decoder. The
+[output-adapter repair](../../development/iris-assessment-wire-fix-20260917.md) separates successful
+structured execution from still-required semantic and real-delivery acceptance.
 Source-grounded, comparable arithmetic and business ratios need not appear verbatim in a source
 to be valid reasoning. Review diagnoses are fallible, not new authority over the original evidence:
 correction must preserve necessary supported quantities, units and qualifications, while keeping

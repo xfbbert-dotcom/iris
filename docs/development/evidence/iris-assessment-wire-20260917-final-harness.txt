@@ -1,0 +1,73 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createPdModel } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createProactiveDiscussionEvalCases, createRequestPacedFetch, runProactiveDiscussionEval, runSyntheticProactiveDiscussionEval } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const mode = process.argv[2];
+if (!['arithmetic', 'full', 'packed', 'thinking'].includes(mode ?? '')) throw Error('Unknown mode');
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const output = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260917/assessment-wire-' + mode + '.json';
+if (existsSync(output)) throw Error('Existing evidence: no request made');
+const config = { provider: 'openai-compatible' as const, baseUrl: 'http://127.0.0.1:18089/v1', apiKey: 'local-synthetic-only', model: 'iris-qwen3-4b-q4km', timeoutMs: mode === 'thinking' ? 180000 : 60000 };
+const report: any = {
+  kind: 'assessment-wire-original-pipeline', mode, syntheticOnly: true, seed: 1709,
+  startedAt: new Date().toISOString(), commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  modelSourceSha256: createHash('sha256').update(readFileSync(root + '/apps/core/src/proactive-discussion/model.ts')).digest('hex'),
+  runtime: 'llama.cpp b11011', model: 'Qwen3-4B-Q4_K_M', timeoutMs: config.timeoutMs,
+  wallMs: mode === 'full' ? 1500000 : mode === 'thinking' ? 900000 : 600000,
+  maxRequests: mode === 'full' ? 180 : mode === 'packed' ? 12 : 6,
+  profile: mode === 'thinking' ? { reasoning_format: 'deepseek', temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, presence_penalty: 1.5, max_tokens: 2048 } : { reasoning: 'off', temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0, max_tokens: 2048 },
+  serverReasoning: mode === 'thinking' ? { enabled: true, tokenBudget: 768 } : { enabled: false },
+  requestIntervalMs: 6000, requests: [], completions: [], manualReview: 'pending',
+};
+const deadline = AbortSignal.timeout(report.wallMs);
+const boundedFetch: typeof fetch = async (url, init) => {
+  if (String(url) !== config.baseUrl + '/chat/completions' || report.requests.length >= report.maxRequests || deadline.aborted) throw Error('Local diagnostic boundary');
+  const payload = JSON.parse(String(init?.body));
+  if (payload.model !== config.model || payload.tools || payload.stream) throw Error('Local model boundary');
+  payload.seed = 1709;
+  if (mode === 'thinking') Object.assign(payload, report.profile);
+  const record: any = { index: report.requests.length + 1, startedAt: new Date().toISOString(), stage: payload.response_format?.json_schema?.name };
+  report.requests.push(record);
+  console.log(JSON.stringify(record));
+  try {
+    const response = await fetch(url, { ...init, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+    record.status = response.status;
+    if (mode === 'thinking' && response.ok) {
+      const parsed = await response.clone().json();
+      record.reasoningContentChars = String(parsed.choices?.[0]?.message?.reasoning_content ?? '').length;
+      record.finishReason = parsed.choices?.[0]?.finish_reason;
+    }
+    return response;
+  } finally { record.finishedAt = new Date().toISOString(); }
+};
+const base = createOpenAICompatibleChatCompletionsClient({ config, fetch: createRequestPacedFetch({ fetch: boundedFetch, requestIntervalMs: 6000 }) });
+const client = { async complete(messages: any, options?: any) {
+  const entry: any = { stage: options?.responseFormat?.json_schema?.name, startedAt: new Date().toISOString() };
+  if (mode !== 'full') { entry.messages = messages; entry.responseFormat = options?.responseFormat; }
+  report.completions.push(entry);
+  try { entry.content = await base.complete(messages, options); return entry.content; }
+  catch (error) { entry.error = error instanceof Error ? error.message.slice(0, 500) : 'unknown'; throw error; }
+  finally { entry.finishedAt = new Date().toISOString(); console.log(JSON.stringify({ completed: report.completions.length, stage: entry.stage, content: entry.content, error: entry.error })); }
+} };
+try {
+  const evaluated = mode === 'full'
+    ? await runSyntheticProactiveDiscussionEval({ client, rounds: 2, includeTrace: true })
+    : await (async () => {
+      const cases = createProactiveDiscussionEvalCases().filter(c => c.id === 'arithmetic' || (mode === 'packed' && c.id === 'material-update'));
+      return { cases, results: await runProactiveDiscussionEval({ model: createPdModel({ client }), cases, rounds: 1 }), syntheticTrace: null };
+    })();
+  report.cases = evaluated.cases.map(({ id, expectedDecision, reviewCriteria }) => ({ id, expectedDecision, reviewCriteria }));
+  report.results = evaluated.results;
+  report.syntheticTrace = evaluated.syntheticTrace;
+  report.failed = evaluated.results.filter(r => r.error !== null || r.assessment?.decision !== evaluated.cases.find(c => c.id === r.caseId)!.expectedDecision || (r.assessment?.decision === 'intervene' && r.draft === null)).map(r => r.caseId + ':' + r.round);
+  process.exitCode = report.failed.length ? 1 : 0;
+} catch (error) {
+  report.error = error instanceof Error ? error.message.slice(0, 500) : 'unknown'; process.exitCode = 1;
+} finally {
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(output, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length, results: report.results, failed: report.failed, error: report.error, exitCode: process.exitCode }));
+}
