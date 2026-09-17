@@ -5,7 +5,7 @@ import {
   type OpenAICompatibleChatCompletionsClient,
 } from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider-error.js";
-import { createPdModel, validatePdAssessment, validatePdRepairedIntervention, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
+import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdRepairedIntervention, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 
@@ -319,6 +319,11 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
   }
 
   if (stage === "assessment") {
+    try { value = unwrapPdAssessmentResponse(value); }
+    catch {
+      addTraceMarker(sanitization.droppedFields, "$envelope");
+      return baseSyntheticTraceRecord(active, attempt, callIndex, stage, null, false, "shape_invalid", sanitization);
+    }
     const replayValidation = replayAssessmentValidation(value, active.context);
     return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
       sanitizeAssessmentCandidate(value, active.context, redactions, sanitization),

@@ -79,6 +79,29 @@ test("trace opt-in leaves model results and request payloads unchanged and keeps
   expect(acceptedScope).toMatchObject({ candidate: { supported: true }, replayValidation: { accepted: true, reason: "accepted" } });
 });
 
+test("wire envelopes retain flat validated trace candidates and reject envelope extras without retaining them", async () => {
+  const legacy = scriptedClient().client;
+  const wrapped: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      const content = await legacy.complete(messages, options);
+      return options?.responseFormat?.json_schema.name === "iris_proactive_discussion_assessment"
+        ? JSON.stringify({ assessment: JSON.parse(content) }) : content;
+    },
+  };
+  const before = await runSynthetic({ client: legacy, rounds: 1, includeTrace: true });
+  const after = await runSynthetic({ client: wrapped, rounds: 1, includeTrace: true });
+  expect(after.results).toEqual(before.results);
+  expect(after.syntheticTrace).toEqual(before.syntheticTrace);
+  const invalid: OpenAICompatibleChatCompletionsClient = {
+    async complete() { return JSON.stringify({ assessment: skipAssessment(), leakedExtra: "PRIVATE-ENVELOPE" }); },
+  };
+  const rejected = await runSynthetic({ client: invalid, rounds: 1, includeTrace: true });
+  expect(rejected.results.every(result => result.error === "assessment_failed")).toBe(true);
+  expect(rejected.syntheticTrace!.records).toHaveLength(30);
+  expect(rejected.syntheticTrace!.records.every(record => record.replayValidation.accepted === false)).toBe(true);
+  expect(JSON.stringify(rejected.syntheticTrace)).not.toContain("PRIVATE-ENVELOPE");
+});
+
 test("trace keeps both assessment repair candidates but drops malformed text, illegal refs and unknown fields", async () => {
   const apiKey = "SENSITIVE-API-KEY-TAIL";
   const endpoint = "https://private.invalid/v1";

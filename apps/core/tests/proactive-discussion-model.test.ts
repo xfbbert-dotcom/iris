@@ -162,18 +162,11 @@ describe("PdModel.assess", () => {
         schema: expect.objectContaining({
           type: "object",
           additionalProperties: false,
-          required: [
-            "decision", "reason", "issueRef", "evidenceRefs", "observation",
-            "reasoning", "suggestion", "uncertainty", "materialChange",
-          ],
-          properties: expect.objectContaining({
-            observation: expect.objectContaining({ maxLength: 2_000 }),
-            evidenceRefs: expect.objectContaining({
-              maxItems: context.sources.length,
-              uniqueItems: true,
-              items: expect.objectContaining({ enum: context.sources.map(source => source.ref) }),
-            }),
+          required: ["assessment"],
+          $defs: expect.objectContaining({
+            sourceRef: { type: "string", enum: context.sources.map(source => source.ref) },
           }),
+          properties: { assessment: { anyOf: expect.any(Array) } },
         }),
       },
     });

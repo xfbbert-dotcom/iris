@@ -41,13 +41,14 @@ const assessmentSystem = [
   "若问题依赖可直接核算的数字，明确写出相关总额、相对基准的差额；同一问题更新时还要写出较原方案的增减量和影响，不能只说超出或变化较大。保留单位和口径，缺少可比前提时明确限定，不编造数字。",
   uncertaintySystem,
   "新问题只返回 description，不创建 ID；已有问题只能使用 suppliedIssues 中的同群 ID。",
-  "intervene 的 issueRef 不得为 null：新问题必须用 new_issue；已有问题通常用 new_evidence，且 materialChange.evidenceRefs 必须包含该问题尚未消费的实质新来源。materialChange.evidenceRefs 必须是 evidenceRefs 的子集。",
+  "intervene 的 issueRef 不得为 null：新问题必须用 new_issue；已有问题通常用 new_evidence，此时 materialChange.evidenceRefs 必须包含该问题尚未消费的实质新来源。materialChange.evidenceRefs 必须是 evidenceRefs 的子集。",
   "resolved 只有出现实质新依据时才能重新介入；user_paused 不能自动恢复。",
   "已有问题的发送结果未知时保持沉默，不能推进同一问题的新版本。",
   "只有已提供、state=observing 且 canReassessUnattempted=true 的已有问题可用 unattempted_first：此前草稿未曾尝试发送，重新判断原依据是否仍值得首次发言；不要把旧依据称为新证据。",
   'skip 的 reason 不得为 material_issue，应选择 no_work_value、insufficient_basis、already_handled、duplicate 或 resolved；materialChange.kind 必须为 none，explanation 必须为 ""，evidenceRefs 必须为 []，不要填写“无变化”等说明。',
   "skip 的 issueRef 只能为 null 或已提供的 existing 问题，不能提出 new 问题。其余文本和顶层 evidenceRefs 允许为空；不要为了满足介入字段而改变实际应当沉默的判断。",
   "不要输出思维链，只给出简明、可审计的字段。",
+  '输出根对象只有 assessment 字段；在其中选择符合实际判断的完整分支。不要为了凑齐字段把应当沉默的情况改成介入。',
 ].join("\n");
 
 const proseSystem = [
@@ -336,7 +337,15 @@ function parseAssessmentContent(content: string, context: PdContext): PdAssessme
   } catch {
     throw assessmentInvalid("assessment JSON is invalid");
   }
-  return validatePdAssessment(value, context);
+  return validatePdAssessment(unwrapPdAssessmentResponse(value), context);
+}
+
+/** Normalize only the wire envelope; never infer or repair a model's decision fields. */
+export function unwrapPdAssessmentResponse(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || !("assessment" in value)) return value;
+  const envelope = z.object({ assessment: z.unknown() }).strict().safeParse(value);
+  if (!envelope.success) throw assessmentInvalid("assessment shape is invalid");
+  return envelope.data.assessment;
 }
 
 function parseDraftContent(content: string, expectedRefs: readonly string[]): PdDraft {
@@ -508,6 +517,92 @@ function pairRepairMessages(
 }
 
 function assessmentResponseFormat(context: PdContext): OpenAICompatibleJsonSchemaResponseFormat {
+  const body = flatAssessmentResponseFormat(context).json_schema.schema;
+  const properties = body.properties as Record<string, unknown>;
+  const change = properties.materialChange as Record<string, unknown>;
+  const allIds = context.issues.map(issue => issue.id);
+  const eligible = context.issues.filter(issue => issue.state !== "user_paused" && !issue.hasUnknownDelivery);
+  const unattemptedIds = eligible.filter(issue => issue.state === "observing" && issue.canReassessUnattempted).map(issue => issue.id);
+  const issueDefinitions: Record<string, unknown> = {};
+  const issueDefinitionNames = new Map<string, string>();
+  // Keep references one level deep: some compatible grammar engines cannot expand nested refs.
+  const evidenceRefs = {
+    type: "array", maxItems: context.sources.length, uniqueItems: true,
+    items: { $ref: "#/$defs/sourceRef" },
+  };
+  const existingRef = (ids: string[]) => {
+    const key = JSON.stringify(ids);
+    let name = issueDefinitionNames.get(key);
+    if (!name) {
+      name = `existingIssue${issueDefinitionNames.size}`;
+      issueDefinitionNames.set(key, name);
+      issueDefinitions[name] = {
+        type: "object", additionalProperties: false, required: ["kind", "id"],
+        properties: { kind: { type: "string", enum: ["existing"] }, id: { type: "string", enum: ids } },
+      };
+    }
+    return { $ref: `#/$defs/${name}` };
+  };
+  const intervention = (issueRef: unknown, kind: string) => ({
+    ...body,
+    properties: {
+      ...properties,
+      decision: { type: "string", enum: ["intervene"] },
+      reason: { type: "string", enum: ["material_issue"] },
+      issueRef,
+      evidenceRefs: { ...evidenceRefs, minItems: 1 },
+      observation: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+      reasoning: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+      suggestion: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+      materialChange: { ...change, properties: {
+        kind: { type: "string", enum: [kind] },
+        explanation: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+        evidenceRefs: { ...evidenceRefs, minItems: 1 },
+      } },
+    },
+  });
+  const skip = {
+    ...body,
+    properties: {
+      ...properties,
+      decision: { type: "string", enum: ["skip"] },
+      reason: { type: "string", enum: ["no_work_value", "insufficient_basis", "already_handled", "duplicate", "resolved"] },
+      issueRef: { anyOf: [{ type: "null" }, ...(allIds.length ? [existingRef(allIds)] : [])] },
+      evidenceRefs,
+      materialChange: { ...change, properties: {
+        kind: { type: "string", enum: ["none"] },
+        explanation: { type: "string", enum: [""] },
+        evidenceRefs: { type: "array", maxItems: 0, items: { type: "string" } },
+      } },
+    },
+  };
+  const branches = [
+    skip,
+    intervention({
+      type: "object", additionalProperties: false, required: ["kind", "description"],
+      properties: { kind: { type: "string", enum: ["new"] }, description: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS) },
+    }, "new_issue"),
+    ...(eligible.length ? [intervention(existingRef(eligible.map(issue => issue.id)), "new_evidence")] : []),
+    ...(unattemptedIds.length ? [intervention(existingRef(unattemptedIds), "unattempted_first")] : []),
+  ];
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: "iris_proactive_discussion_assessment", strict: true,
+      schema: {
+        type: "object", additionalProperties: false, required: ["assessment"],
+        $defs: {
+          sourceRef: { type: "string", enum: context.sources.map(source => source.ref) },
+          ...issueDefinitions,
+        },
+        properties: { assessment: { anyOf: branches } },
+      },
+    },
+  };
+}
+
+// Flat shape remains shared by the locked pair-repair response; only assess uses the envelope.
+function flatAssessmentResponseFormat(context: PdContext): OpenAICompatibleJsonSchemaResponseFormat {
   const sourceRefs = context.sources.map(source => source.ref);
   const issueIds = context.issues.map(issue => issue.id);
   const existingIssueOption = issueIds.length === 0 ? [] : [{
@@ -602,7 +697,7 @@ function pairRepairResponseFormat(
   context: PdContext,
   originalAssessment: PdAssessment,
 ): OpenAICompatibleJsonSchemaResponseFormat {
-  const assessmentSchema = assessmentResponseFormat(context).json_schema.schema;
+  const assessmentSchema = flatAssessmentResponseFormat(context).json_schema.schema;
   const assessmentProperties = assessmentSchema.properties as Record<string, unknown>;
   const materialChange = assessmentProperties.materialChange as Record<string, unknown>;
   const materialChangeProperties = materialChange.properties as Record<string, unknown>;
