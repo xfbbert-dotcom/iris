@@ -54,6 +54,19 @@ const localEmbeddingMigrationScript = readFileSync(
   "utf8",
 );
 
+test("propagates the explicit Core structured-output mode without changing the memory provider", () => {
+  const defaults = loadPilotCompose("deploy/pilot/ci.env", {
+    IRIS_MODEL_STRUCTURED_OUTPUT_MODE: "",
+  });
+  assert.equal(defaults.services.core.environment.IRIS_MODEL_STRUCTURED_OUTPUT_MODE, "json_schema");
+  const jsonMode = loadPilotCompose("deploy/pilot/ci.env", {
+    IRIS_MODEL_STRUCTURED_OUTPUT_MODE: "json_object",
+  });
+  assert.equal(jsonMode.services.core.environment.IRIS_MODEL_STRUCTURED_OUTPUT_MODE, "json_object");
+  assert.equal(jsonMode.services["ai-worker"].environment.IRIS_MODEL_STRUCTURED_OUTPUT_MODE, undefined);
+  assert.equal(readEnvAssignment(pilotEnvExample, "IRIS_MODEL_STRUCTURED_OUTPUT_MODE"), "json_schema");
+});
+
 test("pins every third-party pilot image to an immutable digest", () => {
   for (const serviceName of ["postgres", "redis", "caddy"]) {
     assert.match(

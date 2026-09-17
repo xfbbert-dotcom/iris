@@ -709,6 +709,38 @@ describe("readModelProviderConfig", () => {
     });
   });
 
+  it.each(["json_schema", " json_object "])("reads explicit structured output mode %s", mode => {
+    expect(readModelProviderConfig({
+      IRIS_MODEL_PROVIDER: "openai-compatible",
+      IRIS_MODEL_BASE_URL: "https://api.example.com/v1",
+      IRIS_MODEL_API_KEY: "key-a",
+      IRIS_MODEL_NAME: "model-a",
+      IRIS_MODEL_STRUCTURED_OUTPUT_MODE: mode,
+    })).toMatchObject({ structuredOutputMode: mode.trim() });
+  });
+
+  it("does not add a structured output override for an empty setting", () => {
+    expect(readModelProviderConfig({
+      IRIS_MODEL_PROVIDER: "openai-compatible",
+      IRIS_MODEL_BASE_URL: "https://api.example.com/v1",
+      IRIS_MODEL_API_KEY: "key-a",
+      IRIS_MODEL_NAME: "model-a",
+      IRIS_MODEL_STRUCTURED_OUTPUT_MODE: "  ",
+    })).not.toHaveProperty("structuredOutputMode");
+  });
+
+  it("rejects unknown structured output modes without returning the configured value", () => {
+    const read = () => readModelProviderConfig({
+      IRIS_MODEL_PROVIDER: "openai-compatible",
+      IRIS_MODEL_BASE_URL: "https://api.example.com/v1",
+      IRIS_MODEL_API_KEY: "key-a",
+      IRIS_MODEL_NAME: "model-a",
+      IRIS_MODEL_STRUCTURED_OUTPUT_MODE: "private-invalid-mode",
+    });
+    expect(read).toThrow("IRIS_MODEL_STRUCTURED_OUTPUT_MODE must be json_schema or json_object");
+    expect(read).not.toThrow("private-invalid-mode");
+  });
+
   it("rejects incomplete openai-compatible config", () => {
     expect(() =>
       readModelProviderConfig({

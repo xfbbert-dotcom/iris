@@ -11,6 +11,7 @@ export type ModelProviderConfig = {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  structuredOutputMode?: "json_schema" | "json_object";
 };
 
 export type EmbeddingProviderConfig = {
@@ -258,12 +259,19 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
     throw new Error(`Unsupported IRIS_MODEL_PROVIDER: ${provider}`);
   }
 
+  const structuredOutputMode = readOptionalEnv(env.IRIS_MODEL_STRUCTURED_OUTPUT_MODE);
+  if (structuredOutputMode !== undefined
+    && structuredOutputMode !== "json_schema" && structuredOutputMode !== "json_object") {
+    throw new Error("IRIS_MODEL_STRUCTURED_OUTPUT_MODE must be json_schema or json_object");
+  }
+
   return {
     provider,
     baseUrl: readHttpBaseUrlEnv("IRIS_MODEL_BASE_URL", env.IRIS_MODEL_BASE_URL),
     apiKey: readRequiredEnv("IRIS_MODEL_API_KEY", env.IRIS_MODEL_API_KEY),
     model: readRequiredEnv("IRIS_MODEL_NAME", env.IRIS_MODEL_NAME),
-    timeoutMs: readTimerDelayEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000)
+    timeoutMs: readTimerDelayEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000),
+    ...(structuredOutputMode === undefined ? {} : { structuredOutputMode }),
   };
 }
 

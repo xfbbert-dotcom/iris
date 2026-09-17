@@ -59,11 +59,21 @@ export function createOpenAICompatibleChatCompletionsClient({
   cancelTimeout = cancelTimer,
 }: OpenAICompatibleChatCompletionsClientDependencies): OpenAICompatibleChatCompletionsClient {
   const timeoutMs = readPositiveSafeInteger(config.timeoutMs, "model provider timeoutMs");
+  const structuredOutputMode = config.structuredOutputMode;
+  if (structuredOutputMode !== undefined
+    && structuredOutputMode !== "json_schema" && structuredOutputMode !== "json_object") {
+    throw new Error("model provider structured output mode is invalid");
+  }
 
   return {
     async complete(messages, options) {
       const deadlineAt = now() + timeoutMs;
       const responseFormat = normalizeResponseFormat(options?.responseFormat);
+      const useJsonObject = structuredOutputMode === "json_object" && responseFormat !== undefined;
+      const requestMessages = useJsonObject
+        ? withJsonSchemaInstruction(messages, responseFormat.json_schema.schema)
+        : messages;
+      const requestFormat = useJsonObject ? { type: "json_object" } : responseFormat;
       for (let attempt = 0; attempt < MAX_MODEL_REQUEST_ATTEMPTS; attempt += 1) {
         const remainingMs = deadlineAt - now();
         if (remainingMs <= 0) {
@@ -80,8 +90,8 @@ export function createOpenAICompatibleChatCompletionsClient({
             },
             body: JSON.stringify({
               model: config.model,
-              messages,
-              ...(responseFormat === undefined ? {} : { response_format: responseFormat }),
+              messages: requestMessages,
+              ...(requestFormat === undefined ? {} : { response_format: requestFormat }),
             }),
             timeoutMs: remainingMs,
             scheduleTimeout,
@@ -112,6 +122,22 @@ export function createOpenAICompatibleChatCompletionsClient({
       throw new Error("model provider request attempts exhausted");
     },
   };
+}
+
+function withJsonSchemaInstruction(
+  messages: readonly OpenAICompatibleChatMessage[],
+  schema: Record<string, unknown>,
+): readonly OpenAICompatibleChatMessage[] {
+  const instruction = [
+    "Return only a JSON object that satisfies the following JSON Schema, not the schema itself.",
+    "Do not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.",
+    JSON.stringify(schema),
+  ].join("\n");
+  const systemIndex = messages.findIndex(message => message.role === "system");
+  if (systemIndex === -1) return [{ role: "system", content: instruction }, ...messages];
+  return messages.map((message, index) => index === systemIndex
+    ? { ...message, content: `${message.content}\n\n${instruction}` }
+    : message);
 }
 
 function normalizeResponseFormat(
