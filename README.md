@@ -29,14 +29,21 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The user authorized a **free-model-only isolated comparison**, not a paid upgrade or production
+switch. The [2026-09-17 setup/probe record](docs/development/iris-free-model-probe-20260917.md)
+retains two one-request capacity failures (GLM-4.7-Flash and GLM-4.6V-Flash, HTTP429). A dedicated
+test key is already encrypted on the local machine; do not request it in chat or recreate it.
+No format/semantic result was obtained and the full evaluation did not start. Availability and
+strict-format compatibility remain prerequisites; the run6 quality gate below remains open.
+
 The approved [assessment/draft joint-review repair](docs/development/iris-proactive-discussion-joint-review-20260916.md)
 is committed as `ee9a8ae2`: one paired correction and one final review at most, one accepted result for
 worker and evaluator, no added calls on the ordinary successful path. Core 4649 passed / 469 conditional
 skips, 110 separate database-gate cases passed (107 real PG), CLI7 and build/type gates passed.
 Same-model run6 produced 30 correct decisions and no execution errors, but full semantic review is
 **26 pass / 4 fail / 0 incomplete**. Numeric omissions and assessment overclaims still pass model review;
-successful execution is not quality acceptance. The next bounded model/checking approach needs a decision,
-not unchanged resampling. The run1–5 status below is historical, not a request to reapprove this repair.
+successful execution is not quality acceptance. A free-only comparison is now authorized as recorded
+above; unchanged resampling is not the next step. The run1–5 status below is historical, not a request to reapprove this repair.
 No push, deployment, real-Feishu sending or proactive activation occurred.
 
 The approved direction is [content-triggered proactive discussion](docs/superpowers/specs/2026-09-09-iris-proactive-discussion-design.md):
