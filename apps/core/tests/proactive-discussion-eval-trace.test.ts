@@ -46,7 +46,8 @@ function scriptedClient({ scopeSupported = true }: { scopeSupported?: boolean } 
           evidenceRefs: input.assessment.evidenceRefs });
       }
       if (stage === "iris_proactive_discussion_scope_review") {
-        return JSON.stringify({ supported: scopeSupported, reason: scopeSupported ? "内容受材料支持。" : "候选遗漏必要限定。" });
+        return JSON.stringify({ supported: scopeSupported, reason: scopeSupported ? "内容受材料支持。" : "候选遗漏必要限定。",
+          requiredNumbers: [], adviceQuote: scopeSupported ? "建议核对预算。" : null });
       }
       if (stage === "iris_proactive_discussion_pair_repair") {
         return JSON.stringify({ assessment: input.assessment, draft: input.draft });
@@ -154,6 +155,86 @@ test("a scope-rejected draft remains visible as a bounded non-accepted candidate
     replayValidation: { accepted: true, reason: "accepted" } });
 });
 
+test("scope receipt replay rejects an affirmative number quote absent from the draft while retaining its evidence", async () => {
+  const base = scriptedClient().client;
+  const receipt = { label: "预算差额", expectedValue: "6", unit: "万元", draftQuote: "预算多60万元" };
+  const client: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      if (options?.responseFormat?.json_schema.name === "iris_proactive_discussion_scope_review") {
+        return JSON.stringify({ supported: true, reason: "数字已核对。", requiredNumbers: [receipt], adviceQuote: "建议核对预算。" });
+      }
+      return base.complete(messages, options);
+    },
+  };
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  const scopes = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic" && record.stage === "scope_review");
+  expect(scopes[0]).toMatchObject({
+    candidate: { supported: true, requiredNumbers: [receipt], adviceQuote: "建议核对预算。" },
+    replayValidation: { accepted: false, reason: "receipt_invalid" },
+  });
+  expect(scopes).toHaveLength(2);
+  expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject({ draft: null, error: "draft_rejected" });
+});
+
+test.each([false, true])("final scope receipt replay checks the current untruncated repaired draft (stale=%s)", async stale => {
+  const base = scriptedClient().client;
+  const repairedText = `${"合成说明。".repeat(110)}两人共16万元，较预算多6万元。建议确认预算或调整人数。`;
+  const adviceQuote = stale ? "建议核对预算。" : "建议确认预算或调整人数。";
+  const receipt = { label: "预算差额", expectedValue: "6", unit: "万元", draftQuote: "较预算多6万元" };
+  let reviews = 0;
+  const client: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      const stage = options?.responseFormat?.json_schema.name;
+      if (stage === "iris_proactive_discussion_scope_review") {
+        reviews += 1;
+        return JSON.stringify(reviews === 1
+          ? { supported: false, reason: "请修正措辞。", requiredNumbers: [], adviceQuote: null }
+          : { supported: true, reason: "修正后内容受支持。", requiredNumbers: [receipt], adviceQuote });
+      }
+      if (stage === "iris_proactive_discussion_pair_repair") {
+        const input = JSON.parse(messages[1]!.content);
+        return JSON.stringify({ assessment: input.assessment, draft: { text: repairedText, evidenceRefs: input.assessment.evidenceRefs } });
+      }
+      return base.complete(messages, options);
+    },
+  };
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  const records = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic");
+  const finalReview = records.filter(record => record.stage === "scope_review").at(-1);
+  expect(finalReview).toMatchObject({ attempt: 2,
+    candidate: { supported: true, requiredNumbers: [receipt], adviceQuote },
+    replayValidation: { accepted: !stale, reason: stale ? "receipt_invalid" : "accepted" },
+  });
+  const repair = records.find(record => record.stage === "pair_repair");
+  expect(repair!.candidate.draft.text).toHaveLength(500);
+  expect(repair!.acceptedDraft).toBe(!stale);
+  expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject(stale
+    ? { draft: null, error: "draft_rejected" } : { draft: { text: repairedText }, error: null });
+});
+
+test("scope receipt trace bounds nested evidence and redacts text without retaining unknown fields", async () => {
+  const base = scriptedClient().client;
+  const client: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      if (options?.responseFormat?.json_schema.name === "iris_proactive_discussion_scope_review") {
+        return JSON.stringify({ supported: true, reason: "需要核对。", adviceQuote: "长".repeat(600),
+          requiredNumbers: Array.from({ length: 10 }, () => ({ label: "PRIVATE-RECEIPT", expectedValue: "6", unit: "万元",
+            draftQuote: "PRIVATE-RECEIPT", hiddenPayload: "NEVER-RETAIN" })) });
+      }
+      return base.complete(messages, options);
+    },
+  };
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true, traceRedactions: ["PRIVATE-RECEIPT"] });
+  const review = run.syntheticTrace!.records.find(record => record.caseId === "arithmetic" && record.stage === "scope_review")!;
+  expect(review.replayValidation).toEqual({ accepted: false, reason: "shape_invalid" });
+  expect(review.candidate.requiredNumbers).toHaveLength(8);
+  expect(review.candidate.requiredNumbers[0]).toEqual({ label: "[REDACTED]", expectedValue: "6", unit: "万元", draftQuote: "[REDACTED]" });
+  expect(review.candidate.adviceQuote).toHaveLength(500);
+  expect(review.sanitization.truncatedFields).toEqual(expect.arrayContaining(["requiredNumbers", "adviceQuote"]));
+  expect(review.sanitization.droppedFields).toContain("$unknownFields");
+  expect(JSON.stringify(run.syntheticTrace)).not.toMatch(/PRIVATE-RECEIPT|NEVER-RETAIN/u);
+});
+
 test("assessment diagnostic replay maps invalid decision-field relations to a fixed local reason", async () => {
   let arithmeticAttempts = 0;
   const client: OpenAICompatibleChatCompletionsClient = {
@@ -205,7 +286,9 @@ function repairingClient(finalSupported: boolean, invalidRepair = false) {
       const stage = options?.responseFormat?.json_schema.name;
       if (stage === "iris_proactive_discussion_scope_review") {
         scopeCalls += 1;
-        return JSON.stringify({ supported: scopeCalls % 2 === 0 && finalSupported, reason: "请保留已核算的预算差额，限定未来影响。" });
+        const supported = scopeCalls % 2 === 0 && finalSupported;
+        return JSON.stringify({ supported, reason: "请保留已核算的预算差额，限定未来影响。",
+          requiredNumbers: [], adviceQuote: supported ? "建议确认预算或调整人数。" : null });
       }
       if (stage === "iris_proactive_discussion_pair_repair") {
         return JSON.stringify({

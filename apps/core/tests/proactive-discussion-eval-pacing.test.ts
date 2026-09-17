@@ -108,8 +108,8 @@ test("one paced client covers transport retry, assessment repair, draft and scop
     new TypeError("synthetic transport failure"),
     "not-json",
     JSON.stringify(pdAssessment()),
-    JSON.stringify({ text: "两人共 16 万，比 10 万预算多 6 万。", evidenceRefs: pdAssessment().evidenceRefs }),
-    JSON.stringify({ supported: true, reason: "数值和建议均来自核准内容。" }),
+    JSON.stringify({ text: "两人共 16 万，比 10 万预算多 6 万。建议核对预算。", evidenceRefs: pdAssessment().evidenceRefs }),
+    JSON.stringify({ supported: true, reason: "数值和建议均来自核准内容。", requiredNumbers: [], adviceQuote: "建议核对预算。" }),
   ];
   const fetch = vi.fn(async () => {
     starts.push(clock);
@@ -132,7 +132,7 @@ test("one paced client covers transport retry, assessment repair, draft and scop
   const [result] = await evaluator.runProactiveDiscussionEval({ model: createPdModel({ client }), rounds: 1,
     cases: [{ id: "bounded", context: pdContext(), expectedDecision: "intervene", reviewCriteria: [] }] });
 
-  expect(result).toMatchObject({ error: null, draft: { text: "两人共 16 万，比 10 万预算多 6 万。" } });
+  expect(result).toMatchObject({ error: null, draft: { text: "两人共 16 万，比 10 万预算多 6 万。建议核对预算。" } });
   expect(starts).toEqual([0, 10, 20, 30, 40]);
   expect(sleeps).toEqual([10, 10, 10, 10]);
 });

@@ -4,6 +4,7 @@ import type {
   OpenAICompatibleChatCompletionOptions,
   OpenAICompatibleChatMessage,
 } from "../src/model/openai-compatible-chat-completions-client.js";
+import { createOpenAICompatibleChatCompletionsClient } from "../src/model/openai-compatible-chat-completions-client.js";
 import { createPdModel } from "../src/proactive-discussion/model.js";
 import type { PdAssessment, PdContext, PdDraft } from "../src/proactive-discussion/contracts.js";
 import { pdAssessment, pdContext, pdContextWithIssue } from "./fixtures/proactive-discussion.js";
@@ -11,6 +12,14 @@ import { pdAssessment, pdContext, pdContextWithIssue } from "./fixtures/proactiv
 const originalDraft: PdDraft = {
   text: "两人总成本为 16 万元，比 10 万元预算多 6 万元，并会影响项目执行。建议先核对预算。",
   evidenceRefs: pdAssessment().evidenceRefs,
+};
+
+const budgetReceipts = {
+  requiredNumbers: [
+    { label: "总成本", expectedValue: "16", unit: "万元", draftQuote: "16 万元" },
+    { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "6 万元" },
+  ],
+  adviceQuote: "建议先核对预算",
 };
 
 function correctedPair() {
@@ -35,7 +44,7 @@ test("returns one jointly reviewed assessment and draft without adding a success
   const assessment = pdAssessment();
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: true, reason: "assessment 与 draft 均受来源支持。" }),
+    JSON.stringify({ supported: true, reason: "assessment 与 draft 均受来源支持。", ...budgetReceipts }),
   ]);
 
   const result = await createPdModel({ client }).render({ context: pdContext(), assessment });
@@ -56,9 +65,9 @@ test("repairs semantic text once, re-reviews it, and returns only the accepted p
   const active = vi.fn(async () => undefined);
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: false, reason: "assessment 和 draft 把未来影响写成确定事实。" }),
+    JSON.stringify({ supported: false, reason: "assessment 和 draft 把未来影响写成确定事实。", requiredNumbers: [], adviceQuote: null }),
     JSON.stringify(repaired),
-    JSON.stringify({ supported: true, reason: "修正后的 pair 保留算术事实并限定未来影响。" }),
+    JSON.stringify({ supported: true, reason: "修正后的 pair 保留算术事实并限定未来影响。", ...budgetReceipts }),
   ]);
 
   const result = await createPdModel({ client }).render({
@@ -92,7 +101,7 @@ test("lets the final model review reject a repair that switches to another issue
       callIndex += 1;
       if (callIndex === 1) return JSON.stringify(originalDraft);
       if (callIndex === 2) {
-        return JSON.stringify({ supported: false, reason: "原 pair 对影响表述过于确定。" });
+        return JSON.stringify({ supported: false, reason: "原 pair 对影响表述过于确定。", requiredNumbers: [], adviceQuote: null });
       }
       if (callIndex === 3) return JSON.stringify(switched);
 
@@ -102,6 +111,7 @@ test("lets the final model review reject a repair that switches to another issue
       return JSON.stringify({
         supported: !switchedIssueDetected,
         reason: switchedIssueDetected ? "修正结果切换成了另一个问题。" : "没有原始问题可供比较。",
+        requiredNumbers: [], adviceQuote: "建议先核实审批要求",
       });
     }),
   };
@@ -114,10 +124,10 @@ test("lets the final model review reject a repair that switches to another issue
 test("carries grounded arithmetic and fallible-review rules through repair and final review", async () => {
   const repaired = correctedPair();
   const rejection = { supported: false,
-    reason: "未来影响不应写成确定事实；60%的增幅未经授权。" };
+    reason: "未来影响不应写成确定事实；60%的增幅未经授权。", requiredNumbers: [], adviceQuote: null };
   const client = sequenceClient([
     JSON.stringify(originalDraft), JSON.stringify(rejection), JSON.stringify(repaired),
-    JSON.stringify({ supported: true, reason: "保留直接算术，限定未来影响。" }),
+    JSON.stringify({ supported: true, reason: "保留直接算术，限定未来影响。", ...budgetReceipts }),
   ]);
 
   await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() }))
@@ -179,12 +189,12 @@ test.each([
   ["invalid structural pair repair", [JSON.stringify({ ...correctedPair(), assessment: {
     ...correctedPair().assessment, evidenceRefs: [pdAssessment().evidenceRefs[0]],
   } })]],
-  ["second semantic rejection", [JSON.stringify(correctedPair()), JSON.stringify({ supported: false, reason: "仍不受支持。" })]],
+  ["second semantic rejection", [JSON.stringify(correctedPair()), JSON.stringify({ supported: false, reason: "仍不受支持。", requiredNumbers: [], adviceQuote: null })]],
   ["malformed final review", [JSON.stringify(correctedPair()), "not-json"]],
 ] as const)("returns null after one %s without another correction", async (_label, tail) => {
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: false, reason: "需要修正。" }),
+    JSON.stringify({ supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
     ...tail,
   ]);
 
@@ -197,7 +207,7 @@ test("propagates a technical repair failure instead of treating it as a semantic
   const transportError = new TypeError("network unavailable");
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: false, reason: "需要修正。" }),
+    JSON.stringify({ supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
     transportError,
   ]);
 
@@ -211,7 +221,7 @@ test("checks the active lease after the final review before returning an accepte
   let checks = 0;
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: true, reason: "受支持。" }),
+    JSON.stringify({ supported: true, reason: "受支持。", ...budgetReceipts }),
   ]);
 
   await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() }, async () => {
@@ -219,6 +229,98 @@ test("checks the active lease after the final review before returning an accepte
     if (checks === 3) throw leaseLost;
   })).rejects.toBe(leaseLost);
   expect(client.complete).toHaveBeenCalledTimes(2);
+});
+
+test("uses the existing pair repair when an affirmative review cites the 6 inside 16 as the missing gap", async () => {
+  const missingGap: PdDraft = { ...originalDraft, text: "招聘总成本16万元，高于10万元预算。建议先核对预算。" };
+  const repaired = correctedPair();
+  const originalAssessment = { ...pdAssessment(), reasoning: "合计16万元，比预算多6万元。" };
+  const client = sequenceClient([
+    JSON.stringify(missingGap),
+    JSON.stringify({ supported: true, reason: "草稿已说明6万元差额。", requiredNumbers: [
+      { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "6万元" },
+    ], adviceQuote: "建议先核对预算" }),
+    JSON.stringify(repaired),
+    JSON.stringify({ supported: true, reason: "修正草稿含明确差额。", ...budgetReceipts }),
+  ]);
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: originalAssessment })).resolves.toEqual(repaired);
+  expect(client.complete).toHaveBeenCalledTimes(4);
+  const repairInput = JSON.parse(client.complete.mock.calls[2]?.[0]?.[1]?.content ?? "{}");
+  expect(repairInput.review).toMatchObject({ supported: false,
+    reason: "复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。" });
+  expect(repairInput.draft).toEqual(missingGap);
+  expect(repairInput.assessment).toEqual(originalAssessment);
+  const scopeFormat = client.complete.mock.calls[1]?.[1]?.responseFormat?.json_schema.schema;
+  expect(scopeFormat).toMatchObject({ type: "object", additionalProperties: false,
+    required: ["supported", "reason", "requiredNumbers", "adviceQuote"], properties: {
+      requiredNumbers: { type: "array", maxItems: 8, items: { additionalProperties: false,
+        required: ["label", "expectedValue", "unit", "draftQuote"], properties: {
+          expectedValue: { type: "string", maxLength: 40 }, unit: { type: "string", maxLength: 30 },
+          draftQuote: { anyOf: [{ type: "string", minLength: 1, maxLength: 1200 }, { type: "null" }] },
+        } } },
+      adviceQuote: { anyOf: [{ type: "string", minLength: 1, maxLength: 1200 }, { type: "null" }] },
+    } });
+});
+
+test.each(["lost number", "stale advice"])("rejects final receipts against the repaired draft after %s without another repair", async failure => {
+  const repaired = correctedPair();
+  if (failure === "lost number") repaired.draft.text = "两人总成本为 16 万元，高于预算。建议先核对预算口径。";
+  const finalReceipts = { ...budgetReceipts, adviceQuote: failure === "stale advice" ? "建议先核对预算。" : budgetReceipts.adviceQuote };
+  const client = sequenceClient([
+    JSON.stringify(originalDraft),
+    JSON.stringify({ supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null }),
+    JSON.stringify(repaired),
+    JSON.stringify({ supported: true, reason: "修正已充分。", ...finalReceipts }),
+  ]);
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() })).resolves.toBeNull();
+  expect(client.complete).toHaveBeenCalledTimes(4);
+  expect(JSON.parse(client.complete.mock.calls[3]?.[0]?.[1]?.content ?? "{}").draft).toEqual(repaired.draft);
+});
+
+test.each(["json_schema", "json_object"] as const)("sends only the current draft's quote choices through the real client HTTP body in %s mode", async structuredOutputMode => {
+  const repaired = correctedPair();
+  const responses = [
+    originalDraft,
+    { supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null },
+    repaired,
+    { supported: true, reason: "修正已充分。", requiredNumbers: [
+      { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "两人总成本为 16 万元，比 10 万元预算多 6 万元；" },
+    ], adviceQuote: "建议先核对预算口径。" },
+  ];
+  const bodies: Array<{ messages: OpenAICompatibleChatMessage[]; response_format: any }> = [];
+  const client = createOpenAICompatibleChatCompletionsClient({
+    config: { provider: "openai-compatible", baseUrl: "https://model.example/v1", apiKey: "test-only", model: "test-only", timeoutMs: 5000, structuredOutputMode },
+    fetch: async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: {
+        content: JSON.stringify(responses[bodies.length - 1]),
+      } }] }), { headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() })).resolves.toEqual(repaired);
+  expect(bodies).toHaveLength(4);
+  for (const [index, draft, expected] of [
+    [1, originalDraft.text, ["两人总成本为 16 万元，比 10 万元预算多 6 万元，并会影响项目执行。", "建议先核对预算。", originalDraft.text]],
+    [3, repaired.draft.text, ["两人总成本为 16 万元，比 10 万元预算多 6 万元；", "若均由该预算承担，可能影响计划。", "建议先核对预算口径。", repaired.draft.text]],
+  ] as const) {
+    const body = bodies[index]!;
+    const schema = structuredOutputMode === "json_schema"
+      ? body.response_format.json_schema.schema
+      : JSON.parse(body.messages[0]!.content.slice(body.messages[0]!.content.indexOf('{"type":"object"')));
+    if (structuredOutputMode === "json_object") expect(body.response_format).toEqual({ type: "json_object" });
+    expect(JSON.parse(body.messages[1]!.content).draft.text).toBe(draft);
+    for (const quote of [schema.properties.adviceQuote, schema.properties.requiredNumbers.items.properties.draftQuote]) {
+      expect(quote.anyOf[0].enum).toEqual(expected);
+      expect(quote.anyOf[1]).toEqual({ type: "null" });
+      expect(quote.anyOf[0].enum).not.toContain("建议先核对预算口径，再决定是否调整人数或预算。");
+      expect(quote.anyOf[0].enum).not.toContain(pdContext().items[0]!.text);
+      if (index === 3) expect(quote.anyOf[0].enum).not.toContain(originalDraft.text);
+    }
+    expect(schema.properties.requiredNumbers.items.properties.expectedValue).not.toHaveProperty("enum");
+  }
 });
 
 type RepairValidator = (

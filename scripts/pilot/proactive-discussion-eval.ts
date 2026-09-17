@@ -3,9 +3,10 @@ import { readModelProviderConfig } from "../../apps/core/src/config/env.js";
 import {
   createOpenAICompatibleChatCompletionsClient,
   type OpenAICompatibleChatCompletionsClient,
+  type OpenAICompatibleChatMessage,
 } from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider-error.js";
-import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdRepairedIntervention, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
+import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdRepairedIntervention, validatePdScopeReview, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 
@@ -176,6 +177,7 @@ const MAX_SYNTHETIC_TRACE_RECORDS = 600;
 const MAX_SYNTHETIC_TRACE_TEXT_CHARS = 500;
 const MAX_SYNTHETIC_TRACE_REFS = 32;
 const MAX_SYNTHETIC_TRACE_MARKERS = 32;
+const MAX_SYNTHETIC_TRACE_REQUIRED_NUMBERS = 8;
 
 type ActiveSyntheticTraceCall = {
   caseId: string;
@@ -235,6 +237,7 @@ export async function runSyntheticProactiveDiscussionEval({
             content,
             redactions,
             stage,
+            draftText: stage === "scope_review" ? scopeReviewDraftText(messages) : undefined,
           }));
         }
       } catch {
@@ -301,13 +304,14 @@ function traceStage(name: string | undefined): SyntheticTraceStage | null {
   return null;
 }
 
-function replaySyntheticOutput({ active, attempt, callIndex, content, redactions, stage }: {
+function replaySyntheticOutput({ active, attempt, callIndex, content, redactions, stage, draftText }: {
   active: ActiveSyntheticTraceCall;
   attempt: number;
   callIndex: number;
   content: string;
   redactions: readonly string[];
   stage: SyntheticTraceStage;
+  draftText?: string;
 }): SyntheticTraceRecord {
   const sanitization: SyntheticTraceSanitization = { truncatedFields: [], droppedFields: [], droppedReferenceCount: 0 };
   let value: unknown;
@@ -352,7 +356,7 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
     return baseSyntheticTraceRecord(active, attempt, callIndex, stage, candidate,
       accepted, accepted ? "accepted" : "repair_invalid", sanitization);
   }
-  const replayValidation = replayScopeReviewValidation(value);
+  const replayValidation = replayScopeReviewValidation(value, draftText);
   return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
     sanitizeScopeCandidate(value, redactions, sanitization),
     replayValidation.accepted, replayValidation.reason, sanitization);
@@ -424,13 +428,29 @@ function replayDraftValidation(value: unknown, expectedRefs: readonly string[]):
   return { accepted: true, reason: "accepted" };
 }
 
-function replayScopeReviewValidation(value: unknown): { accepted: boolean; reason: string } {
-  if (!isPlainRecord(value) || !hasExactKeys(value, ["reason", "supported"])
-    || typeof value.supported !== "boolean" || typeof value.reason !== "string"
-    || value.reason.normalize("NFC").trim().length === 0 || value.reason.length > 2_000) {
+function scopeReviewDraftText(messages: readonly OpenAICompatibleChatMessage[]): string | undefined {
+  const inputMessage = messages.filter(message => message.role === "user").at(-1);
+  if (inputMessage === undefined) return undefined;
+  try {
+    const input: unknown = JSON.parse(inputMessage.content);
+    if (isPlainRecord(input) && isPlainRecord(input.draft) && typeof input.draft.text === "string") {
+      return input.draft.text;
+    }
+  } catch { /* Request shape diagnostics never retain arbitrary content or error details. */ }
+  return undefined;
+}
+
+function replayScopeReviewValidation(value: unknown, draftText: string | undefined): { accepted: boolean; reason: string } {
+  if (draftText === undefined) return { accepted: false, reason: "draft_missing" };
+  try {
+    const review = validatePdScopeReview(value, draftText);
+    if (isPlainRecord(value) && value.supported === true && !review.supported) {
+      return { accepted: false, reason: "receipt_invalid" };
+    }
+    return { accepted: true, reason: "accepted" };
+  } catch {
     return { accepted: false, reason: "shape_invalid" };
   }
-  return { accepted: true, reason: "accepted" };
 }
 
 function sanitizeAssessmentCandidate(
@@ -513,12 +533,35 @@ function sanitizeScopeCandidate(
   sanitization: SyntheticTraceSanitization,
 ): Record<string, unknown> | null {
   if (!isPlainRecord(value)) return null;
-  noteUnknownFields(value, ["supported", "reason"], sanitization);
+  noteUnknownFields(value, ["supported", "reason", "requiredNumbers", "adviceQuote"], sanitization);
   const candidate: Record<string, unknown> = {};
   if (typeof value.supported === "boolean") candidate.supported = value.supported;
   else if (value.supported !== undefined) addTraceMarker(sanitization.droppedFields, "supported");
   if (typeof value.reason === "string") candidate.reason = sanitizeTraceText(value.reason, "reason", redactions, sanitization);
   else if (value.reason !== undefined) addTraceMarker(sanitization.droppedFields, "reason");
+  if (Array.isArray(value.requiredNumbers)) {
+    const requiredNumbers: Record<string, unknown>[] = [];
+    for (const [index, item] of value.requiredNumbers.slice(0, MAX_SYNTHETIC_TRACE_REQUIRED_NUMBERS).entries()) {
+      const field = `requiredNumbers[${index}]`;
+      if (!isPlainRecord(item)) {
+        addTraceMarker(sanitization.droppedFields, field);
+        continue;
+      }
+      noteUnknownFields(item, ["label", "expectedValue", "unit", "draftQuote"], sanitization);
+      const receipt: Record<string, unknown> = {};
+      for (const key of ["label", "expectedValue", "unit", "draftQuote"] as const) {
+        if (typeof item[key] === "string") receipt[key] = sanitizeTraceText(item[key], `${field}.${key}`, redactions, sanitization);
+        else if (key === "draftQuote" && item[key] === null) receipt[key] = null;
+        else if (item[key] !== undefined) addTraceMarker(sanitization.droppedFields, `${field}.${key}`);
+      }
+      requiredNumbers.push(receipt);
+    }
+    candidate.requiredNumbers = requiredNumbers;
+    if (value.requiredNumbers.length > MAX_SYNTHETIC_TRACE_REQUIRED_NUMBERS) addTraceMarker(sanitization.truncatedFields, "requiredNumbers");
+  } else if (value.requiredNumbers !== undefined) addTraceMarker(sanitization.droppedFields, "requiredNumbers");
+  if (typeof value.adviceQuote === "string") candidate.adviceQuote = sanitizeTraceText(value.adviceQuote, "adviceQuote", redactions, sanitization);
+  else if (value.adviceQuote === null) candidate.adviceQuote = null;
+  else if (value.adviceQuote !== undefined) addTraceMarker(sanitization.droppedFields, "adviceQuote");
   return candidate;
 }
 

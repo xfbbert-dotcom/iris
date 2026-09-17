@@ -104,7 +104,8 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("final review real PostgreS
     const model = createPdModel({ client: { complete: async (_messages, options) => {
       const kind = options?.responseFormat?.json_schema.name;
       if (kind === "iris_proactive_discussion_draft") return JSON.stringify({ text: "两人需要 16 万，建议核对预算。", evidenceRefs: pdAssessment().evidenceRefs });
-      if (kind === "iris_proactive_discussion_scope_review") return JSON.stringify({ supported: true, reason: "预算依据未变" });
+      if (kind === "iris_proactive_discussion_scope_review") return JSON.stringify({ supported: true, reason: "预算依据未变",
+        requiredNumbers: [], adviceQuote: "建议核对预算。" });
       return JSON.stringify({ ...pdAssessment(), issueRef: { kind: "existing", id: issueId },
         materialChange: { kind: "unattempted_first", explanation: "此前草稿未曾尝试发送，原矛盾仍成立", evidenceRefs: pdAssessment().evidenceRefs } });
     } } });
@@ -188,7 +189,8 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("final review real PostgreS
       await tick();
       const name = options?.responseFormat?.json_schema.name;
       if (name === "iris_proactive_discussion_draft") return JSON.stringify({ text: "先核对预算。", evidenceRefs: pdAssessment().evidenceRefs });
-      if (name === "iris_proactive_discussion_scope_review") return JSON.stringify({ supported: true, reason: "有依据" });
+      if (name === "iris_proactive_discussion_scope_review") return JSON.stringify({ supported: true, reason: "有依据",
+        requiredNumbers: [], adviceQuote: "先核对预算。" });
       return JSON.stringify(pdAssessment());
     } } });
     const worker = createPdEvaluationWorker({ repository: db.repository, contextBuilder: h.builder, reader: h.reader, model,
