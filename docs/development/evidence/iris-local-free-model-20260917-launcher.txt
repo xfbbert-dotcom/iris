@@ -1,0 +1,19 @@
+import { spawn } from 'node:child_process';
+const folder = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260917';
+const args = [
+  '--model', folder + '/Qwen3-4B-Q4_K_M.gguf',
+  '--alias', 'iris-qwen3-4b-q4km', '--host', '127.0.0.1', '--port', '18089',
+  '--cors-origins', 'http://127.0.0.1:18089',
+  '--ctx-size', '16384', '--parallel', '1', '--threads', '4', '--threads-batch', '4',
+  '--batch-size', '256', '--ubatch-size', '128', '--n-gpu-layers', '0',
+  '--n-predict', '2048', '--jinja', '--reasoning', 'off',
+  '--temp', '0.7', '--top-p', '0.8', '--top-k', '20', '--min-p', '0',
+  '--no-webui', '--no-agent', '--no-ui-mcp-proxy',
+];
+const server = spawn(folder + '/runtime/llama-server.exe', args,
+  { windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'] });
+console.log(JSON.stringify({ serverPid: server.pid, deadlineMs: 1800000, args }));
+const deadline = setTimeout(() => server.kill(), 1800000);
+server.on('error', () => { clearTimeout(deadline); process.exitCode = 1; });
+server.on('exit', code => { clearTimeout(deadline); console.log(JSON.stringify({ serverExited: true, code })); });
+process.on('SIGINT', () => server.kill());

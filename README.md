@@ -31,11 +31,14 @@ The internal MVP acceptance checklist lives at:
 
 The user authorized a **free-model-only isolated comparison**, not a paid upgrade or production
 switch. The [2026-09-17 setup/probe record](docs/development/iris-free-model-probe-20260917.md)
-retains the initial two capacity failures and one further single-request window explicitly resumed
-by the user (GLM-4.7-Flash, again HTTP429); three attempts total, no automatic retries. A dedicated
+retains the initial two capacity failures and two further single-request windows explicitly resumed
+by the user (GLM-4.7-Flash, again HTTP429); four cloud attempts total, no automatic retries. A dedicated
 test key is already encrypted on the local machine; do not request it in chat or recreate it.
-No format/semantic result was obtained and the full evaluation did not start. Availability and
-strict-format compatibility remain prerequisites; the run6 quality gate below remains open.
+No cloud format/semantic result was obtained. The [local free fallback](docs/development/iris-local-free-model-eval-20260917.md)
+downloaded and verified portable llama.cpp plus official Qwen3-4B Q4_K_M: the minimal format passed,
+but the original arithmetic case failed assessment validation after its existing one repair.
+No full evaluation ran; the local server is stopped and no production settings changed.
+Neither availability nor a minimal format pass replaces the open run6 quality gate below.
 
 The approved [assessment/draft joint-review repair](docs/development/iris-proactive-discussion-joint-review-20260916.md)
 is committed as `ee9a8ae2`: one paired correction and one final review at most, one accepted result for

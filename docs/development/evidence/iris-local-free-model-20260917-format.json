@@ -1,0 +1,34 @@
+{
+  "kind": "local-free-model-format",
+  "startedAt": "2026-09-17T03:11:17.640Z",
+  "applicationCommit": "ee9a8ae2cd8d3c1d596c42e0728331169827ed12",
+  "syntheticOnly": true,
+  "model": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+  "runtime": "llama.cpp b11011",
+  "mode": "format",
+  "timeoutMs": 60000,
+  "maxRequests": 1,
+  "wallMs": 60000,
+  "requestIntervalMs": 0,
+  "requests": [
+    {
+      "index": 1,
+      "startedAt": "2026-09-17T03:11:17.649Z",
+      "schemaName": "iris_free_format_check",
+      "status": 200,
+      "finishedAt": "2026-09-17T03:11:20.836Z"
+    }
+  ],
+  "completionRecords": [
+    {
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-17T03:11:17.648Z",
+      "content": "{\"result\": 16, \"label\": \"iris-free-format-check\"}",
+      "complete": true,
+      "finishedAt": "2026-09-17T03:11:20.844Z"
+    }
+  ],
+  "manualReview": "pending",
+  "valid": true,
+  "finishedAt": "2026-09-17T03:11:20.844Z"
+}

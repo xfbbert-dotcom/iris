@@ -1,0 +1,69 @@
+import { existsSync, writeFileSync } from 'node:fs';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createPdModel } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createProactiveDiscussionEvalCases, createRequestPacedFetch, runProactiveDiscussionEval, runSyntheticProactiveDiscussionEval } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const mode = process.argv[2];
+if (!['format', 'arithmetic', 'full'].includes(mode ?? '')) throw Error('Unknown evaluation mode');
+const folder = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260917/';
+const outputPath = folder + mode + '-report.json';
+if (existsSync(outputPath)) throw Error('Report already exists; no request made');
+const config = { provider: 'openai-compatible' as const, baseUrl: 'http://127.0.0.1:18089/v1', apiKey: 'local-synthetic-only', model: 'iris-qwen3-4b-q4km', timeoutMs: 60000 };
+const maxRequests = mode === 'format' ? 1 : mode === 'arithmetic' ? 12 : 240;
+const wallMs = mode === 'format' ? 60000 : mode === 'arithmetic' ? 420000 : 1500000;
+const report: any = { kind: 'local-free-model-' + mode, startedAt: new Date().toISOString(), applicationCommit: 'ee9a8ae2cd8d3c1d596c42e0728331169827ed12', syntheticOnly: true, model: 'Qwen/Qwen3-4B-GGUF:Q4_K_M', runtime: 'llama.cpp b11011', mode, timeoutMs: config.timeoutMs, maxRequests, wallMs, requestIntervalMs: mode === 'format' ? 0 : 6000, requests: [], completionRecords: [], manualReview: 'pending' };
+const deadline = AbortSignal.timeout(wallMs);
+const boundedFetch: typeof fetch = async (url, init) => {
+  if (String(url) !== config.baseUrl + '/chat/completions' || report.requests.length >= maxRequests || deadline.aborted) throw Error('Local request boundary');
+  const payload = JSON.parse(String(init?.body));
+  if (payload.model !== config.model || payload.tools || payload.stream) throw Error('Local model boundary');
+  const record: any = { index: report.requests.length + 1, startedAt: new Date().toISOString(), schemaName: payload.response_format?.json_schema?.name };
+  report.requests.push(record);
+  console.log(JSON.stringify({ request: record.index, stage: record.schemaName, mode }));
+  try {
+    const response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+    record.status = response.status;
+    return response;
+  } finally { record.finishedAt = new Date().toISOString(); }
+};
+const base = createOpenAICompatibleChatCompletionsClient({ config, fetch: createRequestPacedFetch({ fetch: boundedFetch, requestIntervalMs: report.requestIntervalMs }) });
+const client = { async complete(messages: any, options: any) {
+  const entry: any = { stage: options?.responseFormat?.json_schema?.name, startedAt: new Date().toISOString() };
+  try {
+    const text = await base.complete(messages, options);
+    if (mode !== 'full') entry.content = text;
+    entry.complete = true;
+    return text;
+  } catch (error) {
+    entry.error = error instanceof Error ? error.message.slice(0, 500) : 'unknown';
+    throw error;
+  } finally { entry.finishedAt = new Date().toISOString(); report.completionRecords.push(entry); }
+} };
+try {
+  if (mode === 'format') {
+    const content = await client.complete([{ role: 'system', content: '只输出 JSON。' }, { role: 'user', content: '计算 8 加 8。' }], { responseFormat: { type: 'json_schema', json_schema: { name: 'iris_free_format_check', strict: true, schema: { type: 'object', properties: { result: { type: 'number', enum: [16] }, label: { type: 'string', enum: ['iris-free-format-check'] } }, required: ['result', 'label'], additionalProperties: false } } } });
+    const result = JSON.parse(content);
+    report.valid = result.result === 16 && result.label === 'iris-free-format-check' && Object.keys(result).length === 2;
+    process.exitCode = report.valid ? 0 : 1;
+  } else {
+    const evaluated = mode === 'full'
+      ? await runSyntheticProactiveDiscussionEval({ client, rounds: 2, includeTrace: true })
+      : await (async () => {
+          const cases = createProactiveDiscussionEvalCases().filter(c => c.id === 'arithmetic');
+          return { cases, results: await runProactiveDiscussionEval({ model: createPdModel({ client }), cases, rounds: 1 }), syntheticTrace: null };
+        })();
+    report.rounds = mode === 'full' ? 2 : 1;
+    report.cases = evaluated.cases.map(({ id, expectedDecision, reviewCriteria }) => ({ id, expectedDecision, reviewCriteria }));
+    report.results = evaluated.results;
+    report.syntheticTrace = evaluated.syntheticTrace;
+    report.decisionMismatches = evaluated.results.filter(r => r.assessment !== null && r.assessment.decision !== evaluated.cases.find(c => c.id === r.caseId)!.expectedDecision).map(r => `${r.caseId}:${r.round}`);
+    process.exitCode = evaluated.results.some(r => r.error !== null) || report.decisionMismatches.length ? 1 : 0;
+  }
+} catch (error) {
+  report.error = error instanceof Error ? error.message.slice(0, 500) : 'unknown';
+  process.exitCode = 1;
+} finally {
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(outputPath, JSON.stringify(report, null, 2), { flag: 'wx' });
+  console.log(JSON.stringify({ mode, outputPath, requests: report.requests.length, valid: report.valid, results: report.results, error: report.error, exitCode: process.exitCode }));
+}

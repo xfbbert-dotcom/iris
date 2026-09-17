@@ -1,0 +1,73 @@
+{
+  "kind": "local-free-model-arithmetic",
+  "startedAt": "2026-09-17T03:11:36.356Z",
+  "applicationCommit": "ee9a8ae2cd8d3c1d596c42e0728331169827ed12",
+  "syntheticOnly": true,
+  "model": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+  "runtime": "llama.cpp b11011",
+  "mode": "arithmetic",
+  "timeoutMs": 60000,
+  "maxRequests": 12,
+  "wallMs": 420000,
+  "requestIntervalMs": 6000,
+  "requests": [
+    {
+      "index": 1,
+      "startedAt": "2026-09-17T03:11:36.362Z",
+      "schemaName": "iris_proactive_discussion_assessment",
+      "status": 200,
+      "finishedAt": "2026-09-17T03:12:22.565Z"
+    },
+    {
+      "index": 2,
+      "startedAt": "2026-09-17T03:12:22.577Z",
+      "schemaName": "iris_proactive_discussion_assessment",
+      "status": 200,
+      "finishedAt": "2026-09-17T03:12:54.021Z"
+    }
+  ],
+  "completionRecords": [
+    {
+      "stage": "iris_proactive_discussion_assessment",
+      "startedAt": "2026-09-17T03:11:36.361Z",
+      "content": "{\n  \"decision\": \"skip\",\n  \"reason\": \"material_issue\",\n  \"issueRef\": null,\n  \"evidenceRefs\": [],\n  \"observation\": \"材料中提到的招聘预算为 10 万元，而招聘两人每人 8 万元的预算安排未超出总预算。但未明确说明预算是否已考虑其他潜在费用或是否有其他限制。\",\n  \"reasoning\": \"材料中未提供足够的信息来确认预算是否合理或是否符合公司政策，因此无法判断是否需要进一步核实。\",\n  \"suggestion\": \"建议进一步核实招聘预算是否符合公司政策，并确认是否需要调整预算以确保其他潜在费用得到考虑。\",\n  \"uncertainty\": \"qualified_inference\",\n  \"materialChange\": {\n    \"kind\": \"none\",\n    \"explanation\": \"材料中未提供足够的信息来判断预算是否合理或是否符合公司政策。\",\n    \"evidenceRefs\": []\n  }\n}",
+      "complete": true,
+      "finishedAt": "2026-09-17T03:12:22.573Z"
+    },
+    {
+      "stage": "iris_proactive_discussion_assessment",
+      "startedAt": "2026-09-17T03:12:22.577Z",
+      "content": "{\"decision\": \"skip\", \"reason\": \"material_issue\", \"issueRef\": null, \"evidenceRefs\": [], \"observation\": \"材料中未明确说明预算是否已考虑其他潜在费用或是否已进行充分的财务审核。\", \"reasoning\": \"招聘预算的总额为10万元，而招聘两人每人8万元共计16万元，明显超出预算范围。这表明预算可能未被合理分配或存在其他未被考虑的支出项。\", \"suggestion\": \"需要核实招聘预算的分配是否合理，并确认是否有其他潜在费用未被纳入考虑。\", \"uncertainty\": \"qualified_inference\", \"materialChange\": {\"kind\": \"none\", \"explanation\": \"无新的材料变化。\", \"evidenceRefs\": []}}",
+      "complete": true,
+      "finishedAt": "2026-09-17T03:12:54.021Z"
+    }
+  ],
+  "manualReview": "pending",
+  "rounds": 1,
+  "cases": [
+    {
+      "id": "arithmetic",
+      "expectedDecision": "intervene",
+      "reviewCriteria": [
+        "明确两人总计 16 万、比 10 万多 6 万，建议核对预算或人数。",
+        "不能编造追加预算已批准，不能承诺已改招聘计划。"
+      ]
+    }
+  ],
+  "results": [
+    {
+      "caseId": "arithmetic",
+      "round": 1,
+      "assessment": null,
+      "draft": null,
+      "error": "assessment_failed",
+      "diagnostic": {
+        "phase": "assessment",
+        "category": "assessment_validation"
+      }
+    }
+  ],
+  "syntheticTrace": null,
+  "decisionMismatches": [],
+  "finishedAt": "2026-09-17T03:12:54.022Z"
+}

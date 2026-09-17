@@ -1,0 +1,19 @@
+{
+  "kind": "free-model-format-probe",
+  "startedAt": "2026-09-17T03:02:06.719Z",
+  "model": "glm-4.7-flash",
+  "endpoint": "https://open.bigmodel.cn/api/paas/v4",
+  "syntheticOnly": true,
+  "requests": 1,
+  "format": "json_schema",
+  "probeOnlySettings": {
+    "max_tokens": 256,
+    "thinking": {
+      "type": "disabled"
+    }
+  },
+  "status": 429,
+  "valid": false,
+  "error": "ModelProviderHttpError: model provider request failed with status 429: 该模型当前访问量过大，请您稍后再试",
+  "finishedAt": "2026-09-17T03:02:07.153Z"
+}
