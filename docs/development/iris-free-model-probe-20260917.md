@@ -69,6 +69,31 @@ GLM-4.5-Flash 标记即将下线，因此未作为新候选。这里记录公开
 GLM-4.6V-Flash为
 `bb42dc6f2c399a81922f75ee231d50dbe2c468f82b0d966b9ee6249930628acc`。
 
+## 第二窗口：用户再次要求继续，仍为容量拒绝
+
+2026-09-17 用户再次明确“继续”，重新核对默认树、实现树status/diff/log/worktrees，
+实现树干净、HEAD为`2b3fddf2`，应用仍为ee9a8ae2；重读交接、白皮书相关规则、
+台账单窗口停止规则和需求基线。复核官方价格信息后复用本机加密key，未操作浏览器、
+创建新key、充值或修改任何账号权限。
+
+- 本窗口只有1次HTTP尝试，候选glm-4.7-flash，同一合成格式问题及上节参数。
+- UTC `2026-09-17T02:42:16.992Z`开始、`02:42:17.383Z`结束，HTTP429，
+  文案仍为模型当前访问量过大。进程退出1；无content、无单例或15例两轮评测。
+- [本窗口脱敏记录](evidence/iris-free-model-20260917-glm47-format-probe-window2.json)，
+  SHA256 `834ec8a10130f21bcffa0175c3dab84317cad5e077e21f69226e008da0959e6e`。
+  先前两份失败不覆盖，两窗口累计3次尝试；本窗口未切换其他候选，也未继续重试。
+- [官方速率限制说明](https://docs.bigmodel.cn/cn/api/rate-limit)把同一报错文案列为
+  平台过载，并与账户自身并发限制区分。这里是文案与官方说明的对应，未采集到原始
+  业务错误码，不能伪称已直接取得1305或更深服务端归因，也不能由此证明账号其他方面无误。
+- 现有停止规则继续适用，不改应用代码或验收标准；没有接口兼容性、质量、生产或
+  飞书通过结论。无需用户重复登录或提供密钥。暂未建立自动重试任务，不能声称稍后会自动运行。
+
+本机探测脚本的当前输出路径已经存在；下次执行前必须选新的结果路径并提前核对不存在，
+避免外部调用之后才遇到结果文件不可覆盖。此说明不授权额外探测或自动重试。
+本窗口收口核验：独立只读复核确认新记录、原两份hash及应用无diff；主代理核对11条本地
+链接/锚点、3份JSON、合计3次尝试和各自hash，`git diff --check`通过。下表四处处置仍成立，
+只追加本次失败与当前入口，不提升任何验收层级。
+
 ## 下次继续的有限步骤
 
 1. 本机私有 key 已保存，不需要重新注册、创建或让用户粘贴凭据。先确认官方免费定价仍成立，
@@ -102,6 +127,6 @@ GLM-4.6V-Flash为
 | 位置 | 本次处置 |
 |---|---|
 | 白皮书 | reviewed-unchanged：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)与[11.2](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#112-mandatory-bug-fix-documentation-closure)仍适用；本次只做免费合成接口探测，不改变产品行为、来源、审批或验收层级 |
-| 工程故障台账 | reviewed-unchanged：[模型容量条目](../operations/engineering-failure-ledger.md#treat-model-capacity-and-latency-as-runtime-state-not-a-code-hypothesis)的单窗口一次、失败停止和脱敏规则仍有效；本次同轮两候选的流程偏差已在上文明确记录，不以比较授权掩盖或追溯放宽规则，下次严格执行总共一次 |
+| 工程故障台账 | reviewed-unchanged：[模型容量条目](../operations/engineering-failure-ledger.md#treat-model-capacity-and-latency-as-runtime-state-not-a-code-hypothesis)的单窗口一次、失败停止和脱敏规则仍有效；首窗口两候选的流程偏差已在上文明确记录，不以比较授权掩盖或追溯放宽规则；第二窗口已严格执行总共一次 |
 | 需求覆盖基线 | reviewed-unchanged：[IRIS-CORE-005及联合复核修订](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-16-判断文案联合复核)仍部分实现、实模未通过；无新的语义或真实群验收，不能提升完成度 |
 | README/AGENTS/当前交接 | updated：[README](../../README.md#current-product-state)、[当前交接](current-handoff.md#当前正在推进)增加本次免费决定、已有凭据和阻塞入口；reviewed-unchanged：[AGENTS](../../AGENTS.md)的准确工作树、四处收口与有限出口规则仍有效 |
