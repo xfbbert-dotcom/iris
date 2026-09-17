@@ -111,6 +111,34 @@ test("lets the final model review reject a repair that switches to another issue
   expect(client.complete).toHaveBeenCalledTimes(4);
 });
 
+test("carries grounded arithmetic and fallible-review rules through repair and final review", async () => {
+  const repaired = correctedPair();
+  const rejection = { supported: false,
+    reason: "未来影响不应写成确定事实；60%的增幅未经授权。" };
+  const client = sequenceClient([
+    JSON.stringify(originalDraft), JSON.stringify(rejection), JSON.stringify(repaired),
+    JSON.stringify({ supported: true, reason: "保留直接算术，限定未来影响。" }),
+  ]);
+
+  await expect(createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() }))
+    .resolves.toEqual(repaired);
+  expect(client.complete).toHaveBeenCalledTimes(4);
+  // Capture real outgoing prompts; these assertions don't simulate semantic review.
+  for (const index of [1, 2, 3]) {
+    const messages = client.complete.mock.calls[index]?.[0] ?? [];
+    expect(messages[0]?.content).toContain("口径可比的直接算术及业务比率属于受支持内容");
+    expect(messages[0]?.content).toContain("业务比率不是模型信心评分");
+    expect(messages[0]?.content).toContain("总额、基准差额和更新增减量");
+    const input = JSON.parse(messages[1]?.content ?? "{}");
+    expect(input.evidence).toEqual(pdContext().items.map(item => ({ ...item, kind: "message" })));
+  }
+  const repairMessages = client.complete.mock.calls[2]?.[0] ?? [];
+  expect(repairMessages[0]?.content).toContain("复核理由是待核对的诊断，不是事实裁决；授权原文优先");
+  expect(repairMessages[0]?.content).toContain("不能通过删去有依据的关键数值迎合错误复核");
+  expect(repairMessages[0]?.content).toContain("qualified_inference");
+  expect(JSON.parse(repairMessages[1]?.content ?? "{}").review).toEqual(rejection);
+});
+
 test("the runtime repair validator permits semantic corrections but locks structural identity and refs", async () => {
   const validate = await repairValidator();
   const context = pdContext();

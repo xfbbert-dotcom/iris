@@ -252,6 +252,25 @@ describe("PdModel.assess", () => {
     expect(JSON.stringify(secondMessages)).not.toContain("private-foreign-ref");
   });
 
+  it("supplies the full decision relationship contract on both assessment attempts", async () => {
+    const invalid = { ...pdSkipAssessment(), reason: "material_issue",
+      materialChange: { kind: "none", explanation: "没有变化", evidenceRefs: [] } };
+    const client = sequenceClient([JSON.stringify(invalid), JSON.stringify(pdSkipAssessment())]);
+
+    await expect(createPdModel({ client }).assess(pdContext())).resolves.toEqual(pdSkipAssessment());
+
+    expect(client.complete).toHaveBeenCalledTimes(2);
+    // These are model-facing request contracts, not proof that a model follows them.
+    for (const [messages] of client.complete.mock.calls) {
+      expect(messages[0]?.content).toContain("skip 的 reason 不得为 material_issue");
+      expect(messages[0]?.content).toContain('explanation 必须为 ""，evidenceRefs 必须为 []');
+      expect(messages[0]?.content).toContain("skip 的 issueRef 只能为 null 或已提供的 existing 问题");
+      expect(messages[0]?.content).toContain("新问题必须用 new_issue");
+      expect(messages[0]?.content).toContain("已有问题通常用 new_evidence");
+      expect(JSON.parse(messages[1]?.content ?? "{}").materials).toEqual(pdContext().items);
+    }
+  });
+
   it("fails closed after one repair and does not consume it for transport errors", async () => {
     const invalidClient = completionClient("private malformed model output");
     const invalidPromise = createPdModel({ client: invalidClient }).assess(pdContext());
