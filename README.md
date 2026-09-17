@@ -29,6 +29,15 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Two further [private repair experiments](docs/development/iris-json-mode-compatibility-20260917.md#继续修复的两项私有实验均未推广)
+did not fix the missing gap or overstatement and were not promoted. The edit-only experiment
+actually returned an incorrect pair when final review omitted the missing quantity from its list;
+the explicit-diagnostic experiment was rejected without a semantic repair. Application code is
+unchanged; these failures remain open. Subsequent [bounded free-cloud probes](docs/development/iris-json-mode-compatibility-20260917.md#后续免费云端格式通过与算术失败或未完整分开)
+passed one minimal JSON-format request on each of GLM-4-Flash-250414 and GLM-4.7-Flash. The former
+then incorrectly skipped the original arithmetic case; the latter's assessment was blocked by
+HTTP429 without output. Neither entered rendering/full evaluation or was adopted; cloud requests stopped.
+
 A second [current-draft quote guard](docs/development/iris-json-mode-compatibility-20260917.md#草稿引用存在性原型验证与第二项狭窄修复)
 uses the existing single paired correction. After a retained correct-draft false rejection, quote
 choices were bound to the actual current draft. A new fixed positive control returned its original
@@ -42,8 +51,8 @@ the remaining semantic failures or authorize deployment, activation or messages.
 The latest [explicit JSON-mode compatibility repair](docs/development/iris-json-mode-compatibility-20260917.md)
 adds an opt-in Core transport mode while preserving native-schema defaults, full schema instructions,
 local domain validation and bounded calls. A free GLM probe returned HTTP200 but ignored the requested
-native schema; the repaired JSON-mode probe received HTTP429 without model output, so actual cloud
-compatibility and semantic acceptance remain unverified. The bounded local review/focus experiments
+native schema; its first repaired JSON-mode probe received HTTP429 without model output. Later
+minimal cloud-format successes above do not establish full compatibility or semantic acceptance. The bounded local review/focus experiments
 did not resolve the known failures and were not promoted. Application `a5e5e2e4` passed Core4673/469
 conditional skips, type/build and one local real-model JSON-format check; that minimal result is not
 Zhipu or proactive semantic acceptance. See the record for the Docker-dependent skipped boundary

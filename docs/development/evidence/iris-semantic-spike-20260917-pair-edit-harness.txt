@@ -1,0 +1,122 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createPdModel } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createProactiveDiscussionEvalCases } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260917';
+const mode = process.argv[2];
+if (mode !== 'negative' && mode !== 'positive') throw Error('Expected negative or positive');
+const output = folder + '/pair-edit-spike-' + mode + '.json';
+if (existsSync(output)) throw Error('Refuse overwrite or repeated sampling');
+const sourcePath = root + '/docs/development/evidence/iris-draft-quote-20260917-' +
+  (mode === 'negative' ? 'repair-enum-chain' : 'correct-chain') + '.json';
+const saved = JSON.parse(readFileSync(sourcePath, 'utf8'));
+const context = createProactiveDiscussionEvalCases().find(c => c.id === 'arithmetic')!.context;
+const firstReview = saved.calls.find((call: any) => call.name === 'iris_proactive_discussion_scope_review');
+const hash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const keys = ['issueDescription', 'observation', 'reasoning', 'suggestion', 'uncertainty',
+  'materialChangeExplanation', 'draftText'];
+const properties = Object.fromEntries(keys.map(key => [key, key === 'uncertainty'
+  ? { type: 'string', enum: ['fact', 'qualified_inference'] }
+  : { type: 'string', minLength: 1, maxLength: key === 'draftText' ? 1200 : 2000 }]));
+const patchFormat = { type: 'json_schema' as const, json_schema: {
+  name: 'iris_proactive_discussion_edit_spike', strict: true,
+  schema: { type: 'object', additionalProperties: false, required: keys, properties },
+} };
+const report: any = { kind: 'mutable-fields-only-pair-repair-spike', mode, syntheticOnly: true,
+  startedAt: new Date().toISOString(),
+  applicationHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  sourceHashes: { replay: hash(sourcePath), model: hash(root + '/apps/core/src/proactive-discussion/model.ts'),
+    receipts: hash(root + '/apps/core/src/proactive-discussion/review-receipts.ts'),
+    client: hash(root + '/apps/core/src/model/openai-compatible-chat-completions-client.ts'),
+    harness: hash(folder + '/pair-edit-spike.mts') },
+  model: 'Qwen3-4B-Q4_K_M', runtime: 'llama.cpp b11011', seed: 1709,
+  profile: 'CPU4/ctx16384/reasoning off/temp0.7/top-p0.8/top-k20/min-p0/max_tokens2048',
+  maxRequests: 2, timeoutMs: 180000, totalDeadlineMs: 420000, automaticRetry: false,
+  calls: [], requests: [], manualReview: 'pending',
+  limitation: 'Only the edit response contract and its explicit output instructions differ. Initial assessment, draft and first review are replayed; only edit and current final review are fresh. Existing production pair validator and final receipt guard remain unchanged. No fresh full generation or suite acceptance.' };
+const deadline = AbortSignal.timeout(420000);
+let currentCall: any;
+let halted = false;
+const real = createOpenAICompatibleChatCompletionsClient({ config: {
+  provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:18089/v1', apiKey: 'local-synthetic-only',
+  model: 'iris-qwen3-4b-q4km', timeoutMs: 180000,
+}, sleep: async () => { throw Error('No retry'); }, fetch: async (url, init) => {
+  if (halted || String(url) !== 'http://127.0.0.1:18089/v1/chat/completions'
+    || report.requests.length >= 2 || deadline.aborted) throw Error('Request boundary');
+  const payload = JSON.parse(String(init?.body));
+  if (payload.model !== 'iris-qwen3-4b-q4km' || payload.tools || payload.stream) throw Error('Wire boundary');
+  const request: any = { stage: currentCall.name, startedAt: new Date().toISOString() };
+  report.requests.push(request);
+  try {
+    const response = await fetch(url, { ...init, redirect: 'error',
+      body: JSON.stringify({ ...payload, seed: 1709 }),
+      signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+    request.status = response.status;
+    if (!response.ok) halted = true;
+    return response;
+  } catch (error) { halted = true; throw error; }
+  finally { request.finishedAt = new Date().toISOString(); }
+}});
+let reviewCount = 0;
+const model = createPdModel({ client: { async complete(messages, options) {
+  const name = options?.responseFormat?.json_schema.name;
+  const entry: any = { name, originalMessages: messages, originalResponseFormat: options?.responseFormat };
+  report.calls.push(entry);
+  if (name === 'iris_proactive_discussion_draft' && report.calls.length === 1) {
+    entry.replayedFrom = sourcePath;
+    entry.content = JSON.stringify(saved.originalPair.draft);
+    return entry.content;
+  }
+  if (name === 'iris_proactive_discussion_scope_review' && ++reviewCount === 1) {
+    entry.replayedFrom = sourcePath;
+    entry.content = firstReview.content;
+    return entry.content;
+  }
+  currentCall = entry;
+  if (name === 'iris_proactive_discussion_pair_repair') {
+    const input = JSON.parse(messages.find(message => message.role === 'user')!.content);
+    if (input.assessment.issueRef.kind !== 'new') throw Error('Spike restricted to archived new-issue cases');
+    const system = messages.find(message => message.role === 'system')!.content
+      .replace('并只输出指定 JSON。', '并只输出七个可编辑字段的 JSON。')
+      .replace('保留原 decision、reason、issue kind、已有 issue ID、全部 evidenceRefs 以及 materialChange.kind；新问题 description 可以纠正措辞，但不能改变问题身份。',
+        '程序保留原 decision、reason、issue kind、全部 evidenceRefs 以及 materialChange.kind，你不要输出这些固定字段。新问题 issueDescription 可以纠正措辞，但不能改变问题身份。') +
+      '\n返回 issueDescription、observation、reasoning、suggestion、uncertainty、materialChangeExplanation、draftText。每个字段都提供修正后的完整文本，而不是修改指令；不要返回 assessment 或 draft 外层对象。';
+    const patchMessages = [{ role: 'system' as const, content: system }, ...messages.filter(message => message.role !== 'system')];
+    entry.messages = patchMessages;
+    entry.responseFormat = patchFormat;
+    entry.patchContent = await real.complete(patchMessages, { responseFormat: patchFormat });
+    const patch = JSON.parse(entry.patchContent);
+    if (!patch || Array.isArray(patch) || Object.keys(patch).length !== keys.length ||
+      !keys.every(key => typeof patch[key] === 'string' && patch[key].trim().length > 0 &&
+        patch[key].length <= (key === 'draftText' ? 1200 : 2000)) ||
+      !['fact', 'qualified_inference'].includes(patch.uncertainty)) throw Error('Invalid edit fields');
+    entry.content = JSON.stringify({ assessment: { ...input.assessment,
+      issueRef: { ...input.assessment.issueRef, description: patch.issueDescription },
+      observation: patch.observation, reasoning: patch.reasoning, suggestion: patch.suggestion,
+      uncertainty: patch.uncertainty,
+      materialChange: { ...input.assessment.materialChange, explanation: patch.materialChangeExplanation },
+    }, draft: { text: patch.draftText, evidenceRefs: input.draft.evidenceRefs } });
+  } else {
+    entry.messages = messages;
+    entry.responseFormat = options?.responseFormat;
+    entry.content = await real.complete(messages, options);
+  }
+  console.log(JSON.stringify({ stage: name, content: entry.content }));
+  return entry.content;
+} } });
+try {
+  report.finalPair = await model.render({ context, assessment: saved.originalPair.assessment });
+  report.returnedPair = report.finalPair !== null;
+} catch (error) {
+  report.error = error instanceof Error ? error.message : 'unknown';
+  process.exitCode = 1;
+} finally {
+  report.halted = halted;
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(output, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length, returnedPair: report.returnedPair, error: report.error }));
+}

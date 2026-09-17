@@ -15,6 +15,12 @@ Compose+CLI40通过/1条件跳过已完成，本地模型已停止；只关闭�
 不把它们的本地通过升级为完整主动语义或交付通过。
 本记录不代表部署或主动能力启用。
 
+用户要求继续后，10:17–10:20 UTC又完成[两项私有修正假设](#继续修复的两项私有实验均未推广)，均未改善目标且未推广。
+其中七字段edit实验的最终review漏列6万元，凭据检查与返回路径实际放过仍错误的pair；这是新增语义失败，
+不以本节先前局部拦截掩盖。应用代码未改；随后[免费云端有限复测](#后续免费云端格式通过与算术失败或未完整分开)中，
+glm-4-flash-250414与glm-4.7-flash均一次最小JSON格式通过，前者原算术合法skip但语义失败，后者算术首请求429、
+没有语义结果。当前云端请求已停止，不能再概括成“所有云端格式未验证”，也不能称主动功能已修好。
+
 ## 症状、归因与实现
 
 已有[输出适配记录](iris-assessment-wire-fix-20260917.md)保留了本地模型的结构修复、
@@ -60,7 +66,7 @@ HTTP200，但内容带 Markdown 围栏、缺少必填 `label`，且新增未允�
 当次[受限测试脚本](evidence/iris-free-model-20260917-json-mode-harness.txt)同时归档：只执行了format模式，
 arithmetic/full分支未启动；遇非成功HTTP即锁止后续请求。归档不包含密钥明文。
 已有本机加密测试密钥无需重建或在聊天中提供。最小请求成功、兼容性通过、主动语义通过和真实群投递
-是不同层级，本轮不能声称新版已经通过实际云端验收。
+是不同层级；此时不能声称新版通过实际云端验收。后续较晚窗口的最小格式通过另记于下节，不覆盖本次429。
 
 ## 实际 Core client 的本地格式正向证据
 
@@ -261,11 +267,67 @@ receipts为`bfc9c99abc1590229f304dae9957bada6ca4beac24f5704e987b277aa484c224`，
 没有新真实PG、精确SHA远端CI、部署、线上开关修改或真实飞书回执验收。
 本地测试证明请求适配与既有校验边界，不证明HTTP429后的服务行为。
 
+## 继续修复的两项私有实验：均未推广
+
+本轮从干净文档HEAD`5611cef9c85ec46a61a791452fe6a50101c20639`继续，应用仍为`42db6b6c`，源码哈希未变。
+两项均复用原assessment、draft与首次review，仅repair及最终review各1次真实请求，seed1709及本机runtime/profile不变。
+当前pair validator、当次draft引用核验和调用上限均未改；不是fresh完整生成，也不是新的产品实现或整套验收。
+
+| 私有假设与原始证据 | 实际结果与独立语义判读 |
+|---|---|
+| [七个可编辑字段](evidence/iris-semantic-spike-20260917-pair-edit.json)及[脚本](evidence/iris-semantic-spike-20260917-pair-edit-harness.txt)：10:17:33.908–10:18:38.489 UTC，总64.581秒；2次HTTP200，28.923/35.578秒 | 仅输出issueDescription、observation、reasoning、suggestion、uncertainty、materialChangeExplanation、draftText，由脚本原样拼回锁定字段再走现有validator。draft仍无6万元，issueDescription还被改成“预算不足导致招聘计划不可行”。最终raw supported=true只列10/16，两项引文有效但列表漏了必要差额，`returnedPair:true`。**独立语义失败，且确实发生误通过**；不能以模型布尔或字面凭据通过称修正成功。 |
+| [具体凭据失败位置](evidence/iris-semantic-spike-20260917-pair-diagnostic.json)及[脚本](evidence/iris-semantic-spike-20260917-pair-diagnostic-harness.txt)：10:19:25.688–10:20:59.727 UTC，总94.039秒；2次HTTP200，64.864/29.088秒 | repair输入新增`requiredNumbers[2].draftQuote`失败位置、声明6万元，并明确这些只是引用诊断、不是数字事实。模型仍返回原pair，未补6万元且保留过度断言；最终raw true声明-60000元，但当前原句没有该值，helper拒绝，`returnedPair:false`。**语义修正失败，仅局部拦截生效**。 |
+
+两种假设都未改善原目标，因此未运行其正向变体，未推广到产品、未增加回归或重复抽样。
+edit的误通过发生于私有修改后的输出合同；它进一步实证了现有门禁不保证必要数字列表完整，
+不等于已完成冻结产品原始完整输入的重新验收。继续保留原15例两轮、旧误拒及此次误通过，不缩减原criteria。
+主代理于18:21:21.912+08:00停止本次短时模型PID50600；18089监听0、llama-server进程0，supervisor60383正常结束。
+这两项本地实验没有云端模型请求、API费用、部署或外发；后续依据官方免费说明执行的独立云端探测另记于下节。
+
+4份归档均与私有原件SHA256一致：edit报告`784614ede281e62648dc802261e8cf4a079f5d01859c2b626a3d0abb66a1f5e9`，
+脚本`48aa77b6ff7aca5edc050844800c4875666967e6d87664208b2786a2bb4efaa8`；
+diagnostic报告`8e530c76cb96455edbaf03ef22eb0157422d8cf3d0f78fffcebe4b7cb277ecf8`，
+脚本`1805ed35c1cf78502a3b18cb89f2d0baaffdaa09b749bc4c66d7f8e6ba0bdace`。
+
+## 后续免费云端：格式通过与算术失败或未完整分开
+
+主代理于10:23 UTC核对[官方GLM-4-Flash-250414页](https://docs.bigmodel.cn/cn/guide/models/free/glm-4-flash-250414)，
+其明确将该型号列为免费API；[当前对话补全接口](https://docs.bigmodel.cn/api-reference/模型-api/对话补全)
+列出`glm-4-flash-250414`及`json_object`，thinking参数仅支持4.5及以上。
+据此只用现有测试key对该明确免费型号做最小格式和原arithmetic，不带tools、search或thinking，未改产品配置。
+GLM-4.5概览的只读打开超时后，未测试费用依据不明确的其他型号；没有声称已核对账单或实际配额消耗。
+
+随后距09:20容量拒绝已约65分钟，在独立第五窗口仅复测原`glm-4.7-flash`：先最小JSON模式，
+通过后进入原arithmetic；其thinking显式disabled。两份脚本均通过真实Core client的`json_object`模式，
+本地检查实际payload类型；报告中的上层responseFormat仍是完整schema合同，不代表线上仍传原生schema。
+
+| 模型/步骤与证据 | UTC时间及真实请求 | 实际结果 |
+|---|---|---|
+| [250414最小格式](evidence/iris-free-model-20260917-glm4flash250414-format.json) | 10:23:19.770–10:23:20.516；1次HTTP200，请求0.674秒 | `{"result":16,"label":"iris-free-format-check"}`，无多余字段/Markdown，`valid:true`。一次实际云端最小格式通过。 |
+| [250414原算术](evidence/iris-free-model-20260917-glm4flash250414-arithmetic.json) | 10:23:35.275–10:23:37.998；1次HTTP200，请求2.637秒 | 返回合法`skip / insufficient_basis`；原标准应intervene，故是实际漏报、**语义失败**。assessment已产生但draft=null，未进入render、review或完整15例两轮。 |
+| [glm-4.7-flash第五窗口格式](evidence/iris-free-model-20260917-glm47-window5-format.json) | 10:25:31.552–10:25:32.570；1次HTTP200，请求0.945秒 | 同样完整返回result16/label，`valid:true`；该型号JSON模式的一次云端最小格式现在已有通过证据。 |
+| [glm-4.7-flash第五窗口原算术](evidence/iris-free-model-20260917-glm47-window5-arithmetic.json) | 10:25:50.147–10:25:50.419；首次assessment请求0.197秒、HTTP429 | 容量拒绝，`halted:true`，assessment/draft均null；**未完整、没有语义结果**，不是一次算术语义失败。未到render或完整集，随后停止全部云端请求。 |
+
+[250414脚本](evidence/iris-free-model-20260917-glm4flash250414-harness.txt)与
+[第五窗口脚本](evidence/iris-free-model-20260917-glm47-window5-harness.txt)同时归档；两者均未运行full分支。
+六份归档均与私有原件SHA256一致，250414的格式/算术/脚本分别为
+`cb03779cf02193589f53072c01aabab1798a8cc8a5b2f9a2194128413b258c98`、
+`446788570b2c30d8523149bd312c68c10433f61fe23bb69cac40b06ae6f21557`、
+`f1630b74caa3aad2f54421c0378bdcc6acd45fd532284b2c445519c58fa36625`；
+第五窗口对应为`13dbfd7182c5534ec7076eb3aaecfe428e697aa8c940b91aa1ce6a61a21b6c83`、
+`52f7f6e8b8cd1506b72c171201c93f3e00b10a25ee223cb979370ad6da90a3b5`、
+`d5103416957bcf6fee665d5afac7945146f2123af880259f457fb268e50daefe`。
+
+这些报告运行HEAD仍为`5611cef9`，应用model/client/config源码哈希未变；它们不撤销前两项已确认的集成修复，
+也不足以把全部剩余失败简单归因于模型。最小格式通过不证明全部schema/enum兼容、主动语义或生产可用性。
+未采用新模型、未测试其他型号、未部署/启用/外发，不将官方免费说明当成账单核对结果。
+
 ## 当前关闭范围与下一步
 
 本轮针对已观察到的 schema 传输兼容缺口提供显式 JSON 模式适配，并保留全部本地校验。
 应用 `a5e5e2e4` 已通过本轮本地回归、构建与有限审查，实际本地模型最小JSON格式通过；
-这项适配实现及文档修复已有对应证据，新模式云端兼容性尚未验证，主动讨论整体实模门禁仍未通过。
+这项适配实现及文档修复已有对应证据；后续两个免费型号的新模式云端最小格式各通过一次，
+但250414原算术漏报、4.7第五窗口算术因429未完整，全部schema兼容和主动讨论整体实模门禁仍未通过。
 原数字遗漏/算错、事实类别改写、复核误放行、独立问题漏报、已处理问题重复介入仍按
 [原结果与标准](iris-assessment-wire-fix-20260917.md#实际关闭范围与剩余门禁)保留。
 
@@ -278,11 +340,14 @@ receipts为`bfc9c99abc1590229f304dae9957bada6ca4beac24f5704e987b277aa484c224`，
 修正链及正确稿失败记录均不覆盖。下一项仍是已保留的必要数字/事实类别、过度断言、
 独立问题漏报和已处理问题重复介入；从具体剩余失败开展下一项有界修复，不重开已完成的引文接线审查，
 也不以本记录授权无界审核或原样抽样。
-下一项最小验证沿用已保留的缺6万元输入和原criteria，检查一次现有联合修正能否同时补齐必要差额、
-消除“计划不可行”的过度断言并返回完整pair；独立判读最终文本，不以review true或最终null替代通过。
+随后两项私有修正假设已按同一缺6万元输入完成且失败，不再原样运行这两种变体。
+剩余最小验收仍是按原criteria补齐必要差额、消除“计划不可行”的过度断言并返回完整pair，
+同时不漏列必要数字；独立判读最终文本，不以review true、字面凭据通过或最终null替代语义通过。
+同平台免费API核对后的有限探测已记录：格式不再是完全未知，但尚无可通过原算术/完整集的新增候选。
+下一项仍从具体必要数字列表、事实类别和修正失败继续有界推进，不要求重找已有配置，不把本记录写成全部工作结束。
 
-当前免费云端窗口已经停止。后续仅在有新的可用性依据或独立较晚窗口时恢复一次最小 JSON 模式检查，
-通过后才进入原算术单例与原15例两轮；不把当前429当成语义失败，也不反复抽样到通过。
+当前免费云端请求已在第五窗口算术429后停止；250414合法skip的语义失败与4.7容量未完整分开保留。
+不密集重试、不对费用不明确型号试探，也不把最小格式成功或当前429写成原算术通过/失败。
 无需重开Tasks1–8/I1–I4审查，不恢复旧包装结构设计，不以关键词代答或付费模型替代本轮证据。
 任何部署、能力启用或真实外发仍需要当次任务授权；本记录及历史试点批准不新增权限。
 
@@ -292,7 +357,7 @@ receipts为`bfc9c99abc1590229f304dae9957bada6ca4beac24f5704e987b277aa484c224`，
 
 | 核对项 | disposition、链接与理由 |
 |---|---|
-| 白皮书 | **updated**：[主动模型合同](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)增加显式 JSON 模式传输边界、当次draft原样引文生成约束，以及引用不能代替语义/完整性判定的限制；局部正负对照与整体语义验收分开，禁止静默降级或无界修正。 |
-| 工程故障台账 | **updated**：[主动协作条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)保留HTTP200格式失败、429无输出，以及旧正确稿误拒；记录新enum下正确稿返回和缺差额稿最终被拦，并明确负向修正仍无完整正确结果。 |
-| 核心需求覆盖基线 | **updated**：[2026-09-17 JSON 模式兼容](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-17-json-模式兼容)区分两项应用提交与最终本地回归、云端未验证、局部正向返回/负向拦截和完整语义未通过；IRIS-CORE-005仍部分实现。 |
+| 白皮书 | **updated**：[主动模型合同](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)增加显式 JSON 模式传输边界、当次draft原样引文生成约束，以及引用不能代替语义/完整性判定的限制；局部正负对照与整体语义验收分开，禁止静默降级或无界修正。后续私有实验和免费云端探测为**reviewed-unchanged**：未改产品合同，既有必要数字完整性、格式/语义及无输出容量拒绝分层已覆盖新增结果。 |
+| 工程故障台账 | **updated**：[主动协作条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)保留HTTP200格式失败、旧429、旧正确稿误拒及负向拦截；追加edit漏列误通过、diagnostic未修正，以及两个型号最小格式通过后分别算术漏报/容量未完整的结果。 |
+| 核心需求覆盖基线 | **updated**：[2026-09-17 JSON 模式兼容](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-17-json-模式兼容)区分应用本地回归、云端最小格式已通过、完整兼容/语义未通过，以及局部返回/拦截和私有实验失败；IRIS-CORE-005仍部分实现。 |
 | README / AGENTS / 当前交接 | **updated**：[README](../../README.md#current-product-state)、[当前交接](current-handoff.md#当前正在推进)及其未完成事项转向本记录；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)，工作树/分支定位和四处闭环要求未变，已有current-handoff入口足以发现最新事实，故无需改动规则文件。 |

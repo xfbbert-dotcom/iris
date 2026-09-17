@@ -140,6 +140,21 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   typecheck/build and Compose+CLI40/1 conditional skip (Docker unavailable; CLI7 passed).
   Local model service was stopped. This closes the bounded receipt integration, not the remaining
   semantic failures, cloud compatibility, deployment or real-message acceptance.
+- **Subsequent private repair experiments, not promoted (2026-09-17):** [Two bounded variants](../development/iris-json-mode-compatibility-20260917.md#继续修复的两项私有实验均未推广)
+  each used two fresh HTTP200 calls after replayed assessment/draft/first review. Emitting only
+  seven editable fields still omitted the gap and retained an overstatement; final review listed
+  only the existing two quantities, so valid literal receipts returned an incorrect pair. Preserve
+  this actual false acceptance caused by an incomplete required-number list. Explicit receipt-failure
+  locations likewise left the pair unchanged; its final fabricated numeric receipt was rejected.
+  Neither hypothesis improved the target or changed product code, so neither positive variants nor
+  repeated sampling were pursued. Receipt presence remains containment, not complete semantic coverage.
+- **Later free-cloud probes (2026-09-17):** [Retained results](../development/iris-json-mode-compatibility-20260917.md#后续免费云端格式通过与算术失败或未完整分开)
+  show one successful minimal JSON-format response each from officially free GLM-4-Flash-250414
+  and GLM-4.7-Flash. The former then returned a structurally valid but semantically wrong skip on
+  the original arithmetic case. The latter's fifth-window assessment returned HTTP429, no judgment:
+  incomplete, not semantic failure. Neither reached rendering/full evaluation or was adopted.
+  Stop cloud calls after the capacity refusal; retain earlier format failures, false acceptance and
+  incomplete runs. Do not generalize one minimal format result into full compatibility or billing verification.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

@@ -1,0 +1,84 @@
+{
+  "kind": "free-json-mode-original-pipeline",
+  "mode": "format",
+  "syntheticOnly": true,
+  "startedAt": "2026-09-17T10:25:31.552Z",
+  "commit": "5611cef9c85ec46a61a791452fe6a50101c20639",
+  "model": "glm-4.7-flash",
+  "structuredOutputMode": "json_object",
+  "timeoutMs": 60000,
+  "profile": {
+    "thinking": {
+      "type": "disabled"
+    },
+    "max_tokens": 256
+  },
+  "wallMs": 420000,
+  "maxRequests": 1,
+  "requestIntervalMs": 0,
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "a2659b5277f5edb7337f6aa1937c9afedc203ffd19db25da2b6274ddd5a3f11e"
+  },
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-17T10:25:31.621Z",
+      "status": 200,
+      "finishedAt": "2026-09-17T10:25:32.566Z"
+    }
+  ],
+  "completions": [
+    {
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-17T10:25:31.621Z",
+      "messages": [
+        {
+          "role": "system",
+          "content": "只输出 JSON。"
+        },
+        {
+          "role": "user",
+          "content": "计算 8 加 8。"
+        }
+      ],
+      "responseFormat": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "iris_free_format_check",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "number",
+                "enum": [
+                  16
+                ]
+              },
+              "label": {
+                "type": "string",
+                "enum": [
+                  "iris-free-format-check"
+                ]
+              }
+            },
+            "required": [
+              "result",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "content": "{\"result\":16,\"label\":\"iris-free-format-check\"}",
+      "finishedAt": "2026-09-17T10:25:32.570Z"
+    }
+  ],
+  "manualReview": "pending",
+  "valid": true,
+  "halted": false,
+  "finishedAt": "2026-09-17T10:25:32.570Z"
+}

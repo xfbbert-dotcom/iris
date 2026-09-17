@@ -132,6 +132,12 @@ Core4673/469条件跳过、类型/构建；Compose+CLI40通过/1因Docker不可�
 Compose+CLI40通过/1条件跳过（Docker不可用，CLI7通过）；本地模型已停止。
 只关闭两项有限实现与文档闭环，不沿用局部引文结果宣称完整主动语义通过。
 合成expectedCoverage不进产品，原未改善spike不撤回；不宣称所有provider/JSON模式会强制执行enum。
+随后[两项私有修正实验](../../development/iris-json-mode-compatibility-20260917.md#继续修复的两项私有实验均未推广)各2次HTTP200，均未推广、未改应用：
+edit仍漏差额/过度断言却因final review只列10/16而实际返回错误pair；diagnostic仍原稿、最终假数字凭据被拒。
+必要数字列表完整性仍未解决，不以字面引用通过或返回pair升级完成度。
+随后[免费云端有限复测](../../development/iris-json-mode-compatibility-20260917.md#后续免费云端格式通过与算术失败或未完整分开)中，
+250414与4.7第五窗口各一次最小JSON格式通过；前者原算术合法skip为语义失败，后者算术首请求429、无判断结果为未完整。
+两者均未进render/full、未采用新型号；最小格式已验证但完整兼容/主动语义未通过，当前云端请求已停止。
 IRIS-CORE-005仍部分实现，未部署、未启用主动发言、未真实飞书投递；不以传输适配或模型自评升级完成度。
 
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
