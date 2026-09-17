@@ -497,6 +497,22 @@ subsets/novelty, normalized text and issue state. Shared definitions must preser
 response-format size; synthetic replay uses the same envelope decoder. The
 [output-adapter repair](../../development/iris-assessment-wire-fix-20260917.md) separates successful
 structured execution from still-required semantic and real-delivery acceptance.
+Structured-output transport compatibility must be explicit: native `json_schema` remains the default;
+an opted-in `json_object` mode carries the complete schema in system instructions without relaxing
+local domain validation or changing call bounds. Never silently downgrade after a failed response.
+A JSON object or HTTP200 does not establish schema compliance, and a capacity rejection without
+output cannot validate a new mode. The [compatibility record](../../development/iris-json-mode-compatibility-20260917.md)
+separates local adapter verification from actual provider and semantic acceptance.
+When review claims that a required quantity or advice appears in a draft, local quote receipts
+must bind to that current draft and complete quantity tokens, not assessment text, an older draft
+or invented wording. Quote-generation choices must also derive from unchanged spans or the whole
+current draft, plus null for missing evidence; this does not establish that every provider or JSON
+mode enforces those choices. Local checks remain necessary and constrain fabricated review evidence only: they cannot prove
+the reviewer listed every required quantity, computed correctly or understood facts and negation.
+Any receipt rejection uses the existing single paired correction/final-review bound. Synthetic
+acceptance constants remain separate from product validation; the [implementation status](../../development/iris-json-mode-compatibility-20260917.md#草稿引用存在性原型验证与第二项狭窄修复)
+separates fixed-draft positive return and negative containment from fresh generation, full semantic
+acceptance and the implementation's final regression/commit status.
 Source-grounded, comparable arithmetic and business ratios need not appear verbatim in a source
 to be valid reasoning. Review diagnoses are fallible, not new authority over the original evidence:
 correction must preserve necessary supported quantities, units and qualifications, while keeping

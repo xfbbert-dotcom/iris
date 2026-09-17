@@ -109,6 +109,37 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   required shared definitions. A complete assessment/draft/review chain can still omit or misstate
   arithmetic and receive a false-positive model review; never equate structural completion with
   semantic acceptance or enable production on that basis.
+- **Explicit transport compatibility (2026-09-17):** A free-provider probe returned HTTP200 but
+  produced fenced JSON, omitted a required field and added an unallowed field despite a native
+  schema request. The [JSON-mode compatibility repair](../development/iris-json-mode-compatibility-20260917.md)
+  makes the alternative transport an explicit Core opt-in, preserves the complete schema in system
+  instructions and leaves local validation/defaults/call bounds intact; no automatic downgrade or
+  response cleanup manufactures success. The new-mode probe then received HTTP429 without output:
+  local request-shape tests do not establish live compatibility or semantic acceptance. Retain both
+  results. Local experiments also showed that a reviewer can calculate a missing value yet falsely
+  claim it appears in the draft, and a correct trigger summary can still precede a wrong decision.
+  These experiments were not promoted; more fields or plausible review prose are not evidence of
+  correctness. Distinguish one failed subcheck from the overall verdict and stop an unsuccessful
+  bounded experiment instead of extending it indefinitely.
+- **Current-draft quote evidence, bounded implementation closed; semantics still open (2026-09-17):** The
+  [three-case fixed-draft probe](../development/iris-json-mode-compatibility-20260917.md#草稿引用存在性原型验证与第二项狭窄修复)
+  retained a model's true verdict but rejected its claimed 6-unit receipt: the real quote said only
+  that a gap existed. The complete arithmetic control had valid receipts. The wrong-category
+  inference had valid literal advice and an empty numeric list despite a false model verdict with
+  an unreliable reason. Quote presence is not factual support or completeness; do not confuse a
+  vacuous numeric list with coverage. Keep synthetic expected-value oracles outside product code.
+  The initial guard also rejected a correct draft because model-generated quotes borrowed source
+  and assessment wording. Preserve that real false rejection. Binding quote-generation choices to
+  unchanged current-draft spans/full text or null then returned the same correct pair in one real
+  HTTP200 review with no repair. The fixed missing-gap control took three HTTP200 calls: two true
+  model verdicts claimed numeric evidence absent from real quotes, both were rejected, and the
+  sole paired correction still omitted the gap and retained an overstatement. Final null proves
+  containment and the call bound, not successful generation or full semantic repair. See the
+  [retained positive/negative runs](../development/iris-json-mode-compatibility-20260917.md#当次草稿引文枚举缺差额稿仍失败并被拦截).
+  Fix `42db6b6c3678802acaf0c2936c67c8640e5f540c` passed fresh Core4716/469 conditional skips,
+  typecheck/build and Compose+CLI40/1 conditional skip (Docker unavailable; CLI7 passed).
+  Local model service was stopped. This closes the bounded receipt integration, not the remaining
+  semantic failures, cloud compatibility, deployment or real-message acceptance.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

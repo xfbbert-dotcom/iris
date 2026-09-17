@@ -1,0 +1,38 @@
+{
+  "syntheticOnly": true,
+  "applicationCommit": "a5e5e2e4",
+  "startedAt": "2026-09-17T09:30:49.745Z",
+  "model": "Qwen3-4B-Q4_K_M",
+  "runtime": "llama.cpp b11011",
+  "profile": "CPU4/ctx16384/reasoning off/temp0.7/top-p0.8/top-k20/min-p0",
+  "clientSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+  "requests": [
+    {
+      "startedAt": "2026-09-17T09:30:49.747Z",
+      "payload": {
+        "model": "iris-qwen3-4b-q4km",
+        "messages": [
+          {
+            "role": "system",
+            "content": "按指定输出结构回答，不使用工具。\n\nReturn only a JSON object that satisfies the following JSON Schema, not the schema itself.\nDo not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.\n{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"label\",\"result\"],\"properties\":{\"label\":{\"type\":\"string\",\"enum\":[\"iris-free-format-check\"]},\"result\":{\"type\":\"integer\"}}}"
+          },
+          {
+            "role": "user",
+            "content": "计算8+8。"
+          }
+        ],
+        "response_format": {
+          "type": "json_object"
+        },
+        "seed": 1709,
+        "max_tokens": 256
+      },
+      "status": 200,
+      "finishedAt": "2026-09-17T09:30:51.731Z"
+    }
+  ],
+  "compatibilityLevel": "local model only, not Zhipu or semantic acceptance",
+  "content": "{\"label\":\"iris-free-format-check\",\"result\":16}",
+  "formatPassed": true,
+  "finishedAt": "2026-09-17T09:30:51.733Z"
+}

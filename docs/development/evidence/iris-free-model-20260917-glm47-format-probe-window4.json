@@ -1,0 +1,19 @@
+{
+  "kind": "free-model-format-probe",
+  "startedAt": "2026-09-17T09:14:10.642Z",
+  "model": "glm-4.7-flash",
+  "endpoint": "https://open.bigmodel.cn/api/paas/v4",
+  "syntheticOnly": true,
+  "requests": 1,
+  "format": "json_schema",
+  "probeOnlySettings": {
+    "max_tokens": 256,
+    "thinking": {
+      "type": "disabled"
+    }
+  },
+  "status": 200,
+  "valid": false,
+  "content": "```json\n{\n  \"expression\": \"8 + 8\",\n  \"result\": 16\n}\n```",
+  "finishedAt": "2026-09-17T09:14:11.512Z"
+}

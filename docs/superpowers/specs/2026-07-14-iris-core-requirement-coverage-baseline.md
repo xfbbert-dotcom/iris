@@ -112,6 +112,28 @@ IRIS-CORE-005仍部分实现、未通过完整实模和真实单群投递门禁�
 尺寸优化前候选的原15例两轮为19通过/8失败/3未完整，证据与剩余门禁见专项记录。
 IRIS-CORE-005仍部分实现；未部署、启用主动发言或重跑云端。
 
+### 2026-09-17 JSON 模式兼容
+
+[本轮兼容修复与原始证据](../../development/iris-json-mode-compatibility-20260917.md)增加Core显式json_object传输，
+默认仍原生json_schema，完整schema进system、原本地领域校验及调用上限不变，memory worker不受影响。
+第四免费窗口的原生请求HTTP200却缺必填字段并带Markdown，不能视为格式通过；修复后最小JSON模式请求
+HTTP429且无输出，尚不能评价真实云端兼容性，更没有完成新版原算术/15例两轮。应用`a5e5e2e4`已通过
+Core4673/469条件跳过、类型/构建；Compose+CLI40通过/1因Docker不可用跳过，其中CLI7通过。
+实际Coreclient的新JSON模式在同一本地模型最小格式1次HTTP200通过，不能替代Zhipu或主动语义验收。
+未获得新真实PG或云端语义验收，精确SHA和全部结果见专项记录。
+两个本地review/focus实验未解决目标缺陷且未推广；原数字/事实类别、漏报及重复介入失败继续保留。
+随后3例固定稿引用核验原型均HTTP200：缺差额算术为supported=true/receiptValid=false，
+正确算术为true/true，错误事实类别inference为false/true；逐字引用存在不代表事实正确或检查完整。
+第二项狭窄引用门禁已接入既有一次pair repair；旧正确稿因引用借用其他字段而误拒，失败保留。
+引文候选收窄为当次draft原样句段/全文或null后，正确稿1次HTTP200返回原pair，缺差额稿3次HTTP200、
+两次raw true被完整数字凭据检查拦截、唯一一次修正后最终null，但仍漏6万元且保留过度断言。
+这是局部正向返回和负向拦截，不是生成或完整语义通过；详见[实际对照](../../development/iris-json-mode-compatibility-20260917.md#当次草稿引文枚举缺差额稿仍失败并被拦截)。
+第二项应用`42db6b6c3678802acaf0c2936c67c8640e5f540c`已通过最终Core4716/469条件跳过、类型/构建，
+Compose+CLI40通过/1条件跳过（Docker不可用，CLI7通过）；本地模型已停止。
+只关闭两项有限实现与文档闭环，不沿用局部引文结果宣称完整主动语义通过。
+合成expectedCoverage不进产品，原未改善spike不撤回；不宣称所有provider/JSON模式会强制执行enum。
+IRIS-CORE-005仍部分实现，未部署、未启用主动发言、未真实飞书投递；不以传输适配或模型自评升级完成度。
+
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 
 - Managed existing-page update code is implemented and locally verified behind the independent

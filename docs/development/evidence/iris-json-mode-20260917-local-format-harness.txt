@@ -1,0 +1,48 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const output = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260917/json-mode-format-probe.json';
+if (existsSync(output)) throw Error('Refuse overwrite');
+const report: any = { syntheticOnly: true, applicationCommit: 'a5e5e2e4',
+  startedAt: new Date().toISOString(), model: 'Qwen3-4B-Q4_K_M', runtime: 'llama.cpp b11011',
+  profile: 'CPU4/ctx16384/reasoning off/temp0.7/top-p0.8/top-k20/min-p0',
+  clientSha256: createHash('sha256').update(readFileSync(root + '/apps/core/src/model/openai-compatible-chat-completions-client.ts')).digest('hex'),
+  requests: [], compatibilityLevel: 'local model only, not Zhipu or semantic acceptance' };
+const client = createOpenAICompatibleChatCompletionsClient({ config: {
+  provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:18089/v1', apiKey: 'local-synthetic-only',
+  model: 'iris-qwen3-4b-q4km', timeoutMs: 60000, structuredOutputMode: 'json_object',
+}, fetch: async (url, init) => {
+  if (String(url) !== 'http://127.0.0.1:18089/v1/chat/completions' || report.requests.length >= 1) throw Error('Probe boundary');
+  const payload = JSON.parse(String(init?.body));
+  if (payload.model !== 'iris-qwen3-4b-q4km' || payload.tools || payload.stream || payload.response_format?.type !== 'json_object') throw Error('Wire boundary');
+  const request: any = { startedAt: new Date().toISOString(), payload: { ...payload, seed: 1709, max_tokens: 256 } };
+  report.requests.push(request);
+  try {
+    const response = await fetch(url, { ...init, body: JSON.stringify(request.payload), redirect: 'error' });
+    request.status = response.status;
+    return response;
+  } finally { request.finishedAt = new Date().toISOString(); }
+}});
+try {
+  report.content = await client.complete([
+    { role: 'system', content: '按指定输出结构回答，不使用工具。' },
+    { role: 'user', content: '计算8+8。' },
+  ], { responseFormat: { type: 'json_schema', json_schema: {
+    name: 'iris_free_format_check', strict: true, schema: {
+      type: 'object', additionalProperties: false, required: ['label', 'result'], properties: {
+        label: { type: 'string', enum: ['iris-free-format-check'] }, result: { type: 'integer' },
+      },
+    },
+  } } });
+  const value = JSON.parse(report.content);
+  report.formatPassed = Object.keys(value).sort().join(',') === 'label,result'
+    && value.label === 'iris-free-format-check' && value.result === 16;
+  if (!report.formatPassed) process.exitCode = 1;
+} catch (error) { report.error = error instanceof Error ? error.message : 'unknown'; process.exitCode = 1; }
+finally {
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(output, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, content: report.content, error: report.error, formatPassed: report.formatPassed, requests: report.requests.length }));
+}

@@ -29,7 +29,27 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
-The latest [assessment output-adapter repair](docs/development/iris-assessment-wire-fix-20260917.md)
+A second [current-draft quote guard](docs/development/iris-json-mode-compatibility-20260917.md#草稿引用存在性原型验证与第二项狭窄修复)
+uses the existing single paired correction. After a retained correct-draft false rejection, quote
+choices were bound to the actual current draft. A new fixed positive control returned its original
+pair in one real HTTP200 review; the negative control's three HTTP200 calls ended in null after
+two invalid numeric receipts, without fixing the missing gap. These are local return/containment
+results, not fresh generation or full semantic acceptance. Commit `42db6b6c` passed fresh Core
+4716/469 conditional skips, typecheck/build and Compose+CLI40/1 conditional skip (CLI7 passed;
+Docker unavailable). The local model was stopped. Bounded implementation closure does not close
+the remaining semantic failures or authorize deployment, activation or messages.
+
+The latest [explicit JSON-mode compatibility repair](docs/development/iris-json-mode-compatibility-20260917.md)
+adds an opt-in Core transport mode while preserving native-schema defaults, full schema instructions,
+local domain validation and bounded calls. A free GLM probe returned HTTP200 but ignored the requested
+native schema; the repaired JSON-mode probe received HTTP429 without model output, so actual cloud
+compatibility and semantic acceptance remain unverified. The bounded local review/focus experiments
+did not resolve the known failures and were not promoted. Application `a5e5e2e4` passed Core4673/469
+conditional skips, type/build and one local real-model JSON-format check; that minimal result is not
+Zhipu or proactive semantic acceptance. See the record for the Docker-dependent skipped boundary
+probe; no production activation, deployment or paid fallback is implied.
+
+The preceding [assessment output-adapter repair](docs/development/iris-assessment-wire-fix-20260917.md)
 constrains complete generation branches and strictly unwraps them into the unchanged runtime
 contract. The final commit completes the original arithmetic chain in a bounded local thinking
 profile, but numeric omissions and false-positive review still fail semantic acceptance; two

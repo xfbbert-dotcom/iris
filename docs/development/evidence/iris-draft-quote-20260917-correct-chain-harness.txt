@@ -1,0 +1,73 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createPdModel } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createProactiveDiscussionEvalCases } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260917';
+const output = folder + '/draft-quote-correct-chain.json';
+if (existsSync(output)) throw Error('Refuse overwrite');
+const savedPath = root + '/docs/development/evidence/iris-assessment-wire-20260917-full.json';
+const saved = JSON.parse(readFileSync(savedPath, 'utf8')).results.find((result: any) => result.caseId === 'arithmetic' && result.round === 2);
+const context = createProactiveDiscussionEvalCases().find(c => c.id === 'arithmetic')!.context;
+const hash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const report: any = { syntheticOnly: true, kind: 'archived-pair-actual-review-and-repair',
+  startedAt: new Date().toISOString(), applicationHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  model: 'Qwen3-4B-Q4_K_M', runtime: 'llama.cpp b11011',
+  seed: 1709, profile: 'CPU4/ctx16384/reasoning off/temp0.7/top-p0.8/top-k20/min-p0/max_tokens2048',
+  timeoutMs: 180000, maxRequests: 3, totalDeadlineMs: 900000, automaticRetry: false,
+  originalPair: { assessment: saved.assessment, draft: saved.draft },
+  sourceHashes: { savedPair: hash(savedPath), model: hash(root + '/apps/core/src/proactive-discussion/model.ts'),
+    client: hash(root + '/apps/core/src/model/openai-compatible-chat-completions-client.ts'),
+    receipts: hash(root + '/apps/core/src/proactive-discussion/review-receipts.ts'),
+    harness: hash(folder + '/draft-quote-correct-chain.mts') },
+  calls: [], requests: [], manualReview: 'pending',
+  limitation: 'The initial assessment and draft are replayed from saved real model output; only review, locked repair and final review are new model calls. This is not a fresh assessment/render or full semantic suite.' };
+const deadline = AbortSignal.timeout(900000);
+let currentCall: any;
+const real = createOpenAICompatibleChatCompletionsClient({ config: {
+  provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:18089/v1', apiKey: 'local-synthetic-only',
+  model: 'iris-qwen3-4b-q4km', timeoutMs: 180000,
+}, sleep: async () => { throw Error('No retry in this probe'); }, fetch: async (url, init) => {
+  if (String(url) !== 'http://127.0.0.1:18089/v1/chat/completions' || report.requests.length >= 3 || deadline.aborted) throw Error('Request boundary');
+  const payload = JSON.parse(String(init?.body));
+  if (payload.model !== 'iris-qwen3-4b-q4km' || payload.tools || payload.stream) throw Error('Wire boundary');
+  const request: any = { startedAt: new Date().toISOString(), stage: currentCall.name };
+  report.requests.push(request);
+  try {
+    const response = await fetch(url, { ...init, body: JSON.stringify({ ...payload, seed: 1709 }), redirect: 'error',
+      signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+    request.status = response.status;
+    return response;
+  } finally { request.finishedAt = new Date().toISOString(); }
+}});
+const model = createPdModel({ client: { async complete(messages, options) {
+  const name = options?.responseFormat?.json_schema.name;
+  const entry: any = { name, messages, responseFormat: options?.responseFormat };
+  report.calls.push(entry);
+  if (report.calls.length === 1) {
+    if (name !== 'iris_proactive_discussion_draft') throw Error('First call must be initial rendering');
+    entry.replayedFrom = savedPath;
+    entry.content = JSON.stringify(saved.draft);
+    return entry.content;
+  }
+  if (name === 'iris_proactive_discussion_scope_review') {
+    const schema = options?.responseFormat?.json_schema.schema as any;
+    if (!schema?.properties?.requiredNumbers || !schema?.properties?.adviceQuote) throw Error('Receipt implementation is not ready; no request made');
+  }
+  currentCall = entry;
+  entry.content = await real.complete(messages, options);
+  console.log(JSON.stringify({ stage: name, content: entry.content }));
+  return entry.content;
+} } });
+try {
+  report.finalPair = await model.render({ context, assessment: saved.assessment });
+  report.returnedPair = report.finalPair !== null;
+} catch (error) { report.error = error instanceof Error ? error.message : 'unknown'; process.exitCode = 1; }
+finally {
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(output, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length, returnedPair: report.returnedPair, error: report.error }));
+}
