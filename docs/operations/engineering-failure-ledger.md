@@ -155,6 +155,14 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   incomplete, not semantic failure. Neither reached rendering/full evaluation or was adopted.
   Stop cloud calls after the capacity refusal; retain earlier format failures, false acceptance and
   incomplete runs. Do not generalize one minimal format result into full compatibility or billing verification.
+- **Numeric-review continuity (2026-09-17):** The [four-response replay and repair](../development/iris-review-continuity-20260917.md)
+  reproduced the edit experiment's incorrect pair in the real render path without its private adapter.
+  Final review had forgotten the first required-number list. Carry earlier diagnoses into the final
+  review and locally require retained current receipts or explicit source-quoted corrections or
+  withdrawals. Reject missing items, duplicate/unknown indices and fabricated evidence without
+  adding calls. Do not freeze a wrong initial number as truth. Runtime/trace must share full-input
+  validation; successful accounting does not prove arithmetic, complete discovery or sound withdrawal
+  reasons. Fresh regression and actual-model results are recorded separately in the linked record.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

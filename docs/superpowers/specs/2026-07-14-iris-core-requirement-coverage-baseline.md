@@ -140,6 +140,16 @@ edit仍漏差额/过度断言却因final review只列10/16而实际返回错误p
 两者均未进render/full、未采用新型号；最小格式已验证但完整兼容/主动语义未通过，当前云端请求已停止。
 IRIS-CORE-005仍部分实现，未部署、未启用主动发言、未真实飞书投递；不以传输适配或模型自评升级完成度。
 
+### 2026-09-17 数字复核连续性
+
+应用`d699761e7e0c9855a2bbcfb6e500a80375470706`修复最终审核遗忘初审数字项的程序缺口，见
+[本次实现与验证](../../development/iris-review-continuity-20260917.md)。真实render离线重放已复现旧误放行；
+现在必须保留当前有效凭据，或明确引用授权原文纠正/撤回初审，不强行保留错误数字。
+Core4734通过/469条件跳过、类型/构建及Compose+CLI40通过/1跳过，独立范围审查通过。
+这些结果不是必要数字发现、事实类别、推断限定、漏报/重复介入等完整语义通过；
+本地实模正负对照各2次HTTP200：正确稿返回原pair，错误稿仍未修好、假数字凭据被拒，
+原始记录单列；IRIS-CORE-005仍部分实现，未部署、未启用、未真实飞书投递。
+
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 
 - Managed existing-page update code is implemented and locally verified behind the independent

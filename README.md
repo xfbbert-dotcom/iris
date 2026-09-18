@@ -29,10 +29,19 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [numeric-review continuity repair](docs/development/iris-review-continuity-20260917.md), application
+`d699761e`, prevents final review from silently dropping earlier numeric diagnoses while permitting
+source-quoted corrections of mistaken diagnoses. Fresh Core4734/469 conditional skips, type/build,
+Compose+CLI40/1 skip and scoped review passed. This is bounded control-flow/receipt verification,
+not complete proactive semantics or deployment. Local model controls each used two HTTP200 calls:
+the correct pair returned, while the incorrect pair still missed the gap and was rejected for a
+fabricated numeric receipt. This is containment/availability evidence, not successful generation.
+The following experiments and failures are retained history, not the current application version.
+
 Two further [private repair experiments](docs/development/iris-json-mode-compatibility-20260917.md#继续修复的两项私有实验均未推广)
 did not fix the missing gap or overstatement and were not promoted. The edit-only experiment
 actually returned an incorrect pair when final review omitted the missing quantity from its list;
-the explicit-diagnostic experiment was rejected without a semantic repair. Application code is
+the explicit-diagnostic experiment was rejected without a semantic repair. Application code was
 unchanged; these failures remain open. Subsequent [bounded free-cloud probes](docs/development/iris-json-mode-compatibility-20260917.md#后续免费云端格式通过与算术失败或未完整分开)
 passed one minimal JSON-format request on each of GLM-4-Flash-250414 and GLM-4.7-Flash. The former
 then incorrectly skipped the original arithmetic case; the latter's assessment was blocked by

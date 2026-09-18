@@ -513,6 +513,13 @@ Any receipt rejection uses the existing single paired correction/final-review bo
 acceptance constants remain separate from product validation; the [implementation status](../../development/iris-json-mode-compatibility-20260917.md#草稿引用存在性原型验证与第二项狭窄修复)
 separates fixed-draft positive return and negative containment from fresh generation, full semantic
 acceptance and the implementation's final regression/commit status.
+After paired correction, final review must account for earlier numeric diagnoses instead of
+silently shrinking the required-number list. Preserve a valid current-draft receipt or explicitly
+revise/withdraw the earlier item with an authorized original-source quote and explanation. Earlier
+diagnoses are not immutable facts; correcting an erroneous review must not require inserting its
+wrong value into a draft. The [continuity repair](../../development/iris-review-continuity-20260917.md)
+checks item accounting, indices and literal evidence, not the semantic correctness of a withdrawal
+or completeness of numbers absent from both reviews. The existing single-correction limit remains.
 Source-grounded, comparable arithmetic and business ratios need not appear verbatim in a source
 to be valid reasoning. Review diagnoses are fallible, not new authority over the original evidence:
 correction must preserve necessary supported quantities, units and qualifications, while keeping
