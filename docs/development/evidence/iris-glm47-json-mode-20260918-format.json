@@ -1,0 +1,84 @@
+{
+  "kind": "free-json-mode-original-pipeline",
+  "mode": "format",
+  "syntheticOnly": true,
+  "startedAt": "2026-09-18T06:20:00.926Z",
+  "commit": "fd8c507fe1517f5098aed5adbd1034d0528f55f1",
+  "model": "glm-4.7-flash",
+  "structuredOutputMode": "json_object",
+  "timeoutMs": 60000,
+  "profile": {
+    "thinking": {
+      "type": "disabled"
+    },
+    "max_tokens": 256
+  },
+  "wallMs": 420000,
+  "maxRequests": 1,
+  "requestIntervalMs": 0,
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "5e2b3a7819d25f0aafb478f8157210989e416f417c8dfb29e84edd5f3b04c8d6"
+  },
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-18T06:20:00.999Z",
+      "status": 429,
+      "finishedAt": "2026-09-18T06:20:01.225Z"
+    }
+  ],
+  "completions": [
+    {
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-18T06:20:00.998Z",
+      "messages": [
+        {
+          "role": "system",
+          "content": "只输出 JSON。"
+        },
+        {
+          "role": "user",
+          "content": "计算 8 加 8。"
+        }
+      ],
+      "responseFormat": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "iris_free_format_check",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "number",
+                "enum": [
+                  16
+                ]
+              },
+              "label": {
+                "type": "string",
+                "enum": [
+                  "iris-free-format-check"
+                ]
+              }
+            },
+            "required": [
+              "result",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "error": "model provider request failed with status 429: 该模型当前访问量过大，请您稍后再试",
+      "finishedAt": "2026-09-18T06:20:01.229Z"
+    }
+  ],
+  "manualReview": "pending",
+  "error": "model provider request failed with status 429: 该模型当前访问量过大，请您稍后再试",
+  "halted": true,
+  "finishedAt": "2026-09-18T06:20:01.229Z"
+}

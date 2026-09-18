@@ -1,0 +1,84 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createPdModel } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createProactiveDiscussionEvalCases } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260918';
+const mode = process.argv[2];
+if (mode !== 'negative' && mode !== 'positive') throw Error('Expected negative or positive');
+const output = `${folder}/schema-visible-${mode}.json`;
+if (existsSync(output)) throw Error('Refuse overwrite or repeated sampling');
+const replayPath = `${root}/docs/development/evidence/iris-draft-quote-20260917-${mode === 'negative' ? 'repair-enum-chain' : 'correct-chain'}.json`;
+const saved = JSON.parse(readFileSync(replayPath, 'utf8'));
+const context = createProactiveDiscussionEvalCases().find(c => c.id === 'arithmetic')!.context;
+const hash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const report: any = {
+  kind: 'native-schema-plus-visible-schema-private-control', mode, syntheticOnly: true,
+  startedAt: new Date().toISOString(), applicationHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  model: 'Qwen3-4B-Q4_K_M', runtime: 'llama.cpp b11011', seed: 1709,
+  profile: 'CPU4/ctx16384/reasoning off/temp0.7/top-p0.8/top-k20/min-p0/max_tokens2048',
+  maxRequests: 2, timeoutMs: 180000, totalDeadlineMs: 420000, automaticRetry: false,
+  sourceHashes: { replay: hash(replayPath), model: hash(root + '/apps/core/src/proactive-discussion/model.ts'),
+    receipts: hash(root + '/apps/core/src/proactive-discussion/review-receipts.ts'),
+    client: hash(root + '/apps/core/src/model/openai-compatible-chat-completions-client.ts'),
+    harness: hash(folder + '/schema-visible-chain.mts'),
+    launcher: hash('C:/Users/59912/AppData/Local/Iris/local-eval-20260917/local-server.mjs') },
+  originalPair: saved.originalPair, calls: [], requests: [], manualReview: 'pending',
+  limitation: 'Private single-variable probe: exact current native response_format and original pair repair unchanged; only append the same complete schema to the system message. Initial assessment/draft/first review replayed. Compare to archived native-only continuity controls, not fresh full generation or product implementation. No extra retry or output adaptation.',
+};
+const deadline = AbortSignal.timeout(420000);
+let halted = false;
+let currentCall: any;
+const real = createOpenAICompatibleChatCompletionsClient({ config: {
+  provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:18089/v1', apiKey: 'local-synthetic-only',
+  model: 'iris-qwen3-4b-q4km', timeoutMs: 180000,
+}, sleep: async () => { throw Error('No retry'); }, fetch: async (url, init) => {
+  if (halted || String(url) !== 'http://127.0.0.1:18089/v1/chat/completions' || report.requests.length >= 2 || deadline.aborted) throw Error('Request boundary');
+  const payload = JSON.parse(String(init?.body));
+  if (payload.model !== 'iris-qwen3-4b-q4km' || payload.tools || payload.stream) throw Error('Wire boundary');
+  const request: any = { stage: currentCall.name, startedAt: new Date().toISOString() };
+  report.requests.push(request);
+  try {
+    const response = await fetch(url, { ...init, redirect: 'error', body: JSON.stringify({ ...payload, seed: 1709 }),
+      signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+    request.status = response.status;
+    if (!response.ok) halted = true;
+    return response;
+  } catch (error) { halted = true; throw error; }
+  finally { request.finishedAt = new Date().toISOString(); }
+}});
+const model = createPdModel({ client: { async complete(messages, options) {
+  const entry: any = { name: options?.responseFormat?.json_schema.name, messages, responseFormat: options?.responseFormat };
+  report.calls.push(entry);
+  if (report.calls.length === 1) {
+    if (entry.name !== 'iris_proactive_discussion_draft') throw Error('Unexpected initial stage');
+    entry.replayedFrom = replayPath;
+    entry.content = JSON.stringify(saved.originalPair.draft);
+  } else if (report.calls.length === 2) {
+    if (entry.name !== 'iris_proactive_discussion_scope_review') throw Error('Unexpected first review');
+    entry.replayedFrom = replayPath;
+    entry.content = saved.calls.find((call: any) => call.name === entry.name).content;
+  } else {
+    currentCall = entry;
+    if (!options?.responseFormat || messages.filter(message => message.role === 'system').length !== 1) throw Error('Expected exactly one system and native schema');
+    entry.originalMessages = messages;
+    entry.messages = messages.map(message => message.role === 'system' ? {
+      ...message, content: message.content + '\n\nReturn only a JSON object that satisfies the following JSON Schema, not the schema itself.\nDo not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.\n' + JSON.stringify(options.responseFormat!.json_schema.schema),
+    } : message);
+    entry.content = await real.complete(entry.messages, options);
+    console.log(JSON.stringify({ stage: entry.name, content: entry.content }));
+  }
+  return entry.content;
+} } });
+try {
+  report.finalPair = await model.render({ context, assessment: saved.originalPair.assessment });
+  report.returnedPair = report.finalPair !== null;
+} catch (error) { report.error = error instanceof Error ? error.message : 'unknown'; process.exitCode = 1; }
+finally {
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(output, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length, returnedPair: report.returnedPair, error: report.error }));
+}

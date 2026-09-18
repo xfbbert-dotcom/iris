@@ -1,1 +1,4 @@
 *.sh text eol=lf
+docs/development/evidence/iris-schema-visible-20260918-* -text
+docs/development/evidence/iris-glm47-json-mode-20260918-* -text
+docs/development/evidence/iris-instruct-20260918-* -text

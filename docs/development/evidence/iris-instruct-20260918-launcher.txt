@@ -1,0 +1,21 @@
+import { spawn } from 'node:child_process';
+import { createReadStream, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const folder = 'C:/Users/59912/AppData/Local/Iris/local-eval-20260918';
+const model = folder + '/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf';
+if (statSync(model).size !== 2497280736) throw Error('Unverified model size');
+const digest = createHash('sha256');
+for await (const chunk of createReadStream(model)) digest.update(chunk);
+if (digest.digest('hex') !== '2fde00ce69dd4899c70d020845e2638353015bba0fdf161b3eb965f2bca4464e') throw Error('Unverified model hash');
+const args = ['--model', model, '--alias', 'iris-qwen3-4b-instruct-2507-q4km',
+  '--host', '127.0.0.1', '--port', '18089', '--cors-origins', 'http://127.0.0.1:18089',
+  '--ctx-size', '16384', '--parallel', '1', '--threads', '4', '--threads-batch', '4',
+  '--batch-size', '256', '--ubatch-size', '128', '--n-gpu-layers', '0',
+  '--n-predict', '2048', '--jinja', '--reasoning', 'off', '--temp', '0.7',
+  '--top-p', '0.8', '--top-k', '20', '--min-p', '0', '--no-webui', '--no-agent', '--no-ui-mcp-proxy'];
+const server = spawn('C:/Users/59912/AppData/Local/Iris/local-eval-20260917/runtime/llama-server.exe', args, {windowsHide:true, stdio:['ignore','inherit','inherit']});
+console.log(JSON.stringify({serverPid:server.pid,deadlineMs:3600000,args}));
+const deadline = setTimeout(() => server.kill(), 3600000);
+server.on('error', () => {clearTimeout(deadline);process.exitCode=1;});
+server.on('exit', code => {clearTimeout(deadline);console.log(JSON.stringify({serverExited:true,code}));});
+process.on('SIGINT', () => server.kill());

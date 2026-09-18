@@ -29,6 +29,14 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 18 generation follow-up](docs/development/iris-free-generation-followup-20260918.md)
+retains seven local calls and one free-cloud call without application changes. Making the native
+schema visible did not repair the known draft; GLM-4.7-Flash again returned HTTP429. A new offline
+Qwen3-4B-Instruct-2507 candidate passed minimal format checks but failed the original arithmetic
+case in both native and explicit JSON modes. It was not adopted or sent to full evaluation.
+The local server is stopped; no paid fallback, production change or semantic completion is claimed.
+Application remains `d699761e`; the regression counts below belong to their earlier repair runs.
+
 The [numeric-review continuity repair](docs/development/iris-review-continuity-20260917.md), application
 `d699761e`, prevents final review from silently dropping earlier numeric diagnoses while permitting
 source-quoted corrections of mistaken diagnoses. Fresh Core4734/469 conditional skips, type/build,

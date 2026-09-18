@@ -1,0 +1,94 @@
+{
+  "kind": "free-local-instruct-candidate-original-pipeline",
+  "mode": "format",
+  "syntheticOnly": true,
+  "startedAt": "2026-09-18T06:34:13.110Z",
+  "applicationHead": "fd8c507fe1517f5098aed5adbd1034d0528f55f1",
+  "model": "Qwen3-4B-Instruct-2507 / bartowski Q4_K_M",
+  "artifactRevision": "ae44f08e1392f39c0e474af10c3ff8355c8b6688",
+  "modelSha256": "2fde00ce69dd4899c70d020845e2638353015bba0fdf161b3eb965f2bca4464e",
+  "runtime": "llama.cpp b11011",
+  "profile": {
+    "cpuThreads": 4,
+    "context": 16384,
+    "reasoning": "off",
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0,
+    "max_tokens": 256,
+    "seed": 1709
+  },
+  "timeoutMs": 60000,
+  "totalDeadlineMs": 1080000,
+  "maxRequests": 1,
+  "automaticRetry": false,
+  "manualReview": "pending",
+  "requests": [
+    {
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-18T06:34:13.185Z",
+      "status": 200,
+      "finishedAt": "2026-09-18T06:34:14.499Z"
+    }
+  ],
+  "completions": [
+    {
+      "stage": "iris_free_format_check",
+      "messages": [
+        {
+          "role": "system",
+          "content": "只输出 JSON，包含 result（8加8的结果）和 label（固定 iris-free-format-check）两个字段。"
+        },
+        {
+          "role": "user",
+          "content": "计算8加8。"
+        }
+      ],
+      "responseFormat": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "iris_free_format_check",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "number",
+                "enum": [
+                  16
+                ]
+              },
+              "label": {
+                "type": "string",
+                "enum": [
+                  "iris-free-format-check"
+                ]
+              }
+            },
+            "required": [
+              "result",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "startedAt": "2026-09-18T06:34:13.185Z",
+      "content": "{\"result\": 16, \"label\": \"iris-free-format-check\"}",
+      "finishedAt": "2026-09-18T06:34:14.502Z"
+    }
+  ],
+  "sourceHashes": {
+    "apps/core/src/proactive-discussion/model.ts": "5e2b3a7819d25f0aafb478f8157210989e416f417c8dfb29e84edd5f3b04c8d6",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "e174ad839b63832a1e7e581bc51c7a5d8ee37821c0291abc488bb8e6a225a54b",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "scripts/pilot/proactive-discussion-eval.ts": "f6d13beaf847f0bdc9d0201b4b98d114dc1498a6157fba4a272a6d1af09a5da8",
+    "harness": "648f6014c95bde1e3b6aa33e2234cdfb7e8e342dda9cc5c16f779e6121e2e5ad",
+    "launcher": "13593def956f10463a702bb8e5b851dba6a805e68821b3ebc8110292238f4586"
+  },
+  "limitation": "Actual original Core client and PdModel; no replay, private prompt adapter, synthetic oracle in messages or lowered semantics. Temporary CPU timeout is not production latency acceptance. Candidate is not deployed.",
+  "valid": true,
+  "halted": false,
+  "finishedAt": "2026-09-18T06:34:14.502Z"
+}
