@@ -1,0 +1,187 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { validatePdScopeReview } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/review-receipts.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918';
+const output = `${folder}/field-thinking-negative-20260920.json`;
+const started = `${folder}/field-thinking-negative-20260920.started.json`;
+const haltPath = `${folder}/field-thinking-negative-20260920.halted.json`;
+if (process.argv.length !== 2) throw Error('No thinking-probe options permitted');
+if ([output, started, haltPath].some(path => existsSync(path))) throw Error('One-shot thinking probe already started or stopped; do not repeat');
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const hashFile = (path: string) => sha(readFileSync(path));
+const sourcePaths = [
+  'apps/core/src/config/env.ts',
+  'apps/core/src/model/openai-compatible-chat-completions-client.ts',
+  'apps/core/src/proactive-discussion/model.ts',
+  'apps/core/src/proactive-discussion/review-receipts.ts',
+  'scripts/pilot/proactive-discussion-eval.ts',
+];
+const sourceHashes = Object.fromEntries(sourcePaths.map(path => [path, hashFile(`${root}/${path}`)]));
+const archivePath = `${folder}/field-review-negative-20260920.json`;
+const archive = JSON.parse(readFileSync(archivePath, 'utf8'));
+const endpoint = 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions';
+const modelName = 'qwen3.7-plus';
+if (archive.kind !== 'bailian-free-only-field-review-diagnostic' || archive.mode !== 'negative'
+  || archive.syntheticOnly !== true || archive.endpoint !== endpoint || archive.model !== modelName
+  || archive.structuredOutputMode !== 'json_object' || archive.profile?.enable_thinking !== false
+  || archive.profile?.max_tokens !== 2048
+  || sourcePaths.some(path => archive.sourceHashes?.[path] !== sourceHashes[path])) {
+  throw Error('Retained baseline or current application source identity mismatch');
+}
+const prior = archive.completions.find((item: any) => item.stage === 'iris_proactive_discussion_scope_review');
+const baselineRequest = archive.requests[0];
+if (!prior || baselineRequest?.stage !== 'iris_proactive_discussion_scope_review') throw Error('Original first scope-review baseline unavailable');
+const messages = structuredClone(prior.originalMessages);
+const responseFormat = structuredClone(prior.originalResponseFormat);
+if (responseFormat?.type !== 'json_schema' || responseFormat.json_schema?.strict !== true
+  || responseFormat.json_schema.name !== 'iris_proactive_discussion_scope_review'
+  || !responseFormat.json_schema.schema || !Array.isArray(messages)
+  || messages.length !== 2 || messages[0]?.role !== 'system' || messages[1]?.role !== 'user') {
+  throw Error('Original strict scope-review input contract unavailable');
+}
+const originalInput = JSON.parse(messages[1].content);
+if (typeof originalInput.draft?.text !== 'string' || !originalInput.assessment || !Array.isArray(originalInput.evidence)) {
+  throw Error('Original assessment, draft or evidence input unavailable');
+}
+const baselineWire = JSON.parse(baselineRequest.requestBodyRaw);
+if (baselineWire.model !== modelName || baselineWire.enable_thinking !== false || baselineWire.max_tokens !== 2048
+  || 'thinking_budget' in baselineWire
+  || Object.keys(baselineWire).some(key => !['model', 'messages', 'response_format', 'enable_thinking', 'max_tokens'].includes(key))
+  || sha(baselineRequest.requestBodyRaw) !== baselineRequest.requestBodySha256) {
+  throw Error('Baseline raw request identity mismatch');
+}
+const { enable_thinking: _baselineThinking, max_tokens: _baselineCap, ...baselineCoreBody } = baselineWire;
+const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+const applicationCommit = execFileSync('git', ['log', '-1', '--format=%H', '--', ...sourcePaths], { cwd: root, encoding: 'utf8' }).trim();
+if (!commit.startsWith('8883f7bf') || !applicationCommit.startsWith('66c7a3c0')) throw Error('Expected run HEAD or application commit changed');
+const apiKey = process.env.IRIS_BAILIAN_EVAL_KEY;
+if (!apiKey || apiKey !== apiKey.trim() || /[\r\n]/u.test(apiKey)) throw Error('Private process key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const redact = (text: string) => text.replaceAll(apiKey, '[REDACTED]');
+const safeError = (error: unknown) => redact(error instanceof Error ? error.message : 'unknown').slice(0, 1000);
+const report: any = {
+  kind: 'private-field-thinking-profile-probe', syntheticOnly: true, startedAt: new Date().toISOString(),
+  commit, applicationCommit, sourceHashes,
+  applicationSourceWorkingTreeStatus: execFileSync('git', ['status', '--porcelain', '--', ...sourcePaths], { cwd: root, encoding: 'utf8' }).trim(),
+  priorReport: { path: archivePath, sha256: hashFile(archivePath), firstRequestSha256: baselineRequest.requestBodySha256 },
+  harnessSha256: hashFile(fileURLToPath(import.meta.url)), launcherSha256: hashFile(`${folder}/run-field-thinking.ps1`),
+  model: modelName, endpoint, structuredOutputMode: 'json_object', timeoutMs: 60000,
+  wallMs: 70000, maxRequests: 1, maximumResponseBytes: 262144, automaticTransportRetry: false,
+  profile: { enable_thinking: true, thinking_budget: 2048, max_tokens: 2048 },
+  comparison: {
+    baselineProfile: { enable_thinking: false, max_tokens: 2048 },
+    changedConfiguration: ['enable_thinking:false -> true', 'thinking_budget:absent -> 2048'],
+    unchanged: ['exact model/endpoint', 'original messages', 'original strict response schema', 'json_object transport', 'max_tokens:2048', 'timeoutMs:60000'],
+    qualification: 'Thinking mode and its budget are configured together; this is not a strict single-variable comparison. max_tokens caps the final answer while thinking_budget caps thinking, according to the provider documentation. Actual usage and finish reasons remain evidence.',
+    providerDocumentation: 'https://help.aliyun.com/zh/model-studio/deep-thinking',
+  },
+  originalMessages: messages, originalResponseFormat: responseFormat,
+  freeOnlyPrecondition: 'Main agent refreshed the exact Qwen3.7-Plus workspace/model UI on 2026-09-20 immediately before this diagnostic: 981.04K of 1M free tokens shown, expiry 2026-12-18, stop when free quota is exhausted enabled. No provider, model, quota protection or paid fallback is changed.',
+  freeGuardQualification: 'The UI observation can lag and is not a billing audit. This runner does not independently inspect the account.',
+  acceptance: 'Single fixed negative-review diagnostic only. No draft generation, repair, full suite, automatic follow-up or product change. Current shared local validation is not independent semantic acceptance.',
+  independentSemanticReview: 'pending', requests: [], executionPassed: false,
+};
+writeFileSync(started, JSON.stringify({ startedAt: report.startedAt, output, commit, applicationCommit, sourceHashes }, null, 2) + '\n', { flag: 'wx' });
+let halted = false;
+const deadline = AbortSignal.timeout(report.wallMs);
+function halt(reason: string) {
+  halted = true;
+  report.haltReason ??= reason;
+  if (!existsSync(haltPath)) writeFileSync(haltPath, JSON.stringify({ at: new Date().toISOString(), reason }, null, 2) + '\n', { flag: 'wx' });
+}
+const client = createOpenAICompatibleChatCompletionsClient({
+  config: { provider: 'openai-compatible', baseUrl: endpoint.slice(0, -'/chat/completions'.length), model: modelName,
+    apiKey, timeoutMs: 60000, structuredOutputMode: 'json_object' },
+  sleep: async () => { halt('transport retry refused'); throw Error('Retry forbidden'); },
+  fetch: async (url, init) => {
+    if (halted || deadline.aborted || report.requests.length !== 0 || String(url) !== endpoint || init?.method !== 'POST') {
+      halt('one exact request, deadline or stopped-window boundary'); throw Error('One exact request only');
+    }
+    const body = JSON.parse(String(init.body));
+    if (body.model !== modelName || body.response_format?.type !== 'json_object'
+      || Object.keys(body.response_format).length !== 1
+      || Object.keys(body).some(key => !['model', 'messages', 'response_format'].includes(key))
+      || JSON.stringify(body) !== JSON.stringify(baselineCoreBody)
+      || !body.messages[0].content.endsWith('\n' + JSON.stringify(responseFormat.json_schema.schema))) {
+      halt('original messages, schema or baseline request changed'); throw Error('Original baseline request boundary failed');
+    }
+    const outgoing = JSON.stringify({ ...body, ...report.profile });
+    const record: any = { index: 1, stage: 'iris_proactive_discussion_scope_review', endpoint, method: 'POST',
+      requestBodyRaw: redact(outgoing), requestBodySha256: sha(outgoing), startedAt: new Date().toISOString(),
+      originalSchemaSha256: sha(JSON.stringify(responseFormat.json_schema.schema)),
+      originalSchemaMatchedInSystem: true, messagesAndSchemaMatchBaseline: true };
+    report.requests.push(record);
+    try {
+      const response = await fetch(url, { ...init, body: outgoing, redirect: 'error',
+        signal: AbortSignal.any([deadline, ...(init.signal ? [init.signal] : [])]) });
+      record.status = response.status;
+      record.headers = Object.fromEntries(['content-type', 'x-request-id', 'x-dashscope-request-id', 'x-acs-request-id', 'request-id', 'retry-after'].flatMap(name => {
+        const value = response.headers.get(name); return value === null ? [] : [[name, redact(value)]];
+      }));
+      if (!response.ok) halt('first non-success HTTP response');
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = response.body?.getReader();
+      if (reader) while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > report.maximumResponseBytes) {
+          record.responseBodyRaw = redact(Buffer.concat(chunks).toString('utf8'));
+          record.responseBodyTruncated = true; record.responseBytesObserved = size;
+          await reader.cancel(); halt('response byte cap'); throw Error('Response byte cap');
+        }
+        chunks.push(part.value);
+      }
+      const bytes = Buffer.concat(chunks);
+      const raw = bytes.toString('utf8');
+      // Raw private evidence may include provider reasoning. Never print it or copy
+      // it into a summary; summaries retain only its presence and character count.
+      record.responseBodyRaw = redact(raw); record.responseBodySha256 = sha(bytes); record.responseBytes = bytes.length;
+      const decoded = JSON.parse(raw);
+      record.usage = decoded.usage ?? null;
+      record.businessCode = decoded.code ?? decoded.error?.code ?? null;
+      record.requestId = decoded.request_id ?? decoded.requestId ?? decoded.id ?? null;
+      record.finishReasons = Array.isArray(decoded.choices) ? decoded.choices.map((choice: any) => choice.finish_reason ?? null) : [];
+      const reasoningContent = decoded.choices?.[0]?.message?.reasoning_content;
+      report.reasoningSummary = {
+        contentPresent: typeof reasoningContent === 'string' && reasoningContent.length > 0,
+        contentCharacterLength: typeof reasoningContent === 'string' ? reasoningContent.length : 0,
+        reportedReasoningTokens: decoded.usage?.completion_tokens_details?.reasoning_tokens ?? null,
+      };
+      if (record.finishReasons.includes('length')) {
+        record.outputTruncated = true;
+        record.failureClassification = 'experimental_output_cap_truncation_not_semantic_quality';
+      }
+      if (decoded.error || !Array.isArray(decoded.choices) || record.finishReasons.length !== 1
+        || record.finishReasons[0] !== 'stop') halt('provider business or non-stop finish boundary');
+      if (halted) throw Error('HTTP/business/finish boundary; no retry or budget increase');
+      return new Response(bytes, { status: response.status, headers: { 'content-type': response.headers.get('content-type') ?? 'application/json' } });
+    } catch (error) {
+      record.error = safeError(error); halt('transport, timeout or response-read failure'); throw error;
+    } finally { record.finishedAt = new Date().toISOString(); }
+  },
+});
+try {
+  const content = await client.complete(messages, { responseFormat });
+  report.content = redact(content);
+  const rawReview = JSON.parse(content);
+  const validated = validatePdScopeReview(rawReview, originalInput.draft.text);
+  report.localValidation = { passed: true, validatedReview: validated };
+  report.verdict = { rawSupported: rawReview.supported, locallySupported: validated.supported,
+    rejectedFields: Object.entries(validated.fieldChecks).filter(([, check]) => !check.supported).map(([field]) => field) };
+  report.executionPassed = !halted;
+} catch (error) {
+  report.error = safeError(error); halt('one-shot diagnostic execution or validation failed'); process.exitCode = 1;
+} finally {
+  report.halted = halted; report.finishedAt = new Date().toISOString();
+  writeFileSync(output, redact(JSON.stringify(report, null, 2)) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length, executionPassed: report.executionPassed,
+    halted, verdict: report.verdict, reasoningSummary: report.reasoningSummary, error: report.error,
+    independentSemanticReview: report.independentSemanticReview }));
+}

@@ -110,13 +110,48 @@ uncertainty目标包含原fact标签和完整reasoning。仍同模型、非思�
 [原件/副本哈希](evidence/iris-bailian-20260920-field-target-manifest.json)。
 私有脚本strict/noEmit与PowerShell AST通过；仅此一次请求。连同前述3次，本轮合计4次HTTP200、16997 tokens。
 
+### 思考模式有界对照：仍误通过，不是配置修好
+
+此前两个窗口均显式关闭思考。按[官方思考配置](https://help.aliyun.com/zh/model-studio/deep-thinking)
+与[结构化输出说明](https://help.aliyun.com/zh/model-studio/qwen-structured-output)，另建一次性私有诊断，
+只把原负向首次review的配置改为`enable_thinking:true`并设置`thinking_budget:2048`；
+原messages、错误assessment、正确draft、schema、模型、endpoint、JSON模式、max_tokens2048和60秒超时不变。
+同时改变开关和思考预算，且仅一份样本，不能声称严格单变量或完整因果归因。无重试、无自动增加预算。
+调用前刷新同模型控制台：剩981.04K/共1M、到期2026-12-18、免费用完即停已开启。
+该UI可能滞后，不能用与各次usage的差额推断账单或零消耗。
+
+09:31:36–09:32:14 UTC，仅1次HTTP200、正常stop，usage5460 tokens（其中报告reasoning_tokens2048）。
+最终JSON的六项及整体仍全部true：reasoning核查理由将实际的错误−6解释成正确的16−10=6，
+uncertainty核查理由声称没有未来推断，与原输入不符。这次数字凭据按draft原样报10/16/6万元，
+因此原字面门禁也通过，`locallySupported=true`；不能把格式通过或没有拒绝当成安全验收。
+独立只读复核确认出站完整原字段及schema与基线一致、哈希匹配；离线调用同一validator复现结果，
+未发现对象被替换、待审目标错传或诊断串线的本地流程错误。不读取或以供应商思维内容解释内部机制。
+
+原报告中的`executionPassed=true`、`halted=false`与`independentSemanticReview=pending`保持原样，
+它们是运行器结束时的事实；随后单独追加语义停止标记，不改写原报告冒充运行器已自动发现错误。
+本窗口未跑positive、repair、fresh生成或full，不推广思考配置到产品，也不继续加预算采样。
+连同前两个窗口，本次字段修复后的实测共**5次HTTP200、22457 tokens**；不包含此前百炼接通的6次请求。
+
+证据：[输入、最终输出与脱敏响应](evidence/iris-bailian-20260920-field-thinking-negative.json)、
+[后置独立语义停止标记](evidence/iris-bailian-20260920-field-thinking-halt.json)、
+[封装](evidence/iris-bailian-20260920-field-thinking-harness.txt)、
+[启动器](evidence/iris-bailian-20260920-field-thinking-launcher.txt)、
+[哈希和变换清单](evidence/iris-bailian-20260920-field-thinking-manifest.json)。
+私有原始请求/响应不改动；仓库副本额外省略供应商reasoning_content及含其内容的原始响应字符串，
+保留原报文字节数/哈希、删除该字段后的解码响应及省略字段长度/哈希。副本不是原始报文，
+不能把重新序列化副本与原responseBodySha256直接比较。密钥、DPAPI文件和思维正文不入仓库。
+封装strict/noEmit、PowerShell AST与归档变换核验通过；此后应用仍66c7a3c0，没有新应用改动。
+
 ### 退出与下一项
 
 - 已完成：六字段必填和本地合取、诊断脱敏、调用上限、回归与文档闭环。
 - 尚未解决：真实模型把错误assessment判为通过，未能修正符号与事实/推断类别；不可称为主动语义已修好。
-- 两个实验窗口均已停止。不要用同配置重新抽样、添加更多布尔项或正确引文来冒充理解，也不要重建密钥。
-- 后续需新的有限可验证假设（例如同一固定负例、仅改变推理配置的对照），保留正确/qualified对照，
-  通过后才恢复原生成及完整集。该后续未在本轮运行，不是付费、部署或扩大权限批准。
+- 三个实验窗口均已停止。不要用同配置重新抽样、添加更多布尔项或正确引文来冒充理解，也不要重建密钥。
+- “增加字段”“显式引用被审字段”“开启有界思考”都未解决这份错误组合；不是429或缺少额度阻塞。
+  下一项应针对生成/纠错阶段与保留状态的一致性形成新的有限假设，或验证独立候选的判断能力；
+  不再把增加审核字段当成语义修复。当前没有已通过、可推广的新语义方案。
+- 正确/qualified控制、原算术全新生成、原15×2完整集仍是后续验收，不因一次review成功或HTTP200跳过。
+  本轮仅关闭字段覆盖合同缺口，不关闭主动语义缺陷，也不授权付费、部署或扩大权限。
 
 ## 4. 四处文档处置
 

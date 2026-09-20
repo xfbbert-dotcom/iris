@@ -1,0 +1,40 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-20T09:37:01.713Z",
+  "transformations": [
+    "Replace exact private workspace hostname.",
+    "Replace local Windows user component.",
+    "For the report only: omit each responseBodyRaw containing provider reasoning; retain its original SHA256/byte count, a decoded response with reasoning_content removed, and the removed field character count/SHA256. Serialize the resulting report as indented JSON."
+  ],
+  "note": "One-shot thinking-profile probe failed independent semantics. Private originals remain immutable. Embedded wire/source hashes are private-original hashes, not reserialized redacted-copy hashes. No credentials or provider reasoning text archived.",
+  "files": [
+    {
+      "sourceName": "field-thinking-negative-20260920.json",
+      "archivedName": "iris-bailian-20260920-field-thinking-negative.json",
+      "originalSha256": "27e61ee2e8e661a6de95eba1a3c40d6fb36bce0e38a2ecd49e75a9878eec73e7",
+      "archivedSha256": "a4c4818fcb88a920c5b72571f0356d0021d8f2993404e30c02a2f8f2f2d6bc4c",
+      "bytes": 41635
+    },
+    {
+      "sourceName": "field-thinking-negative-20260920.halted.json",
+      "archivedName": "iris-bailian-20260920-field-thinking-halt.json",
+      "originalSha256": "bc895a8c1ccef2a5225ff803a3a702d07511e8aba94cf5378e57bdd8f17465fc",
+      "archivedSha256": "bc895a8c1ccef2a5225ff803a3a702d07511e8aba94cf5378e57bdd8f17465fc",
+      "bytes": 1032
+    },
+    {
+      "sourceName": "field-thinking-probe.mts",
+      "archivedName": "iris-bailian-20260920-field-thinking-harness.txt",
+      "originalSha256": "0c82f16f0501c1b6f74dbe58896e5545ae8e79d096a6fcececc0ca2daca471cc",
+      "archivedSha256": "207bde64a2aa02f0f1e2727c3c43c08b9c0839b292352393acbe9f708f5550c2",
+      "bytes": 13771
+    },
+    {
+      "sourceName": "run-field-thinking.ps1",
+      "archivedName": "iris-bailian-20260920-field-thinking-launcher.txt",
+      "originalSha256": "9aa58da8f22b44664f8c9744c6065d31d787c0c95e91e09437eb8957526a08c4",
+      "archivedSha256": "dfd7286cc8f66dd4e19dd157c10197dae7552b30fb0f41f49d82f678a956f74c",
+      "bytes": 1981
+    }
+  ]
+}

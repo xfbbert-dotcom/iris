@@ -1,0 +1,13 @@
+{
+  "at": "2026-09-20T09:36:09Z",
+  "kind": "independent-semantic-stop",
+  "sourceReport": "field-thinking-negative-20260920.json",
+  "reason": "The unchanged fixed negative assessment still says 16 minus 10 equals -6, asserts future non-performance or rule-breaking as a consequence, and labels the whole judgment fact. All six field verdicts and the overall verdict approved it. Current local validation also approved this response because its draft receipts were literal matches. Thinking mode with the bounded 2048-token thinking budget did not repair this negative control.",
+  "executionQualification": "The original report is immutable: executionPassed=true, halted=false, and independentSemanticReview=pending describe the runner outcome before this independent semantic finding. They do not mean semantic acceptance.",
+  "requests": 1,
+  "usageTokens": 5460,
+  "continue": false,
+  "noAutomaticRetryOrBudgetIncrease": true,
+  "noPositiveRepairOrFullEvaluationStarted": true,
+  "noProductAdoptionOrProductionChange": true
+}

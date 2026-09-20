@@ -1,0 +1,37 @@
+$ErrorActionPreference = 'Stop'
+if ($args.Count -ne 0) { throw 'No thinking-probe options permitted.' }
+$taskFolder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918'
+$taskRoot = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86'
+foreach ($taskMarker in @('field-thinking-negative-20260920.json', 'field-thinking-negative-20260920.started.json', 'field-thinking-negative-20260920.halted.json')) {
+  if (Test-Path -LiteralPath (Join-Path $taskFolder $taskMarker)) { throw 'One-shot thinking probe already started or stopped; do not repeat.' }
+}
+Add-Type -AssemblyName System.Security
+$taskBytes = $null
+$taskProcess = $null
+$taskStart = $null
+$taskCode = 1
+try {
+  $taskBytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes((Join-Path $taskFolder 'bailian-key.dpapi')), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+  $taskStart = [Diagnostics.ProcessStartInfo]::new()
+  $taskStart.FileName = 'D:/软件安装/node.exe'
+  $taskStart.WorkingDirectory = $taskRoot
+  $taskStart.UseShellExecute = $false
+  $taskStart.CreateNoWindow = $true
+  $taskStart.ArgumentList.Add('--import')
+  $taskStart.ArgumentList.Add('tsx')
+  $taskStart.ArgumentList.Add((Join-Path $taskFolder 'field-thinking-probe.mts'))
+  $taskStart.Environment['IRIS_BAILIAN_EVAL_KEY'] = [Text.Encoding]::UTF8.GetString($taskBytes)
+  $taskProcess = [Diagnostics.Process]::Start($taskStart)
+  $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null
+  [Array]::Clear($taskBytes, 0, $taskBytes.Length)
+  $taskBytes = $null
+  $taskProcess.WaitForExit()
+  $taskCode = $taskProcess.ExitCode
+} catch {
+  Write-Error 'Private thinking-probe launcher failed; no credential details are logged.'
+} finally {
+  if ($null -ne $taskStart) { $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null }
+  if ($null -ne $taskBytes) { [Array]::Clear($taskBytes, 0, $taskBytes.Length) }
+  if ($null -ne $taskProcess) { $taskProcess.Dispose() }
+}
+exit $taskCode
