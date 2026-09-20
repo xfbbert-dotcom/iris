@@ -300,7 +300,7 @@ describe("PdModel.render", () => {
       evidenceRefs: assessment.evidenceRefs,
     };
     const client = sequenceClient([
-      JSON.stringify(draft),
+      JSON.stringify({ assessment, draft }),
       JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "仅重述核准数字和建议。", requiredNumbers: [
         { label: "计划总成本", expectedValue: "16", unit: "万", draftQuote: "16 万" },
       ], adviceQuote: "建议先确认是否有追加预算，再决定招聘人数。" }),
@@ -317,14 +317,18 @@ describe("PdModel.render", () => {
     expect(proseMessages[0]?.content).not.toContain(injection);
     expect(proseMessages[1]?.content).toContain(injection);
     expect(proseOptions?.responseFormat?.json_schema).toEqual(expect.objectContaining({
-      name: "iris_proactive_discussion_draft",
+      name: "iris_proactive_discussion_generated_pair",
       strict: true,
       schema: expect.objectContaining({
         properties: expect.objectContaining({
-          text: expect.objectContaining({ maxLength: 1_200 }),
-          evidenceRefs: expect.objectContaining({
-            uniqueItems: true,
-            items: expect.objectContaining({ enum: assessment.evidenceRefs }),
+          draft: expect.objectContaining({
+            properties: expect.objectContaining({
+              text: expect.objectContaining({ maxLength: 1_200 }),
+              evidenceRefs: expect.objectContaining({
+                uniqueItems: true,
+                items: expect.objectContaining({ enum: assessment.evidenceRefs }),
+              }),
+            }),
           }),
         }),
       }),
@@ -348,10 +352,10 @@ describe("PdModel.render", () => {
       reasoning: "如果成本口径一致，预算可能不足。",
     };
     const client = sequenceClient([
-      JSON.stringify({
+      JSON.stringify({ assessment, draft: {
         text: "公司已经决定追加 6 万预算，confidence 95%。",
         evidenceRefs: assessment.evidenceRefs,
-      }),
+      } }),
       JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "新增公司决定并遗漏推断限定。", requiredNumbers: [], adviceQuote: null }),
     ]);
 
@@ -373,7 +377,7 @@ describe("PdModel.render", () => {
       evidenceRefs: pdAssessment().evidenceRefs,
     }],
   ])("rejects a draft with %s without exposing it to the scope checker", async (_label, draft) => {
-    const client = completionClient(JSON.stringify(draft));
+    const client = completionClient(JSON.stringify({ assessment: pdAssessment(), draft }));
 
     await expect(createPdModel({ client }).render({
       context: pdContext(),

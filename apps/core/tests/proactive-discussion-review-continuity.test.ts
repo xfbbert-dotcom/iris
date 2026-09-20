@@ -27,6 +27,9 @@ test.each([false, true])("does not accept the archived forgotten-gap pair throug
   let index = 0;
   const client = { complete: vi.fn(async () => {
     const content = saved.calls[index++].content;
+    // Test-only adapter preserves the archived draft and assessment verbatim
+    // inside the current generation envelope; this is not a new model result.
+    if (index === 1) return JSON.stringify({ assessment, draft: JSON.parse(content) });
     if (index !== 2 && index !== 4) return content;
     // Test-only contract adaptation isolates numeric continuity; these checks
     // are not historical model output or evidence of semantic acceptance.
@@ -93,7 +96,7 @@ test("binds final review to the initial diagnosis and keeps the existing single-
   const repaired = { assessment, draft: { text: draft, evidenceRefs: assessment.evidenceRefs } };
   const evidence = context.items[0]!;
   const final = { ...finalReview(), numberRevisions: [{ ...revision(), sourceRef: evidence.ref, sourceQuote: evidence.text }] };
-  const responses = [repaired.draft, firstReview, repaired, final];
+  const responses = [repaired, firstReview, repaired, final];
   const requests: any[] = [];
   const client = { complete: vi.fn(async (messages: any, options: any) => {
     requests.push({ messages, options });

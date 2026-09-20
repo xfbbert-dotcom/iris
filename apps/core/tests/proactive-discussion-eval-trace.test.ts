@@ -6,7 +6,7 @@ import type {
   OpenAICompatibleChatCompletionOptions,
 } from "../src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
-import { pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
+import { pdAssessment, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 
 const evalPath = "../../../scripts/pilot/proactive-discussion-eval.ts";
 
@@ -42,9 +42,15 @@ function scriptedClient({ scopeSupported = true }: { scopeSupported?: boolean } 
           observation: "两人总成本 16 万。", reasoning: "比 10 万预算多 6 万。", suggestion: "建议核对预算。",
           uncertainty: "fact", materialChange: { kind: "new_issue", explanation: "发现预算差额。", evidenceRefs: refs } });
       }
-      if (stage === "iris_proactive_discussion_draft") {
-        return JSON.stringify({ text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。",
-          evidenceRefs: input.assessment.evidenceRefs });
+      if (stage === "iris_proactive_discussion_generated_pair") {
+        return JSON.stringify({
+          assessment: { ...pdAssessment(), ...input.target,
+            issueRef: { ...input.target.issueRef, description: "招聘预算不足" },
+            reasoning: "生成时复核：比10万元预算多6万元。",
+            materialChange: { ...input.target.materialChange, explanation: "发现预算差额。" } },
+          draft: { text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。",
+            evidenceRefs: input.target.evidenceRefs },
+        });
       }
       if (stage === "iris_proactive_discussion_scope_review") {
         return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: scopeSupported, reason: scopeSupported ? "内容受材料支持。" : "候选遗漏必要限定。",
@@ -79,6 +85,17 @@ test("trace opt-in leaves model results and request payloads unchanged and keeps
   ]);
   const acceptedScope = on.syntheticTrace!.records.find(record => record.stage === "scope_review");
   expect(acceptedScope).toMatchObject({ candidate: { supported: true }, replayValidation: { accepted: true, reason: "accepted" } });
+  const generated = on.syntheticTrace!.records.filter(record => record.stage === "generated_pair");
+  expect(generated).toHaveLength(2);
+  for (const record of generated) {
+    expect(record).toMatchObject({ acceptedDraft: true, attempt: 1,
+      candidate: { assessment: { reasoning: "生成时复核：比10万元预算多6万元。" },
+        draft: { text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。" } },
+      replayValidation: { accepted: true, reason: "accepted" },
+    });
+  }
+  expect(on.results.filter(result => result.caseId === "arithmetic").map(result => result.assessment?.reasoning))
+    .toEqual(["生成时复核：比10万元预算多6万元。", "生成时复核：比10万元预算多6万元。"]);
 });
 
 test("wire envelopes retain flat validated trace candidates and reject envelope extras without retaining them", async () => {
@@ -146,11 +163,13 @@ test("a scope-rejected draft remains visible as a bounded non-accepted candidate
   const scripted = scriptedClient({ scopeSupported: false });
   const run = await runSynthetic({ client: scripted.client, rounds: 1, includeTrace: true });
   const result = run.results.find(entry => entry.caseId === "arithmetic");
-  const draft = run.syntheticTrace!.records.find(record => record.caseId === "arithmetic" && record.stage === "draft");
+  const draft = run.syntheticTrace!.records.find(record => record.caseId === "arithmetic" && record.stage === "generated_pair");
   const scope = run.syntheticTrace!.records.find(record => record.caseId === "arithmetic" && record.stage === "scope_review");
 
   expect(result).toMatchObject({ draft: null, error: "draft_rejected" });
-  expect(draft).toMatchObject({ acceptedDraft: false, candidate: { text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。" },
+  expect(draft).toMatchObject({ acceptedDraft: false,
+    candidate: { assessment: { reasoning: "生成时复核：比10万元预算多6万元。" },
+      draft: { text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。" } },
     replayValidation: { accepted: true, reason: "accepted" } });
   expect(scope).toMatchObject({ candidate: { supported: false, reason: "候选遗漏必要限定。" },
     replayValidation: { accepted: true, reason: "accepted" } });
@@ -397,7 +416,7 @@ test("trace follows one pair repair and marks only its final reviewed draft acce
   expect(onClient.requests).toEqual(offClient.requests);
   expect(on.syntheticTrace).toMatchObject({ complete: true, recordsDropped: 0 });
   const records = on.syntheticTrace!.records.filter(record => record.caseId === "arithmetic");
-  expect(records.map(record => record.stage)).toEqual(["assessment", "draft", "scope_review", "pair_repair", "scope_review"]);
+  expect(records.map(record => record.stage)).toEqual(["assessment", "generated_pair", "scope_review", "pair_repair", "scope_review"]);
   expect(records[1]).toMatchObject({ acceptedDraft: false });
   expect(records[3]).toMatchObject({ acceptedDraft: true, attempt: 1,
     candidate: { assessment: { reasoning: "按现有材料，两人总成本比预算多6万元。" }, draft: { text: "两人共16万元，较预算多6万元。建议确认预算或调整人数。" } },
@@ -415,7 +434,7 @@ test("trace retains a twice-rejected pair without labelling either draft as acce
   const records = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic");
   expect(records).toHaveLength(5);
   expect(records.filter(record => record.stage === "scope_review").map(record => record.candidate.supported)).toEqual([false, false]);
-  expect(records.filter(record => record.stage === "draft" || record.stage === "pair_repair").map(record => record.acceptedDraft)).toEqual([false, false]);
+  expect(records.filter(record => record.stage === "generated_pair" || record.stage === "pair_repair").map(record => record.acceptedDraft)).toEqual([false, false]);
   expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject({ draft: null, error: "draft_rejected" });
 });
 

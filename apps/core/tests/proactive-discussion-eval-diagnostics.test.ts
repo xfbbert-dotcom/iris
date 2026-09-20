@@ -8,7 +8,7 @@ const evalPath = "../../../scripts/pilot/proactive-discussion-eval.ts";
 test.each([
   { label: "invalid assessment after one repair", outputs: ["not-json", "not-json"], phase: "assessment", category: "assessment_validation", calls: 2 },
   { label: "invalid draft", outputs: [JSON.stringify(pdAssessment()), "not-json"], phase: "render", category: "draft_validation", calls: 2 },
-  { label: "invalid scope review", outputs: [JSON.stringify(pdAssessment()), JSON.stringify({ text: "两人共16万，缺口6万。", evidenceRefs: pdAssessment().evidenceRefs }), "not-json"], phase: "render", category: "scope_review_validation", calls: 3 },
+  { label: "invalid scope review", outputs: [JSON.stringify(pdAssessment()), JSON.stringify({ assessment: pdAssessment(), draft: { text: "两人共16万，缺口6万。", evidenceRefs: pdAssessment().evidenceRefs } }), "not-json"], phase: "render", category: "scope_review_validation", calls: 3 },
 ])("eval distinguishes $label without returning provider content", async ({ outputs, phase, category, calls }) => {
   const { runProactiveDiscussionEval } = await import(evalPath);
   let completed = 0;

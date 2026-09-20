@@ -44,7 +44,7 @@ function correctedPair() {
 test("returns one jointly reviewed assessment and draft without adding a successful-path call", async () => {
   const assessment = pdAssessment();
   const client = sequenceClient([
-    JSON.stringify(originalDraft),
+    JSON.stringify({ assessment, draft: originalDraft }),
     JSON.stringify({ supported: true, reason: "assessment 与 draft 均受来源支持。", ...budgetReceipts }),
   ]);
 
@@ -55,7 +55,7 @@ test("returns one jointly reviewed assessment and draft without adding a success
   const reviewMessages = client.complete.mock.calls[1]?.[0] ?? [];
   const reviewInput = JSON.parse(reviewMessages[1]?.content ?? "{}");
   expect(reviewInput).toMatchObject({ assessment, draft: originalDraft });
-  expect(reviewInput).not.toHaveProperty("originalAssessment");
+  expect(reviewInput.originalAssessment).toEqual(assessment);
   expect(reviewMessages[0]?.content).toContain("assessment 和 draft");
   expect(reviewMessages[0]?.content).toContain("建议核实");
   expect(reviewMessages[0]?.content).toContain("已经执行");
@@ -65,7 +65,7 @@ test("repairs semantic text once, re-reviews it, and returns only the accepted p
   const repaired = correctedPair();
   const active = vi.fn(async () => undefined);
   const client = sequenceClient([
-    JSON.stringify(originalDraft),
+    JSON.stringify({ assessment: pdAssessment(), draft: originalDraft }),
     JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "assessment 和 draft 把未来影响写成确定事实。", requiredNumbers: [], adviceQuote: null }),
     JSON.stringify(repaired),
     JSON.stringify({ supported: true, reason: "修正后的 pair 保留算术事实并限定未来影响。", ...budgetReceipts }),
@@ -100,7 +100,7 @@ test("lets the final model review reject a repair that switches to another issue
   const client = {
     complete: vi.fn(async (messages: readonly OpenAICompatibleChatMessage[]) => {
       callIndex += 1;
-      if (callIndex === 1) return JSON.stringify(originalDraft);
+      if (callIndex === 1) return JSON.stringify({ assessment: pdAssessment(), draft: originalDraft });
       if (callIndex === 2) {
         return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "原 pair 对影响表述过于确定。", requiredNumbers: [], adviceQuote: null });
       }
@@ -128,7 +128,7 @@ test("carries grounded arithmetic and fallible-review rules through repair and f
   const rejection = { fieldChecks: pdReviewFieldChecks(), supported: false,
     reason: "未来影响不应写成确定事实；60%的增幅未经授权。", requiredNumbers: [], adviceQuote: null };
   const client = sequenceClient([
-    JSON.stringify(originalDraft), JSON.stringify(rejection), JSON.stringify(repaired),
+    JSON.stringify({ assessment: pdAssessment(), draft: originalDraft }), JSON.stringify(rejection), JSON.stringify(repaired),
     JSON.stringify({ supported: true, reason: "保留直接算术，限定未来影响。", ...budgetReceipts }),
   ]);
 
@@ -195,7 +195,7 @@ test.each([
   ["malformed final review", [JSON.stringify(correctedPair()), "not-json"]],
 ] as const)("returns null after one %s without another correction", async (_label, tail) => {
   const client = sequenceClient([
-    JSON.stringify(originalDraft),
+    JSON.stringify({ assessment: pdAssessment(), draft: originalDraft }),
     JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
     ...tail,
   ]);
@@ -208,7 +208,7 @@ test.each([
 test("propagates a technical repair failure instead of treating it as a semantic rejection", async () => {
   const transportError = new TypeError("network unavailable");
   const client = sequenceClient([
-    JSON.stringify(originalDraft),
+    JSON.stringify({ assessment: pdAssessment(), draft: originalDraft }),
     JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
     transportError,
   ]);
@@ -222,7 +222,7 @@ test("checks the active lease after the final review before returning an accepte
   const leaseLost = new Error("lease lost");
   let checks = 0;
   const client = sequenceClient([
-    JSON.stringify(originalDraft),
+    JSON.stringify({ assessment: pdAssessment(), draft: originalDraft }),
     JSON.stringify({ supported: true, reason: "受支持。", ...budgetReceipts }),
   ]);
 
@@ -238,7 +238,7 @@ test("uses the existing pair repair when an affirmative review cites the 6 insid
   const repaired = correctedPair();
   const originalAssessment = { ...pdAssessment(), reasoning: "合计16万元，比预算多6万元。" };
   const client = sequenceClient([
-    JSON.stringify(missingGap),
+    JSON.stringify({ assessment: originalAssessment, draft: missingGap }),
     JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "草稿已说明6万元差额。", requiredNumbers: [
       { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "6万元" },
     ], adviceQuote: "建议先核对预算" }),
@@ -270,7 +270,7 @@ test.each(["lost number", "stale advice"])("rejects final receipts against the r
   if (failure === "lost number") repaired.draft.text = "两人总成本为 16 万元，高于预算。建议先核对预算口径。";
   const finalReceipts = { ...budgetReceipts, adviceQuote: failure === "stale advice" ? "建议先核对预算。" : budgetReceipts.adviceQuote };
   const client = sequenceClient([
-    JSON.stringify(originalDraft),
+    JSON.stringify({ assessment: pdAssessment(), draft: originalDraft }),
     JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null }),
     JSON.stringify(repaired),
     JSON.stringify({ supported: true, reason: "修正已充分。", ...finalReceipts }),
@@ -284,7 +284,7 @@ test.each(["lost number", "stale advice"])("rejects final receipts against the r
 test.each(["json_schema", "json_object"] as const)("sends only the current draft's quote choices through the real client HTTP body in %s mode", async structuredOutputMode => {
   const repaired = correctedPair();
   const responses = [
-    originalDraft,
+    { assessment: pdAssessment(), draft: originalDraft },
     { fieldChecks: pdReviewFieldChecks(), supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null },
     repaired,
     { fieldChecks: pdReviewFieldChecks(), supported: true, reason: "修正已充分。", requiredNumbers: [

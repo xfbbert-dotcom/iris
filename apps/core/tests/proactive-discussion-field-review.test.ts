@@ -72,7 +72,7 @@ test.each([false, true])("one repair rechecks the current pair; final field fail
   firstReview.fieldChecks.uncertainty = { supported: false, reason: "未来影响需限定，并使用 qualified_inference。" };
   const finalReview = { ...review(), numberRevisions: [] };
   finalReview.fieldChecks.reasoning!.supported = finalAccepted;
-  const client = clientFor([draft, firstReview, repaired, finalReview]);
+  const client = clientFor([{ assessment: original, draft }, firstReview, repaired, finalReview]);
   const result = await createPdModel({ client }).render({ context: pdContext(), assessment: original });
   expect(result).toEqual(finalAccepted ? repaired : null);
   expect(client.complete).toHaveBeenCalledTimes(4);
@@ -96,7 +96,7 @@ test("an explicitly qualified, source-supported pair passes without another call
   const value = review();
   const wire = new Ajv({ strict: true }).compile(createPdScopeReviewJsonSchema(draft.text));
   expect(wire(value)).toBe(true);
-  const client = clientFor([draft, value]);
+  const client = clientFor([{ assessment, draft }, value]);
   expect(await createPdModel({ client }).render({ context: pdContext(), assessment })).toEqual({ assessment, draft });
   expect(client.complete).toHaveBeenCalledTimes(2);
 });

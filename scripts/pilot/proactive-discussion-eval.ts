@@ -19,7 +19,7 @@ export type PdEvalDiagnostic = {
 };
 export type PdEvalResult = { caseId: string; round: number; assessment: PdAssessment | null; draft: PdDraft | null; error: string | null; diagnostic: PdEvalDiagnostic | null };
 
-type SyntheticTraceStage = "assessment" | "draft" | "scope_review" | "pair_repair";
+type SyntheticTraceStage = "assessment" | "draft" | "generated_pair" | "scope_review" | "pair_repair";
 type SyntheticTraceSanitization = {
   truncatedFields: string[];
   droppedFields: string[];
@@ -261,7 +261,7 @@ export async function runSyntheticProactiveDiscussionEval({
         caseId,
         round,
         context,
-        attempts: { assessment: 0, draft: 0, scope_review: 0, pair_repair: 0 },
+        attempts: { assessment: 0, draft: 0, generated_pair: 0, scope_review: 0, pair_repair: 0 },
       };
       callByContext.set(context, invocation);
       active = invocation;
@@ -284,7 +284,7 @@ export async function runSyntheticProactiveDiscussionEval({
       try {
         const reviewed = await baseModel.render(input, assertActive);
         const draftRecord = [...trace.records].reverse().find(record => record.caseId === invocation.caseId
-          && record.round === invocation.round && (record.stage === "draft" || record.stage === "pair_repair"));
+          && record.round === invocation.round && (record.stage === "draft" || record.stage === "generated_pair" || record.stage === "pair_repair"));
         if (draftRecord) draftRecord.acceptedDraft = reviewed !== null;
         else markSyntheticTraceIncomplete(trace);
         return reviewed;
@@ -300,6 +300,7 @@ export async function runSyntheticProactiveDiscussionEval({
 function traceStage(name: string | undefined): SyntheticTraceStage | null {
   if (name === "iris_proactive_discussion_assessment") return "assessment";
   if (name === "iris_proactive_discussion_draft") return "draft";
+  if (name === "iris_proactive_discussion_generated_pair") return "generated_pair";
   if (name === "iris_proactive_discussion_scope_review") return "scope_review";
   if (name === "iris_proactive_discussion_pair_repair") return "pair_repair";
   return null;
@@ -340,7 +341,7 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
       sanitizeDraftCandidate(value, active.context, redactions, sanitization),
       replayValidation.accepted, replayValidation.reason, sanitization), acceptedDraft: false };
   }
-  if (stage === "pair_repair") {
+  if (stage === "pair_repair" || stage === "generated_pair") {
     let accepted = false;
     if (active.assessment) {
       try { validatePdRepairedIntervention(value, active.context, active.assessment); accepted = true; }
@@ -355,7 +356,7 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
       };
     }
     return baseSyntheticTraceRecord(active, attempt, callIndex, stage, candidate,
-      accepted, accepted ? "accepted" : "repair_invalid", sanitization);
+      accepted, accepted ? "accepted" : stage === "generated_pair" ? "generation_invalid" : "repair_invalid", sanitization);
   }
   const replayValidation = replayScopeReviewValidation(value, scopeInput);
   return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
@@ -375,7 +376,7 @@ function baseSyntheticTraceRecord(
 ): SyntheticTraceRecord {
   return { caseId: active.caseId, round: active.round, callIndex, stage, attempt, candidate,
     replayValidation: { accepted, reason }, sanitization,
-    ...(stage === "draft" || stage === "pair_repair" ? { acceptedDraft: false } : {}) };
+    ...(stage === "draft" || stage === "generated_pair" || stage === "pair_repair" ? { acceptedDraft: false } : {}) };
 }
 
 function replayAssessmentValidation(value: unknown, context: PdContext): { accepted: boolean; reason: string } {

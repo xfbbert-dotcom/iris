@@ -101,9 +101,14 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("final review real PostgreS
     expect(await delivery.runOnce()).toBe("processed"); expect(sends).toEqual([]);
     const stale = (await db.pool.query("SELECT state,attempted_at,last_error FROM proactive_discussion_deliveries")).rows[0];
     expect(stale).toMatchObject({ state: "cancelled", attempted_at: null, last_error: "context_stale" });
-    const model = createPdModel({ client: { complete: async (_messages, options) => {
+    const model = createPdModel({ client: { complete: async (messages, options) => {
       const kind = options?.responseFormat?.json_schema.name;
-      if (kind === "iris_proactive_discussion_draft") return JSON.stringify({ text: "两人需要 16 万，建议核对预算。", evidenceRefs: pdAssessment().evidenceRefs });
+      if (kind === "iris_proactive_discussion_generated_pair") {
+        const target = JSON.parse(messages[1]!.content).target;
+        return JSON.stringify({ assessment: { ...pdAssessment(), ...target,
+          materialChange: { ...target.materialChange, explanation: "此前草稿未曾尝试发送，原矛盾仍成立" } },
+        draft: { text: "两人需要 16 万，建议核对预算。", evidenceRefs: pdAssessment().evidenceRefs } });
+      }
       if (kind === "iris_proactive_discussion_scope_review") return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "预算依据未变",
         requiredNumbers: [], adviceQuote: "建议核对预算。" });
       return JSON.stringify({ ...pdAssessment(), issueRef: { kind: "existing", id: issueId },
@@ -188,7 +193,8 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("final review real PostgreS
       else seconds += 25;
       await tick();
       const name = options?.responseFormat?.json_schema.name;
-      if (name === "iris_proactive_discussion_draft") return JSON.stringify({ text: "先核对预算。", evidenceRefs: pdAssessment().evidenceRefs });
+      if (name === "iris_proactive_discussion_generated_pair") return JSON.stringify({ assessment: pdAssessment(),
+        draft: { text: "先核对预算。", evidenceRefs: pdAssessment().evidenceRefs } });
       if (name === "iris_proactive_discussion_scope_review") return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "有依据",
         requiredNumbers: [], adviceQuote: "先核对预算。" });
       return JSON.stringify(pdAssessment());

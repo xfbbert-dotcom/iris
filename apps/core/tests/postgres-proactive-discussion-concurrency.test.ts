@@ -95,7 +95,7 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion final
       }
     }
     let receiptSender = "app-id", receiptChat = PILOT_CHAT, receiptText = "两人需要 16 万，建议先核对预算。", receiptTarget = "m2";
-    const modelOutputs = [pdAssessment(), { text: receiptText, evidenceRefs: pdAssessment().evidenceRefs },
+    const modelOutputs = [pdAssessment(), { assessment: pdAssessment(), draft: { text: receiptText, evidenceRefs: pdAssessment().evidenceRefs } },
       { fieldChecks: pdReviewFieldChecks(), supported: true, reason: "supported", requiredNumbers: [], adviceQuote: "建议先核对预算。" }];
     let runtime: ReturnType<typeof createProactiveDiscussionRuntime>;
     const messages = context.items.map((item, index) => ({ message_id: `m${index + 1}`, chat_id: PILOT_CHAT,
