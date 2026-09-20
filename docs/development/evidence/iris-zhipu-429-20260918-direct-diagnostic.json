@@ -1,0 +1,44 @@
+{
+  "kind": "single-request-429-root-cause-diagnostic",
+  "startedAt": "2026-09-18T06:52:25.871Z",
+  "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+  "transport": "native Node fetch; no Iris client, SDK, automatic retry, concurrency or response_format",
+  "maxRequests": 1,
+  "timeoutMs": 60000,
+  "syntheticOnly": true,
+  "request": {
+    "model": "glm-4.7-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply only OK."
+      }
+    ],
+    "thinking": {
+      "type": "disabled"
+    },
+    "max_tokens": 16,
+    "stream": false
+  },
+  "status": 200,
+  "latencyMs": 13774,
+  "headers": {
+    "content-type": "application/json; charset=UTF-8",
+    "date": "Fri, 18 Sep 2026 06:52:36 GMT"
+  },
+  "responseBody": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"OK\",\"role\":\"assistant\"}}],\"created\":1789714356,\"id\":\"20260918145223511d561b83a64c96\",\"model\":\"glm-4.7-flash\",\"object\":\"chat.completion\",\"request_id\":\"20260918145223511d561b83a64c96\",\"usage\":{\"completion_tokens\":2,\"completion_tokens_details\":{\"reasoning_tokens\":0},\"prompt_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":2},\"total_tokens\":11}}",
+  "businessCode": null,
+  "providerMessage": null,
+  "usage": {
+    "completion_tokens": 2,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 9,
+    "prompt_tokens_details": {
+      "cached_tokens": 2
+    },
+    "total_tokens": 11
+  },
+  "finishedAt": "2026-09-18T06:52:39.652Z"
+}

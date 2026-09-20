@@ -29,6 +29,16 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 20 Bailian free-only evaluation](docs/development/iris-bailian-free-eval-20260920.md)
+completed six synthetic calls: native minimal format passed, the full assessment schema received
+HTTP400 for array constraints, and the existing explicit JSON mode completed the original arithmetic
+pipeline. Independent semantic review still failed: the retained assessment had a subtraction-sign
+error and an unsupported certain consequence despite a correct draft and positive model review.
+The 15-case two-round suite was not started; no model adoption or production change occurred.
+Free-quota exhaustion protection remains enabled, local focused regression passed 93 tests, and
+application remains `d699761e`. The record also preserves September 18's actual Zhipu 1305 overload
+response; it is not evidence of a daily quota reset. All earlier failed runs below remain history.
+
 The [September 18 generation follow-up](docs/development/iris-free-generation-followup-20260918.md)
 retains seven local calls and one free-cloud call without application changes. Making the native
 schema visible did not repair the known draft; GLM-4.7-Flash again returned HTTP429. A new offline

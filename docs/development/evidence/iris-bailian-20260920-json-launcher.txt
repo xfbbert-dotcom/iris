@@ -1,0 +1,16 @@
+param([ValidateSet('format','arithmetic','full')][string]$Stage = 'format', [switch]$ArithmeticReviewedPass)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Security
+$keyPath = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/bailian-key.dpapi'
+$clearBytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($keyPath), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+try {
+  $env:IRIS_BAILIAN_EVAL_KEY = [Text.Encoding]::UTF8.GetString($clearBytes)
+  $evalArgs = @('--import', 'tsx', 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/eval-json.mts', $Stage)
+  if ($ArithmeticReviewedPass) { $evalArgs += '--arithmetic-reviewed-pass' }
+  & 'D:/软件安装/node.exe' @evalArgs
+  $resultCode = $LASTEXITCODE
+} finally {
+  Remove-Item Env:IRIS_BAILIAN_EVAL_KEY -ErrorAction SilentlyContinue
+  [Array]::Clear($clearBytes, 0, $clearBytes.Length)
+}
+exit $resultCode

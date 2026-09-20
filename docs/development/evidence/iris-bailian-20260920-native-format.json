@@ -1,0 +1,78 @@
+{
+  "kind": "bailian-free-only-original-pipeline",
+  "mode": "format",
+  "syntheticOnly": true,
+  "startedAt": "2026-09-20T08:43:50.903Z",
+  "commit": "75340039ce4223a2a96d2f0ad1744060f0ef4370",
+  "applicationCommit": "d699761e7e0c9855a2bbcfb6e500a80375470706",
+  "model": "qwen3.7-plus",
+  "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "structuredOutputMode": "json_schema",
+  "timeoutMs": 60000,
+  "profile": {
+    "enable_thinking": false,
+    "max_tokens": 256
+  },
+  "wallMs": 70000,
+  "maxRequests": 1,
+  "requestIntervalMs": 0,
+  "automaticTransportRetry": false,
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "5e2b3a7819d25f0aafb478f8157210989e416f417c8dfb29e84edd5f3b04c8d6",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "e174ad839b63832a1e7e581bc51c7a5d8ee37821c0291abc488bb8e6a225a54b",
+    "scripts/pilot/proactive-discussion-eval.ts": "f6d13beaf847f0bdc9d0201b4b98d114dc1498a6157fba4a272a6d1af09a5da8",
+    "harness": "d523345d9fc78e51bd9547fb9a23b4846f470960616b56feec1f2a8874767b45"
+  },
+  "priorEvidence": {},
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-20T08:43:51.047Z",
+      "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "method": "POST",
+      "requestBodyRaw": "{\"model\":\"qwen3.7-plus\",\"messages\":[{\"role\":\"system\",\"content\":\"只输出 JSON。\"},{\"role\":\"user\",\"content\":\"计算 8 加 8。\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"iris_free_format_check\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"result\":{\"type\":\"number\",\"enum\":[16]},\"label\":{\"type\":\"string\",\"enum\":[\"iris-free-format-check\"]}},\"required\":[\"result\",\"label\"],\"additionalProperties\":false}}},\"enable_thinking\":false,\"max_tokens\":256}",
+      "requestBodySha256": "aafcbbc51b9f6d559b12924365d819d272683e995cb368a5dd03b2d2e0d1a97c",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "3a7a0ad4-a7dc-9fa1-bb6f-13d44f382a86"
+      },
+      "responseBytes": 431,
+      "responseBodyRaw": "{\"id\":\"chatcmpl-3a7a0ad4-a7dc-9fa1-bb6f-13d44f382a86\",\"object\":\"chat.completion\",\"created\":1789893825,\"model\":\"qwen3.7-plus\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\n  \\\"result\\\": 16\\n  ,\\n  \\\"label\\\": \\\"iris-free-format-check\\\"\\n}\"},\"finish_reason\":\"stop\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":31,\"total_tokens\":66,\"completion_tokens\":35,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":31}}}",
+      "responseBodySha256": "1397537d9e367414e9fed1cdc2d1f02fbb43da0a561a3ab9611afb608af289ae",
+      "businessCode": null,
+      "requestId": "chatcmpl-3a7a0ad4-a7dc-9fa1-bb6f-13d44f382a86",
+      "usage": {
+        "prompt_tokens": 31,
+        "total_tokens": 66,
+        "completion_tokens": 35,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 31
+        }
+      },
+      "finishReasons": [
+        "stop"
+      ],
+      "finishedAt": "2026-09-20T08:43:53.009Z"
+    }
+  ],
+  "completions": [
+    {
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-20T08:43:51.046Z",
+      "content": "{\n  \"result\": 16\n  ,\n  \"label\": \"iris-free-format-check\"\n}",
+      "finishedAt": "2026-09-20T08:43:53.013Z"
+    }
+  ],
+  "independentSemanticReview": "pending",
+  "executionPassed": true,
+  "freeOnlyPrecondition": "Parent verified this exact model/workspace: 1M free tokens remaining, free-only switch enabled, expiry 2026-12-18. This runner cannot independently audit billing and never changes provider, model or paid fallback.",
+  "acceptance": "Execution and format only; independent review of all final assessment fields and draft remains required. Native schema, nonthinking and output cap are candidate settings; no deployment or live-group acceptance.",
+  "valid": true,
+  "halted": false,
+  "finishedAt": "2026-09-20T08:43:53.013Z"
+}

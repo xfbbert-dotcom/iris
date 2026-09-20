@@ -1,0 +1,81 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-20T08:50:03.545Z",
+  "transformations": [
+    "Replace exact private workspace host with workspace-redacted host.",
+    "Replace local Windows user component with LOCAL_USER."
+  ],
+  "notes": "Original files and their hashes are preserved privately. Embedded source/report hashes describe original bytes, not these redacted copies. No credentials, DPAPI files or creation UI snapshots are archived.",
+  "files": [
+    {
+      "sourceName": "qwen37-native-format-20260918.json",
+      "archivedName": "iris-bailian-20260920-native-format.json",
+      "originalSha256": "1e9d510e814cdeb2c6a047eadaabcb4e426a6ef5b79df289a27477259f75452d",
+      "archivedSha256": "cb5683f530d6c1faa2a2040654b904d8967f7df45aa06f7743ce3a0bb440b546",
+      "bytes": 4434
+    },
+    {
+      "sourceName": "qwen37-native-arithmetic-20260918.json",
+      "archivedName": "iris-bailian-20260920-native-arithmetic.json",
+      "originalSha256": "2a84d4912aad157974353617c9c2a2f6c8739935069d4b45365b2d873c6eef68",
+      "archivedSha256": "1b2fc0b095b7d72fd724686c1e545e26c55f48cf095b4d218f7fa1616821a88e",
+      "bytes": 12230
+    },
+    {
+      "sourceName": "qwen37-json-format-20260920.json",
+      "archivedName": "iris-bailian-20260920-json-format.json",
+      "originalSha256": "41e4e17cdd57776b9c910db8a9773b03cc72dea219a01342133ee0c8316c8586",
+      "archivedSha256": "b717e71d8e8531f46de1425a63bceb3e56300d08355306eba4948c621cf3f5a7",
+      "bytes": 5535
+    },
+    {
+      "sourceName": "qwen37-json-arithmetic-20260920.json",
+      "archivedName": "iris-bailian-20260920-json-arithmetic.json",
+      "originalSha256": "ed1d9c6e165cd8b8d79cd632088caab24e5cd05502cbf3bca5f5f59ce02753be",
+      "archivedSha256": "954b96b49c8d9e8b1702542df65338ccc637c4de29359f6ec55dcd907bfa7ba5",
+      "bytes": 55691
+    },
+    {
+      "sourceName": "eval.mts",
+      "archivedName": "iris-bailian-20260920-native-harness.txt",
+      "originalSha256": "d523345d9fc78e51bd9547fb9a23b4846f470960616b56feec1f2a8874767b45",
+      "archivedSha256": "0f4876db9bd36bca41d58880861645c94c17246ff75ec9cb033e3c678a143072",
+      "bytes": 13936
+    },
+    {
+      "sourceName": "eval-json.mts",
+      "archivedName": "iris-bailian-20260920-json-harness.txt",
+      "originalSha256": "4aefcdbec25571a115498dc7a379e61e84132c94aa44bbd369deeea49dff4a99",
+      "archivedSha256": "4a676789e5c33e727ec9b5e085697f48bbe852840eefdb8390fa070ecd26bc86",
+      "bytes": 14946
+    },
+    {
+      "sourceName": "run-eval.ps1",
+      "archivedName": "iris-bailian-20260920-native-launcher.txt",
+      "originalSha256": "dc6a35a65eb96338e4cc6e6abf5382b38bbcc98d153d71adfedf39e14ec0630c",
+      "archivedSha256": "8d6ee8ac7923c87b1b65aeba7f4c11df46727221ab25af8e9b9d9d558f59a8be",
+      "bytes": 935
+    },
+    {
+      "sourceName": "run-json-eval.ps1",
+      "archivedName": "iris-bailian-20260920-json-launcher.txt",
+      "originalSha256": "8d1a9e5522deaeb2c0229988daebf77ce6600a3e56c96fce01c01c3c8465aff3",
+      "archivedSha256": "be9c5ff188aeab162ad34a282963367bd6e580240e1d14ff56666741cc7c5d68",
+      "bytes": 940
+    },
+    {
+      "sourceName": "429-diagnostic.json",
+      "archivedName": "iris-zhipu-429-20260918-direct-diagnostic.json",
+      "originalSha256": "5899f5ff555777ca12de5669084e6914c99a76819ba6fe0e87e7c238f840504f",
+      "archivedSha256": "5899f5ff555777ca12de5669084e6914c99a76819ba6fe0e87e7c238f840504f",
+      "bytes": 1553
+    },
+    {
+      "sourceName": "429-client-diagnostic.json",
+      "archivedName": "iris-zhipu-429-20260918-client-diagnostic.json",
+      "originalSha256": "726338ce4e59a0db71b853e56878bb19b1228578d083a9560e0cc4851054d3ef",
+      "archivedSha256": "726338ce4e59a0db71b853e56878bb19b1228578d083a9560e0cc4851054d3ef",
+      "bytes": 1702
+    }
+  ]
+}

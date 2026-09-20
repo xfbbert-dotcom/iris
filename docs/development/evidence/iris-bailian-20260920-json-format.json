@@ -1,0 +1,109 @@
+{
+  "kind": "bailian-free-only-original-pipeline",
+  "mode": "format",
+  "syntheticOnly": true,
+  "startedAt": "2026-09-20T08:47:47.573Z",
+  "commit": "75340039ce4223a2a96d2f0ad1744060f0ef4370",
+  "applicationCommit": "d699761e7e0c9855a2bbcfb6e500a80375470706",
+  "model": "qwen3.7-plus",
+  "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "structuredOutputMode": "json_object",
+  "timeoutMs": 60000,
+  "profile": {
+    "enable_thinking": false,
+    "max_tokens": 256
+  },
+  "wallMs": 70000,
+  "maxRequests": 1,
+  "requestIntervalMs": 0,
+  "automaticTransportRetry": false,
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "5e2b3a7819d25f0aafb478f8157210989e416f417c8dfb29e84edd5f3b04c8d6",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "e174ad839b63832a1e7e581bc51c7a5d8ee37821c0291abc488bb8e6a225a54b",
+    "scripts/pilot/proactive-discussion-eval.ts": "f6d13beaf847f0bdc9d0201b4b98d114dc1498a6157fba4a272a6d1af09a5da8",
+    "harness": "4aefcdbec25571a115498dc7a379e61e84132c94aa44bbd369deeea49dff4a99"
+  },
+  "priorEvidence": {},
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_free_format_check",
+      "startedAt": "2026-09-20T08:47:47.714Z",
+      "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "method": "POST",
+      "requestBodyRaw": "{\"model\":\"qwen3.7-plus\",\"messages\":[{\"role\":\"system\",\"content\":\"只输出 JSON。\\n\\nReturn only a JSON object that satisfies the following JSON Schema, not the schema itself.\\nDo not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.\\n{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"result\\\":{\\\"type\\\":\\\"number\\\",\\\"enum\\\":[16]},\\\"label\\\":{\\\"type\\\":\\\"string\\\",\\\"enum\\\":[\\\"iris-free-format-check\\\"]}},\\\"required\\\":[\\\"result\\\",\\\"label\\\"],\\\"additionalProperties\\\":false}\"},{\"role\":\"user\",\"content\":\"计算 8 加 8。\"}],\"response_format\":{\"type\":\"json_object\"},\"enable_thinking\":false,\"max_tokens\":256}",
+      "requestBodySha256": "1e9cc591977ad5d903a2efe32a3dce35b658fbd851f2643d252b67b86082abf4",
+      "originalSchemaSha256": "f7963e86c7c1fde8ab4d2da690fa9813f9fccf112c2379bf69026ee8a935af4e",
+      "originalSchemaMatchedInSystem": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "0ba0c01d-d72f-9c8f-8d50-03758e722f17"
+      },
+      "responseBytes": 418,
+      "responseBodyRaw": "{\"id\":\"chatcmpl-0ba0c01d-d72f-9c8f-8d50-03758e722f17\",\"object\":\"chat.completion\",\"created\":1789894062,\"model\":\"qwen3.7-plus\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"result\\\":16,\\\"label\\\":\\\"iris-free-format-check\\\"}\"},\"finish_reason\":\"stop\",\"logprobs\":null}],\"usage\":{\"prompt_tokens\":118,\"total_tokens\":131,\"completion_tokens\":13,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":118}}}",
+      "responseBodySha256": "fc1acb5c685dbd4badfa16b218447079f4a6fa682189efcbe7140a608a612aee",
+      "businessCode": null,
+      "requestId": "chatcmpl-0ba0c01d-d72f-9c8f-8d50-03758e722f17",
+      "usage": {
+        "prompt_tokens": 118,
+        "total_tokens": 131,
+        "completion_tokens": 13,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 118
+        }
+      },
+      "finishReasons": [
+        "stop"
+      ],
+      "finishedAt": "2026-09-20T08:47:48.938Z"
+    }
+  ],
+  "completions": [
+    {
+      "stage": "iris_free_format_check",
+      "originalResponseFormat": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "iris_free_format_check",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "number",
+                "enum": [
+                  16
+                ]
+              },
+              "label": {
+                "type": "string",
+                "enum": [
+                  "iris-free-format-check"
+                ]
+              }
+            },
+            "required": [
+              "result",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "startedAt": "2026-09-20T08:47:47.714Z",
+      "content": "{\"result\":16,\"label\":\"iris-free-format-check\"}",
+      "finishedAt": "2026-09-20T08:47:48.940Z"
+    }
+  ],
+  "independentSemanticReview": "pending",
+  "executionPassed": true,
+  "freeOnlyPrecondition": "Parent verified this exact model/workspace: 1M free tokens remaining, free-only switch enabled, expiry 2026-12-18. This runner cannot independently audit billing and never changes provider, model or paid fallback.",
+  "acceptance": "Execution and format only; independent review of all final assessment fields and draft remains required. Explicit Core JSON-object mode with the complete original schema in system, nonthinking and output cap are candidate settings; no deployment or live-group acceptance.",
+  "valid": true,
+  "halted": false,
+  "finishedAt": "2026-09-20T08:47:48.940Z"
+}

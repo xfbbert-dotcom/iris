@@ -1,0 +1,46 @@
+{
+  "kind": "single-original-client-429-diagnostic",
+  "startedAt": "2026-09-18T06:54:03.504Z",
+  "maxRequests": 1,
+  "timeoutMs": 60000,
+  "syntheticOnly": true,
+  "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+  "requestCount": 1,
+  "profile": {
+    "thinking": {
+      "type": "disabled"
+    },
+    "max_tokens": 256
+  },
+  "request": {
+    "model": "glm-4.7-flash",
+    "messages": [
+      {
+        "role": "system",
+        "content": "只输出 JSON。\n\nReturn only a JSON object that satisfies the following JSON Schema, not the schema itself.\nDo not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.\n{\"type\":\"object\",\"properties\":{\"result\":{\"type\":\"number\",\"enum\":[16]},\"label\":{\"type\":\"string\",\"enum\":[\"iris-free-format-check\"]}},\"required\":[\"result\",\"label\"],\"additionalProperties\":false}"
+      },
+      {
+        "role": "user",
+        "content": "计算 8 加 8。"
+      }
+    ],
+    "response_format": {
+      "type": "json_object"
+    },
+    "thinking": {
+      "type": "disabled"
+    },
+    "max_tokens": 256
+  },
+  "status": 429,
+  "latencyMs": 162,
+  "headers": {
+    "content-type": "application/json; charset=UTF-8",
+    "date": "Fri, 18 Sep 2026 06:54:00 GMT"
+  },
+  "responseBody": "{\"error\":{\"code\":\"1305\",\"message\":\"该模型当前访问量过大，请您稍后再试\"}}",
+  "businessCode": "1305",
+  "providerMessage": "该模型当前访问量过大，请您稍后再试",
+  "clientError": "model provider request failed with status 429: 该模型当前访问量过大，请您稍后再试",
+  "finishedAt": "2026-09-18T06:54:03.672Z"
+}

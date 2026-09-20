@@ -163,6 +163,17 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   adding calls. Do not freeze a wrong initial number as truth. Runtime/trace must share full-input
   validation; successful accounting does not prove arithmetic, complete discovery or sound withdrawal
   reasons. Fresh regression and actual-model results are recorded separately in the linked record.
+- **Provider boundary and retained-assessment false acceptance (2026-09-20):** The
+  [Bailian free-only evaluation](../development/iris-bailian-free-eval-20260920.md) passed a minimal
+  native schema but rejected the full assessment request with HTTP400, naming array constraints;
+  the actual body contained uniqueItems. Test the real emitted contract, not just a small schema,
+  before calling a provider compatible. The existing explicit JSON mode preserved the complete
+  schema and local validation and completed the arithmetic chain, but retained a signed subtraction
+  error and an unsupported certain consequence in assessment while the correct draft received a
+  positive review. Literal draft receipts do not validate every assessment claim. Preserve that
+  false acceptance and stop before full evaluation; do not delete constraints or sample until green.
+  The same record archives a separately observed Zhipu business code1305: retain safe response codes
+  to distinguish model overload from account limits, and never invent a next-day reset from HTTP429 alone.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,
