@@ -9,7 +9,7 @@ import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider
 import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdRepairedIntervention, validatePdScopeReview, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
-import type { PdScopeReviewHistory } from "../../apps/core/src/proactive-discussion/review-receipts.js";
+import { PD_REVIEW_FIELDS, type PdScopeReviewHistory } from "../../apps/core/src/proactive-discussion/review-receipts.js";
 
 export type PdEvalCase = { id: string; context: PdContext; expectedDecision: "intervene" | "skip"; reviewCriteria: string[] };
 export type PdEvalDiagnostic = {
@@ -542,8 +542,28 @@ function sanitizeScopeCandidate(
   history?: PdScopeReviewHistory,
 ): Record<string, unknown> | null {
   if (!isPlainRecord(value)) return null;
-  noteUnknownFields(value, ["supported", "reason", "requiredNumbers", "adviceQuote", "numberRevisions"], sanitization);
+  noteUnknownFields(value, ["fieldChecks", "supported", "reason", "requiredNumbers", "adviceQuote", "numberRevisions"], sanitization);
   const candidate: Record<string, unknown> = {};
+  if (isPlainRecord(value.fieldChecks)) {
+    noteUnknownFields(value.fieldChecks, PD_REVIEW_FIELDS, sanitization);
+    const checks: Record<string, unknown> = {};
+    for (const field of PD_REVIEW_FIELDS) {
+      const item = value.fieldChecks[field];
+      const path = `fieldChecks.${field}`;
+      if (!isPlainRecord(item)) {
+        if (item !== undefined) addTraceMarker(sanitization.droppedFields, path);
+        continue;
+      }
+      noteUnknownFields(item, ["supported", "reason"], sanitization);
+      const check: Record<string, unknown> = {};
+      if (typeof item.supported === "boolean") check.supported = item.supported;
+      else if (item.supported !== undefined) addTraceMarker(sanitization.droppedFields, `${path}.supported`);
+      if (typeof item.reason === "string") check.reason = sanitizeTraceText(item.reason, `${path}.reason`, redactions, sanitization);
+      else if (item.reason !== undefined) addTraceMarker(sanitization.droppedFields, `${path}.reason`);
+      checks[field] = check;
+    }
+    candidate.fieldChecks = checks;
+  } else if (value.fieldChecks !== undefined) addTraceMarker(sanitization.droppedFields, "fieldChecks");
   if (typeof value.supported === "boolean") candidate.supported = value.supported;
   else if (value.supported !== undefined) addTraceMarker(sanitization.droppedFields, "supported");
   if (typeof value.reason === "string") candidate.reason = sanitizeTraceText(value.reason, "reason", redactions, sanitization);

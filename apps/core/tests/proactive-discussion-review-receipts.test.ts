@@ -1,9 +1,10 @@
 import { expect, test } from "vitest";
 import * as pdModel from "../src/proactive-discussion/model.js";
 import { createPdScopeReviewJsonSchema } from "../src/proactive-discussion/review-receipts.js";
+import { pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 
 type NumberReceipt = { label: string; expectedValue: string; unit: string; draftQuote: string | null };
-type Review = { supported: boolean; reason: string; requiredNumbers: NumberReceipt[]; adviceQuote: string | null };
+type Review = { fieldChecks: ReturnType<typeof pdReviewFieldChecks>; supported: boolean; reason: string; requiredNumbers: NumberReceipt[]; adviceQuote: string | null };
 
 function validate(value: unknown, draft: string): Review {
   const api = pdModel as unknown as { validatePdScopeReview?: (value: unknown, draft: string) => Review };
@@ -12,7 +13,7 @@ function validate(value: unknown, draft: string): Review {
 }
 
 function positive(draftQuote: string | null, expectedValue = "6", unit = "万元"): Review {
-  return { supported: true, reason: "数字和建议均存在。", requiredNumbers: [
+  return { fieldChecks: pdReviewFieldChecks(), supported: true, reason: "数字和建议均存在。", requiredNumbers: [
     { label: "差额", expectedValue, unit, draftQuote },
   ], adviceQuote: "建议核对预算" };
 }
@@ -61,7 +62,7 @@ test("keeps semantic rejection unchanged even without affirmative quote receipts
 });
 
 test("allows a declared empty number list without pretending it proves numeric completeness", () => {
-  const review = { supported: true, reason: "未声明关键数字。", requiredNumbers: [], adviceQuote: "建议核对预算" };
+  const review = { fieldChecks: pdReviewFieldChecks(), supported: true, reason: "未声明关键数字。", requiredNumbers: [], adviceQuote: "建议核对预算" };
   expect(validate(review, "总成本16万元，建议核对预算。")).toEqual(review);
 });
 

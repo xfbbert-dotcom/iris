@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { createPdModel } from "../src/proactive-discussion/model.js";
 import { validatePdScopeReview, createPdScopeReviewJsonSchema } from "../src/proactive-discussion/review-receipts.js";
-import { pdAssessment, pdContext } from "./fixtures/proactive-discussion.js";
+import { pdAssessment, pdContext, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 
 type History = {
   previousNumbers: Array<{ label: string; expectedValue: string; unit: string; draftQuote: string | null }>;
@@ -13,7 +13,7 @@ const source = { ref: "authorized-budget", text: "预算10万元。招聘两人�
 const draft = "两人总成本16万元，比10万元预算多6万元。建议先核对预算。";
 const receipt = (value: string) => ({ label: "差额", expectedValue: value, unit: "万元", draftQuote: draft });
 const history = (value = "6"): History => ({ previousNumbers: [{ ...receipt(value), draftQuote: null }], evidence: [source] });
-const finalReview = () => ({ supported: true, reason: "根据原文和当前稿复核。",
+const finalReview = () => ({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "根据原文和当前稿复核。",
   requiredNumbers: [receipt("16"), receipt("6")], adviceQuote: "建议先核对预算。", numberRevisions: [] as unknown[] });
 const revision = () => ({ previousIndex: 0, replacementIndex: 1, reason: "两人各8万元合计16万元，减去10万元是6万元，不是60万元。",
   sourceRef: source.ref, sourceQuote: source.text });
@@ -27,7 +27,11 @@ test.each([false, true])("does not accept the archived forgotten-gap pair throug
   let index = 0;
   const client = { complete: vi.fn(async () => {
     const content = saved.calls[index++].content;
-    return index === 4 && explicitRevisions ? JSON.stringify({ ...JSON.parse(content), numberRevisions: [] }) : content;
+    if (index !== 2 && index !== 4) return content;
+    // Test-only contract adaptation isolates numeric continuity; these checks
+    // are not historical model output or evidence of semantic acceptance.
+    return JSON.stringify({ ...JSON.parse(content), fieldChecks: pdReviewFieldChecks(),
+      ...(index === 4 && explicitRevisions ? { numberRevisions: [] } : {}) });
   }) };
   expect(saved.returnedPair).toBe(true); // Retain the historical failure; don't rewrite the archive.
   await expect(createPdModel({ client }).render({ context, assessment })).resolves.toBeNull();
@@ -85,7 +89,7 @@ test("requires the final revision contract only with earlier numeric diagnoses",
 test("binds final review to the initial diagnosis and keeps the existing single-repair call bound", async () => {
   const context = pdContext();
   const assessment = pdAssessment();
-  const firstReview = { supported: false, reason: "差额应为60万元。", requiredNumbers: history("60").previousNumbers, adviceQuote: null };
+  const firstReview = { fieldChecks: pdReviewFieldChecks(), supported: false, reason: "差额应为60万元。", requiredNumbers: history("60").previousNumbers, adviceQuote: null };
   const repaired = { assessment, draft: { text: draft, evidenceRefs: assessment.evidenceRefs } };
   const evidence = context.items[0]!;
   const final = { ...finalReview(), numberRevisions: [{ ...revision(), sourceRef: evidence.ref, sourceQuote: evidence.text }] };

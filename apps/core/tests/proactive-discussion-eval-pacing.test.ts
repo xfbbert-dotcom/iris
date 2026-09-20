@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 
 import { createOpenAICompatibleChatCompletionsClient } from "../src/model/openai-compatible-chat-completions-client.js";
 import { createPdModel } from "../src/proactive-discussion/model.js";
-import { pdAssessment, pdContext } from "./fixtures/proactive-discussion.js";
+import { pdAssessment, pdContext, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 
 const evalPath = "../../../scripts/pilot/proactive-discussion-eval.ts";
 
@@ -109,7 +109,7 @@ test("one paced client covers transport retry, assessment repair, draft and scop
     "not-json",
     JSON.stringify(pdAssessment()),
     JSON.stringify({ text: "两人共 16 万，比 10 万预算多 6 万。建议核对预算。", evidenceRefs: pdAssessment().evidenceRefs }),
-    JSON.stringify({ supported: true, reason: "数值和建议均来自核准内容。", requiredNumbers: [], adviceQuote: "建议核对预算。" }),
+    JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "数值和建议均来自核准内容。", requiredNumbers: [], adviceQuote: "建议核对预算。" }),
   ];
   const fetch = vi.fn(async () => {
     starts.push(clock);

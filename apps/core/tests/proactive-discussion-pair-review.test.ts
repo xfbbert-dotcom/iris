@@ -7,7 +7,7 @@ import type {
 import { createOpenAICompatibleChatCompletionsClient } from "../src/model/openai-compatible-chat-completions-client.js";
 import { createPdModel } from "../src/proactive-discussion/model.js";
 import type { PdAssessment, PdContext, PdDraft } from "../src/proactive-discussion/contracts.js";
-import { pdAssessment, pdContext, pdContextWithIssue } from "./fixtures/proactive-discussion.js";
+import { pdAssessment, pdContext, pdContextWithIssue, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 
 const originalDraft: PdDraft = {
   text: "两人总成本为 16 万元，比 10 万元预算多 6 万元，并会影响项目执行。建议先核对预算。",
@@ -15,6 +15,7 @@ const originalDraft: PdDraft = {
 };
 
 const budgetReceipts = {
+  fieldChecks: pdReviewFieldChecks(),
   requiredNumbers: [
     { label: "总成本", expectedValue: "16", unit: "万元", draftQuote: "16 万元" },
     { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "6 万元" },
@@ -65,7 +66,7 @@ test("repairs semantic text once, re-reviews it, and returns only the accepted p
   const active = vi.fn(async () => undefined);
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: false, reason: "assessment 和 draft 把未来影响写成确定事实。", requiredNumbers: [], adviceQuote: null }),
+    JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "assessment 和 draft 把未来影响写成确定事实。", requiredNumbers: [], adviceQuote: null }),
     JSON.stringify(repaired),
     JSON.stringify({ supported: true, reason: "修正后的 pair 保留算术事实并限定未来影响。", ...budgetReceipts }),
   ]);
@@ -101,7 +102,7 @@ test("lets the final model review reject a repair that switches to another issue
       callIndex += 1;
       if (callIndex === 1) return JSON.stringify(originalDraft);
       if (callIndex === 2) {
-        return JSON.stringify({ supported: false, reason: "原 pair 对影响表述过于确定。", requiredNumbers: [], adviceQuote: null });
+        return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "原 pair 对影响表述过于确定。", requiredNumbers: [], adviceQuote: null });
       }
       if (callIndex === 3) return JSON.stringify(switched);
 
@@ -109,6 +110,7 @@ test("lets the final model review reject a repair that switches to another issue
       const switchedIssueDetected = input.originalAssessment?.issueRef?.description === "招聘预算不足"
         && input.assessment?.issueRef?.description === "权限审批流程存在风险";
       return JSON.stringify({
+        fieldChecks: pdReviewFieldChecks(),
         supported: !switchedIssueDetected,
         reason: switchedIssueDetected ? "修正结果切换成了另一个问题。" : "没有原始问题可供比较。",
         requiredNumbers: [], adviceQuote: "建议先核实审批要求",
@@ -123,7 +125,7 @@ test("lets the final model review reject a repair that switches to another issue
 
 test("carries grounded arithmetic and fallible-review rules through repair and final review", async () => {
   const repaired = correctedPair();
-  const rejection = { supported: false,
+  const rejection = { fieldChecks: pdReviewFieldChecks(), supported: false,
     reason: "未来影响不应写成确定事实；60%的增幅未经授权。", requiredNumbers: [], adviceQuote: null };
   const client = sequenceClient([
     JSON.stringify(originalDraft), JSON.stringify(rejection), JSON.stringify(repaired),
@@ -189,12 +191,12 @@ test.each([
   ["invalid structural pair repair", [JSON.stringify({ ...correctedPair(), assessment: {
     ...correctedPair().assessment, evidenceRefs: [pdAssessment().evidenceRefs[0]],
   } })]],
-  ["second semantic rejection", [JSON.stringify(correctedPair()), JSON.stringify({ supported: false, reason: "仍不受支持。", requiredNumbers: [], adviceQuote: null })]],
+  ["second semantic rejection", [JSON.stringify(correctedPair()), JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "仍不受支持。", requiredNumbers: [], adviceQuote: null })]],
   ["malformed final review", [JSON.stringify(correctedPair()), "not-json"]],
 ] as const)("returns null after one %s without another correction", async (_label, tail) => {
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
+    JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
     ...tail,
   ]);
 
@@ -207,7 +209,7 @@ test("propagates a technical repair failure instead of treating it as a semantic
   const transportError = new TypeError("network unavailable");
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
+    JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "需要修正。", requiredNumbers: [], adviceQuote: null }),
     transportError,
   ]);
 
@@ -237,7 +239,7 @@ test("uses the existing pair repair when an affirmative review cites the 6 insid
   const originalAssessment = { ...pdAssessment(), reasoning: "合计16万元，比预算多6万元。" };
   const client = sequenceClient([
     JSON.stringify(missingGap),
-    JSON.stringify({ supported: true, reason: "草稿已说明6万元差额。", requiredNumbers: [
+    JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "草稿已说明6万元差额。", requiredNumbers: [
       { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "6万元" },
     ], adviceQuote: "建议先核对预算" }),
     JSON.stringify(repaired),
@@ -253,7 +255,7 @@ test("uses the existing pair repair when an affirmative review cites the 6 insid
   expect(repairInput.assessment).toEqual(originalAssessment);
   const scopeFormat = client.complete.mock.calls[1]?.[1]?.responseFormat?.json_schema.schema;
   expect(scopeFormat).toMatchObject({ type: "object", additionalProperties: false,
-    required: ["supported", "reason", "requiredNumbers", "adviceQuote"], properties: {
+    required: ["fieldChecks", "supported", "reason", "requiredNumbers", "adviceQuote"], properties: {
       requiredNumbers: { type: "array", maxItems: 8, items: { additionalProperties: false,
         required: ["label", "expectedValue", "unit", "draftQuote"], properties: {
           expectedValue: { type: "string", maxLength: 40 }, unit: { type: "string", maxLength: 30 },
@@ -269,7 +271,7 @@ test.each(["lost number", "stale advice"])("rejects final receipts against the r
   const finalReceipts = { ...budgetReceipts, adviceQuote: failure === "stale advice" ? "建议先核对预算。" : budgetReceipts.adviceQuote };
   const client = sequenceClient([
     JSON.stringify(originalDraft),
-    JSON.stringify({ supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null }),
+    JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null }),
     JSON.stringify(repaired),
     JSON.stringify({ supported: true, reason: "修正已充分。", ...finalReceipts }),
   ]);
@@ -283,9 +285,9 @@ test.each(["json_schema", "json_object"] as const)("sends only the current draft
   const repaired = correctedPair();
   const responses = [
     originalDraft,
-    { supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null },
+    { fieldChecks: pdReviewFieldChecks(), supported: false, reason: "请限定未来影响。", requiredNumbers: [], adviceQuote: null },
     repaired,
-    { supported: true, reason: "修正已充分。", requiredNumbers: [
+    { fieldChecks: pdReviewFieldChecks(), supported: true, reason: "修正已充分。", requiredNumbers: [
       { label: "差额", expectedValue: "6", unit: "万元", draftQuote: "两人总成本为 16 万元，比 10 万元预算多 6 万元；" },
     ], adviceQuote: "建议先核对预算口径。" },
   ];

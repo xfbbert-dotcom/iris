@@ -6,6 +6,7 @@ import type {
   OpenAICompatibleChatCompletionOptions,
 } from "../src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
+import { pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 
 const evalPath = "../../../scripts/pilot/proactive-discussion-eval.ts";
 
@@ -46,7 +47,7 @@ function scriptedClient({ scopeSupported = true }: { scopeSupported?: boolean } 
           evidenceRefs: input.assessment.evidenceRefs });
       }
       if (stage === "iris_proactive_discussion_scope_review") {
-        return JSON.stringify({ supported: scopeSupported, reason: scopeSupported ? "内容受材料支持。" : "候选遗漏必要限定。",
+        return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: scopeSupported, reason: scopeSupported ? "内容受材料支持。" : "候选遗漏必要限定。",
           requiredNumbers: [], adviceQuote: scopeSupported ? "建议核对预算。" : null });
       }
       if (stage === "iris_proactive_discussion_pair_repair") {
@@ -155,13 +156,42 @@ test("a scope-rejected draft remains visible as a bounded non-accepted candidate
     replayValidation: { accepted: true, reason: "accepted" } });
 });
 
+test("trace retains a failed assessment field check and redacts its diagnostic reason", async () => {
+  const base = scriptedClient().client;
+  const secret = "PRIVATE-FIELD-CHECK";
+  const fieldChecks = pdReviewFieldChecks();
+  fieldChecks.reasoning = { supported: false, reason: `该理由的减法方向有误：${secret}` };
+  const client: OpenAICompatibleChatCompletionsClient = {
+    async complete(messages, options) {
+      if (options?.responseFormat?.json_schema.name === "iris_proactive_discussion_scope_review") {
+        return JSON.stringify({ fieldChecks, supported: true, reason: "草稿受支持。",
+          requiredNumbers: [], adviceQuote: "建议核对预算。" });
+      }
+      return base.complete(messages, options);
+    },
+  };
+  const run = await runSynthetic({ client, rounds: 1, includeTrace: true, traceRedactions: [secret] });
+  const scopes = run.syntheticTrace!.records.filter(record => record.caseId === "arithmetic" && record.stage === "scope_review");
+  expect(scopes).toHaveLength(2);
+  for (const scope of scopes) {
+    expect(scope).toMatchObject({
+      candidate: { supported: true, fieldChecks: {
+        reasoning: { supported: false, reason: "该理由的减法方向有误：[REDACTED]" },
+      } },
+      replayValidation: { accepted: false, reason: "receipt_invalid" },
+    });
+  }
+  expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject({ draft: null, error: "draft_rejected" });
+  expect(JSON.stringify(run.syntheticTrace)).not.toContain(secret);
+});
+
 test("scope receipt replay rejects an affirmative number quote absent from the draft while retaining its evidence", async () => {
   const base = scriptedClient().client;
   const receipt = { label: "预算差额", expectedValue: "6", unit: "万元", draftQuote: "预算多60万元" };
   const client: OpenAICompatibleChatCompletionsClient = {
     async complete(messages, options) {
       if (options?.responseFormat?.json_schema.name === "iris_proactive_discussion_scope_review") {
-        return JSON.stringify({ supported: true, reason: "数字已核对。", requiredNumbers: [receipt], adviceQuote: "建议核对预算。" });
+        return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "数字已核对。", requiredNumbers: [receipt], adviceQuote: "建议核对预算。" });
       }
       return base.complete(messages, options);
     },
@@ -188,8 +218,8 @@ test.each([false, true])("final scope receipt replay checks the current untrunca
       if (stage === "iris_proactive_discussion_scope_review") {
         reviews += 1;
         return JSON.stringify(reviews === 1
-          ? { supported: false, reason: "请修正措辞。", requiredNumbers: [], adviceQuote: null }
-          : { supported: true, reason: "修正后内容受支持。", requiredNumbers: [receipt], adviceQuote });
+          ? { fieldChecks: pdReviewFieldChecks(), supported: false, reason: "请修正措辞。", requiredNumbers: [], adviceQuote: null }
+          : { fieldChecks: pdReviewFieldChecks(), supported: true, reason: "修正后内容受支持。", requiredNumbers: [receipt], adviceQuote });
       }
       if (stage === "iris_proactive_discussion_pair_repair") {
         const input = JSON.parse(messages[1]!.content);
@@ -244,8 +274,8 @@ test.each([false, true])("final trace uses prior numeric diagnoses and records e
       reviews += 1;
       const input = JSON.parse(messages[1]!.content);
       const receipt = { label: "差额", expectedValue: "60", unit: "万", draftQuote: null };
-      if (reviews === 1) return JSON.stringify({ supported: false, reason: "初审要求60万。", requiredNumbers: [receipt], adviceQuote: null });
-      return JSON.stringify({ supported: true, reason: "当前差额为6万。",
+      if (reviews === 1) return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "初审要求60万。", requiredNumbers: [receipt], adviceQuote: null });
+      return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "当前差额为6万。",
         requiredNumbers: [{ ...receipt, expectedValue: "6", draftQuote: "多 6 万" }], adviceQuote: "建议核对预算。",
         numberRevisions: corrected ? [{ previousIndex: 0, replacementIndex: 0, reason: "初审算错，16减10为6。",
           sourceRef: input.evidence[0].ref, sourceQuote: input.evidence[0].text }] : [] });
@@ -269,7 +299,7 @@ test("revision trace bounds and redacts diagnostics while dropping unknown sourc
   const client: OpenAICompatibleChatCompletionsClient = {
     async complete(messages, options) {
       if (options?.responseFormat?.json_schema.name !== "iris_proactive_discussion_scope_review") return base.complete(messages, options);
-      if (++reviews === 1) return JSON.stringify({ supported: false, reason: "核对差额。", requiredNumbers: [
+      if (++reviews === 1) return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "核对差额。", requiredNumbers: [
         { label: "差额", expectedValue: "60", unit: "万", draftQuote: null },
       ], adviceQuote: null });
       return JSON.stringify({ supported: true, reason: "复核。", requiredNumbers: [], adviceQuote: "建议核对预算。",
@@ -342,7 +372,7 @@ function repairingClient(finalSupported: boolean, invalidRepair = false) {
       if (stage === "iris_proactive_discussion_scope_review") {
         scopeCalls += 1;
         const supported = scopeCalls % 2 === 0 && finalSupported;
-        return JSON.stringify({ supported, reason: "请保留已核算的预算差额，限定未来影响。",
+        return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported, reason: "请保留已核算的预算差额，限定未来影响。",
           requiredNumbers: [], adviceQuote: supported ? "建议确认预算或调整人数。" : null });
       }
       if (stage === "iris_proactive_discussion_pair_repair") {

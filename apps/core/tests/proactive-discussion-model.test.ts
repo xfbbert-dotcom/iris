@@ -15,6 +15,7 @@ import {
   pdAssessment,
   pdContext,
   pdContextWithIssue,
+  pdReviewFieldChecks,
   pdSkipAssessment,
 } from "./fixtures/proactive-discussion.js";
 
@@ -300,7 +301,7 @@ describe("PdModel.render", () => {
     };
     const client = sequenceClient([
       JSON.stringify(draft),
-      JSON.stringify({ supported: true, reason: "仅重述核准数字和建议。", requiredNumbers: [
+      JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "仅重述核准数字和建议。", requiredNumbers: [
         { label: "计划总成本", expectedValue: "16", unit: "万", draftQuote: "16 万" },
       ], adviceQuote: "建议先确认是否有追加预算，再决定招聘人数。" }),
     ]);
@@ -351,7 +352,7 @@ describe("PdModel.render", () => {
         text: "公司已经决定追加 6 万预算，confidence 95%。",
         evidenceRefs: assessment.evidenceRefs,
       }),
-      JSON.stringify({ supported: false, reason: "新增公司决定并遗漏推断限定。", requiredNumbers: [], adviceQuote: null }),
+      JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: false, reason: "新增公司决定并遗漏推断限定。", requiredNumbers: [], adviceQuote: null }),
     ]);
 
     await expect(createPdModel({ client }).render({ context: pdContext(), assessment }))

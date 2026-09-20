@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 const MAX_REASON_CHARS = 2_000;
+const MAX_FIELD_REASON_CHARS = 400;
+export const PD_REVIEW_FIELDS = ["issueRef", "observation", "reasoning", "suggestion", "uncertainty", "materialChange"] as const;
 const MAX_QUOTE_CHARS = 1_200;
 const MAX_NUMBER_RECEIPTS = 8;
 const MAX_LABEL_CHARS = 120;
@@ -11,7 +13,20 @@ const DECIMAL_VALUE_PATTERN = "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$";
 // Quote text is intentionally neither trimmed nor Unicode-normalized.
 const quoteSchema = z.string().min(1).max(MAX_QUOTE_CHARS)
   .refine(value => value.trim().length > 0).nullable();
+const fieldCheckSchema = z.object({
+  supported: z.boolean(),
+  reason: z.string().min(1).max(MAX_FIELD_REASON_CHARS).regex(/\S/u),
+}).strict();
+const fieldChecksSchema = z.object({
+  issueRef: fieldCheckSchema,
+  observation: fieldCheckSchema,
+  reasoning: fieldCheckSchema,
+  suggestion: fieldCheckSchema,
+  uncertainty: fieldCheckSchema,
+  materialChange: fieldCheckSchema,
+}).strict();
 const scopeReviewSchema = z.object({
+  fieldChecks: fieldChecksSchema,
   supported: z.boolean(),
   reason: z.string().max(MAX_REASON_CHARS)
     .transform(value => value.normalize("NFC").trim())
@@ -50,6 +65,13 @@ export function validatePdScopeReview(value: unknown, draftText: string, history
   if (!parsed.success) throw new Error("proactive discussion scope review was invalid");
   const review: PdScopeReview = parsed.data;
   if (!review.supported) return review;
+  // Completeness and conjunction are deterministic; the model's semantic
+  // verdicts are still fallible. A correct draft cannot waive an assessment defect.
+  const failedFields = PD_REVIEW_FIELDS.filter(field => !review.fieldChecks[field].supported);
+  if (failedFields.length > 0) {
+    return { ...review, supported: false,
+      reason: `判断字段复核未通过：${failedFields.join("、")}；请依据各项理由核对并修正同一问题。` };
+  }
   // This proves only the returned quote claims, not that the model listed every
   // necessary number or correctly assessed the meaning of the quoted text.
   if (draftText.length > MAX_QUOTE_CHARS || review.adviceQuote === null
@@ -115,8 +137,18 @@ export function createPdScopeReviewJsonSchema(draftText: string, history?: PdSco
   return {
     type: "object",
     additionalProperties: false,
-    required: ["supported", "reason", "requiredNumbers", "adviceQuote", ...(hasHistory ? ["numberRevisions"] : [])],
+    required: ["fieldChecks", "supported", "reason", "requiredNumbers", "adviceQuote", ...(hasHistory ? ["numberRevisions"] : [])],
     properties: {
+      fieldChecks: {
+        type: "object", additionalProperties: false, required: [...PD_REVIEW_FIELDS],
+        properties: Object.fromEntries(PD_REVIEW_FIELDS.map(field => [field, {
+          type: "object", additionalProperties: false, required: ["supported", "reason"],
+          properties: {
+            supported: { type: "boolean" },
+            reason: { type: "string", minLength: 1, maxLength: MAX_FIELD_REASON_CHARS, pattern: "\\S" },
+          },
+        }])),
+      },
       supported: { type: "boolean" },
       reason: { type: "string", minLength: 1, maxLength: MAX_REASON_CHARS },
       requiredNumbers: {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { openPdDatabase, preparePdDelivery, pdTestAt as at, pdTestTime as time } from "./helpers/proactive-discussion-postgres.js";
-import { PILOT_CHAT, pdContext, pdAssessment } from "./fixtures/proactive-discussion.js";
+import { PILOT_CHAT, pdContext, pdAssessment, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 import { hashLocalMessageText } from "../src/memory/local-message-source.js";
 import { createPdSourceRef } from "../src/proactive-discussion/contracts.js";
 import { lockConversationMessageIngestScope } from "../src/conversation/conversation-message-replay-guard.js";
@@ -96,7 +96,7 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("proactive discussion final
     }
     let receiptSender = "app-id", receiptChat = PILOT_CHAT, receiptText = "两人需要 16 万，建议先核对预算。", receiptTarget = "m2";
     const modelOutputs = [pdAssessment(), { text: receiptText, evidenceRefs: pdAssessment().evidenceRefs },
-      { supported: true, reason: "supported", requiredNumbers: [], adviceQuote: "建议先核对预算。" }];
+      { fieldChecks: pdReviewFieldChecks(), supported: true, reason: "supported", requiredNumbers: [], adviceQuote: "建议先核对预算。" }];
     let runtime: ReturnType<typeof createProactiveDiscussionRuntime>;
     const messages = context.items.map((item, index) => ({ message_id: `m${index + 1}`, chat_id: PILOT_CHAT,
       deleted: false, sender: { sender_type: "user", id: "human" }, msg_type: "text",
