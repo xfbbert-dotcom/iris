@@ -174,6 +174,15 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   false acceptance and stop before full evaluation; do not delete constraints or sample until green.
   The same record archives a separately observed Zhipu business code1305: retain safe response codes
   to distinguish model overload from account limits, and never invent a next-day reset from HTTP429 alone.
+- **Assessment field coverage (2026-09-20):** The [bounded field-review repair](../development/iris-field-review-20260920.md)
+  closes an output-contract gap: full assessment was already present in the request, but a single
+  overall verdict and draft-only receipts did not require a visible judgment on each retained field.
+  Require six named checks, bounded reasons and local conjunction with the overall verdict; share
+  fact-versus-qualified-inference rules with assessment/repair. Missing checks are invalid, and one
+  failed check uses only the existing single pair repair/final review. Trace must retain and redact
+  these diagnoses. Model verdicts can still be wrong: raw replay rejection proves contract enforcement,
+  not automatic semantic detection. Record live negative/qualified-positive/fresh-generation results
+  separately; do not erase the earlier falsely accepted pair or expand retries until green.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

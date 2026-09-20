@@ -520,6 +520,13 @@ diagnoses are not immutable facts; correcting an erroneous review must not requi
 wrong value into a draft. The [continuity repair](../../development/iris-review-continuity-20260917.md)
 checks item accounting, indices and literal evidence, not the semantic correctness of a withdrawal
 or completeness of numbers absent from both reviews. The existing single-correction limit remains.
+Joint review must return separate, mandatory verdicts with bounded concrete reasons for issue
+identity/description, observation, reasoning, suggestion, uncertainty and material-change explanation.
+The overall positive verdict cannot override a failed assessment field, even when the final draft
+is correct. Initial and final review use the same contract and uncertainty rules; a missing field is
+invalid, never implicitly approved. Keep current-draft receipts and numeric continuity as additional
+gates. These checks enforce coverage and conjunction, not deterministic semantic truth; see the
+[field-review repair and retained controls](../../development/iris-field-review-20260920.md).
 Source-grounded, comparable arithmetic and business ratios need not appear verbatim in a source
 to be valid reasoning. Review diagnoses are fallible, not new authority over the original evidence:
 correction must preserve necessary supported quantities, units and qualifications, while keeping

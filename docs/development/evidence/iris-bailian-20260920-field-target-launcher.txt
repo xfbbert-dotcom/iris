@@ -1,0 +1,14 @@
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Security
+$taskDir = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918'
+if ((Test-Path -LiteralPath "$taskDir/field-target-negative-20260920.started.json") -or (Test-Path -LiteralPath "$taskDir/field-target-negative-20260920.json")) { throw 'Probe already started; do not repeat' }
+$taskBytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes("$taskDir/bailian-key.dpapi"), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+try {
+  $env:IRIS_BAILIAN_EVAL_KEY = [Text.Encoding]::UTF8.GetString($taskBytes)
+  & 'D:/软件安装/node.exe' --import tsx "$taskDir/field-target-probe.mts"
+  $taskCode = $LASTEXITCODE
+} finally {
+  Remove-Item Env:IRIS_BAILIAN_EVAL_KEY -ErrorAction SilentlyContinue
+  [Array]::Clear($taskBytes, 0, $taskBytes.Length)
+}
+exit $taskCode

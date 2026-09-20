@@ -1,0 +1,88 @@
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+
+const folder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918';
+const output = folder + '/field-target-negative-20260920.json';
+const started = folder + '/field-target-negative-20260920.started.json';
+if (existsSync(output) || existsSync(started)) throw Error('One-shot probe already started; do not repeat');
+if (process.argv.length !== 2) throw Error('No probe options permitted');
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const archivePath = folder + '/field-review-negative-20260920.json';
+const archive = JSON.parse(readFileSync(archivePath, 'utf8'));
+const prior = archive.completions.find((item: any) => item.stage === 'iris_proactive_discussion_scope_review');
+const original = JSON.parse(prior.originalMessages.find((item: any) => item.role === 'user').content);
+const assessment = original.assessment;
+const targets = {
+  issueRef: JSON.stringify(assessment.issueRef), observation: assessment.observation, reasoning: assessment.reasoning,
+  suggestion: assessment.suggestion, uncertainty: `标签：${assessment.uncertainty}\n完整理由：${assessment.reasoning}`,
+  materialChange: JSON.stringify(assessment.materialChange),
+};
+const format = structuredClone(prior.originalResponseFormat);
+for (const [field, targetText] of Object.entries(targets)) {
+  const check = format.json_schema.schema.properties.fieldChecks.properties[field];
+  check.required.unshift('targetQuote');
+  check.properties = { targetQuote: { type: 'string', enum: [targetText] }, ...check.properties };
+}
+const messages = [{ role: 'system' as const, content: prior.originalMessages[0].content +
+  '\n本次 assessmentFields 是实际待审字段，不是正确答案。按字段核查 targetText 原样表述，targetQuote 必须完整逐字复制对应目标，不能用自己算出的正确说法或 draft 代替它。正确草稿不会修正错误判断；字段中错误的符号或确定后果即使其他处写对仍应拒绝。uncertainty 项同时核查原标签和完整理由。输出简短缺陷或依据，不输出思维链。' },
+  { role: 'user' as const, content: JSON.stringify({ evidence: original.evidence,
+    assessmentFields: Object.entries(targets).map(([field, targetText]) => ({ field, targetText })), draft: original.draft }) }];
+const apiKey = process.env.IRIS_BAILIAN_EVAL_KEY;
+if (!apiKey || apiKey !== apiKey.trim()) throw Error('Private process key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const redact = (text: string) => text.replaceAll(apiKey, '[REDACTED]');
+const endpoint = archive.endpoint;
+if (endpoint !== 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions') throw Error('Endpoint mismatch');
+const report: any = { kind: 'private-field-target-layout-probe', syntheticOnly: true, startedAt: new Date().toISOString(),
+  priorReportSha256: sha(readFileSync(archivePath)), harnessSha256: sha(readFileSync(fileURLToPath(import.meta.url))),
+  hypothesis: 'One fixed negative pair with explicit target text and complete target quotes; changes input layout and output obligations together, not proof of draft interference.',
+  maxRequests: 1, automaticTransportRetry: false, model: 'qwen3.7-plus', endpoint,
+  profile: { enable_thinking: false, max_tokens: 2048 }, originalResponseFormat: format, originalMessages: messages,
+  acceptance: 'Diagnostic only, no product change or successful semantic verdict inferred from HTTP200 or supported. No positive/full generation authorized by this runner.',
+  freeOnlyPrecondition: 'Same Beijing workspace/model, 2026-09-20 control page shows free quota remaining and free-exhaustion stop enabled; never change model or paid fallback.',
+  independentSemanticReview: 'pending', requests: [] };
+writeFileSync(started, JSON.stringify({ startedAt: report.startedAt, output }) + '\n', { flag: 'wx' });
+const client = createOpenAICompatibleChatCompletionsClient({
+  config: { provider: 'openai-compatible', baseUrl: endpoint.slice(0, -'/chat/completions'.length), model: 'qwen3.7-plus', apiKey, timeoutMs: 60000, structuredOutputMode: 'json_object' },
+  sleep: async () => { throw Error('Retry forbidden'); },
+  fetch: async (url, init) => {
+    if (report.requests.length !== 0 || String(url) !== endpoint || init?.method !== 'POST') throw Error('One exact request only');
+    const body = JSON.parse(String(init.body));
+    if (body.model !== report.model || body.response_format?.type !== 'json_object'
+      || Object.keys(body).some(key => !['model','messages','response_format'].includes(key))
+      || !body.messages[0].content.endsWith('\n' + JSON.stringify(format.json_schema.schema))) throw Error('Original schema/request boundary failed');
+    const outgoing = JSON.stringify({ ...body, ...report.profile });
+    const record: any = { requestBodyRaw: redact(outgoing), requestBodySha256: sha(outgoing), startedAt: new Date().toISOString() };
+    report.requests.push(record);
+    const response = await fetch(url, { ...init, body: outgoing, redirect: 'error',
+      signal: AbortSignal.any([AbortSignal.timeout(60000), ...(init.signal ? [init.signal] : [])]) });
+    record.status = response.status;
+    const chunks: Uint8Array[] = []; let size = 0;
+    const reader = response.body?.getReader();
+    if (reader) while (true) {
+      const part = await reader.read(); if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 262144) { await reader.cancel(); throw Error('Response byte cap'); }
+      chunks.push(part.value);
+    }
+    const raw = Buffer.concat(chunks).toString('utf8');
+    record.responseBodyRaw = redact(raw); record.responseBodySha256 = sha(raw); record.finishedAt = new Date().toISOString();
+    const parsed = JSON.parse(raw); record.usage = parsed.usage; record.businessCode = parsed.code ?? parsed.error?.code ?? null;
+    record.finishReason = parsed.choices?.[0]?.finish_reason;
+    if (!response.ok || record.finishReason !== 'stop') throw Error('HTTP/business/finish boundary; no retry');
+    return new Response(raw, { status: response.status, headers: { 'content-type': 'application/json' } });
+  },
+});
+try {
+  report.content = await client.complete(messages, { responseFormat: format });
+  const result = JSON.parse(report.content);
+  report.completeExactTargetQuotes = Object.entries(targets).every(([field, text]) => result.fieldChecks?.[field]?.targetQuote === text);
+  report.formatReceived = true;
+} catch (error) { report.error = redact(error instanceof Error ? error.message : 'unknown'); process.exitCode = 1; }
+finally {
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(output, redact(JSON.stringify(report, null, 2)) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ requests: report.requests.length, formatReceived: report.formatReceived, exactQuotes: report.completeExactTargetQuotes, error: report.error }));
+}

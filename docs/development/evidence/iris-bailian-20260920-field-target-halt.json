@@ -1,0 +1,7 @@
+{
+  "kind": "independent-semantic-stop",
+  "stage": "field-target-negative",
+  "report": "field-target-negative-20260920.json",
+  "reason": "Complete exact target quotes were returned, but reasoning and uncertainty remained false-positive true. The reviewer quoted the signed subtraction error and future consequence while approving both. Do not repeat this variant, promote it to product, or run positive/full on this basis.",
+  "productChangedByProbe": false
+}

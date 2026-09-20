@@ -1,0 +1,39 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-20T09:17:18.439Z",
+  "transformations": [
+    "Replace exact private workspace hostname.",
+    "Replace local Windows user component."
+  ],
+  "note": "Raw private originals remain unchanged. Embedded hashes describe original bytes, not redacted copies. New field contract did not solve semantic review; positive and fresh arithmetic were not started.",
+  "files": [
+    {
+      "sourceName": "field-review-negative-20260920.json",
+      "archivedName": "iris-bailian-20260920-field-review-negative.json",
+      "originalSha256": "a570fb4439e373217e19f12d7cf1b274932676389e8df596ffd117b27ef88ea0",
+      "archivedSha256": "d45e26255d6da93aba4a871e456036e02028239ce1605e024642d32569ef1978",
+      "bytes": 130675
+    },
+    {
+      "sourceName": "field-review-halted-20260920.json",
+      "archivedName": "iris-bailian-20260920-field-review-halt.json",
+      "originalSha256": "86d82b027376de14070e6dbaf970a8cf2d187243439e38afa8c72d8bbd030a3e",
+      "archivedSha256": "86d82b027376de14070e6dbaf970a8cf2d187243439e38afa8c72d8bbd030a3e",
+      "bytes": 132
+    },
+    {
+      "sourceName": "field-review-eval.mts",
+      "archivedName": "iris-bailian-20260920-field-review-harness.txt",
+      "originalSha256": "a8122595fadcd094e686dfadb511cd383b3416ad95f95ede81a39932e48215f8",
+      "archivedSha256": "8a034e1bb51b5292df85e3b853dfcd5ecaa55c53e3c5108ee1c96a9549eb2d21",
+      "bytes": 17769
+    },
+    {
+      "sourceName": "run-field-review.ps1",
+      "archivedName": "iris-bailian-20260920-field-review-launcher.txt",
+      "originalSha256": "94b7928c09221da561b0c690e5910e0ee43908d3a914c50416fd7d081c62261f",
+      "archivedSha256": "dc8668c46020fe518ae71b078e569cb596738fc19a464e5aea2f9d0293e2ef9a",
+      "bytes": 2348
+    }
+  ]
+}

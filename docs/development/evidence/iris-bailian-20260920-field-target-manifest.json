@@ -1,0 +1,39 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-20T09:24:22.616Z",
+  "transformations": [
+    "Replace exact private workspace hostname.",
+    "Replace local Windows user component."
+  ],
+  "note": "Single private diagnostic rejected; not promoted. Embedded hashes remain those of private originals. No credentials archived.",
+  "files": [
+    {
+      "sourceName": "field-target-negative-20260920.json",
+      "archivedName": "iris-bailian-20260920-field-target-negative.json",
+      "originalSha256": "b484c063ea0b5049a64b0a6ea9fc3fe1e8a26ca1d746798ba137fa1571028ba6",
+      "archivedSha256": "ad23ceb4a67d670731e7ef750ce6ac77080a36ceb36edb0f9bc99c2d8348d927",
+      "bytes": 46998
+    },
+    {
+      "sourceName": "field-target-halted-20260920.json",
+      "archivedName": "iris-bailian-20260920-field-target-halt.json",
+      "originalSha256": "9d7225989fad3d0a87e72fb168b189d860c9659d8f43d88b6a8b11542bb61caf",
+      "archivedSha256": "9d7225989fad3d0a87e72fb168b189d860c9659d8f43d88b6a8b11542bb61caf",
+      "bytes": 463
+    },
+    {
+      "sourceName": "field-target-probe.mts",
+      "archivedName": "iris-bailian-20260920-field-target-harness.txt",
+      "originalSha256": "7f1ea55f76f56f396f0d59f080a2a6c3528a6042779a90f0487d1842d6aec0e3",
+      "archivedSha256": "f673ed4f1ece6d06c04fcac5ffe0929be152a1a0c30ad9ec0e6877731b155d54",
+      "bytes": 7219
+    },
+    {
+      "sourceName": "run-field-target.ps1",
+      "archivedName": "iris-bailian-20260920-field-target-launcher.txt",
+      "originalSha256": "a28c389d2e0cdbf53a8f0196a9555d6b4442863a80f436c7baf84b3c3d02ef29",
+      "archivedSha256": "9ce14da91047024592a064e81209518635cedded93ddd2629eab9720f7b785d2",
+      "bytes": 874
+    }
+  ]
+}

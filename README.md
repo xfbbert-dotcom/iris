@@ -29,6 +29,15 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 20 assessment-field review repair](docs/development/iris-field-review-20260920.md),
+application `66c7a3c0`, requires six named field verdicts and local conjunction with the overall
+review and existing receipts. Core4756/469 conditional skips, type/build, CLI7 and scoped review
+passed. **This closes a contract gap, not the real-model semantic defect.** The fixed negative
+control still received false-positive field verdicts; its unchanged pair was rejected only by the
+old numeric-quote gate. One additional private exact-target-quote probe also failed and was not
+promoted. Four free-protected HTTP200 calls are retained; later controls/full evaluation were not
+started. No push, deployment or activation occurred. Earlier versions and failures below are history.
+
 The [September 20 Bailian free-only evaluation](docs/development/iris-bailian-free-eval-20260920.md)
 completed six synthetic calls: native minimal format passed, the full assessment schema received
 HTTP400 for array constraints, and the existing explicit JSON mode completed the original arithmetic
