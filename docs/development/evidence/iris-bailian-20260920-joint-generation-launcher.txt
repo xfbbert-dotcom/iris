@@ -1,0 +1,47 @@
+param(
+  [Parameter(Mandatory = $true)][ValidateSet('negative','positive','arithmetic')][string]$Stage,
+  [switch]$ControlsReviewedPass
+)
+$ErrorActionPreference = 'Stop'
+$taskFolder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918'
+$taskRoot = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86'
+if (($Stage -eq 'arithmetic') -ne $ControlsReviewedPass.IsPresent) {
+  throw 'Only arithmetic requires ControlsReviewedPass after independent complete control review.'
+}
+foreach ($taskMarker in @("joint-generation-$Stage-20260920.json", "joint-generation-$Stage-20260920.started.json", 'joint-generation-halted-20260920.json')) {
+  if (Test-Path -LiteralPath (Join-Path $taskFolder $taskMarker)) { throw 'Existing stage or stopped new window; no repeat or overwrite.' }
+}
+Add-Type -AssemblyName System.Security
+$keyPath = Join-Path $taskFolder 'bailian-key.dpapi'
+$clearBytes = $null
+$taskProcess = $null
+$taskStart = $null
+$resultCode = 1
+try {
+  $clearBytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($keyPath), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+  $taskStart = [Diagnostics.ProcessStartInfo]::new()
+  $taskStart.FileName = 'D:/软件安装/node.exe'
+  $taskStart.WorkingDirectory = $taskRoot
+  $taskStart.UseShellExecute = $false
+  $taskStart.CreateNoWindow = $true
+  $taskStart.ArgumentList.Add('--import')
+  $taskStart.ArgumentList.Add('tsx')
+  $taskStart.ArgumentList.Add((Join-Path $taskFolder 'joint-generation-eval.mts'))
+  $taskStart.ArgumentList.Add($Stage)
+  if ($ControlsReviewedPass) { $taskStart.ArgumentList.Add('--controls-reviewed-pass') }
+  $taskStart.Environment['IRIS_BAILIAN_EVAL_KEY'] = [Text.Encoding]::UTF8.GetString($clearBytes)
+  $taskProcess = [Diagnostics.Process]::Start($taskStart)
+  $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null
+  [Array]::Clear($clearBytes, 0, $clearBytes.Length)
+  $clearBytes = $null
+  $taskProcess.WaitForExit()
+  $resultCode = $taskProcess.ExitCode
+} catch {
+  Write-Error 'Private joint-generation launcher failed; no credential details are logged.'
+} finally {
+  if ($null -ne $taskStart) { $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null }
+  if ($null -ne $clearBytes) { [Array]::Clear($clearBytes, 0, $clearBytes.Length) }
+  if ($null -ne $taskProcess) { $taskProcess.Dispose() }
+}
+exit $resultCode
+

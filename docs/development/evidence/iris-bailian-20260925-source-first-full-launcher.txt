@@ -1,0 +1,43 @@
+param([switch]$StagesReviewedPass)
+$ErrorActionPreference = 'Stop'
+if (!$StagesReviewedPass.IsPresent -or $args.Count -ne 0) { throw 'Explicit independent acceptance of all three stages required; no other options.' }
+$taskFolder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918'
+$taskRoot = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86'
+foreach ($taskMarker in @('source-first-full-20260925.json', 'source-first-full-20260925.started.json', 'source-first-full-20260925.halted.json', 'source-first-full-20260920.json', 'source-first-full-20260920.started.json', 'source-first-full-halted-20260920.json', 'source-first-generation-halted-20260920.json')) {
+  if (Test-Path -LiteralPath (Join-Path $taskFolder $taskMarker)) { throw 'Existing full stage or stopped window; no repeat or overwrite.' }
+}
+foreach ($taskStage in @('negative','positive','arithmetic')) {
+  if (!(Test-Path -LiteralPath (Join-Path $taskFolder "source-first-generation-$taskStage-20260920.json"))) { throw 'A required source-first stage report is unavailable.' }
+}
+Add-Type -AssemblyName System.Security
+$keyPath = Join-Path $taskFolder 'bailian-key.dpapi'
+$clearBytes = $null
+$taskProcess = $null
+$taskStart = $null
+$resultCode = 1
+try {
+  $clearBytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($keyPath), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+  $taskStart = [Diagnostics.ProcessStartInfo]::new()
+  $taskStart.FileName = 'D:/软件安装/node.exe'
+  $taskStart.WorkingDirectory = $taskRoot
+  $taskStart.UseShellExecute = $false
+  $taskStart.CreateNoWindow = $true
+  $taskStart.ArgumentList.Add('--import')
+  $taskStart.ArgumentList.Add('tsx')
+  $taskStart.ArgumentList.Add((Join-Path $taskFolder 'source-first-full-eval.mts'))
+  $taskStart.ArgumentList.Add('--stages-reviewed-pass')
+  $taskStart.Environment['IRIS_BAILIAN_EVAL_KEY'] = [Text.Encoding]::UTF8.GetString($clearBytes)
+  $taskProcess = [Diagnostics.Process]::Start($taskStart)
+  $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null
+  [Array]::Clear($clearBytes, 0, $clearBytes.Length)
+  $clearBytes = $null
+  $taskProcess.WaitForExit()
+  $resultCode = $taskProcess.ExitCode
+} catch {
+  Write-Error 'Private source-first full-evaluation launcher failed; no credential details are logged.'
+} finally {
+  if ($null -ne $taskStart) { $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null }
+  if ($null -ne $clearBytes) { [Array]::Clear($clearBytes, 0, $clearBytes.Length) }
+  if ($null -ne $taskProcess) { $taskProcess.Dispose() }
+}
+exit $resultCode

@@ -1,0 +1,19 @@
+{
+  "kind": "independent-agent-semantic-halt",
+  "recordedAt": "2026-09-20T10:27:33Z",
+  "window": "joint-generation-20260920",
+  "stage": "negative",
+  "report": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/joint-generation-negative-20260920.json",
+  "reportSha256": "07f91f185178fca945e75526a61f1f062068553d1de448df267f7cd85a87b941",
+  "runtimeExecutionPassed": true,
+  "independentSemanticPassed": false,
+  "observations": [
+    "The final retained assessment.reasoning still states that 16万元 minus 10万元 equals -6万元.",
+    "The final reasoning includes future overspending or performance-risk consequences while uncertainty remains fact.",
+    "The final draft invokes unauthorized violation and performance consequences; the supplied synthetic evidence contains the budget and hiring cost, not a violation policy or existing commitments.",
+    "The single reviewer marked all six fieldChecks and the overall supported flag true despite the retained assessment defect. Its reason silently describes the correct 16-10=6 instead of checking the actual negative-six statement."
+  ],
+  "disposition": "Stop this joint-generation window. Do not run its positive or arithmetic stages. Preserve the original report, started marker and any original halt unchanged. A new source-first input-projection experiment is separate and requires review before execution.",
+  "reviewer": "Independent assistant read the complete final assessment, draft and scope-review content; not human sign-off or automatic semantic validation.",
+  "networkCallsByThisReview": 0
+}

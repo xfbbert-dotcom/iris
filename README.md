@@ -29,6 +29,24 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 25 review-diagnostics fix](docs/development/iris-review-diagnostics-20260925.md)
+is locally committed as application `45fe8968`. A negative model review no longer hides
+simultaneous local field, number, advice-quote or continuity failures from the sole pair repair.
+Four tests went red then green; 90 focused tests, Core4774/469 conditional skips, type/build,
+and an independent 69-test scope review passed. A separate context fix is still uncommitted.
+The earlier full-model result remains 22/30 semantically accepted. No repaired full-model or
+live-group acceptance, push, deployment or activation is claimed.
+
+The [September 20 source-first pair generation](docs/development/iris-source-first-generation-20260920.md),
+application `dcaa2995`, rebuilds assessment and draft together from authorized evidence, retaining the
+issue/authority structure but excluding unverified prior prose from initial generation. The earlier
+pair-only attempt still falsely accepted a subtraction error and is preserved. Source-first negative,
+positive and fresh arithmetic stages returned correct final pairs (9 HTTP200 calls, 29569 tokens).
+September 25 Core4770/469 conditional skips, focused83, type/build and CLI7 passed; the earlier
+scoped code review and original evidence are retained. The full 15-case, two-round window completed:
+66 HTTP200 calls but only 22 semantic passes, 3 wrong decisions, 3 incomplete results and 2 content
+failures. It is not accepted. No push, deployment or live-group activation occurred.
+
 The [September 20 assessment-field review repair](docs/development/iris-field-review-20260920.md),
 application `66c7a3c0`, requires six named field verdicts and local conjunction with the overall
 review and existing receipts. Core4756/469 conditional skips, type/build, CLI7 and scoped review

@@ -1,0 +1,255 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-25T12:11:07.118Z",
+  "transformations": [
+    "Replace the exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace only the exact local Windows user path component with LOCAL_USER.",
+    "If a provider response unexpectedly contains reasoning, omit that raw response while retaining original wire hash/length, decoded response without provider reasoning, and removed-field hashes/lengths. Otherwise preserve JSON formatting and all report bytes except the two exact redactions."
+  ],
+  "note": "Private originals remain unchanged. Embedded request/response/source hashes identify private original bytes, not redacted copies. No credential store is read or copied; launcher files are archived as inert text and never executed.",
+  "disposition": "Three completed runs are archived. Raw execution reports retain independentSemanticReview=pending; the independent field-by-field semantic disposition belongs in the associated release record, not a rewritten model report.",
+  "files": [
+    {
+      "sourceName": "source-first-generation-negative-20260920.json",
+      "archivedName": "iris-bailian-20260920-source-first-generation-negative.json",
+      "originalSha256": "83d32e88d817ea322af7924359f1b3a73874902dda632663c7acef2778f88cb0",
+      "originalBytes": 73164,
+      "archivedSha256": "cdb43533a3f00caa415b4ced70f9d20c12bff29b0412ad4df96132dba16ec891",
+      "archivedBytes": 73171,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 3
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 2
+        }
+      ],
+      "wireValidation": {
+        "requests": 2,
+        "completions": 2,
+        "http200": 2,
+        "originalResponseBytes": 5926,
+        "requestAndResponseHashesVerified": true,
+        "completionContentMatchesWire": true
+      },
+      "sourceIdentity": {
+        "recordedHead": "3df870d40892d9f4cfbba8654543484b91cba0a5",
+        "recordedApplicationLabel": "66c7a3c0bc7a32dcb9d1ec3aea82205610e09157",
+        "candidateApplicationCommit": "dcaa29956956172566f155f4cf1cb1f21fbebc6e",
+        "matchesCandidateApplicationSourceContent": true,
+        "note": "Recorded HEAD and application label predate the dirty working-tree candidate. Every recorded application source hash equals current source bytes, and Git confirms those tracked sources equal this application commit.",
+        "files": [
+          {
+            "path": "apps/core/src/config/env.ts",
+            "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "currentSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+            "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "currentSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/model.ts",
+            "recordedSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "currentSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+            "recordedSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "currentSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "scripts/pilot/proactive-discussion-eval.ts",
+            "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "currentSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "matchesCurrentApplicationContent": true
+          }
+        ],
+        "harnessAndLauncherOriginalHashesVerified": true
+      },
+      "providerReasoningOmissions": []
+    },
+    {
+      "sourceName": "source-first-generation-positive-20260920.json",
+      "archivedName": "iris-bailian-20260920-source-first-generation-positive.json",
+      "originalSha256": "dda8e6d95fe5e22ef872823e9d3fcbdbc302826c5d28760929749d5cdb2341c7",
+      "originalBytes": 148879,
+      "archivedSha256": "5a1add5fd6f1f34a61c71eddf8b8655ee6ebf63982ea63acd04ed5ccf764b709",
+      "archivedBytes": 148884,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 5
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 2
+        }
+      ],
+      "wireValidation": {
+        "requests": 4,
+        "completions": 4,
+        "http200": 4,
+        "originalResponseBytes": 10947,
+        "requestAndResponseHashesVerified": true,
+        "completionContentMatchesWire": true
+      },
+      "sourceIdentity": {
+        "recordedHead": "3df870d40892d9f4cfbba8654543484b91cba0a5",
+        "recordedApplicationLabel": "66c7a3c0bc7a32dcb9d1ec3aea82205610e09157",
+        "candidateApplicationCommit": "dcaa29956956172566f155f4cf1cb1f21fbebc6e",
+        "matchesCandidateApplicationSourceContent": true,
+        "note": "Recorded HEAD and application label predate the dirty working-tree candidate. Every recorded application source hash equals current source bytes, and Git confirms those tracked sources equal this application commit.",
+        "files": [
+          {
+            "path": "apps/core/src/config/env.ts",
+            "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "currentSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+            "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "currentSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/model.ts",
+            "recordedSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "currentSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+            "recordedSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "currentSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "scripts/pilot/proactive-discussion-eval.ts",
+            "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "currentSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "matchesCurrentApplicationContent": true
+          }
+        ],
+        "harnessAndLauncherOriginalHashesVerified": true
+      },
+      "providerReasoningOmissions": []
+    },
+    {
+      "sourceName": "source-first-generation-arithmetic-20260920.json",
+      "archivedName": "iris-bailian-20260920-source-first-generation-arithmetic.json",
+      "originalSha256": "4ebc1eca7e49e0727ac9aff5c3a649e5e9e5d0b9d0237fd73ffb5bd0ee0c19cd",
+      "originalBytes": 96527,
+      "archivedSha256": "128eb6693a9b4ac5a40b1a59248e9f3cb097f919ca678d8f0c822aeda58264de",
+      "archivedBytes": 96543,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 4
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 4
+        }
+      ],
+      "wireValidation": {
+        "requests": 3,
+        "completions": 3,
+        "http200": 3,
+        "originalResponseBytes": 7759,
+        "requestAndResponseHashesVerified": true,
+        "completionContentMatchesWire": true
+      },
+      "sourceIdentity": {
+        "recordedHead": "3df870d40892d9f4cfbba8654543484b91cba0a5",
+        "recordedApplicationLabel": "66c7a3c0bc7a32dcb9d1ec3aea82205610e09157",
+        "candidateApplicationCommit": "dcaa29956956172566f155f4cf1cb1f21fbebc6e",
+        "matchesCandidateApplicationSourceContent": true,
+        "note": "Recorded HEAD and application label predate the dirty working-tree candidate. Every recorded application source hash equals current source bytes, and Git confirms those tracked sources equal this application commit.",
+        "files": [
+          {
+            "path": "apps/core/src/config/env.ts",
+            "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "currentSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+            "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "currentSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/model.ts",
+            "recordedSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "currentSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+            "recordedSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "currentSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "scripts/pilot/proactive-discussion-eval.ts",
+            "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "currentSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "matchesCurrentApplicationContent": true
+          }
+        ],
+        "harnessAndLauncherOriginalHashesVerified": true
+      },
+      "providerReasoningOmissions": []
+    },
+    {
+      "sourceName": "source-first-generation-eval.mts",
+      "archivedName": "iris-bailian-20260920-source-first-generation-harness.txt",
+      "originalSha256": "752d1c13e759035028dc2a580d6c99698a6af1dce9f426080df1189a172b7b4b",
+      "originalBytes": 21134,
+      "archivedSha256": "9ae67cb29d7f8665051adecd4806485b7347c6e340d3f0539e2827f882f70a20",
+      "archivedBytes": 21138,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-source-first-generation.ps1",
+      "archivedName": "iris-bailian-20260920-source-first-generation-launcher.txt",
+      "originalSha256": "313deb7c07f63c97a5188755ca50639911bee53790292ecf1d488ff5c93cfd7f",
+      "originalBytes": 2399,
+      "archivedSha256": "0f01e150444d64059160612071662ec508d8993bc5f1f5559a8ed59903779c4c",
+      "archivedBytes": 2404,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

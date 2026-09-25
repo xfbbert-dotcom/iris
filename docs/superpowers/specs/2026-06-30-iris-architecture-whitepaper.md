@@ -527,6 +527,23 @@ is correct. Initial and final review use the same contract and uncertainty rules
 invalid, never implicitly approved. Keep current-draft receipts and numeric continuity as additional
 gates. These checks enforce coverage and conjunction, not deterministic semantic truth; see the
 [field-review repair and retained controls](../../development/iris-field-review-20260920.md).
+Even when the model rejects a pair, local review validation must collect all independently
+checkable field, current-draft quote and numeric-continuity failures before the sole correction.
+An early negative verdict must not hide a simultaneous bad receipt. Preserve the negative model
+verdict and retain its reason with explicit truncation when needed, identify invalid number claims
+precisely, and keep combined feedback within the review reason contract; final validation and the
+existing call bound still apply. This is
+diagnostic completeness, not proof that the model will repair the pair. The
+[diagnostic aggregation fix](../../development/iris-review-diagnostics-20260925.md) retains the
+failed full-suite baseline separately from focused local regression.
+Initial prose generation must reconstruct both the retained assessment and draft from authorized
+sources, rather than copying unverified prior reasoning and changing only the outward wording.
+Carry the selected issue identity and locked decision/evidence/change structure, not the earlier
+observation, reasoning, suggestion, uncertainty or change explanation as a rewrite template. Issue
+descriptions identify the topic; they are not factual authority. Review compares the original issue
+with the newly generated pair; any sole correction receives that current pair. The existing call
+and authority bounds remain unchanged. The [source-first record](../../development/iris-source-first-generation-20260920.md)
+separates the failed pair-only experiment, actual source-first controls, full evaluation and deployment.
 Source-grounded, comparable arithmetic and business ratios need not appear verbatim in a source
 to be valid reasoning. Review diagnoses are fallible, not new authority over the original evidence:
 correction must preserve necessary supported quantities, units and qualifications, while keeping

@@ -183,6 +183,26 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   these diagnoses. Model verdicts can still be wrong: raw replay rejection proves contract enforcement,
   not automatic semantic detection. Record live negative/qualified-positive/fresh-generation results
   separately; do not erase the earlier falsely accepted pair or expand retries until green.
+- **Unverified candidate as rewrite template (2026-09-20):** First render originally generated only
+  a draft, leaving incorrect assessment unchanged unless review rejected it. Generating both fields
+  closed that flow limitation but the real negative control still copied the wrong subtraction and
+  review falsely accepted it. The [source-first repair](../development/iris-source-first-generation-20260920.md)
+  removes prior semantic prose from initial generation: preserve issue/authority structure and raw
+  authorized evidence, regenerate the same pair, then review the original identity and current pair.
+  Do not retain a stale internal assessment behind a correct outward answer, or call a model's true
+  verdict proof. Preserve failed experiments, fresh controls and complete-suite results separately.
+  Unchanged call bounds and locked references are not an automatic semantic guarantee.
+- **Negative review hid a simultaneous receipt failure (2026-09-25):** In the retained
+  [full-run `material-update` second round](../development/iris-source-first-generation-20260920.md#32-9月25日完整15例两轮),
+  the model rejected uncertainty but supplied `requiredNumbers[2]` as `2 人` with a draft quote for
+  `2 个`. Local validation returned immediately on `supported=false`, so the sole pair repair received
+  no numeric failure and changed only uncertainty; final literal validation still rejected the pair.
+  Application `45fe8968` and the [bounded diagnostic fix](../development/iris-review-diagnostics-20260925.md) accumulate
+  independently checkable field, number, advice and continuity failures even after a model rejection,
+  preserves that rejection, and caps feedback to the existing reason length. Four RED-to-GREEN tests
+  and a five-file/90-test focused run cover the regression; Core4774/469 conditional skips, type/build
+  and independent 69-test scope review passed locally. Do not count fuller repair instructions
+  as a successful model repair or erase the original 22/30 semantic result; the other failures remain.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

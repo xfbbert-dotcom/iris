@@ -1,0 +1,300 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createProactiveDiscussionEvalCases, createRequestPacedFetch, runProactiveDiscussionEval } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918';
+const baseUrl = 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const endpoint = baseUrl + '/chat/completions';
+const modelName = 'qwen3.7-plus';
+const mode = process.argv[2];
+if (!['negative', 'positive', 'arithmetic'].includes(mode ?? '')) throw Error('Expected negative, positive or arithmetic');
+if (process.argv.length !== (mode === 'arithmetic' ? 4 : 3)
+  || (mode === 'arithmetic' && process.argv[3] !== '--controls-reviewed-pass')) {
+  throw Error('Invalid arguments or missing independent control acceptance');
+}
+const stagePath = (stage: string) => `${folder}/source-first-generation-${stage}-20260920.json`;
+const output = stagePath(mode!);
+const startedPath = `${folder}/source-first-generation-${mode}-20260920.started.json`;
+const haltPath = `${folder}/source-first-generation-halted-20260920.json`;
+if (existsSync(output) || existsSync(startedPath) || existsSync(haltPath)) {
+  throw Error('Existing stage or stopped new window; no overwrite or repeated request');
+}
+const hash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const hashText = (text: string) => createHash('sha256').update(text).digest('hex');
+const sourcePaths = [
+  'apps/core/src/config/env.ts',
+  'apps/core/src/model/openai-compatible-chat-completions-client.ts',
+  'apps/core/src/proactive-discussion/model.ts',
+  'apps/core/src/proactive-discussion/review-receipts.ts',
+  'scripts/pilot/proactive-discussion-eval.ts',
+];
+const sourceHashes = Object.fromEntries(sourcePaths.map(path => [path, hash(root + '/' + path)]));
+sourceHashes.harness = hash(fileURLToPath(import.meta.url));
+sourceHashes.launcher = hash(`${folder}/run-source-first-generation.ps1`);
+const arithmeticCase = createProactiveDiscussionEvalCases().find(entry => entry.id === 'arithmetic');
+if (!arithmeticCase) throw Error('Original arithmetic case unavailable');
+const context = structuredClone(arithmeticCase.context);
+const caseContextSha256 = hashText(JSON.stringify(context));
+const archivePath = `${folder}/field-review-negative-20260920.json`;
+const archive = JSON.parse(readFileSync(archivePath, 'utf8'));
+if (archive.kind !== 'bailian-free-only-field-review-diagnostic' || archive.syntheticOnly !== true
+  || archive.mode !== 'negative' || archive.model !== modelName || archive.endpoint !== endpoint
+  || archive.structuredOutputMode !== 'json_object' || !archive.inputControl?.archivedAssessment
+  || JSON.stringify(archive.inputControl.context) !== JSON.stringify(context)) {
+  throw Error('Archived synthetic assessment or source-context identity gate failed');
+}
+const archivedAssessment = validatePdAssessment(archive.inputControl.archivedAssessment, context);
+const previousJointPath = `${folder}/joint-generation-negative-20260920.json`;
+const previousJoint = JSON.parse(readFileSync(previousJointPath, 'utf8'));
+if (previousJoint.kind !== 'bailian-free-only-joint-generation-diagnostic'
+  || previousJoint.mode !== 'negative' || previousJoint.syntheticOnly !== true
+  || !isDeepStrictEqual(previousJoint.inputControl?.assessment, archivedAssessment)
+  || !isDeepStrictEqual(previousJoint.inputControl?.context, context)) {
+  throw Error('Previous joint-generation negative assessment or context mismatch');
+}
+const priorEvidence: Record<string, unknown> = {
+  archive: { path: archivePath, sha256: hash(archivePath), applicationCommit: archive.applicationCommit },
+  previousJointNegative: { path: previousJointPath, sha256: hash(previousJointPath),
+    commit: previousJoint.commit, sourceHashes: previousJoint.sourceHashes },
+};
+function loadControl(stage: 'negative' | 'positive') {
+  const path = stagePath(stage);
+  const prior = JSON.parse(readFileSync(path, 'utf8'));
+  if (prior.kind !== 'bailian-free-only-source-first-generation-diagnostic' || prior.mode !== stage
+    || prior.model !== modelName || prior.endpoint !== endpoint || prior.syntheticOnly !== true
+    || prior.structuredOutputMode !== 'json_object' || prior.profile?.enable_thinking !== false
+    || prior.profile?.max_tokens !== 2048 || prior.halted !== false || prior.executionPassed !== true
+    || !prior.pair?.assessment || !prior.pair?.draft || prior.caseContextSha256 !== caseContextSha256
+    || prior.liveGeneratedPairCalls !== 1 || prior.replayedOutputs !== 0 || prior.sourceFirstInputBoundaryPassed !== true
+    || JSON.stringify(prior.sourceHashes) !== JSON.stringify(sourceHashes)) {
+    throw Error('Control report, final pair or source identity gate failed');
+  }
+  priorEvidence[stage] = { path, sha256: hash(path), finishedAt: prior.finishedAt };
+}
+if (mode === 'arithmetic') {
+  loadControl('negative');
+  loadControl('positive');
+  priorEvidence.controlsSemanticAcceptance = 'Explicit --controls-reviewed-pass supplied after the main agent independently read both complete final pairs and review records; this is not an automatic semantic verdict or human sign-off.';
+}
+const apiKey = process.env.IRIS_BAILIAN_EVAL_KEY;
+if (!apiKey || apiKey !== apiKey.trim() || /[\r\n]/u.test(apiKey)) throw Error('Private process key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const redact = (value: string) => value.replaceAll(apiKey, '[REDACTED]');
+const safeError = (error: unknown) => redact(error instanceof Error ? error.message : 'unknown').slice(0, 1000);
+const config = { provider: 'openai-compatible' as const, baseUrl, model: modelName, apiKey, timeoutMs: 60000, structuredOutputMode: 'json_object' as const };
+const report: any = {
+  kind: 'bailian-free-only-source-first-generation-diagnostic', mode, syntheticOnly: true, startedAt: new Date().toISOString(),
+  commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  applicationCommit: execFileSync('git', ['log', '-1', '--format=%H', '--', ...sourcePaths], { cwd: root, encoding: 'utf8' }).trim(),
+  applicationSourceWorkingTreeStatus: execFileSync('git', ['status', '--porcelain', '--', ...sourcePaths], { cwd: root, encoding: 'utf8' }).trim(),
+  model: modelName, endpoint, structuredOutputMode: 'json_object', timeoutMs: 60000,
+  profile: { enable_thinking: false, max_tokens: 2048 },
+  wallMs: mode === 'arithmetic' ? 420000 : 300000,
+  maxRequests: mode === 'arithmetic' ? 6 : 4,
+  requestIntervalMs: 6000, automaticTransportRetry: false,
+  sourceHashes, caseContextSha256, priorEvidence, requests: [], completions: [], liveGeneratedPairCalls: 0, replayedOutputs: 0,
+  independentSemanticReview: 'pending', executionPassed: false, sourceFirstInputBoundaryPassed: false,
+  hypothesis: 'Keep the same original negative assessment and synthetic context at the Core entry point. Only the first generation receives locked structural fields, unverified issue identity and original authorized evidence; omit the previous assessment semantic prose. Review, response schema and call budgets remain bounded. The harness verifies the actual projection but does not construct it or inject answers.',
+  freeOnlyPrecondition: 'Main agent must confirm the same exact Qwen3.7-Plus workspace has free quota remaining and stop-when-free-exhausted enabled before launch. The last shared 2026-09-20 observation was 981.04K of 1M, expiry 2026-12-18; this is historical, may lag, and is not a billing audit. This runner never changes provider, model, quota protection or paid fallback.',
+  acceptance: 'Execution and format only. Every generation, review and bounded repair response is live; only the control assessment and original synthetic context are supplied. No archived or hand-written draft is injected. HTTP200, a returned pair and supported=true are not semantic acceptance; the main agent independently reviews every final assessment field, draft and review. No full-suite support, automatic follow-up, model adoption, deployment or live-group acceptance.',
+};
+writeFileSync(startedPath, JSON.stringify({ mode, startedAt: report.startedAt, output, sourceHashes }, null, 2) + '\n', { flag: 'wx' });
+const deadline = AbortSignal.timeout(report.wallMs);
+let halted = false;
+let currentStage = 'unknown';
+let expectedSchemaJson: string | undefined;
+let completing = false;
+let generationAssessment: ReturnType<typeof validatePdAssessment> | undefined;
+function verifySourceFirstInput(messages: any) {
+  if (!generationAssessment || !Array.isArray(messages) || messages.length !== 2
+    || messages[0]?.role !== 'system' || messages[1]?.role !== 'user') {
+    throw Error('Original locked assessment or generation messages unavailable');
+  }
+  const original = generationAssessment;
+  const target = { decision: original.decision, reason: original.reason,
+    issueRef: original.issueRef, evidenceRefs: original.evidenceRefs,
+    materialChange: { kind: original.materialChange.kind, evidenceRefs: original.materialChange.evidenceRefs } };
+  const evidence = original.evidenceRefs.map(ref => ({
+    ref, text: context.items.find(item => item.ref === ref)?.text ?? '',
+    kind: context.sources.find(source => source.ref === ref)?.kind,
+  })).filter(item => item.text.length > 0);
+  let existingIssueDescription: string | undefined;
+  if (original.issueRef?.kind === 'existing') {
+    const existingId = original.issueRef.id;
+    const issue = context.issues.find(item => item.id === existingId);
+    if (!issue) throw Error('Original existing issue identity unavailable');
+    existingIssueDescription = issue.description;
+  }
+  const expected = { target, evidence,
+    ...(existingIssueDescription === undefined ? {} : { existingIssueDescription }) };
+  const actual = JSON.parse(messages[1].content);
+  if (!isDeepStrictEqual(actual, expected)) {
+    throw Error('First generation must contain only exact locked target, original evidence and existing issue description when applicable');
+  }
+  report.sourceFirstInputBoundaryPassed = true;
+  report.initialGenerationInputSha256 = hashText(messages[1].content);
+}
+function halt(reason: string) {
+  halted = true;
+  report.haltReason ??= reason;
+  if (!existsSync(haltPath)) writeFileSync(haltPath, JSON.stringify({ at: new Date().toISOString(), mode, reason }, null, 2) + '\n', { flag: 'wx' });
+}
+const allowedStages = new Set(['iris_proactive_discussion_assessment', 'iris_proactive_discussion_generated_pair', 'iris_proactive_discussion_scope_review', 'iris_proactive_discussion_pair_repair']);
+const allowedHeaderNames = ['content-type', 'x-request-id', 'x-dashscope-request-id', 'x-acs-request-id', 'request-id', 'retry-after'];
+const MAX_RESPONSE_BYTES = 262144;
+const base = createOpenAICompatibleChatCompletionsClient({
+  config,
+  sleep: async () => { halt('transport retry refused'); throw Error('No automatic transport retry'); },
+  fetch: createRequestPacedFetch({ requestIntervalMs: report.requestIntervalMs, fetch: async (url, init) => {
+    if (halted || deadline.aborted || report.requests.length >= report.maxRequests) {
+      halt('request count, deadline or stopped-window boundary'); throw Error('Bounded evaluation stopped before request');
+    }
+    const payload = JSON.parse(String(init?.body));
+    if (String(url) !== endpoint || init?.method !== 'POST' || payload.model !== modelName
+      || Object.keys(payload).some(key => !['model', 'messages', 'response_format'].includes(key))
+      || !Array.isArray(payload.messages) || payload.response_format?.type !== 'json_object'
+      || Object.keys(payload.response_format).length !== 1 || !allowedStages.has(currentStage)) {
+      halt('exact endpoint, model or explicit JSON-object request boundary'); throw Error('Outbound request boundary');
+    }
+    const systemMessage = payload.messages.find((message: any) => message.role === 'system');
+    if (!expectedSchemaJson || typeof systemMessage?.content !== 'string'
+      || !systemMessage.content.endsWith('\n' + expectedSchemaJson)) {
+      halt('complete original schema missing or changed in system'); throw Error('Original schema visibility boundary');
+    }
+    if (currentStage === 'iris_proactive_discussion_generated_pair') {
+      try { verifySourceFirstInput(payload.messages); }
+      catch (error) { halt('source-first initial generation projection boundary'); throw error; }
+    }
+    const outgoingBody = JSON.stringify({ ...payload, ...report.profile });
+    const record: any = { index: report.requests.length + 1, stage: currentStage, startedAt: new Date().toISOString(),
+      endpoint, method: 'POST', requestBodyRaw: redact(outgoingBody), requestBodySha256: hashText(outgoingBody),
+      originalSchemaSha256: hashText(expectedSchemaJson), originalSchemaMatchedInSystem: true };
+    report.requests.push(record);
+    console.log(JSON.stringify({ request: record.index, stage: currentStage, startedAt: record.startedAt }));
+    try {
+      const response = await fetch(url, { ...init, redirect: 'error', body: outgoingBody,
+        signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+      record.status = response.status;
+      record.headers = Object.fromEntries(allowedHeaderNames.flatMap(name => {
+        const value = response.headers.get(name); return value === null ? [] : [[name, redact(value)]];
+      }));
+      if (!response.ok) halt('first non-success HTTP response');
+      const chunks: Uint8Array[] = [];
+      let byteLength = 0;
+      const reader = response.body?.getReader();
+      if (reader) {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          byteLength += part.value.byteLength;
+          if (byteLength > MAX_RESPONSE_BYTES) {
+            record.responseBodyRaw = redact(Buffer.concat(chunks).toString('utf8'));
+            record.responseBodyTruncated = true; record.responseBytesObserved = byteLength;
+            await reader.cancel(); halt('response size boundary'); throw Error('Response exceeded 262144 bytes');
+          }
+          chunks.push(part.value);
+        }
+      }
+      const bytes = Buffer.concat(chunks);
+      const raw = bytes.toString('utf8');
+      record.responseBytes = bytes.byteLength;
+      record.responseBodyRaw = redact(raw);
+      record.responseBodySha256 = createHash('sha256').update(bytes).digest('hex');
+      let decoded: any;
+      try { decoded = JSON.parse(raw); } catch { /* Core retains normal response validation. */ }
+      if (decoded) {
+        record.businessCode = decoded.code ?? decoded.error?.code ?? null;
+        record.requestId = decoded.request_id ?? decoded.requestId ?? decoded.error?.request_id ?? decoded.id ?? null;
+        record.usage = decoded.usage ?? null;
+        record.finishReasons = Array.isArray(decoded.choices) ? decoded.choices.map((choice: any) => choice.finish_reason ?? null) : [];
+        if (record.finishReasons.includes('length')) {
+          record.outputTruncated = true;
+          record.failureClassification = 'experimental_output_cap_truncation_not_semantic_quality';
+        }
+        if (!Array.isArray(decoded.choices) || record.finishReasons.length !== 1 || record.finishReasons[0] !== 'stop') {
+          halt('model output did not finish normally; output cap is not increased or retried');
+        }
+        if (decoded.error || (!Array.isArray(decoded.choices) && decoded.code)) halt('provider business error');
+      }
+      return new Response(bytes.length === 0 ? null : bytes, { status: response.status, statusText: response.statusText,
+        headers: { 'content-type': response.headers.get('content-type') ?? 'application/json' } });
+    } catch (error) {
+      record.error = safeError(error); halt('transport, timeout or response-read failure'); throw error;
+    } finally { record.finishedAt = new Date().toISOString(); }
+  } }),
+});
+const client = { async complete(messages: any, options?: any) {
+  if (completing || halted || deadline.aborted) {
+    halt('concurrency, deadline or stopped-window boundary'); throw Error('Bounded evaluation stopped before completion');
+  }
+  currentStage = options?.responseFormat?.json_schema?.name ?? 'unknown';
+  if (!allowedStages.has(currentStage) || options?.responseFormat?.type !== 'json_schema'
+    || options.responseFormat.json_schema?.strict !== true || !options.responseFormat.json_schema.schema) {
+    halt('original complete strict schema unavailable'); throw Error('Original Core schema required');
+  }
+  if (mode !== 'arithmetic' && (currentStage === 'iris_proactive_discussion_assessment'
+    || (report.completions.length === 0 && currentStage !== 'iris_proactive_discussion_generated_pair'))) {
+    halt('control must start with live joint generation'); throw Error('Joint-generation control stage boundary');
+  }
+  if (currentStage === 'iris_proactive_discussion_generated_pair') {
+    if (report.liveGeneratedPairCalls !== 0) {
+      halt('duplicate initial joint generation'); throw Error('One initial joint generation only');
+    }
+    report.liveGeneratedPairCalls += 1;
+  }
+  completing = true;
+  expectedSchemaJson = JSON.stringify(options.responseFormat.json_schema.schema);
+  const entry: any = { stage: currentStage, originalResponseFormat: options.responseFormat, originalMessages: messages, startedAt: new Date().toISOString() };
+  report.completions.push(entry);
+  try {
+    entry.origin = 'live_model';
+    const content = await base.complete(messages, options);
+    entry.content = redact(content);
+    if (halted) throw Error('Provider response stopped the bounded evaluation');
+    const decoded = JSON.parse(content); // Malformed JSON stops this window before any downstream request.
+    if (currentStage === 'iris_proactive_discussion_assessment') {
+      try { generationAssessment = validatePdAssessment(unwrapPdAssessmentResponse(decoded), context); }
+      catch { generationAssessment = undefined; } // Core owns its existing assessment contract repair.
+    }
+    return content;
+  } catch (error) {
+    entry.error = safeError(error); halt('completion failed'); throw error;
+  } finally { entry.finishedAt = new Date().toISOString(); completing = false; }
+} };
+try {
+  if (mode === 'arithmetic') {
+    report.cases = [{ id: arithmeticCase.id, expectedDecision: arithmeticCase.expectedDecision, reviewCriteria: arithmeticCase.reviewCriteria }];
+    report.results = await runProactiveDiscussionEval({ model: createPdModel({ client }), cases: [arithmeticCase], rounds: 1 });
+    const result = report.results[0];
+    report.pair = result?.assessment && result?.draft ? { assessment: result.assessment, draft: result.draft } : null;
+    report.executionPassed = !halted && result?.error === null && result?.assessment?.decision === 'intervene' && report.pair !== null && report.sourceFirstInputBoundaryPassed;
+  } else {
+    const assessment = structuredClone(archivedAssessment);
+    if (mode === 'positive') {
+      assessment.reasoning = '按原文每人8万元招聘两人，总成本16万元，相较10万元预算多6万元；若人数和单人成本不调整且未补足该差额，可能影响招聘计划的落实，具体影响仍需核实。';
+      assessment.uncertainty = 'qualified_inference';
+    }
+    generationAssessment = assessment;
+    report.inputControl = { archivedAssessment, assessment,
+      changedAssessmentFields: mode === 'positive' ? ['reasoning', 'uncertainty'] : [],
+      draftOrigin: 'live_joint_generation_no_draft_supplied', context };
+    report.pair = await createPdModel({ client }).render({ context, assessment });
+    report.executionPassed = report.pair !== null && !halted && report.liveGeneratedPairCalls === 1 && report.sourceFirstInputBoundaryPassed;
+  }
+  if (!report.executionPassed) halt('stage execution did not return a complete accepted pair');
+  process.exitCode = report.executionPassed ? 0 : 1;
+} catch (error) {
+  report.error = safeError(error); halt('stage execution failed'); process.exitCode = 1;
+} finally {
+  report.halted = halted; report.finishedAt = new Date().toISOString();
+  writeFileSync(output, redact(JSON.stringify(report, null, 2)) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length, liveGeneratedPairCalls: report.liveGeneratedPairCalls, replayedOutputs: report.replayedOutputs,
+    executionPassed: report.executionPassed, error: report.error, halted, independentSemanticReview: report.independentSemanticReview }));
+}
+

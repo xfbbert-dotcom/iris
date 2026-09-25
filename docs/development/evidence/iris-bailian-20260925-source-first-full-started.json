@@ -1,0 +1,14 @@
+{
+  "rounds": 2,
+  "startedAt": "2026-09-25T12:15:25.920Z",
+  "output": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/source-first-full-20260925.json",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+    "harness": "f69c26dcd4af90c66560cf3c738c2de74c1820d60205ddd60b6151c87c5c50ba",
+    "launcher": "498f5b13d1e78db05b430e5d452cad02be352506639f40b9c89f5d85413762bf"
+  }
+}

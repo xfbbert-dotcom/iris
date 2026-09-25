@@ -1,0 +1,133 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-25T12:11:06.897Z",
+  "transformations": [
+    "Replace the exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace only the exact local Windows user path component with LOCAL_USER.",
+    "If a provider response unexpectedly contains reasoning, omit that raw response while retaining original wire hash/length, decoded response without provider reasoning, and removed-field hashes/lengths. Otherwise preserve JSON formatting and all report bytes except the two exact redactions."
+  ],
+  "note": "Private originals remain unchanged. Embedded request/response/source hashes identify private original bytes, not redacted copies. No credential store is read or copied; launcher files are archived as inert text and never executed.",
+  "disposition": "The separate immutable semantic halt records failure. No positive or fresh arithmetic run in this window.",
+  "files": [
+    {
+      "sourceName": "joint-generation-negative-20260920.json",
+      "archivedName": "iris-bailian-20260920-joint-generation-negative.json",
+      "originalSha256": "07f91f185178fca945e75526a61f1f062068553d1de448df267f7cd85a87b941",
+      "originalBytes": 76532,
+      "archivedSha256": "17657b177800f5d5edabf260242c56aaa0d6990f4c51ed8bf2ed2f701c57f830",
+      "archivedBytes": 76534,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 3
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ],
+      "wireValidation": {
+        "requests": 2,
+        "completions": 2,
+        "http200": 2,
+        "originalResponseBytes": 6381,
+        "requestAndResponseHashesVerified": true,
+        "completionContentMatchesWire": true
+      },
+      "sourceIdentity": {
+        "recordedHead": "3df870d40892d9f4cfbba8654543484b91cba0a5",
+        "recordedApplicationLabel": "66c7a3c0bc7a32dcb9d1ec3aea82205610e09157",
+        "candidateApplicationCommit": "dcaa29956956172566f155f4cf1cb1f21fbebc6e",
+        "matchesCandidateApplicationSourceContent": false,
+        "note": "This failed earlier joint-generation candidate differs from the committed source-first model. Preserve its original dirty-working-tree identity and source hashes; do not label this run as the committed source-first application.",
+        "files": [
+          {
+            "path": "apps/core/src/config/env.ts",
+            "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "currentSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+            "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "currentSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/model.ts",
+            "recordedSha256": "718087f906ba8da40f9903ea9dda8df0e647ce13404591aec1b9e09fce1525cd",
+            "currentSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "matchesCurrentApplicationContent": false
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+            "recordedSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "currentSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "matchesCurrentApplicationContent": true
+          },
+          {
+            "path": "scripts/pilot/proactive-discussion-eval.ts",
+            "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "currentSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "matchesCurrentApplicationContent": true
+          }
+        ],
+        "harnessAndLauncherOriginalHashesVerified": true
+      },
+      "providerReasoningOmissions": []
+    },
+    {
+      "sourceName": "joint-generation-semantic-halted-20260920.json",
+      "archivedName": "iris-bailian-20260920-joint-generation-halt.json",
+      "originalSha256": "2649cb44b4b28f54e888ecbe844865903a4f2e13a5b82fb5a00d934994e00a12",
+      "originalBytes": 1577,
+      "archivedSha256": "377927510bea9f8e2bed33cfd3b6873a56a34be5f28a77eeb6d0c200247c7316",
+      "archivedBytes": 1582,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ],
+      "haltReportOriginalHashVerified": true
+    },
+    {
+      "sourceName": "joint-generation-eval.mts",
+      "archivedName": "iris-bailian-20260920-joint-generation-harness.txt",
+      "originalSha256": "e8225f1867f66803f03a098cf58880f2d2e1abea49c9ea59f9ce44e72039bfb7",
+      "originalBytes": 17405,
+      "archivedSha256": "c32ae883784e713a64beade24f05bebc0d8842bbc6795a38b15aa61e35b962a3",
+      "archivedBytes": 17409,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-joint-generation.ps1",
+      "archivedName": "iris-bailian-20260920-joint-generation-launcher.txt",
+      "originalSha256": "7202aafe4e171f647e83814986b08bd61e4bc023c2862d6e8d9f405167480353",
+      "originalBytes": 2364,
+      "archivedSha256": "c6c689b66adb24c20d8cbb452c1308c309ae712e780893b3aa90956903ea40b7",
+      "archivedBytes": 2369,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

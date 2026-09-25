@@ -1,0 +1,136 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-25T12:26:15.495Z",
+  "transformations": [
+    "Replace the exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace only the exact local Windows user path component with LOCAL_USER.",
+    "Omit each raw provider response containing a reasoning field, retaining its original wire hash/length and a decoded response with the reasoning removed and removed-field hashes/lengths. Omit an unparseable raw response entirely with original wire hash/length."
+  ],
+  "note": "Private originals remain unchanged. Embedded request/response/source hashes identify private original bytes, not redacted copies. The archived launcher is inert text, never executed. No credential store is read. Raw independentSemanticReview remains unchanged; semantic assessment belongs in the dated release record.",
+  "disposition": "Full synthetic run halted or failed execution; retain incomplete/failed results without semantic acceptance.",
+  "files": [
+    {
+      "sourceName": "source-first-full-20260925.json",
+      "archivedName": "iris-bailian-20260925-source-first-full-report.json",
+      "originalSha256": "ab32820c42094dde43ed575e186a5407d4697ad036f74a88cc88c1c99d963e37",
+      "originalBytes": 2251472,
+      "archivedSha256": "14d0b9aaa81ebec56b7c9dff67dc77c2095b1cc6e4bac669c2b184e03aa4127a",
+      "archivedBytes": 2251420,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 67
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 3
+        }
+      ],
+      "wireValidation": {
+        "requests": 66,
+        "completions": 66,
+        "http200": 66,
+        "originalResponseBytes": 154448,
+        "truncatedResponses": 0,
+        "unparseableResponses": 0,
+        "originalHashesVerified": true,
+        "completionContentMatchesWireWherePresent": true
+      },
+      "sourceIdentity": {
+        "recordedHead": "dcaa29956956172566f155f4cf1cb1f21fbebc6e",
+        "recordedApplicationLabel": "dcaa29956956172566f155f4cf1cb1f21fbebc6e",
+        "candidateApplicationCommit": "dcaa29956956172566f155f4cf1cb1f21fbebc6e",
+        "files": [
+          {
+            "path": "apps/core/src/config/env.ts",
+            "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+            "currentSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41"
+          },
+          {
+            "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+            "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+            "currentSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007"
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/model.ts",
+            "recordedSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658",
+            "currentSha256": "529675f88112958aa213473566703690526e6c34efdff590c95cfdc466b82658"
+          },
+          {
+            "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+            "recordedSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae",
+            "currentSha256": "b5b2c424ac39a55b300699d1f1063e4f6a7162d76c7c8b8c1d7e9f6f7cb3c4ae"
+          },
+          {
+            "path": "scripts/pilot/proactive-discussion-eval.ts",
+            "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+            "currentSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca"
+          }
+        ],
+        "applicationSourceAndHarnessLauncherHashesVerified": true
+      },
+      "providerResponseOmissions": []
+    },
+    {
+      "sourceName": "source-first-full-20260925.started.json",
+      "archivedName": "iris-bailian-20260925-source-first-full-started.json",
+      "originalSha256": "7649c9001324e0db035b6a9c44fd217bcddc0030166c2e0a63107748c2601a2a",
+      "originalBytes": 964,
+      "archivedSha256": "d71e5775ba5c150043f85f89350b379dac4f8d41442b4eeb6cedc26563c2a26e",
+      "archivedBytes": 969,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "source-first-full-20260925.halted.json",
+      "archivedName": "iris-bailian-20260925-source-first-full-halt.json",
+      "originalSha256": "e53b184e1bc4faa2204b566d5fbdc20411b0a74d476c9f25a2a8f66d0484c6cd",
+      "originalBytes": 135,
+      "archivedSha256": "e53b184e1bc4faa2204b566d5fbdc20411b0a74d476c9f25a2a8f66d0484c6cd",
+      "archivedBytes": 135,
+      "exactRedactions": []
+    },
+    {
+      "sourceName": "source-first-full-eval.mts",
+      "archivedName": "iris-bailian-20260925-source-first-full-harness.txt",
+      "originalSha256": "f69c26dcd4af90c66560cf3c738c2de74c1820d60205ddd60b6151c87c5c50ba",
+      "originalBytes": 19451,
+      "archivedSha256": "e2fd8ee3f3d9ecfc660188a1c322cacb78efffba61bacabe6a34a76c83d7d502",
+      "archivedBytes": 19455,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-source-first-full.ps1",
+      "archivedName": "iris-bailian-20260925-source-first-full-launcher.txt",
+      "originalSha256": "498f5b13d1e78db05b430e5d452cad02be352506639f40b9c89f5d85413762bf",
+      "originalBytes": 2579,
+      "archivedSha256": "005776a1f1b629341efdea5e699ec17c47606d325a328cb960f454841ef230b8",
+      "archivedBytes": 2584,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}
