@@ -236,11 +236,18 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   retains 11 RED failures, 90 GREEN focused tests and Core4781/469 conditional skips.
   Its seven-case run ended after 17 HTTP200 calls with inference scope-review validation failure
   and paraphrase false intervention. Independent review passed four and failed three: inference
-  invented unverifiable numeric targets, qualified-risk asserted an unsupported extreme
+  generated pair invented an unsupported 1–5% conversion rate and review demanded an
+  uncomputable absolute-income target, qualified-risk asserted an unsupported extreme
   consequence despite six true field checks, and paraphrase ignored real prior 16/10/6 history.
   The raw report's semantic field remains pending; the dated record holds the independent
   conclusion. Removing the mistaken-history input path is verified locally, but the broader
   de-anchoring and certainty hypotheses failed this diagnostic.
+- **Thinking profile did not repair the first review false positive (2026-09-25):** On unchanged
+  application `04aa3a09` and exactly the original qualified-risk first-review Core body,
+  `qwen3.7-plus` with thinking enabled/budget4096 returned all six fields true and locally
+  accepted the unsupported extreme consequence. The bounded [profile comparison](../development/iris-review-identity-20260925.md#同应用独立thinking-profile对照负向)
+  stopped after one HTTP200/5486 usage tokens (1614 reasoning tokens); four planned cases
+  were not called. This is not a full five-case failure or a reason to promote thinking.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

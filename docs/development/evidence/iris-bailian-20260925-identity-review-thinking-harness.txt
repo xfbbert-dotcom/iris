@@ -1,0 +1,318 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { validatePdScopeReview } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/review-receipts.ts';
+import { createRequestPacedFetch } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918';
+const baseUrl = 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const endpoint = baseUrl + '/chat/completions';
+const modelName = 'qwen3.7-plus';
+if (process.argv.length !== 4 || process.argv[2] !== '--quota-verified'
+  || !process.argv[3]?.trim()) throw Error('Fresh exact-model free-quota verification and description required');
+const quotaEvidence = process.argv[3].trim();
+const output = `${folder}/identity-review-thinking-20260925.json`;
+const startedPath = `${folder}/identity-review-thinking-20260925.started.json`;
+const haltPath = `${folder}/identity-review-thinking-20260925.halted.json`;
+if ([output, startedPath, haltPath].some(path => existsSync(path))) {
+  throw Error('Existing thinking-profile artifact; no overwrite or repeat');
+}
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const hashFile = (path: string) => sha(readFileSync(path));
+const sourcePaths = [
+  'apps/core/src/config/env.ts',
+  'apps/core/src/model/openai-compatible-chat-completions-client.ts',
+  'apps/core/src/proactive-discussion/model.ts',
+  'apps/core/src/proactive-discussion/review-receipts.ts',
+  'scripts/pilot/proactive-discussion-eval.ts',
+];
+const git = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const sourceStatus = git(['status', '--porcelain', '--', ...sourcePaths]);
+if (sourceStatus) throw Error('Application source paths must be committed and clean');
+const commit = git(['rev-parse', 'HEAD']);
+const applicationCommit = git(['log', '-1', '--format=%H', '--', ...sourcePaths]);
+const sourceHashes = Object.fromEntries(sourcePaths.map(path => [path, hashFile(`${root}/${path}`)]));
+const archivePath = `${folder}/identity-target-diagnostic-20260925.json`;
+const archiveSha256 = 'f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215';
+if (hashFile(archivePath) !== archiveSha256) throw Error('Identity-target baseline hash mismatch');
+const archive = JSON.parse(readFileSync(archivePath, 'utf8'));
+if (archive.kind !== 'bailian-free-only-identity-target-diagnostic'
+  || archive.model !== modelName || archive.endpoint !== endpoint
+  || archive.profile?.enable_thinking !== false || archive.profile?.max_tokens !== 2048
+  || archive.structuredOutputMode !== 'json_object' || archive.timeoutMs !== 60000
+  || archive.applicationCommit !== applicationCommit
+  || sourcePaths.some(path => archive.sourceHashes?.[path] !== sourceHashes[path])) {
+  throw Error('Archived baseline, application commit or five source hashes changed');
+}
+const priorThinkingPath = `${folder}/field-thinking-negative-20260920.json`;
+const priorThinkingSha256 = '27e61ee2e8e661a6de95eba1a3c40d6fb36bce0e38a2ecd49e75a9878eec73e7';
+if (hashFile(priorThinkingPath) !== priorThinkingSha256) throw Error('Retained September 20 thinking failure changed');
+const priorThinking = JSON.parse(readFileSync(priorThinkingPath, 'utf8'));
+if (priorThinking.kind !== 'private-field-thinking-profile-probe'
+  || priorThinking.verdict?.locallySupported !== true) throw Error('Prior thinking false-positive baseline unavailable');
+const selected = [
+  { caseId: 'qualified-risk', expectedSupported: false },
+  { caseId: 'paraphrase', expectedSupported: false },
+  { caseId: 'inference', expectedSupported: false },
+  { caseId: 'arithmetic', expectedSupported: true },
+  { caseId: 'material-update', expectedSupported: true },
+] as const;
+type Replay = { caseId: string; expectedSupported: boolean; messages: any; responseFormat: any;
+  draftText: string; coreBodySha256: string; baseline: any };
+const replays: Replay[] = selected.map(({ caseId, expectedSupported }) => {
+  const completions = archive.completions.filter((item: any) => item.caseId === caseId
+    && item.stage === 'iris_proactive_discussion_scope_review' && item.attempt === 1);
+  const requests = archive.requests.filter((item: any) => item.caseId === caseId
+    && item.stage === 'iris_proactive_discussion_scope_review' && item.attempt === 1);
+  if (completions.length !== 1 || requests.length !== 1) throw Error(`Unique first review unavailable: ${caseId}`);
+  const completion = completions[0];
+  const request = requests[0];
+  const messages = structuredClone(completion.originalMessages);
+  const responseFormat = structuredClone(completion.originalResponseFormat);
+  if (!Array.isArray(messages) || messages.length !== 2 || messages[0]?.role !== 'system'
+    || messages[1]?.role !== 'user' || responseFormat?.type !== 'json_schema'
+    || responseFormat.json_schema?.strict !== true
+    || responseFormat.json_schema.name !== 'iris_proactive_discussion_scope_review'
+    || !responseFormat.json_schema.schema || request.status !== 200
+    || request.endpoint !== endpoint || request.method !== 'POST') {
+    throw Error(`Archived first-review input shape unavailable: ${caseId}`);
+  }
+  const input = JSON.parse(messages[1].content);
+  if (typeof input.draft?.text !== 'string' || !input.assessment
+    || !Array.isArray(input.evidence) || !input.identityTarget) {
+    throw Error(`Original pair/evidence/identity target unavailable: ${caseId}`);
+  }
+  const wire = JSON.parse(request.requestBodyRaw);
+  if (wire.model !== modelName || wire.enable_thinking !== false || wire.max_tokens !== 2048
+    || 'thinking_budget' in wire
+    || Object.keys(wire).some(key => !['model', 'messages', 'response_format', 'enable_thinking', 'max_tokens'].includes(key))
+    || sha(request.requestBodyRaw) !== request.requestBodySha256) {
+    throw Error(`Original non-thinking raw wire mismatch: ${caseId}`);
+  }
+  const { enable_thinking: _thinking, max_tokens: _cap, ...coreBody } = wire;
+  if (!Array.isArray(coreBody.messages) || coreBody.messages.length !== 2
+    || coreBody.messages[1]?.content !== messages[1].content
+    || coreBody.response_format?.type !== 'json_object'
+    || Object.keys(coreBody.response_format).length !== 1
+    || !coreBody.messages[0]?.content.endsWith('\n' + JSON.stringify(responseFormat.json_schema.schema))) {
+    throw Error(`Original Core body/schema/messages mismatch: ${caseId}`);
+  }
+  let baselineValidation: any;
+  try {
+    const value = validatePdScopeReview(JSON.parse(completion.content), input.draft.text);
+    baselineValidation = { schemaValid: true, rawSupported: JSON.parse(completion.content).supported,
+      locallySupported: value.supported };
+  } catch {
+    baselineValidation = { schemaValid: false,
+      rawSupported: JSON.parse(completion.content).supported, locallySupported: null };
+  }
+  return { caseId, expectedSupported, messages, responseFormat, draftText: input.draft.text,
+    coreBodySha256: sha(JSON.stringify(coreBody)),
+    baseline: { requestBodySha256: request.requestBodySha256, coreBodySha256: sha(JSON.stringify(coreBody)),
+      status: request.status, reportedUsageTokens: request.accountedUsageTokens,
+      responseBodySha256: request.responseBodySha256, validation: baselineValidation } };
+});
+const apiKey = process.env.IRIS_BAILIAN_EVAL_KEY;
+if (!apiKey || apiKey !== apiKey.trim() || /[\r\n]/u.test(apiKey)) throw Error('Private process key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const redact = (value: string) => value.replaceAll(apiKey, '[REDACTED]');
+// Provider/model exception messages may embed raw response text. Do not log them.
+const safeError = (error: unknown) => error instanceof Error ? error.name : 'unknown';
+const report: any = {
+  kind: 'private-identity-review-thinking-profile-comparison', syntheticOnly: true,
+  startedAt: new Date().toISOString(), commit, applicationCommit,
+  applicationSourceWorkingTreeStatus: sourceStatus, sourceHashes,
+  harnessSha256: hashFile(fileURLToPath(import.meta.url)),
+  launcherSha256: hashFile(`${folder}/run-identity-review-thinking.ps1`),
+  archive: { path: archivePath, sha256: archiveSha256, applicationCommit },
+  priorThinkingFailure: { path: priorThinkingPath, sha256: priorThinkingSha256,
+    finding: 'September 20 negative review was a semantic false positive despite a locally valid receipt.' },
+  selectedCaseIds: selected.map(item => item.caseId),
+  expectedSupported: Object.fromEntries(selected.map(item => [item.caseId, item.expectedSupported])),
+  baseline: replays.map(({ caseId, baseline }) => ({ caseId, ...baseline })),
+  model: modelName, endpoint, structuredOutputMode: 'json_object', timeoutMs: 60000,
+  profile: { enable_thinking: true, thinking_budget: 4096, max_tokens: 2048 },
+  comparison: { changed: ['enable_thinking:false -> true', 'thinking_budget:absent -> 4096'],
+    unchanged: ['exact original first-review Core messages/body/schema', 'JSON-object transport',
+      'qwen3.7-plus endpoint', 'max_tokens:2048', 'timeoutMs:60000', 'Core local validator'],
+    providerDocumentation: 'https://help.aliyun.com/zh/model-studio/deep-thinking',
+    qualification: 'Thinking and its budget change together; this is a profile comparison, not proof of a single-variable mechanism.' },
+  wallMs: 480000, maxRequests: 5, maximumReportedUsageTokens: 80000,
+  reportedUsageTokens: 0, requestIntervalMs: 6000, automaticTransportRetry: false,
+  maximumResponseBytes: 262144, requests: [], results: [],
+  independentSemanticReview: 'pending', executionPassed: false,
+  freeOnlyPrecondition: `Operator supplied fresh exact-model free-quota evidence at launch: ${quotaEvidence}. This is an assertion, not automated quota verification or billing audit. Stop-when-free-exhausted must remain enabled; no paid fallback.`,
+  acceptance: 'Review-only five fixed original first-review calls. Negative cases require valid supported=false receipts; positive cases require valid supported=true receipts. Any mismatch/schema failure stops immediately and this profile is not promoted or sampled again. Even five matching local verdicts still require independent semantic review. No assess/generation/repair/full-suite calls.',
+  privacy: 'Provider reasoning_content is never printed or stored verbatim. Report retains only each removed field path, byte count and SHA256 plus decoded response with those fields removed.',
+};
+writeFileSync(startedPath, JSON.stringify({ startedAt: report.startedAt, output, commit,
+  applicationCommit, sourceHashes, archiveSha256, selectedCaseIds: report.selectedCaseIds,
+  quotaEvidence }, null, 2) + '\n', { flag: 'wx' });
+const deadline = AbortSignal.timeout(report.wallMs);
+let halted = false;
+let current: Replay | undefined;
+let expectedCoreBodySha256: string | undefined;
+function halt(reason: string) {
+  halted = true;
+  report.haltReason ??= reason;
+  if (!existsSync(haltPath)) writeFileSync(haltPath,
+    JSON.stringify({ at: new Date().toISOString(), reason }, null, 2) + '\n', { flag: 'wx' });
+}
+function stripReasoning(value: unknown, path = '$'): { decoded: unknown; removed: any[] } {
+  const removed: any[] = [];
+  const visit = (part: any, at: string): any => {
+    if (Array.isArray(part)) return part.map((item, index) => visit(item, `${at}[${index}]`));
+    if (part && typeof part === 'object') {
+      const clean: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(part)) {
+        if (/^(reasoning_content|reasoning_text|thinking_content)$/iu.test(key)) {
+          const raw = typeof item === 'string' ? item : JSON.stringify(item);
+          removed.push({ path: `${at}.${key}`, bytes: Buffer.byteLength(raw), sha256: sha(raw) });
+        } else clean[key] = visit(item, `${at}.${key}`);
+      }
+      return clean;
+    }
+    return part;
+  };
+  return { decoded: visit(value, path), removed };
+}
+const client = createOpenAICompatibleChatCompletionsClient({
+  config: { provider: 'openai-compatible', baseUrl, model: modelName,
+    apiKey, timeoutMs: 60000, structuredOutputMode: 'json_object' },
+  sleep: async () => { halt('transport retry refused'); throw Error('No automatic transport retry'); },
+  fetch: createRequestPacedFetch({ requestIntervalMs: report.requestIntervalMs, fetch: async (url, init) => {
+    if (halted || deadline.aborted || !current || !expectedCoreBodySha256
+      || report.requests.length >= report.maxRequests
+      || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('request count, usage, deadline or stopped-window boundary'); throw Error('Bounded profile comparison stopped');
+    }
+    const rawCoreBody = String(init?.body);
+    const body = JSON.parse(rawCoreBody);
+    if (String(url) !== endpoint || init?.method !== 'POST'
+      || body.model !== modelName || body.response_format?.type !== 'json_object'
+      || Object.keys(body.response_format).length !== 1
+      || Object.keys(body).some(key => !['model', 'messages', 'response_format'].includes(key))
+      || sha(rawCoreBody) !== expectedCoreBodySha256
+      || body.messages[1]?.content !== current.messages[1].content
+      || !body.messages[0]?.content.endsWith('\n' + JSON.stringify(current.responseFormat.json_schema.schema))) {
+      halt('exact archived Core request or schema boundary'); throw Error('Original Core body changed');
+    }
+    const outgoing = JSON.stringify({ ...body, ...report.profile });
+    const record: any = { index: report.requests.length + 1, caseId: current.caseId,
+      stage: 'iris_proactive_discussion_scope_review', startedAt: new Date().toISOString(),
+      endpoint, method: 'POST', baselineCoreBodySha256: current.coreBodySha256,
+      actualCoreBodySha256: sha(rawCoreBody), coreBodyMatchesBaseline: true,
+      requestBodyRaw: redact(outgoing), requestBodySha256: sha(outgoing),
+      originalSchemaSha256: sha(JSON.stringify(current.responseFormat.json_schema.schema)),
+      originalSchemaMatchedInSystem: true };
+    report.requests.push(record);
+    console.log(JSON.stringify({ request: record.index, caseId: record.caseId,
+      startedAt: record.startedAt, reportedUsageTokens: report.reportedUsageTokens }));
+    try {
+      const response = await fetch(url, { ...init, redirect: 'error', body: outgoing,
+        signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+      record.status = response.status;
+      record.headers = Object.fromEntries(['content-type', 'x-request-id', 'x-dashscope-request-id',
+        'x-acs-request-id', 'request-id', 'retry-after'].flatMap(name => {
+        const value = response.headers.get(name); return value === null ? [] : [[name, redact(value)]];
+      }));
+      if (!response.ok) halt('first non-success HTTP response');
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = response.body?.getReader();
+      if (reader) while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > report.maximumResponseBytes) {
+          record.responseBodyTruncated = true; record.responseBytesObserved = size;
+          await reader.cancel(); halt('response byte cap'); throw Error('Response byte cap');
+        }
+        chunks.push(part.value);
+      }
+      const bytes = Buffer.concat(chunks);
+      record.responseBytes = bytes.length;
+      record.responseBodySha256 = sha(bytes);
+      let decoded: any;
+      try { decoded = JSON.parse(bytes.toString('utf8')); }
+      catch { halt('provider response JSON invalid'); throw Error('Provider response JSON invalid'); }
+      const sanitized = stripReasoning(decoded);
+      record.responseDecodedSansReasoning = sanitized.decoded;
+      record.reasoningFields = sanitized.removed;
+      record.usage = decoded.usage ?? null;
+      record.businessCode = decoded.code ?? decoded.error?.code ?? null;
+      record.requestId = decoded.request_id ?? decoded.requestId ?? decoded.id ?? null;
+      record.finishReasons = Array.isArray(decoded.choices)
+        ? decoded.choices.map((choice: any) => choice.finish_reason ?? null) : [];
+      const validCount = (value: unknown): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+      const total = validCount(decoded.usage?.total_tokens) ? decoded.usage.total_tokens
+        : validCount(decoded.usage?.prompt_tokens) && validCount(decoded.usage?.completion_tokens)
+          ? decoded.usage.prompt_tokens + decoded.usage.completion_tokens : undefined;
+      if (validCount(total)) {
+        report.reportedUsageTokens += total;
+        record.accountedUsageTokens = total;
+        record.cumulativeReportedUsageTokens = report.reportedUsageTokens;
+      } else if (response.ok) halt('successful response lacks valid usage accounting');
+      if (record.finishReasons.includes('length')) {
+        record.outputTruncated = true;
+        record.failureClassification = 'experimental_output_cap_truncation_not_semantic_quality';
+      }
+      if (decoded.error || !Array.isArray(decoded.choices) || record.finishReasons.length !== 1
+        || record.finishReasons[0] !== 'stop') halt('provider business error or non-stop finish');
+      if (halted) throw Error('Provider or usage boundary failed');
+      return new Response(bytes, { status: response.status,
+        headers: { 'content-type': response.headers.get('content-type') ?? 'application/json' } });
+    } catch (error) {
+      record.error = safeError(error); halt('transport, timeout or response-read failure'); throw error;
+    } finally { record.finishedAt = new Date().toISOString(); }
+  } }),
+});
+try {
+  for (const replay of replays) {
+    if (halted || deadline.aborted || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('profile comparison stopped before next case'); break;
+    }
+    current = replay;
+    expectedCoreBodySha256 = replay.coreBodySha256;
+    const result: any = { caseId: replay.caseId, expectedSupported: replay.expectedSupported,
+      baseline: replay.baseline, originalMessages: replay.messages,
+      originalResponseFormat: replay.responseFormat,
+      startedAt: new Date().toISOString() };
+    report.results.push(result);
+    try {
+      const content = await client.complete(replay.messages, { responseFormat: replay.responseFormat });
+      result.content = redact(content); // Core returns final content, not provider reasoning_content.
+      const rawReview = JSON.parse(content);
+      const validated = validatePdScopeReview(rawReview, replay.draftText);
+      result.schemaValid = true;
+      result.rawSupported = rawReview.supported;
+      result.locallySupported = validated.supported;
+      result.validatedReview = validated;
+      result.profileVerdictMatched = rawReview.supported === replay.expectedSupported
+        && validated.supported === replay.expectedSupported;
+      if (!result.profileVerdictMatched) halt('first review judgement mismatch; profile not promoted');
+    } catch (error) {
+      result.schemaValid = false;
+      result.errorType = safeError(error);
+      halt('first review schema, transport or validation failure; profile not promoted');
+    } finally { result.finishedAt = new Date().toISOString(); }
+    if (halted) break;
+  }
+  report.executionPassed = !halted && report.results.length === 5 && report.requests.length === 5
+    && report.results.every((item: any) => item.profileVerdictMatched === true);
+  if (!report.executionPassed && !halted) halt('five-case comparison incomplete');
+  process.exitCode = report.executionPassed ? 0 : 1;
+} catch (error) {
+  report.errorType = safeError(error); halt('profile comparison execution failed'); process.exitCode = 1;
+} finally {
+  report.halted = halted;
+  report.finishedAt = new Date().toISOString();
+  writeFileSync(output, redact(JSON.stringify(report, null, 2)) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length,
+    reportedUsageTokens: report.reportedUsageTokens, executionPassed: report.executionPassed,
+    halted, independentSemanticReview: report.independentSemanticReview }));
+}

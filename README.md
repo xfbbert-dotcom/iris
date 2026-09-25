@@ -36,6 +36,8 @@ current candidate and real discussion history. The local Core suite passed 4781 
 469 conditional skips; type/build and evaluation CLI passed. The bounded seven-case run
 ended with 17 HTTP200 calls but failed execution on inference and paraphrase; independent
 semantic review passed four of seven, failing inference, qualified-risk and paraphrase.
+An unchanged-app thinking-profile comparison stopped after its first `qualified-risk` review
+again accepted the overcertain consequence; four planned controls were not called.
 No full-suite or live-group acceptance is claimed.
 
 The [September 25 literal-receipt diagnostic](docs/development/iris-literal-receipts-20260925.md)

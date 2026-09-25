@@ -37,8 +37,9 @@ issueRef、选中引用以及materialChange的kind/引用），不传旧观察�
   55396 reported usage tokens，无自动重放；`executionPassed=false`且有停止标记。
   `inference`在`scope_review_validation`后`render_failed`，`paraphrase`执行层误介入。
   独立逐例语义为**4通过/3失败**：`arithmetic`、`material-update`、`handled`、
-  `hypothesis`通过；`inference`的审核schema给`requiredNumbers.expectedValue=null`，
-  又凭空要求无法由材料计算的绝对收入/行业1%–5%基准；`qualified-risk`把条件后果写成
+  `hypothesis`通过；`inference`的generated pair自行加入无依据的行业1%–5%转化率，
+  review又要求原文无法核算的绝对收入，并在`requiredNumbers.expectedValue`给出null，
+  导致schema失败；`qualified-risk`把条件后果写成
   “将直接导致”和“极高违约风险”，缺概率依据，六项review却全true；`paraphrase`
   将同义复述当新证据，忽略真实历史lastObservation已载16/10/6及相同建议。
   原报告`independentSemanticReview=pending`仅是运行器字段，不回写原件；独立结论记在此处。
@@ -60,13 +61,41 @@ issueRef、选中引用以及materialChange的kind/引用），不传旧观察�
   且`psql`命令未安装；本轮未运行真实PG/Redis集成，也未触发仓库现有CI的真实PG步骤。
   这是后续发布验证边界，不是当前模型语义诊断的等待条件。
 
+### 同应用、独立thinking profile对照（负向）
+
+文档检查点`76edbb68`之后，保持应用`04aa3a09`和原首次review的Core
+messages/schema/body不变，仅把同一`qwen3.7-plus`调用切换为thinking开启、
+budget4096（因此是**profile**对照，不能归因为单个参数）。原计划五例三负两正，
+于13:29:03.760–13:29:31.805 UTC在首例`qualified-risk`即触发停止：
+**仅1次HTTP200、5486 reported usage tokens，其中1614 reasoning tokens**。
+新review的六字段全部true、模型`supported=true`、本地凭据校验也true，
+却仍把缺概率依据的“将直接导致/极高违约风险”视为合格；首例的预期为false。
+其余`paraphrase`、`inference`、`arithmetic`、`material-update`四例
+**未调用**，不能写成五例均失败或thinking已全面比较。本次不改变应用、合同、
+完整15×2或生产状态；thinking profile未获提升。
+
+私有原报告SHA256 `bcbd32630005d4f0712300333adc703a37f9cb2bda40c7498b75e0b0388da1bd`
+已冻结。原报告不保存provider reasoning正文，只留该字段路径、7504字节与哈希；
+1614是供应商计的reasoning tokens，不等于7504字节。运行器原
+`independentSemanticReview=pending`不回写；以上负向判定记录于此。
+[脱敏归档清单](evidence/iris-bailian-20260925-identity-review-thinking-manifest.json)、
+[报告](evidence/iris-bailian-20260925-identity-review-thinking-report.json)、
+[起始标记](evidence/iris-bailian-20260925-identity-review-thinking-started.json)、
+[停止标记](evidence/iris-bailian-20260925-identity-review-thinking-halt.json)、
+[harness](evidence/iris-bailian-20260925-identity-review-thinking-harness.txt)和
+[launcher](evidence/iris-bailian-20260925-identity-review-thinking-launcher.txt)已归档。
+归档校验固定原报告SHA、唯一请求体哈希、与non-thinking基线相同的Core body、
+脱敏后decoded response和结果的连结；原响应9857字节/哈希仅保留元数据，
+因原件没有raw response而**不能独立重算**。reasoning正文未公开，
+只留7504字节/哈希元数据；私有原件未改、凭据/DPAPI未读取。
+
 ## 四处文档处置
 
 | 核对项 | disposition与理由 |
 |---|---|
-| 白皮书 | **reviewed-unchanged**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)已经要求区分当前讨论与先前意见、只按授权原文核对、避免重复及过度确定后果；本次是有限输入投影修复，七例仍有三项语义失败，不新增产品行为规则。 |
-| 工程故障台账 | **updated**：[主动讨论条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)记录本轮候选被误作历史意见的输入路径、投影修复及七例仍失败的边界。 |
-| 核心需求覆盖基线 | **updated**：[IRIS-CORE-005补记](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-25-本轮评估身份与真实历史分离)区分本地门禁、七例4/3语义和历史失败。 |
-| README / AGENTS / 当前交接 | **updated**：[README](../../README.md#current-product-state)及[当前接手入口](current-handoff.md#当前正在推进)列出应用SHA、已验本地范围和七例4/3结论。**reviewed-unchanged**：[AGENTS](../../AGENTS.md)的工作树定位、授权边界与四处闭环要求仍有效。 |
+| 白皮书 | **reviewed-unchanged**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)已经要求区分当前讨论与先前意见、只按授权原文核对、避免重复及过度确定后果；本次是有限输入投影及独立profile诊断，七例仍有三项语义失败，thinking首例又误通过，不新增产品行为规则。 |
+| 工程故障台账 | **updated**：[主动讨论条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)记录投影修复后七例仍失败及thinking首例误通过。 |
+| 核心需求覆盖基线 | **updated**：[IRIS-CORE-005补记](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-25-本轮评估身份与真实历史分离)区分本地门禁、七例4/3语义与独立thinking负向对照。 |
+| README / AGENTS / 当前交接 | **updated**：[README](../../README.md#current-product-state)及[当前接手入口](current-handoff.md#当前正在推进)列出应用SHA、七例4/3和thinking首例结果。**reviewed-unchanged**：[AGENTS](../../AGENTS.md)的工作树定位、授权边界与四处闭环要求仍有效。 |
 
 本记录不把文档提交、本地回归或已结束但失败的模型窗口当作发布批准。

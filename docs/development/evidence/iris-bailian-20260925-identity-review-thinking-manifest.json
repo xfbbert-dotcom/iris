@@ -1,0 +1,170 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-25T13:36:05.387Z",
+  "transformations": [
+    "Replace exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace exact local Windows user path component with LOCAL_USER.",
+    "Provider reasoning was already absent from the private report; publish only its retained field path, byte count and SHA256."
+  ],
+  "note": "Private originals remain unchanged. No credential/DPAPI file is read. The raw response is not available in the original report: its retained SHA256/byte count are identified, not independently reverified. The launcher is inert text. Four planned controls were not called.",
+  "disposition": "One thinking-profile control: qualified-risk false positive despite six true fields and local acceptance. Profile not promoted; no five-case or full-suite result.",
+  "originalReportSha256": "bcbd32630005d4f0712300333adc703a37f9cb2bda40c7498b75e0b0388da1bd",
+  "wireValidation": {
+    "requests": 1,
+    "http200": 1,
+    "rawResponseBytesRecordedNotReverifiable": 9857,
+    "requestBodySha256Verified": true,
+    "originalResponseSha256RetainedNotReverifiable": "7f406c78b2fb65a1cd8cc14517efe2691719d4095ac0861cff6fc4e433e519d9",
+    "decodedContentMatchesResult": true,
+    "coreBodyMatchesNonThinkingBaseline": true,
+    "providerReasoningRawAbsent": true,
+    "providerReasoningBytesRetained": 7504,
+    "providerReasoningSha256Retained": "d3987b2e13f957b6a853f414701d60fc2fa45a6120b3eff769301226d8e9ed56"
+  },
+  "sourceIdentity": {
+    "recordedApplicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+    "recordedHead": "76edbb6858f2bc95bb4a343b1230022d013e440e",
+    "recordedWorkingTreeStatus": "",
+    "files": [
+      {
+        "path": "apps/core/src/config/env.ts",
+        "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedSha256": "0f6a9c820e876853fe9868bcc24552583b83d25b6c1da1191ed416e53017aeb5",
+        "currentWorkingTreeSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedBytes": 38698,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 1273
+      },
+      {
+        "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+        "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedSha256": "909f5559359bb8bd34d2d274b216d5435ee8b79a27272414ed6f09cd261c2f20",
+        "currentWorkingTreeSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedBytes": 11237,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 306
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/model.ts",
+        "recordedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "currentWorkingTreeSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedBytes": 45593,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+        "recordedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "currentWorkingTreeSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedBytes": 10345,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "scripts/pilot/proactive-discussion-eval.ts",
+        "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "currentWorkingTreeSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedBytes": 42439,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      }
+    ],
+    "originalHarnessAndLauncherHashesVerified": true
+  },
+  "files": [
+    {
+      "sourceName": "identity-review-thinking-20260925.json",
+      "archivedName": "iris-bailian-20260925-identity-review-thinking-report.json",
+      "originalSha256": "bcbd32630005d4f0712300333adc703a37f9cb2bda40c7498b75e0b0388da1bd",
+      "originalBytes": 49707,
+      "archivedSha256": "3c2989430bb104e38bca0d66b9854f859dbf6aab1fa89bdfde2cd7d503c7dfad",
+      "archivedBytes": 49715,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 2
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 2
+        }
+      ],
+      "wireValidation": {
+        "requests": 1,
+        "http200": 1,
+        "rawResponseBytesRecordedNotReverifiable": 9857,
+        "requestBodySha256Verified": true,
+        "originalResponseSha256RetainedNotReverifiable": "7f406c78b2fb65a1cd8cc14517efe2691719d4095ac0861cff6fc4e433e519d9",
+        "decodedContentMatchesResult": true,
+        "coreBodyMatchesNonThinkingBaseline": true,
+        "providerReasoningRawAbsent": true,
+        "providerReasoningBytesRetained": 7504,
+        "providerReasoningSha256Retained": "d3987b2e13f957b6a853f414701d60fc2fa45a6120b3eff769301226d8e9ed56"
+      }
+    },
+    {
+      "sourceName": "identity-review-thinking-20260925.started.json",
+      "archivedName": "iris-bailian-20260925-identity-review-thinking-started.json",
+      "originalSha256": "37fd6d0e429d72a75743c7c09679d72762f9207eeee63405985cbf874b797cee",
+      "originalBytes": 1304,
+      "archivedSha256": "6401f518c550ffb68d0adef4733a68b2d3f32822ca1ecbce4346ee1cb9dd3015",
+      "archivedBytes": 1309,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "identity-review-thinking-20260925.halted.json",
+      "archivedName": "iris-bailian-20260925-identity-review-thinking-halt.json",
+      "originalSha256": "bfa225ad25aaa1f07f9a35ea2348afc5bc900c8add3bea6b461f4984211a492a",
+      "originalBytes": 108,
+      "archivedSha256": "bfa225ad25aaa1f07f9a35ea2348afc5bc900c8add3bea6b461f4984211a492a",
+      "archivedBytes": 108,
+      "exactRedactions": []
+    },
+    {
+      "sourceName": "identity-review-thinking-20260925.mts",
+      "archivedName": "iris-bailian-20260925-identity-review-thinking-harness.txt",
+      "originalSha256": "c51fdbb52b15920fd98f64247e4db572cd3b6bb68ed69c1c077c9c909893f764",
+      "originalBytes": 20571,
+      "archivedSha256": "ea3c697509dbfe810b6ea3807bbe7816ca780caa4eb9adba24f00e073aa80cbd",
+      "archivedBytes": 20575,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-identity-review-thinking.ps1",
+      "archivedName": "iris-bailian-20260925-identity-review-thinking-launcher.txt",
+      "originalSha256": "fd94e8ddb409ed8aa0118c7437714281020473e31f304c42fa0c029d0fafb0ae",
+      "originalBytes": 3231,
+      "archivedSha256": "d10059f4a592475e9f305fd025b2d80a2dd92c9f6aec31c976030f0a82b4d826",
+      "archivedBytes": 3236,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

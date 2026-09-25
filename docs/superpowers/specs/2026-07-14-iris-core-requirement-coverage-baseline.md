@@ -207,10 +207,14 @@ IRIS-CORE-005继续**部分实现**；本次无完整语义、精确SHA CI、真
 13文件/469项条件跳过，类型/build exit0，CLI7项通过。
 七例各一轮实模窗口已结束：17次HTTP200/55396 reported usage tokens，
 `inference`因scope review validation失败、`paraphrase`误介入，执行未通过；
-独立语义4通过/3失败（`inference`无依据数字目标、`qualified-risk`过度确定而
+独立语义4通过/3失败（`inference`生成无依据的行业1%–5%转化率且review要求无法核算的绝对收入、`qualified-risk`过度确定而
 review漏检、`paraphrase`无视真实历史同义复述）。原报告semantic字段pending
 不回写。不能据输入路径修复推断条件后果确定性已修好。
 前序完整集22/30及两次六例4/2失败均保留。
+同应用thinking开启/budget4096的独立profile对照仅跑`qualified-risk`首例：
+1次HTTP200/5486 reported usage tokens（含1614 reasoning tokens），审核六字段
+与整体true、本地也true，仍误通过；其余四例未调用。不得把它写成五例结果或
+把thinking当默认修复。IRIS-CORE-005状态不变。
 IRIS-CORE-005仍**部分实现**；完整语义、精确SHA CI、真实单群和部署未验收。
 
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
