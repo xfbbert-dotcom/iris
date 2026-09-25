@@ -118,3 +118,29 @@ test("review includes a latest handling message even when it was not selected as
   expect(inputs[1].evidence[0].ref).toBe(context.sources[0]!.ref);
   expect(context.sources).toHaveLength(2);
 });
+
+test("initial and final reviewers receive a literal, non-normalizing receipt contract and repair sees local mismatches", async () => {
+  const context = pdContextWithIssue();
+  const original = pdAssessment();
+  const draft = { text: "预算10万元，建议核对预算。", evidenceRefs: original.evidenceRefs };
+  const calls: { stage: string; messages: readonly OpenAICompatibleChatMessage[] }[] = [];
+  const client = { complete: vi.fn(async (messages: readonly OpenAICompatibleChatMessage[], options?: OpenAICompatibleChatCompletionOptions) => {
+    const stage = options!.responseFormat!.json_schema.name; calls.push({ stage, messages });
+    if (stage !== "iris_proactive_discussion_scope_review") return JSON.stringify({ assessment: original, draft });
+    const input = JSON.parse(messages[1]!.content);
+    return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: true, reason: "数字算术等价但未按字面合同返回。",
+      requiredNumbers: [{ label: "预算", expectedValue: "100000", unit: "元", draftQuote: "预算10万元" }],
+      adviceQuote: "建议核对预算", ...(input.previousReview ? { numberRevisions: [] } : {}) });
+  }) };
+  expect(await createPdModel({ client }).render({ context, assessment: original })).toBeNull();
+  const reviews = calls.filter(call => call.stage === "iris_proactive_discussion_scope_review");
+  expect(reviews).toHaveLength(2);
+  for (const call of reviews) {
+    expect(call.messages[0]!.content).toContain("不得把金额换算为另一单位");
+    expect(call.messages[0]!.content).toContain("不得补写草稿没有的单位字");
+  }
+  const repair = calls.find(call => call.stage === "iris_proactive_discussion_pair_repair")!;
+  expect(repair.messages[0]!.content).toContain("算术等价不代表字面凭据合格");
+  expect(JSON.parse(repair.messages[1]!.content).review.reason).toContain("100000 元");
+  expect(client.complete).toHaveBeenCalledTimes(4);
+});
