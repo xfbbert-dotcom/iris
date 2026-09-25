@@ -1,0 +1,22 @@
+{
+  "rounds": 1,
+  "selectedCaseIds": [
+    "arithmetic",
+    "inference",
+    "qualified-risk",
+    "paraphrase",
+    "material-update",
+    "handled"
+  ],
+  "startedAt": "2026-09-25T12:49:58.874Z",
+  "output": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/review-context-diagnostic-20260925.json",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "da082856e375dea2fc72f11aa2fe1108eeb9728429c45bed5ab1acfd76bcfed2",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+    "harness": "509844f804df9e548281056608bbac9d9fd1a665f7c3ba1bb5044728a812d2ba",
+    "launcher": "b11292115a3534ce5b880440cac5961fa9546643176f5ca349581499086842c5"
+  }
+}

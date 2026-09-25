@@ -29,11 +29,26 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 25 literal-receipt diagnostic](docs/development/iris-literal-receipts-20260925.md)
+is bound to application `bdef93c0`. Its six-case run had 16 HTTP200 calls and five execution
+successes, but independent review found only four semantic passes: `inference` was wrongly
+rejected and `qualified-risk` contained an overcertain consequence that review missed. It is
+not a full-suite, CI, deployment or live-group acceptance.
+
+The [September 25 review-context repair](docs/development/iris-review-context-20260925.md),
+application `a0a7f2a0`, supplies current discussion and prior intervention state to review and
+repair, preserves an existing issue's last accepted source basis for generation, and fails before
+generation when its authorized text is missing. Five staged regressions, focused66, Core4779/469
+conditional skips and type/build passed. A bounded six-case live diagnostic returned four independent
+passes and two incomplete drafts after 18 HTTP200 calls; it does not establish full semantic acceptance.
+The earlier full run remains 22/30. No push, deployment or activation occurred.
+
 The [September 25 review-diagnostics fix](docs/development/iris-review-diagnostics-20260925.md)
 is locally committed as application `45fe8968`. A negative model review no longer hides
 simultaneous local field, number, advice-quote or continuity failures from the sole pair repair.
 Four tests went red then green; 90 focused tests, Core4774/469 conditional skips, type/build,
-and an independent 69-test scope review passed. A separate context fix is still uncommitted.
+and an independent 69-test scope review passed. The separate context fix is recorded above as
+application `a0a7f2a0`; these earlier gates are not its acceptance evidence.
 The earlier full-model result remains 22/30 semantically accepted. No repaired full-model or
 live-group acceptance, push, deployment or activation is claimed.
 

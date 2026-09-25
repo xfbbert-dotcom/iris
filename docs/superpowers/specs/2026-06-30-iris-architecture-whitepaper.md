@@ -536,6 +536,16 @@ existing call bound still apply. This is
 diagnostic completeness, not proof that the model will repair the pair. The
 [diagnostic aggregation fix](../../development/iris-review-diagnostics-20260925.md) retains the
 failed full-suite baseline separately from focused local regression.
+An assessment for an existing issue may select new evidence without selecting its last accepted
+basis. Before source-first pair generation or review, close its locked fact references over that
+last accepted basis when its current authorized text is available. A source binding alone is not
+text: fail before generation if selected or prior-basis text is unavailable; never fill the gap
+with old model prose. Keep material-change references tied to the current change. Preserve all
+authorized fragments sharing one source reference. Review and the sole repair may read current
+discussion and prior intervention state to judge necessity and semantic duplication, while the
+candidate's factual claims remain limited to locked evidence references. This scoped rule and its
+remaining historic-text boundary are recorded in the
+[context repair](../../development/iris-review-context-20260925.md); it is not a semantic-pass claim.
 Initial prose generation must reconstruct both the retained assessment and draft from authorized
 sources, rather than copying unverified prior reasoning and changing only the outward wording.
 Carry the selected issue identity and locked decision/evidence/change structure, not the earlier

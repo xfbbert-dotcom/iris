@@ -203,6 +203,30 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   and a five-file/90-test focused run cover the regression; Core4774/469 conditional skips, type/build
   and independent 69-test scope review passed locally. Do not count fuller repair instructions
   as a successful model repair or erase the original 22/30 semantic result; the other failures remain.
+- **Review lacked discussion state and a prior source baseline (2026-09-25):** The old full run
+  retained repeated intervention, an unsupported missing-baseline assertion and excessive review
+  reasons. Initial assessment already had current discussion; generation/review narrowed to selected
+  references, and review/repair lacked the read-only current discussion and prior intervention state.
+  Existing-issue updates could drop the last accepted basis text. Application `a0a7f2a0` and the
+  [context repair record](../development/iris-review-context-20260925.md) carry necessity context
+  to both reviews/sole repair, close locked evidence over the last accepted basis and fail before
+  generation when authorized text is absent. Independent review found a P1: the new presence
+  check rejected multiple fragments under one ref. Aggregation now accepts and retains them,
+  also correcting the earlier Map's last-fragment-only projection. Five staged RED/GREEN
+  regressions, focused66, Core4779/469 conditional skips and type/build passed locally. An old
+  source binding is not itself readable content; historic basis outside current items still fails
+  closed. The six-case diagnostic later returned four independent passes and two incomplete
+  drafts; both rejections involved numeric/unit quote receipts, with additional unsupported
+  material-update content. Do not promote these local guards or erase the original 22/30 failure.
+- **Literal receipts improved, but current-assessment timing and conditional certainty failed (2026-09-25):**
+  Application `bdef93c0` clarified literal number/unit receipts and comparison prose, with one
+  prompt-contract regression. Its [dated diagnostic](../development/iris-literal-receipts-20260925.md)
+  used 16 HTTP200 calls across six original cases. Five completed at the execution layer, but
+  independent semantic review passed only arithmetic, material-update, paraphrase and handled.
+  Inference was wrongly rejected after two reviews treated this round's original assessment as
+  historical handled opinion; qualified-risk's final assessment asserted an overcertain
+  conditional consequence while review returned true. Preserve both failures and the old 22/30;
+  no full-suite, live-group or deployment acceptance follows from the four passes.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

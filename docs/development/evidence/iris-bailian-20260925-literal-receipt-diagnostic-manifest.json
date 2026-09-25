@@ -1,0 +1,162 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-25T13:12:05.626Z",
+  "transformations": [
+    "Replace the exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace only the exact local Windows user path component with LOCAL_USER.",
+    "Omit raw provider responses with reasoning fields, retaining original wire hashes/byte counts, decoded response without reasoning and omitted-field hashes/lengths."
+  ],
+  "note": "Private originals remain unchanged. Original wire/source hashes refer to original bytes. No credential or DPAPI file is read or copied. Launcher is inert text. Raw independentSemanticReview stays pending; independent 4-pass/2-fail disposition is in the dated record.",
+  "disposition": "Six original cases: 16 HTTP200 calls, five execution successes and one rejection; independent semantic review found four passes and two failures. No full-suite or deployment acceptance.",
+  "originalReportSha256": "5e40ecbe2f7618655b5a9372eb4928fbfb02f6d43353c4808d81d7c091ccb830",
+  "wireValidation": {
+    "requests": 16,
+    "completions": 16,
+    "http200": 16,
+    "originalResponseBytes": 40002,
+    "requestAndResponseHashesVerified": true,
+    "completionContentAndCaseLinksVerified": true
+  },
+  "sourceIdentity": {
+    "recordedHead": "bdef93c045903146e009d624799264b4cae300a0",
+    "recordedWorkingTreeStatus": "",
+    "files": [
+      {
+        "path": "apps/core/src/config/env.ts",
+        "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedSha256": "0f6a9c820e876853fe9868bcc24552583b83d25b6c1da1191ed416e53017aeb5",
+        "currentWorkingTreeSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedBytes": 38698,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 1273
+      },
+      {
+        "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+        "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedSha256": "909f5559359bb8bd34d2d274b216d5435ee8b79a27272414ed6f09cd261c2f20",
+        "currentWorkingTreeSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedBytes": 11237,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 306
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/model.ts",
+        "recordedSha256": "983bf9ecffadccfea8e95008fcd1b4b7dbe665b70eca41608a1a95cce9a8ff3b",
+        "committedSha256": "983bf9ecffadccfea8e95008fcd1b4b7dbe665b70eca41608a1a95cce9a8ff3b",
+        "currentWorkingTreeSha256": "d072d47604b8aeccc2b611caff815061d98e8d6eb9930f522036781b192f282b",
+        "committedBytes": 44740,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+        "recordedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "currentWorkingTreeSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedBytes": 10345,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "scripts/pilot/proactive-discussion-eval.ts",
+        "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "currentWorkingTreeSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedBytes": 42439,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      }
+    ],
+    "originalHarnessAndLauncherHashesVerified": true
+  },
+  "files": [
+    {
+      "sourceName": "literal-receipt-diagnostic-20260925.json",
+      "archivedName": "iris-bailian-20260925-literal-receipt-diagnostic-report.json",
+      "originalSha256": "5e40ecbe2f7618655b5a9372eb4928fbfb02f6d43353c4808d81d7c091ccb830",
+      "originalBytes": 562945,
+      "archivedSha256": "964869e62d6f4ef8b914e17c04ff6af9daa934a4ac32d3e81345012c7e9947f7",
+      "archivedBytes": 562938,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 17
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 2
+        }
+      ],
+      "wireValidation": {
+        "requests": 16,
+        "completions": 16,
+        "http200": 16,
+        "originalResponseBytes": 40002,
+        "requestAndResponseHashesVerified": true,
+        "completionContentAndCaseLinksVerified": true
+      },
+      "providerReasoningOmissions": []
+    },
+    {
+      "sourceName": "literal-receipt-diagnostic-20260925.started.json",
+      "archivedName": "iris-bailian-20260925-literal-receipt-diagnostic-started.json",
+      "originalSha256": "4e227f63fb8fb1392bca93770344b1ad7f0a64fa90116d97f4e33965c90a2254",
+      "originalBytes": 1113,
+      "archivedSha256": "69f7ec82fc3aad04eca0a6ca6dd25df285b264f40b17f0b3fa546ab33c0273f3",
+      "archivedBytes": 1118,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "literal-receipt-diagnostic-20260925.halted.json",
+      "archivedName": "iris-bailian-20260925-literal-receipt-diagnostic-halt.json",
+      "originalSha256": "a6c128dfb9071f8507fac386af80881b3d0b9ab179a63d647dd40ff0f8fb62f1",
+      "originalBytes": 116,
+      "archivedSha256": "a6c128dfb9071f8507fac386af80881b3d0b9ab179a63d647dd40ff0f8fb62f1",
+      "archivedBytes": 116,
+      "exactRedactions": []
+    },
+    {
+      "sourceName": "literal-receipt-diagnostic-20260925.mts",
+      "archivedName": "iris-bailian-20260925-literal-receipt-diagnostic-harness.txt",
+      "originalSha256": "72887b4ef6f21648bb49c15eda3e7d92bb5bb81a3ffc55a89e0dbe0a807efa1f",
+      "originalBytes": 20409,
+      "archivedSha256": "9b1d82f80727a731bb31cc1c85be8ea73cae6aee1460d61b58edd45cb99e193e",
+      "archivedBytes": 20413,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-literal-receipt-diagnostic.ps1",
+      "archivedName": "iris-bailian-20260925-literal-receipt-diagnostic-launcher.txt",
+      "originalSha256": "5c9e7bc9bd1bdcd6bb780e62b84abc0d58695021df12ca229599ffcddcc36ec3",
+      "originalBytes": 2801,
+      "archivedSha256": "d151af122d250f66372b4e50294d7cefc55970106dc619741851c7a7c3ba02c1",
+      "archivedBytes": 2806,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

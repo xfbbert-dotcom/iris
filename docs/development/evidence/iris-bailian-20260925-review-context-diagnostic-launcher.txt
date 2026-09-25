@@ -1,0 +1,51 @@
+param([switch]$QuotaVerified)
+$ErrorActionPreference = 'Stop'
+if (!$QuotaVerified.IsPresent -or $args.Count -ne 0) {
+  throw 'Fresh exact qwen3.7-plus free-quota row and stop-when-exhausted setting must be verified before this one-shot diagnostic.'
+}
+$taskFolder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918'
+$taskRoot = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86'
+foreach ($taskMarker in @('review-context-diagnostic-20260925.json',
+  'review-context-diagnostic-20260925.started.json',
+  'review-context-diagnostic-20260925.halted.json')) {
+  if (Test-Path -LiteralPath (Join-Path $taskFolder $taskMarker)) {
+    throw 'Existing diagnostic artifact; no overwrite or repeat.'
+  }
+}
+if (!(Test-Path -LiteralPath (Join-Path $taskFolder 'source-first-full-20260925.json'))) {
+  throw 'Retained original failed full report is unavailable.'
+}
+Add-Type -AssemblyName System.Security
+$keyPath = Join-Path $taskFolder 'bailian-key.dpapi'
+$clearBytes = $null
+$taskProcess = $null
+$taskStart = $null
+$resultCode = 1
+try {
+  $clearBytes = [Security.Cryptography.ProtectedData]::Unprotect(
+    [IO.File]::ReadAllBytes($keyPath), $null,
+    [Security.Cryptography.DataProtectionScope]::CurrentUser)
+  $taskStart = [Diagnostics.ProcessStartInfo]::new()
+  $taskStart.FileName = 'D:/软件安装/node.exe'
+  $taskStart.WorkingDirectory = $taskRoot
+  $taskStart.UseShellExecute = $false
+  $taskStart.CreateNoWindow = $true
+  $taskStart.ArgumentList.Add('--import')
+  $taskStart.ArgumentList.Add('tsx')
+  $taskStart.ArgumentList.Add((Join-Path $taskFolder 'review-context-diagnostic-20260925.mts'))
+  $taskStart.ArgumentList.Add('--quota-verified')
+  $taskStart.Environment['IRIS_BAILIAN_EVAL_KEY'] = [Text.Encoding]::UTF8.GetString($clearBytes)
+  $taskProcess = [Diagnostics.Process]::Start($taskStart)
+  $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null
+  [Array]::Clear($clearBytes, 0, $clearBytes.Length)
+  $clearBytes = $null
+  $taskProcess.WaitForExit()
+  $resultCode = $taskProcess.ExitCode
+} catch {
+  Write-Error 'Private review-context diagnostic launcher failed; no credential details are logged.'
+} finally {
+  if ($null -ne $taskStart) { $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null }
+  if ($null -ne $clearBytes) { [Array]::Clear($clearBytes, 0, $clearBytes.Length) }
+  if ($null -ne $taskProcess) { $taskProcess.Dispose() }
+}
+exit $resultCode
