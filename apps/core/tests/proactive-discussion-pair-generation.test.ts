@@ -35,7 +35,8 @@ test("first generation and review replace the stale assessment together with the
   expect(original.reasoning).toBe("16万元减10万元等于-6万元，因此必然无法履约。");
   expect(client.complete).toHaveBeenCalledTimes(2);
   const input = JSON.parse(client.complete.mock.calls[1]![0][1]!.content);
-  expect(input).toMatchObject({ ...pair, originalAssessment: original });
+  expect(input).toMatchObject({ ...pair, identityTarget: { issueRef: original.issueRef,
+    evidenceRefs: original.evidenceRefs } });
   expect(client.complete.mock.calls[0]![1]!.responseFormat!.json_schema.schema.required).toEqual(["assessment", "draft"]);
 });
 
@@ -94,9 +95,12 @@ test("the sole repair receives the generated pair while final review still compa
   expect(await createPdModel({ client }).render({ context: pdContext(), assessment: original })).toEqual(repaired);
   expect(client.complete).toHaveBeenCalledTimes(4);
   const repairInput = JSON.parse(client.complete.mock.calls[2]![0][1]!.content);
-  expect(repairInput).toMatchObject({ ...pair, review: { supported: false }, originalAssessment: original });
+  expect(repairInput).toMatchObject({ ...pair, review: { supported: false },
+    identityTarget: { issueRef: original.issueRef, evidenceRefs: original.evidenceRefs } });
   const finalInput = JSON.parse(client.complete.mock.calls[3]![0][1]!.content);
-  expect(finalInput).toMatchObject({ ...repaired, originalAssessment: original, previousReview: { requiredNumbers: review().requiredNumbers } });
+  expect(finalInput).toMatchObject({ ...repaired,
+    identityTarget: { issueRef: original.issueRef, evidenceRefs: original.evidenceRefs },
+    previousReview: { requiredNumbers: review().requiredNumbers } });
 });
 
 test.each(["decision", "reason", "issueKind", "evidence", "changeKind", "changeEvidence", "draftEvidence"])(
@@ -131,7 +135,7 @@ test("first review can reject same-source issue switching and a repeated rejecti
     if (stage === "iris_proactive_discussion_draft") return pair.draft;
     if (stage !== "iris_proactive_discussion_scope_review") return pair;
     const input = JSON.parse(messages[1]!.content);
-    const switched = input.originalAssessment?.issueRef?.description === "招聘预算不足"
+    const switched = input.identityTarget?.issueRef?.description === "招聘预算不足"
       && input.assessment.issueRef.description === "另一件权限管理问题";
     return { ...review(!switched), ...(input.previousReview ? { numberRevisions: [] } : {}) };
   });

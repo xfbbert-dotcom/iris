@@ -29,7 +29,7 @@ test("existing issue generation keeps the verified old baseline in every locked 
   expect(inputs[1].evidence.map((item: { ref: string }) => item.ref)).toEqual(expectedRefs);
   expect(inputs[1].evidence[1].text).toBe(context.items[0]!.text);
   expect(inputs[2].evidence.map((item: { ref: string }) => item.ref)).toEqual(expectedRefs);
-  expect(inputs[2].originalAssessment.evidenceRefs).toEqual(expectedRefs);
+  expect(inputs[2].identityTarget?.evidenceRefs).toEqual(expectedRefs);
   expect(selected.evidenceRefs).toEqual([newRef]);
   expect(client.complete).toHaveBeenCalledTimes(3);
 });
@@ -94,10 +94,65 @@ test("both reviews and the sole repair receive the current discussion and prior 
     expect(input.discussion.suppliedIssues[0]).toMatchObject({ id: context.issues[0]!.id,
       state: "surfaced", lastSuggestion: context.issues[0]!.lastSuggestion });
     expect(input.evidence.map((item: { ref: string }) => item.ref)).toEqual(original.evidenceRefs);
+    expect(input.identityTarget?.issueRef).toEqual({ kind: "existing", id: context.issues[0]!.id });
+    expect(input).not.toHaveProperty("originalAssessment");
   }
   // The first source-grounded generation must not regain old opinion prose.
   expect(inputs[0]!.input).not.toHaveProperty("discussion");
   expect(JSON.stringify(inputs[0]!.input)).not.toContain(context.issues[0]!.lastSuggestion);
+});
+
+test("both reviews and repair receive an unsent identity target without the original assessment prose", async () => {
+  const context = pdContextWithIssue();
+  context.issues = [];
+  const original = { ...pdAssessment(), observation: "OLD_INTERNAL_OBSERVATION",
+    reasoning: "OLD_INTERNAL_REASONING", suggestion: "OLD_INTERNAL_SUGGESTION",
+    materialChange: { ...pdAssessment().materialChange, explanation: "OLD_INTERNAL_CHANGE" } };
+  const candidate = pdAssessment();
+  const draft = { text: "建议先核对预算。", evidenceRefs: original.evidenceRefs };
+  const inputs: { stage: string; input: any }[] = [];
+  let reviewCount = 0;
+  const client = { complete: vi.fn(async (messages: readonly OpenAICompatibleChatMessage[], options?: OpenAICompatibleChatCompletionOptions) => {
+    const stage = options!.responseFormat!.json_schema.name;
+    const input = JSON.parse(messages[1]!.content);
+    inputs.push({ stage, input });
+    if (stage === "iris_proactive_discussion_scope_review") {
+      reviewCount += 1;
+      return JSON.stringify({ fieldChecks: pdReviewFieldChecks(), supported: reviewCount === 2,
+        reason: reviewCount === 1 ? "当前候选需要核对措辞。" : "当前候选可保留。",
+        requiredNumbers: [], adviceQuote: draft.text });
+    }
+    return JSON.stringify({ assessment: candidate, draft });
+  }) };
+
+  expect(await createPdModel({ client }).render({ context, assessment: original }))
+    .toEqual({ assessment: candidate, draft });
+  expect(inputs.map(({ stage }) => stage)).toEqual([
+    "iris_proactive_discussion_generated_pair", "iris_proactive_discussion_scope_review",
+    "iris_proactive_discussion_pair_repair", "iris_proactive_discussion_scope_review",
+  ]);
+  // This verifies the wire's projection and time-role boundary, not model semantic judgment.
+  for (const { input } of inputs.slice(1)) {
+    expect(input).not.toHaveProperty("originalAssessment");
+    expect(input.identityTarget).toEqual({
+      decision: "intervene", reason: "material_issue", issueRef: { kind: "new", description: "招聘预算不足" },
+      evidenceRefs: original.evidenceRefs,
+      materialChange: { kind: "new_issue", evidenceRefs: original.materialChange.evidenceRefs },
+    });
+    expect(input.evaluationContext).toEqual({
+      deliveryState: "not_sent",
+      identityTargetRole: "identity_only",
+      priorHandlingSource: "discussion",
+    });
+    for (const oldProse of [original.observation, original.reasoning, original.suggestion, original.materialChange.explanation]) {
+      expect(JSON.stringify(input)).not.toContain(oldProse);
+    }
+    expect(input.discussion.suppliedIssues).toEqual([]);
+    expect(input.assessment).toEqual(candidate);
+    expect(input.draft).toEqual(draft);
+  }
+  expect(inputs[0]!.input).not.toHaveProperty("evaluationContext");
+  expect(inputs[0]!.input).not.toHaveProperty("originalAssessment");
 });
 
 test("review includes a latest handling message even when it was not selected as prose evidence", async () => {

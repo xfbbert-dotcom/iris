@@ -80,7 +80,10 @@ test.each([false, true])("one repair rechecks the current pair; final field fail
   expect(repairInput.review).toMatchObject({ supported: false, fieldChecks: firstReview.fieldChecks });
   const finalInput = JSON.parse(client.complete.mock.calls[3]![0][1]!.content);
   expect(finalInput.assessment).toEqual(repaired.assessment);
-  expect(finalInput.originalAssessment).toEqual(original);
+  expect(finalInput.identityTarget).toEqual({ decision: original.decision, reason: original.reason,
+    issueRef: original.issueRef, evidenceRefs: original.evidenceRefs,
+    materialChange: { kind: original.materialChange.kind, evidenceRefs: original.materialChange.evidenceRefs } });
+  expect(finalInput).not.toHaveProperty("originalAssessment");
   expect(finalInput.previousReview.requiredNumbers).toEqual(firstReview.requiredNumbers);
   for (const index of [1, 3]) {
     const prompt = client.complete.mock.calls[index]![0][0]!.content;

@@ -55,7 +55,10 @@ test("returns one jointly reviewed assessment and draft without adding a success
   const reviewMessages = client.complete.mock.calls[1]?.[0] ?? [];
   const reviewInput = JSON.parse(reviewMessages[1]?.content ?? "{}");
   expect(reviewInput).toMatchObject({ assessment, draft: originalDraft });
-  expect(reviewInput.originalAssessment).toEqual(assessment);
+  expect(reviewInput.identityTarget).toEqual({ decision: assessment.decision, reason: assessment.reason,
+    issueRef: assessment.issueRef, evidenceRefs: assessment.evidenceRefs,
+    materialChange: { kind: assessment.materialChange.kind, evidenceRefs: assessment.materialChange.evidenceRefs } });
+  expect(reviewInput).not.toHaveProperty("originalAssessment");
   expect(reviewMessages[0]?.content).toContain("assessment 和 draft");
   expect(reviewMessages[0]?.content).toContain("建议核实");
   expect(reviewMessages[0]?.content).toContain("已经执行");
@@ -85,7 +88,8 @@ test("repairs semantic text once, re-reviews it, and returns only the accepted p
   expect(repairInput).toMatchObject({ assessment: pdAssessment(), draft: originalDraft,
     review: { supported: false } });
   const finalReviewInput = JSON.parse(client.complete.mock.calls[3]?.[0]?.[1]?.content ?? "{}");
-  expect(finalReviewInput).toMatchObject({ ...repaired, originalAssessment: pdAssessment() });
+  expect(finalReviewInput).toMatchObject({ ...repaired,
+    identityTarget: { issueRef: pdAssessment().issueRef, evidenceRefs: pdAssessment().evidenceRefs } });
 });
 
 test("lets the final model review reject a repair that switches to another issue within the same references", async () => {
@@ -107,7 +111,7 @@ test("lets the final model review reject a repair that switches to another issue
       if (callIndex === 3) return JSON.stringify(switched);
 
       const input = JSON.parse(messages[1]?.content ?? "{}");
-      const switchedIssueDetected = input.originalAssessment?.issueRef?.description === "招聘预算不足"
+      const switchedIssueDetected = input.identityTarget?.issueRef?.description === "招聘预算不足"
         && input.assessment?.issueRef?.description === "权限审批流程存在风险";
       return JSON.stringify({
         fieldChecks: pdReviewFieldChecks(),
