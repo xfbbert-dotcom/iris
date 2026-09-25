@@ -148,7 +148,8 @@ test("carries grounded arithmetic and fallible-review rules through repair and f
   expect(repairMessages[0]?.content).toContain("复核理由是待核对的诊断，不是事实裁决；授权原文优先");
   expect(repairMessages[0]?.content).toContain("不能通过删去有依据的关键数值迎合错误复核");
   expect(repairMessages[0]?.content).toContain("qualified_inference");
-  expect(JSON.parse(repairMessages[1]?.content ?? "{}").review).toEqual(rejection);
+  expect(JSON.parse(repairMessages[1]?.content ?? "{}").review).toEqual({ ...rejection,
+    reason: expect.stringContaining(rejection.reason) });
 });
 
 test("the runtime repair validator permits semantic corrections but locks structural identity and refs", async () => {
@@ -250,7 +251,7 @@ test("uses the existing pair repair when an affirmative review cites the 6 insid
   expect(client.complete).toHaveBeenCalledTimes(4);
   const repairInput = JSON.parse(client.complete.mock.calls[2]?.[0]?.[1]?.content ?? "{}");
   expect(repairInput.review).toMatchObject({ supported: false,
-    reason: "复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。" });
+    reason: expect.stringContaining("6 万元") });
   expect(repairInput.draft).toEqual(missingGap);
   expect(repairInput.assessment).toEqual(originalAssessment);
   const scopeFormat = client.complete.mock.calls[1]?.[1]?.responseFormat?.json_schema.schema;

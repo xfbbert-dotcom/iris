@@ -64,26 +64,38 @@ export function validatePdScopeReview(value: unknown, draftText: string, history
   const parsed = (hasHistory ? finalScopeReviewSchema : scopeReviewSchema).safeParse(value);
   if (!parsed.success) throw new Error("proactive discussion scope review was invalid");
   const review: PdScopeReview = parsed.data;
-  if (!review.supported) return review;
+  const failures: string[] = [];
   // Completeness and conjunction are deterministic; the model's semantic
   // verdicts are still fallible. A correct draft cannot waive an assessment defect.
   const failedFields = PD_REVIEW_FIELDS.filter(field => !review.fieldChecks[field].supported);
   if (failedFields.length > 0) {
-    return { ...review, supported: false,
-      reason: `判断字段复核未通过：${failedFields.join("、")}；请依据各项理由核对并修正同一问题。` };
+    failures.push(`判断字段复核未通过：${failedFields.join("、")}；请依据各项理由核对并修正同一问题。`);
   }
   // This proves only the returned quote claims, not that the model listed every
   // necessary number or correctly assessed the meaning of the quoted text.
-  if (draftText.length > MAX_QUOTE_CHARS || review.adviceQuote === null
-    || !draftText.includes(review.adviceQuote)
-    || !review.requiredNumbers.every(number => numberQuoteMatches(draftText, number))) {
-    return { ...review, supported: false,
-      reason: "复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。" };
+  const invalidNumbers = review.requiredNumbers.flatMap((number, index) =>
+    numberQuoteMatches(draftText, number) ? [] : [{ number, index }]);
+  const adviceInvalid = review.adviceQuote === null || !draftText.includes(review.adviceQuote);
+  if (draftText.length > MAX_QUOTE_CHARS || adviceInvalid || invalidNumbers.length > 0) {
+    failures.push("复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。");
+    for (const { number, index } of invalidNumbers) {
+      failures.push(`数字凭据[${index}]“${number.label.slice(0, 40)}”：当前草稿引文未同时支持 ${number.expectedValue} ${number.unit}；核对数值、单位及原句，不得借用来源或改写引文。`);
+    }
+    if (adviceInvalid) failures.push("建议凭据未对应当前草稿原句；核对 adviceQuote 或补齐实际建议。");
   }
   if (hasHistory && !numberHistoryAccountedFor(review, history)) {
-    return { ...review, supported: false, reason: "最终复核未完整处理此前数字核对项。" };
+    failures.push("最终复核未完整处理此前数字核对项。");
   }
-  return review;
+  if (failures.length === 0) return review;
+  // The sole repair must see every known local defect, even if the model
+  // already rejected another field. Never promote a model rejection to true.
+  const localReason = failures.join("\n");
+  if (!review.supported && review.reason.includes(localReason)) return review;
+  const reason = review.supported ? localReason : `${localReason}\n模型复核：${review.reason}`;
+  const truncation = "…（原复核理由截断；字段判定保留）";
+  return { ...review, supported: false,
+    reason: reason.length <= MAX_REASON_CHARS ? reason
+      : reason.slice(0, MAX_REASON_CHARS - truncation.length) + truncation };
 }
 
 function numberHistoryAccountedFor(review: PdScopeReview, history: PdScopeReviewHistory): boolean {

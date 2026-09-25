@@ -45,7 +45,7 @@ test("preserves the original affirmative result only when its actual advice quot
   for (const adviceQuote of [null, "建议批准预算", " 建议核对预算"]) {
     const invalid = { ...original, adviceQuote };
     expect(validate(invalid, "差额6万元，建议核对预算。")).toMatchObject({ supported: false,
-      reason: "复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。" });
+      reason: expect.stringContaining("建议凭据未对应当前草稿原句") });
     expect(invalid.supported).toBe(true);
   }
 });
@@ -56,9 +56,10 @@ test("does not normalize or rewrite a quote to manufacture a match", () => {
   expect(review.adviceQuote).toBe("建议核对预算é");
 });
 
-test("keeps semantic rejection unchanged even without affirmative quote receipts", () => {
+test("keeps semantic rejection and its reason while adding missing quote diagnostics", () => {
   const rejected = { ...positive(null), supported: false, reason: "事实类别被改变。", adviceQuote: null };
-  expect(validate(rejected, "访谈5人喜欢，不是已经付费。")).toEqual(rejected);
+  expect(validate(rejected, "访谈5人喜欢，不是已经付费。")).toEqual({ ...rejected,
+    reason: expect.stringContaining(rejected.reason) });
 });
 
 test("allows a declared empty number list without pretending it proves numeric completeness", () => {

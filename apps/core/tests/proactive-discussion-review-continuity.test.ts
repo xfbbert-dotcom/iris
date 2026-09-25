@@ -105,7 +105,7 @@ test("binds final review to the initial diagnosis and keeps the existing single-
   await expect(createPdModel({ client }).render({ context, assessment })).resolves.toEqual(repaired);
   expect(client.complete).toHaveBeenCalledTimes(4);
   const input = JSON.parse(requests[3].messages[1].content);
-  expect(input.previousReview).toEqual(firstReview);
+  expect(input.previousReview).toEqual({ ...firstReview, reason: expect.stringContaining(firstReview.reason) });
   expect(input.evidence.map((item: { ref: string }) => item.ref)).toEqual(assessment.evidenceRefs);
   expect(requests[1].options.responseFormat.json_schema.schema.required).not.toContain("numberRevisions");
   expect(requests[3].options.responseFormat.json_schema.schema.required).toContain("numberRevisions");
