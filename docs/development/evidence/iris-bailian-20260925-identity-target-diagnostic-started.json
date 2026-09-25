@@ -1,0 +1,26 @@
+{
+  "rounds": 1,
+  "selectedCaseIds": [
+    "arithmetic",
+    "inference",
+    "qualified-risk",
+    "paraphrase",
+    "material-update",
+    "handled",
+    "hypothesis"
+  ],
+  "startedAt": "2026-09-25T13:17:36.996Z",
+  "output": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/identity-target-diagnostic-20260925.json",
+  "commit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+  "applicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+    "harness": "7d3e2cfab015b6be81a22259aa246f047d22f9cf19e752becde069df6f8a4410",
+    "launcher": "1fc0c9e94ed5c361976327e5510f36a375e2261283618a545e1e509f6c8123c8"
+  },
+  "quotaEvidence": "2026-09-25 13:16 UTC authenticated exact qwen3.7-plus row: 617.96K of 1M remaining, expires 2026-12-18, stop when free exhausted enabled. Checked immediately before this one-shot diagnostic; shared quota UI can lag."
+}

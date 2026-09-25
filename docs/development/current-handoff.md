@@ -4,7 +4,18 @@
 
 ## 当前正在推进
 
-最新应用`bdef93c045903146e009d624799264b4cae300a0`的
+最新应用`04aa3a09f8548865b9178b001d575d7f800785b4`见
+[本轮评估身份与真实历史分离](iris-review-identity-20260925.md)：三次后续模型调用
+改用只含问题身份/锁定结构的`identityTarget`，不传本轮旧assessment的观察、
+理由、建议、变化说明正文；当前候选与真实discussion仍完整分开提供。修复前
+11项RED、相关90项GREEN，独立四文件58项通过；提交前Core261文件/4781项通过、
+13文件/469项条件跳过，类型/build exit0，CLI7项通过。七例受限实模窗口已结束，
+17次HTTP200/55396 usage tokens，`inference`与`paraphrase`执行失败；独立语义
+4通过/3失败：`inference`有无依据数字审核，`qualified-risk`条件后果过度确定但
+review全true，`paraphrase`漏真实历史、同义复述误介入。原report仍pending字段，
+独立结论只记在专项记录。无push、部署、启用或外发。
+
+前一应用`bdef93c045903146e009d624799264b4cae300a0`的
 [数字字面凭据澄清及六例诊断](iris-literal-receipts-20260925.md)已结束：16次HTTP200、
 55390 reported usage tokens；执行层5例成功、`inference`拒稿，但独立语义仅4通过/2失败。
 `inference`两次review把本轮assessment误作历史已处理意见；`qualified-risk`最终
@@ -294,7 +305,7 @@ Task 8 应用 `89f299f5` 已新增真实非 @ ingress → PG 登记 → worker �
 
 ## 未完成事项与下一步
 
-- 最新应用为`bdef93c0`，六例执行5成功/1拒稿、独立语义4通过/2失败，见[数字字面凭据记录](iris-literal-receipts-20260925.md)；前一应用`a0a7f2a0`的本地门禁和六例4通过/2未完整诊断见[当前讨论记录](iris-review-context-20260925.md)。`dcaa2995`的完整实模结果见[来源优先记录§3.2](iris-source-first-generation-20260920.md#32-9月25日完整15例两轮)：22项语义通过、8项未通过，不把HTTP200或executionPassed当作语义核准。
+- 最新应用为`04aa3a09`，本地门禁与七例独立语义4通过/3失败见[评估身份记录](iris-review-identity-20260925.md)；前一`bdef93c0`六例执行5成功/1拒稿、独立语义4通过/2失败见[数字字面凭据记录](iris-literal-receipts-20260925.md)。`a0a7f2a0`六例4通过/2未完整见[当前讨论记录](iris-review-context-20260925.md)；`dcaa2995`完整实模见[来源优先记录§3.2](iris-source-first-generation-20260920.md#32-9月25日完整15例两轮)，仅22/30语义通过，不把HTTP200或executionPassed当作语义核准。
 - 当前优先项是完整集的事实、数字、推断限定、漏报与重复介入验收。旧[字段复核](iris-field-review-20260920.md)与[连续性修复](iris-review-continuity-20260917.md)的失败和误通过仍保留，不重开包装/引文接线/连续性审查。若完整集出现具体失败，仅据原始输入输出形成下一项有限修复；不重复创建key、扩大模型权限、同配置抽样、付费回退或密集重试。通过后仍须精确SHA CI及另行获准的真实单群投递/停止/恢复，不能直接宣布已部署。没有当次授权不得推送、部署或开能力。
 - P2：缺少第三版的补充场景曾把已知新版错称第三版；后续重放正常不证明根治。原定两版比较若发生同类混淆，应重新判断是否阻塞。
 - P2/P3：来源标签和正式措辞、意图不确定时的提示表达；继续用具体用户反馈驱动，不无限扩展本轮修复。

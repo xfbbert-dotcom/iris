@@ -227,6 +227,20 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   historical handled opinion; qualified-risk's final assessment asserted an overcertain
   conditional consequence while review returned true. Preserve both failures and the old 22/30;
   no full-suite, live-group or deployment acceptance follows from the four passes.
+- **Current evaluation was mistaken for prior handling (2026-09-25):** In the `bdef93c0`
+  inference diagnostic, both reviews treated this run's original assessment as a historical
+  intervention and rejected a still-current draft. Application `04aa3a09` replaces that
+  model-facing prose in initial review, sole repair and final review with a locked identity-only
+  target and explicit unsent-evaluation role; current assessment/draft and actual discussion
+  history remain separate. The [dated record](../development/iris-review-identity-20260925.md)
+  retains 11 RED failures, 90 GREEN focused tests and Core4781/469 conditional skips.
+  Its seven-case run ended after 17 HTTP200 calls with inference scope-review validation failure
+  and paraphrase false intervention. Independent review passed four and failed three: inference
+  invented unverifiable numeric targets, qualified-risk asserted an unsupported extreme
+  consequence despite six true field checks, and paraphrase ignored real prior 16/10/6 history.
+  The raw report's semantic field remains pending; the dated record holds the independent
+  conclusion. Removing the mistaken-history input path is verified locally, but the broader
+  de-anchoring and certainty hypotheses failed this diagnostic.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

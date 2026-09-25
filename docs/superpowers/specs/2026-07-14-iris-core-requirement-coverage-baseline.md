@@ -197,6 +197,22 @@ IRIS-CORE-005继续**部分实现**；精确SHA CI、完整语义、真实单群
 原`a0a7f2a0`六例4/2及`dcaa2995`完整集22/30仍分别保留，不互相替代。
 IRIS-CORE-005继续**部分实现**；本次无完整语义、精确SHA CI、真实单群或部署验收。
 
+### 2026-09-25 本轮评估身份与真实历史分离
+
+应用`04aa3a09`在初审、唯一修正和终审中仅传本轮问题的锁定身份/引用结构，
+不再传旧assessment观察、理由、建议及变化说明正文；当前候选和真实讨论状态
+仍独立提供，内部schema/运行时身份锁、数字连续性和最多一次修正未变。见
+[专项记录](../../development/iris-review-identity-20260925.md)。修复前11项RED，
+相关90项GREEN，独立四文件58项通过；提交前Core261文件/4781项通过、
+13文件/469项条件跳过，类型/build exit0，CLI7项通过。
+七例各一轮实模窗口已结束：17次HTTP200/55396 reported usage tokens，
+`inference`因scope review validation失败、`paraphrase`误介入，执行未通过；
+独立语义4通过/3失败（`inference`无依据数字目标、`qualified-risk`过度确定而
+review漏检、`paraphrase`无视真实历史同义复述）。原报告semantic字段pending
+不回写。不能据输入路径修复推断条件后果确定性已修好。
+前序完整集22/30及两次六例4/2失败均保留。
+IRIS-CORE-005仍**部分实现**；完整语义、精确SHA CI、真实单群和部署未验收。
+
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 
 - Managed existing-page update code is implemented and locally verified behind the independent

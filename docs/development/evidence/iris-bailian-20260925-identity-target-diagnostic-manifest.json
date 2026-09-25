@@ -1,0 +1,162 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-25T13:27:11.531Z",
+  "transformations": [
+    "Replace the exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace only the exact local Windows user path component with LOCAL_USER.",
+    "Omit raw provider responses with reasoning fields, retaining original wire hashes/byte counts, decoded response without reasoning, and omitted-field hashes/lengths."
+  ],
+  "note": "Private originals remain unchanged. Original wire/source hashes refer to original bytes. No credential or DPAPI file is read or copied. Launcher is inert text. Raw independentSemanticReview stays pending; independent disposition belongs in the dated record.",
+  "disposition": "Seven-case run had 17 HTTP200 calls but two execution failures. No semantic, full-suite or deployment acceptance.",
+  "originalReportSha256": "f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215",
+  "wireValidation": {
+    "requests": 17,
+    "completions": 17,
+    "http200": 17,
+    "originalResponseBytes": 41464,
+    "requestAndResponseHashesVerified": true,
+    "completionContentAndCaseLinksVerified": true
+  },
+  "sourceIdentity": {
+    "recordedHead": "04aa3a09f8548865b9178b001d575d7f800785b4",
+    "recordedWorkingTreeStatus": "",
+    "files": [
+      {
+        "path": "apps/core/src/config/env.ts",
+        "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedSha256": "0f6a9c820e876853fe9868bcc24552583b83d25b6c1da1191ed416e53017aeb5",
+        "currentWorkingTreeSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedBytes": 38698,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 1273
+      },
+      {
+        "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+        "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedSha256": "909f5559359bb8bd34d2d274b216d5435ee8b79a27272414ed6f09cd261c2f20",
+        "currentWorkingTreeSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedBytes": 11237,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 306
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/model.ts",
+        "recordedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "currentWorkingTreeSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedBytes": 45593,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+        "recordedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "currentWorkingTreeSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedBytes": 10345,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "scripts/pilot/proactive-discussion-eval.ts",
+        "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "currentWorkingTreeSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedBytes": 42439,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      }
+    ],
+    "originalHarnessAndLauncherHashesVerified": true
+  },
+  "files": [
+    {
+      "sourceName": "identity-target-diagnostic-20260925.json",
+      "archivedName": "iris-bailian-20260925-identity-target-diagnostic-report.json",
+      "originalSha256": "f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215",
+      "originalBytes": 566463,
+      "archivedSha256": "c8682bc9d89399a80eba81a1083b231af5cec3d4bcc81b8d91aaae7ee9ff0392",
+      "archivedBytes": 566450,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 18
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ],
+      "wireValidation": {
+        "requests": 17,
+        "completions": 17,
+        "http200": 17,
+        "originalResponseBytes": 41464,
+        "requestAndResponseHashesVerified": true,
+        "completionContentAndCaseLinksVerified": true
+      },
+      "providerReasoningOmissions": []
+    },
+    {
+      "sourceName": "identity-target-diagnostic-20260925.started.json",
+      "archivedName": "iris-bailian-20260925-identity-target-diagnostic-started.json",
+      "originalSha256": "c3d8289d2d2c6eab1985201aa6c3c7cb102935a164a0848985bcffc00ba44597",
+      "originalBytes": 1492,
+      "archivedSha256": "7bea0b947b1a19def908653bf8d3acb066ec84c33a23e3ece59f18d173027e95",
+      "archivedBytes": 1497,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "identity-target-diagnostic-20260925.halted.json",
+      "archivedName": "iris-bailian-20260925-identity-target-diagnostic-halt.json",
+      "originalSha256": "bd9562efb7d54d0b488afbe11501824e10b82c74640d021abf6bb961f07da808",
+      "originalBytes": 116,
+      "archivedSha256": "bd9562efb7d54d0b488afbe11501824e10b82c74640d021abf6bb961f07da808",
+      "archivedBytes": 116,
+      "exactRedactions": []
+    },
+    {
+      "sourceName": "identity-target-diagnostic-20260925.mts",
+      "archivedName": "iris-bailian-20260925-identity-target-diagnostic-harness.txt",
+      "originalSha256": "7d3e2cfab015b6be81a22259aa246f047d22f9cf19e752becde069df6f8a4410",
+      "originalBytes": 19341,
+      "archivedSha256": "95276bf3c6bf3837c8a1e4b841f8d8c506ef87ce58035be5098aa336ad1ed06b",
+      "archivedBytes": 19345,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-identity-target-diagnostic.ps1",
+      "archivedName": "iris-bailian-20260925-identity-target-diagnostic-launcher.txt",
+      "originalSha256": "1fc0c9e94ed5c361976327e5510f36a375e2261283618a545e1e509f6c8123c8",
+      "originalBytes": 3243,
+      "archivedSha256": "132ceedae153c425618bc4f65d5c91058c0c10bdc682830fb679e4c68a20c56e",
+      "archivedBytes": 3248,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

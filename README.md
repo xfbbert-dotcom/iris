@@ -29,6 +29,15 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 25 review-identity projection](docs/development/iris-review-identity-20260925.md)
+is committed as application `04aa3a09`. It removes the current evaluation's old assessment
+prose from both reviews and the sole repair while retaining a locked issue identity, the
+current candidate and real discussion history. The local Core suite passed 4781 tests with
+469 conditional skips; type/build and evaluation CLI passed. The bounded seven-case run
+ended with 17 HTTP200 calls but failed execution on inference and paraphrase; independent
+semantic review passed four of seven, failing inference, qualified-risk and paraphrase.
+No full-suite or live-group acceptance is claimed.
+
 The [September 25 literal-receipt diagnostic](docs/development/iris-literal-receipts-20260925.md)
 is bound to application `bdef93c0`. Its six-case run had 16 HTTP200 calls and five execution
 successes, but independent review found only four semantic passes: `inference` was wrongly
