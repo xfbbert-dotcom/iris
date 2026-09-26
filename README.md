@@ -29,6 +29,13 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 26 fixed-review model comparison](docs/development/iris-qwen38-review-20260926.md)
+used newly authorized `Qwen3.8-Max` on the existing synthetic-test key, without an
+application or production model change. It stopped after two HTTP200 calls: the old arithmetic
+negative was rejected without recognizing its sign error, while `qualified-risk` was
+incorrectly accepted. Three planned controls were not called. The original full-suite and
+live-group acceptance gaps remain open.
+
 The [September 25 review-identity projection](docs/development/iris-review-identity-20260925.md)
 is committed as application `04aa3a09`. It removes the current evaluation's old assessment
 prose from both reviews and the sole repair while retaining a locked issue identity, the

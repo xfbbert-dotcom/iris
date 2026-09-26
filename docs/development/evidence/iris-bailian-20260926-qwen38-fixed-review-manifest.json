@@ -1,0 +1,198 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-26T13:07:29.384Z",
+  "transformations": [
+    "Replace exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace exact local Windows user path component with LOCAL_USER.",
+    "Provider raw responses were already omitted from private report; retain decoded responses and original response hash/byte metadata only."
+  ],
+  "note": "Private originals remain unchanged. No key or DPAPI file is read. Original raw response SHA256/bytes cannot be independently recomputed from this privacy-preserving report. Launcher is inert text. Three planned controls were not called.",
+  "disposition": "Two fixed review calls: old arithmetic negative boolean was false for a different reason; qualified-risk was a false positive and halted. No five-case, full-suite or production acceptance.",
+  "originalReportSha256": "7a6e3d31d90288d8d60b60a0f36be272d1544ec3d4d61d40f4a8a56145213f0a",
+  "wireValidation": {
+    "requests": 2,
+    "http200": 2,
+    "totalReportedUsageTokens": 7125,
+    "requestBodyHashesVerified": true,
+    "onlyModelChangedFromBaseline": true,
+    "decodedContentsMatchResults": true,
+    "providerReasoningRawAbsent": true,
+    "originalResponseHashesAndBytesRetainedNotReverifiable": [
+      {
+        "controlId": "old-negative-arithmetic",
+        "sha256": "a8190d26e649056f5d10884b7b3c9949a3e9c50d26b961365102f110ff43353f",
+        "bytes": 3209
+      },
+      {
+        "controlId": "qualified-risk",
+        "sha256": "de2e93609652e5e91977071e02b1409244ddd4f69ec5416d503c5bd6f2d18ea8",
+        "bytes": 2070
+      }
+    ],
+    "uncalledControls": [
+      "paraphrase",
+      "arithmetic",
+      "material-update"
+    ]
+  },
+  "sourceIdentity": {
+    "recordedApplicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+    "recordedHead": "e4cf978b9eb7a30382c06dd16f76a617d16e2973",
+    "recordedWorkingTreeStatus": "",
+    "files": [
+      {
+        "path": "apps/core/src/config/env.ts",
+        "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedSha256": "0f6a9c820e876853fe9868bcc24552583b83d25b6c1da1191ed416e53017aeb5",
+        "currentWorkingTreeSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedBytes": 38698,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 1273
+      },
+      {
+        "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+        "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedSha256": "909f5559359bb8bd34d2d274b216d5435ee8b79a27272414ed6f09cd261c2f20",
+        "currentWorkingTreeSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedBytes": 11237,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 306
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/model.ts",
+        "recordedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "currentWorkingTreeSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedBytes": 45593,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+        "recordedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "currentWorkingTreeSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedBytes": 10345,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "scripts/pilot/proactive-discussion-eval.ts",
+        "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "currentWorkingTreeSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedBytes": 42439,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      }
+    ],
+    "originalHarnessAndLauncherHashesVerified": true
+  },
+  "files": [
+    {
+      "sourceName": "qwen38-fixed-review-20260926.json",
+      "archivedName": "iris-bailian-20260926-qwen38-fixed-review-report.json",
+      "originalSha256": "7a6e3d31d90288d8d60b60a0f36be272d1544ec3d4d61d40f4a8a56145213f0a",
+      "originalBytes": 90544,
+      "archivedSha256": "464962c5e13ef51c925185795dbb9494f538ce6899c8767c313eba16d4f271ba",
+      "archivedBytes": 90551,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 3
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 2
+        }
+      ],
+      "wireValidation": {
+        "requests": 2,
+        "http200": 2,
+        "totalReportedUsageTokens": 7125,
+        "requestBodyHashesVerified": true,
+        "onlyModelChangedFromBaseline": true,
+        "decodedContentsMatchResults": true,
+        "providerReasoningRawAbsent": true,
+        "originalResponseHashesAndBytesRetainedNotReverifiable": [
+          {
+            "controlId": "old-negative-arithmetic",
+            "sha256": "a8190d26e649056f5d10884b7b3c9949a3e9c50d26b961365102f110ff43353f",
+            "bytes": 3209
+          },
+          {
+            "controlId": "qualified-risk",
+            "sha256": "de2e93609652e5e91977071e02b1409244ddd4f69ec5416d503c5bd6f2d18ea8",
+            "bytes": 2070
+          }
+        ],
+        "uncalledControls": [
+          "paraphrase",
+          "arithmetic",
+          "material-update"
+        ]
+      }
+    },
+    {
+      "sourceName": "qwen38-fixed-review-20260926.started.json",
+      "archivedName": "iris-bailian-20260926-qwen38-fixed-review-started.json",
+      "originalSha256": "2e989f5d0cb929cfe0dbb091be342a770c3328b46123c6b0afbc1601f6d0aeef",
+      "originalBytes": 2077,
+      "archivedSha256": "0d5e57aeb79c74d516b32527f5ef6e24ae3ee3ff2b286c64fd599b56bf1e2d46",
+      "archivedBytes": 2092,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 3
+        }
+      ]
+    },
+    {
+      "sourceName": "qwen38-fixed-review-20260926.halted.json",
+      "archivedName": "iris-bailian-20260926-qwen38-fixed-review-halt.json",
+      "originalSha256": "b34d1f3b37a402cbafe08cedb42b0fdc4b40ba8a02cfe3bcd856b68cb04370ef",
+      "originalBytes": 109,
+      "archivedSha256": "b34d1f3b37a402cbafe08cedb42b0fdc4b40ba8a02cfe3bcd856b68cb04370ef",
+      "archivedBytes": 109,
+      "exactRedactions": []
+    },
+    {
+      "sourceName": "qwen38-fixed-review-20260926.mts",
+      "archivedName": "iris-bailian-20260926-qwen38-fixed-review-harness.txt",
+      "originalSha256": "7a8f226097fb00bdf53674dd049596c8a36ecdac94d2bcce70ce520520ac8f9a",
+      "originalBytes": 20632,
+      "archivedSha256": "2e027aec9a08be94e6c3d5dbe190c9061fc50cf87310b5b216364e8d8b391f16",
+      "archivedBytes": 20636,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-qwen38-fixed-review.ps1",
+      "archivedName": "iris-bailian-20260926-qwen38-fixed-review-launcher.txt",
+      "originalSha256": "73332513893c58db596bcbfca17f1aad536abb2e0341b1a704b70509180f2cd5",
+      "originalBytes": 3488,
+      "archivedSha256": "d3247e6053b868efa6b5685da158f097f0aa00374ada9c68745d62fa05d8c8ef",
+      "archivedBytes": 3493,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

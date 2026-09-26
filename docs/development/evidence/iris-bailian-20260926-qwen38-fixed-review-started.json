@@ -1,0 +1,46 @@
+{
+  "startedAt": "2026-09-26T12:40:39.794Z",
+  "output": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/qwen38-fixed-review-20260926.json",
+  "commit": "e4cf978b9eb7a30382c06dd16f76a617d16e2973",
+  "applicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca"
+  },
+  "archives": [
+    {
+      "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/field-review-negative-20260920.json",
+      "sha256": "a570fb4439e373217e19f12d7cf1b274932676389e8df596ffd117b27ef88ea0"
+    },
+    {
+      "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/identity-target-diagnostic-20260925.json",
+      "sha256": "f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215"
+    }
+  ],
+  "selectedControls": [
+    {
+      "id": "old-negative-arithmetic",
+      "expectedSupported": false
+    },
+    {
+      "id": "qualified-risk",
+      "expectedSupported": false
+    },
+    {
+      "id": "paraphrase",
+      "expectedSupported": false
+    },
+    {
+      "id": "arithmetic",
+      "expectedSupported": true
+    },
+    {
+      "id": "material-update",
+      "expectedSupported": true
+    }
+  ],
+  "quotaEvidence": "2026-09-26 12:39 UTC authenticated Beijing UI: exact qwen3.8-max row 1M/1M expires 2026-12-18 free-exhaustion stop enabled; existing synthetic-test key edit saved and reopened: custom selected exactly Qwen3.7-Plus and Qwen3.8-Max, other model and IP settings unchanged; user explicitly allowed this scope"
+}

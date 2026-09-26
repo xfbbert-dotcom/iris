@@ -1,0 +1,326 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { validatePdScopeReview } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/review-receipts.ts';
+import { createRequestPacedFetch } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918';
+const baseUrl = 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const endpoint = baseUrl + '/chat/completions';
+const originalModel = 'qwen3.7-plus';
+const modelName = 'qwen3.8-max';
+if (process.argv.length !== 5 || process.argv[2] !== '--quota-verified'
+  || process.argv[3] !== '--model-permission-verified' || !process.argv[4]?.trim()) {
+  throw Error('Fresh exact-model free quota and model permission verification required');
+}
+const quotaEvidence = process.argv[4].trim();
+const output = `${folder}/qwen38-fixed-review-20260926.json`;
+const startedPath = `${folder}/qwen38-fixed-review-20260926.started.json`;
+const haltPath = `${folder}/qwen38-fixed-review-20260926.halted.json`;
+if ([output, startedPath, haltPath].some(path => existsSync(path))) {
+  throw Error('Existing qwen3.8-max fixed-review artifact; no overwrite or repeat');
+}
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const hashFile = (path: string) => sha(readFileSync(path));
+const sourcePaths = [
+  'apps/core/src/config/env.ts',
+  'apps/core/src/model/openai-compatible-chat-completions-client.ts',
+  'apps/core/src/proactive-discussion/model.ts',
+  'apps/core/src/proactive-discussion/review-receipts.ts',
+  'scripts/pilot/proactive-discussion-eval.ts',
+];
+const git = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const sourceStatus = git(['status', '--porcelain', '--', ...sourcePaths]);
+if (sourceStatus) throw Error('Application source paths must be committed and clean');
+const commit = git(['rev-parse', 'HEAD']);
+const applicationCommit = git(['log', '-1', '--format=%H', '--', ...sourcePaths]);
+const sourceHashes = Object.fromEntries(sourcePaths.map(path => [path, hashFile(`${root}/${path}`)]));
+const oldPath = `${folder}/field-review-negative-20260920.json`;
+const oldSha256 = 'a570fb4439e373217e19f12d7cf1b274932676389e8df596ffd117b27ef88ea0';
+const newPath = `${folder}/identity-target-diagnostic-20260925.json`;
+const newSha256 = 'f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215';
+if (hashFile(oldPath) !== oldSha256 || hashFile(newPath) !== newSha256) {
+  throw Error('Frozen original review archives changed');
+}
+const oldArchive = JSON.parse(readFileSync(oldPath, 'utf8'));
+const newArchive = JSON.parse(readFileSync(newPath, 'utf8'));
+if (oldArchive.kind !== 'bailian-free-only-field-review-diagnostic'
+  || newArchive.kind !== 'bailian-free-only-identity-target-diagnostic'
+  || newArchive.applicationCommit !== applicationCommit
+  || sourcePaths.some(path => newArchive.sourceHashes?.[path] !== sourceHashes[path])) {
+  throw Error('Archived review or current application source identity mismatch');
+}
+type FixedReview = { id: string; expectedSupported: boolean; messages: any;
+  responseFormat: any; draftText: string; expectedCoreBodySha256: string; baseline: any };
+function fixedReview(archive: any, caseId: string | null, expectedSupported: boolean): FixedReview {
+  let completion: any;
+  let request: any;
+  if (caseId === null) {
+    const firstReviews = archive.completions.filter((item: any) => {
+      if (item.stage !== 'iris_proactive_discussion_scope_review') return false;
+      const user = item.originalMessages?.find((message: any) => message.role === 'user');
+      if (typeof user?.content !== 'string') return false;
+      const input = JSON.parse(user.content);
+      return !Object.hasOwn(input, 'previousReview') && !Object.hasOwn(input, 'originalAssessment');
+    });
+    if (firstReviews.length !== 1 || archive.requests?.[0]?.stage !== 'iris_proactive_discussion_scope_review') {
+      throw Error('Unique archived September 20 first review unavailable');
+    }
+    completion = firstReviews[0];
+    request = archive.requests[0];
+  } else {
+    const reviews = archive.completions.filter((item: any) => item.caseId === caseId
+      && item.stage === 'iris_proactive_discussion_scope_review' && item.attempt === 1);
+    const requests = archive.requests.filter((item: any) => item.caseId === caseId
+      && item.stage === 'iris_proactive_discussion_scope_review' && item.attempt === 1);
+    if (reviews.length !== 1 || requests.length !== 1) throw Error(`Unique first review unavailable: ${caseId}`);
+    completion = reviews[0];
+    request = requests[0];
+  }
+  const id = caseId ?? 'old-negative-arithmetic';
+  const messages = structuredClone(completion.originalMessages);
+  const responseFormat = structuredClone(completion.originalResponseFormat);
+  if (!Array.isArray(messages) || messages.length !== 2 || messages[0]?.role !== 'system'
+    || messages[1]?.role !== 'user' || responseFormat?.type !== 'json_schema'
+    || responseFormat.json_schema?.strict !== true
+    || responseFormat.json_schema.name !== 'iris_proactive_discussion_scope_review'
+    || !responseFormat.json_schema.schema || request.status !== 200
+    || (request.endpoint !== undefined && request.endpoint !== endpoint)
+    || (request.method !== undefined && request.method !== 'POST')) {
+    throw Error(`Original strict review contract unavailable: ${id}`);
+  }
+  const input = JSON.parse(messages[1].content);
+  if (typeof input.draft?.text !== 'string' || !input.assessment || !Array.isArray(input.evidence)) {
+    throw Error(`Original assessment/draft/evidence unavailable: ${id}`);
+  }
+  const wire = JSON.parse(request.requestBodyRaw);
+  if (wire.model !== originalModel || wire.enable_thinking !== false || wire.max_tokens !== 2048
+    || 'thinking_budget' in wire
+    || Object.keys(wire).some(key => !['model', 'messages', 'response_format', 'enable_thinking', 'max_tokens'].includes(key))
+    || sha(request.requestBodyRaw) !== request.requestBodySha256) {
+    throw Error(`Original qwen3.7-plus non-thinking raw wire mismatch: ${id}`);
+  }
+  const { enable_thinking: _thinking, max_tokens: _cap, ...originalCoreBody } = wire;
+  if (!Array.isArray(originalCoreBody.messages) || originalCoreBody.messages.length !== 2
+    || originalCoreBody.messages[1]?.content !== messages[1].content
+    || originalCoreBody.response_format?.type !== 'json_object'
+    || Object.keys(originalCoreBody.response_format).length !== 1
+    || !originalCoreBody.messages[0]?.content.endsWith('\n' + JSON.stringify(responseFormat.json_schema.schema))) {
+    throw Error(`Archived Core messages/schema mismatch: ${id}`);
+  }
+  let baselineValidation: any;
+  try {
+    const raw = JSON.parse(completion.content);
+    const validated = validatePdScopeReview(raw, input.draft.text);
+    baselineValidation = { schemaValid: true, rawSupported: raw.supported,
+      locallySupported: validated.supported };
+  } catch {
+    const raw = JSON.parse(completion.content);
+    baselineValidation = { schemaValid: false, rawSupported: raw.supported,
+      locallySupported: null };
+  }
+  const comparisonCoreBody = { ...originalCoreBody, model: modelName };
+  return { id, expectedSupported, messages, responseFormat, draftText: input.draft.text,
+    expectedCoreBodySha256: sha(JSON.stringify(comparisonCoreBody)),
+    baseline: { model: originalModel, enableThinking: false, maxTokens: 2048,
+      requestBodySha256: request.requestBodySha256, responseBodySha256: request.responseBodySha256,
+      status: request.status, reportedUsage: request.accountedUsageTokens ?? request.usage ?? null,
+      reviewContentSha256: sha(completion.content), validation: baselineValidation } };
+}
+const fixed: FixedReview[] = [
+  fixedReview(oldArchive, null, false),
+  fixedReview(newArchive, 'qualified-risk', false),
+  fixedReview(newArchive, 'paraphrase', false),
+  fixedReview(newArchive, 'arithmetic', true),
+  fixedReview(newArchive, 'material-update', true),
+];
+const apiKey = process.env.IRIS_BAILIAN_EVAL_KEY;
+if (!apiKey || apiKey !== apiKey.trim() || /[\r\n]/u.test(apiKey)) throw Error('Private process key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const redact = (value: string) => value.replaceAll(apiKey, '[REDACTED]');
+// Client/provider errors may include raw response content; record only error type.
+const safeError = (error: unknown) => error instanceof Error ? error.name : 'unknown';
+const report: any = {
+  kind: 'private-qwen38-fixed-product-review-comparison', syntheticOnly: true,
+  startedAt: new Date().toISOString(), commit, applicationCommit,
+  applicationSourceWorkingTreeStatus: sourceStatus, sourceHashes,
+  harnessSha256: hashFile(fileURLToPath(import.meta.url)),
+  launcherSha256: hashFile(`${folder}/run-qwen38-fixed-review.ps1`),
+  archives: [{ path: oldPath, sha256: oldSha256 }, { path: newPath, sha256: newSha256 }],
+  model: modelName, originalModel, endpoint, structuredOutputMode: 'json_object', timeoutMs: 60000,
+  profile: { enable_thinking: false, max_tokens: 2048 },
+  comparison: { changed: ['model:qwen3.7-plus -> qwen3.8-max'],
+    unchanged: ['actual product first-review originalMessages and strict responseFormat',
+      'Core JSON-object transport', 'enable_thinking:false', 'max_tokens:2048',
+      'timeoutMs:60000', 'existing validatePdScopeReview'],
+    qualification: 'Five fixed archived review inputs only; no generation, repair, full suite or production model change.' },
+  selectedControls: fixed.map(({ id, expectedSupported }) => ({ id, expectedSupported })),
+  baseline: fixed.map(({ id, baseline }) => ({ id, ...baseline })),
+  wallMs: 360000, maxRequests: 5, maximumReportedUsageTokens: 40000,
+  reportedUsageTokens: 0, requestIntervalMs: 6000, automaticTransportRetry: false,
+  maximumResponseBytes: 262144, requests: [], results: [],
+  independentSemanticReview: 'pending', executionPassed: false,
+  freeOnlyPrecondition: `Operator asserted fresh authenticated exact qwen3.8-max free quota, free-exhaustion stop, and this key's qwen3.8-max permission at launch: ${quotaEvidence}. This is not automated quota verification or a billing audit. No paid fallback.`,
+  acceptance: 'First malformed receipt, local validation error, fixed expected supported-boolean mismatch, HTTP failure or hard boundary stops immediately. Five matching booleans do not prove semantic quality; independent review of all reasons is still required. No second sample, no full evaluation, no application write.',
+  privacy: 'Provider reasoning_content is never printed or saved verbatim; only field path, byte count and SHA256 are retained if present.',
+};
+writeFileSync(startedPath, JSON.stringify({ startedAt: report.startedAt, output,
+  commit, applicationCommit, sourceHashes, archives: report.archives,
+  selectedControls: report.selectedControls, quotaEvidence }, null, 2) + '\n', { flag: 'wx' });
+const deadline = AbortSignal.timeout(report.wallMs);
+let halted = false;
+let active: FixedReview | undefined;
+function halt(reason: string) {
+  halted = true; report.haltReason ??= reason;
+  if (!existsSync(haltPath)) writeFileSync(haltPath,
+    JSON.stringify({ at: new Date().toISOString(), reason }, null, 2) + '\n', { flag: 'wx' });
+}
+function sanitizedProvider(value: any) {
+  const removed: any[] = [];
+  const visit = (part: any, path: string): any => {
+    if (Array.isArray(part)) return part.map((item, index) => visit(item, `${path}[${index}]`));
+    if (part && typeof part === 'object') {
+      const clean: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(part)) {
+        if (/^(reasoning_content|reasoning_text|thinking_content)$/iu.test(key)) {
+          const raw = typeof item === 'string' ? item : JSON.stringify(item);
+          removed.push({ path: `${path}.${key}`, bytes: Buffer.byteLength(raw), sha256: sha(raw) });
+        } else clean[key] = visit(item, `${path}.${key}`);
+      }
+      return clean;
+    }
+    return part;
+  };
+  return { decoded: visit(value, '$'), removed };
+}
+const client = createOpenAICompatibleChatCompletionsClient({
+  config: { provider: 'openai-compatible', baseUrl, model: modelName,
+    apiKey, timeoutMs: 60000, structuredOutputMode: 'json_object' },
+  sleep: async () => { halt('transport retry refused'); throw Error('No automatic transport retry'); },
+  fetch: createRequestPacedFetch({ requestIntervalMs: report.requestIntervalMs, fetch: async (url, init) => {
+    if (halted || deadline.aborted || !active || report.requests.length >= report.maxRequests
+      || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('request count, reported usage, deadline or stopped-window boundary');
+      throw Error('Bounded fixed-review comparison stopped');
+    }
+    const coreBodyRaw = String(init?.body);
+    const coreBody = JSON.parse(coreBodyRaw);
+    if (String(url) !== endpoint || init?.method !== 'POST' || coreBody.model !== modelName
+      || coreBody.response_format?.type !== 'json_object'
+      || Object.keys(coreBody.response_format).length !== 1
+      || Object.keys(coreBody).some(key => !['model', 'messages', 'response_format'].includes(key))
+      || sha(coreBodyRaw) !== active.expectedCoreBodySha256
+      || !coreBody.messages?.[0]?.content.endsWith('\n'
+        + JSON.stringify(active.responseFormat.json_schema.schema))) {
+      halt('exact archived Core request with only model changed was not reproduced');
+      throw Error('Frozen review request boundary failed');
+    }
+    const outgoing = JSON.stringify({ ...coreBody, ...report.profile });
+    const record: any = { index: report.requests.length + 1, controlId: active.id,
+      stage: 'iris_proactive_discussion_scope_review', startedAt: new Date().toISOString(),
+      endpoint, method: 'POST', originalCoreBodyWithNewModelSha256: active.expectedCoreBodySha256,
+      actualCoreBodySha256: sha(coreBodyRaw), onlyModelChangedFromArchive: true,
+      requestBodyRaw: redact(outgoing), requestBodySha256: sha(outgoing),
+      originalSchemaSha256: sha(JSON.stringify(active.responseFormat.json_schema.schema)) };
+    report.requests.push(record);
+    console.log(JSON.stringify({ request: record.index, controlId: record.controlId,
+      reportedUsageTokens: report.reportedUsageTokens }));
+    try {
+      const response = await fetch(url, { ...init, redirect: 'error', body: outgoing,
+        signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+      record.status = response.status;
+      record.headers = Object.fromEntries(['content-type', 'x-request-id', 'x-dashscope-request-id',
+        'x-acs-request-id', 'request-id', 'retry-after'].flatMap(name => {
+        const value = response.headers.get(name); return value === null ? [] : [[name, redact(value)]];
+      }));
+      if (!response.ok) halt('first non-success HTTP response');
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = response.body?.getReader();
+      if (reader) while (true) {
+        const part = await reader.read(); if (part.done) break;
+        size += part.value.byteLength;
+        if (size > report.maximumResponseBytes) {
+          record.responseBodyTruncated = true; record.responseBytesObserved = size;
+          await reader.cancel(); halt('response byte cap'); throw Error('Response byte cap');
+        }
+        chunks.push(part.value);
+      }
+      const bytes = Buffer.concat(chunks);
+      record.responseBytes = bytes.length; record.responseBodySha256 = sha(bytes);
+      let decoded: any;
+      try { decoded = JSON.parse(bytes.toString('utf8')); }
+      catch { halt('provider response JSON invalid'); throw Error('Provider response JSON invalid'); }
+      const sanitized = sanitizedProvider(decoded);
+      record.responseDecodedSansReasoning = sanitized.decoded;
+      record.reasoningFields = sanitized.removed;
+      record.usage = decoded.usage ?? null;
+      record.businessCode = decoded.code ?? decoded.error?.code ?? null;
+      record.requestId = decoded.request_id ?? decoded.requestId ?? decoded.id ?? null;
+      record.finishReasons = Array.isArray(decoded.choices)
+        ? decoded.choices.map((choice: any) => choice.finish_reason ?? null) : [];
+      const validCount = (value: unknown): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+      const total = validCount(decoded.usage?.total_tokens) ? decoded.usage.total_tokens
+        : validCount(decoded.usage?.prompt_tokens) && validCount(decoded.usage?.completion_tokens)
+          ? decoded.usage.prompt_tokens + decoded.usage.completion_tokens : undefined;
+      if (validCount(total)) {
+        report.reportedUsageTokens += total; record.accountedUsageTokens = total;
+        record.cumulativeReportedUsageTokens = report.reportedUsageTokens;
+      } else if (response.ok) halt('successful response lacks valid usage accounting');
+      if (record.finishReasons.includes('length')) {
+        record.outputTruncated = true;
+        record.failureClassification = 'experimental_output_cap_truncation_not_semantic_quality';
+      }
+      if (decoded.error || !Array.isArray(decoded.choices) || record.finishReasons.length !== 1
+        || record.finishReasons[0] !== 'stop') halt('provider business error or non-stop finish');
+      if (halted) throw Error('Provider or usage boundary failed');
+      return new Response(bytes, { status: response.status,
+        headers: { 'content-type': response.headers.get('content-type') ?? 'application/json' } });
+    } catch (error) {
+      record.errorType = safeError(error); halt('transport, timeout or response-read failure'); throw error;
+    } finally { record.finishedAt = new Date().toISOString(); }
+  } }),
+});
+try {
+  for (const control of fixed) {
+    if (halted || deadline.aborted || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('comparison stopped before next fixed case'); break;
+    }
+    active = control;
+    const result: any = { controlId: control.id, expectedSupported: control.expectedSupported,
+      baseline: control.baseline, originalMessages: control.messages,
+      originalResponseFormat: control.responseFormat, startedAt: new Date().toISOString() };
+    report.results.push(result);
+    try {
+      const content = await client.complete(control.messages, { responseFormat: control.responseFormat });
+      result.content = redact(content); // Core returns final message.content, not provider reasoning_content.
+      const raw = JSON.parse(content);
+      const validated = validatePdScopeReview(raw, control.draftText);
+      result.schemaValid = true; result.rawSupported = raw.supported;
+      result.locallySupported = validated.supported; result.validatedReview = validated;
+      result.fixedOracleBooleanMatched = raw.supported === control.expectedSupported
+        && validated.supported === control.expectedSupported;
+      if (!result.fixedOracleBooleanMatched) halt('first fixed-review boolean mismatch; comparison failed');
+    } catch (error) {
+      result.schemaValid = false; result.errorType = safeError(error);
+      halt('first review schema, local validation or transport failure; comparison failed');
+    } finally { result.finishedAt = new Date().toISOString(); }
+    if (halted) break;
+  }
+  report.executionPassed = !halted && report.results.length === 5 && report.requests.length === 5
+    && report.results.every((item: any) => item.fixedOracleBooleanMatched === true);
+  if (!report.executionPassed && !halted) halt('five-case comparison incomplete');
+  process.exitCode = report.executionPassed ? 0 : 1;
+} catch (error) {
+  report.errorType = safeError(error); halt('comparison execution failed'); process.exitCode = 1;
+} finally {
+  report.halted = halted; report.finishedAt = new Date().toISOString();
+  writeFileSync(output, redact(JSON.stringify(report, null, 2)) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length,
+    reportedUsageTokens: report.reportedUsageTokens, executionPassed: report.executionPassed,
+    halted, independentSemanticReview: report.independentSemanticReview }));
+}
