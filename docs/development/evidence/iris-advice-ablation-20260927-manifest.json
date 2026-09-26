@@ -1,0 +1,131 @@
+{
+  "kind": "advice-ablation-sanitized-evidence",
+  "applicationCommit": "1f00cc0efb286c0da4c4719981dc2b7a7078cec7",
+  "transformations": [
+    "private workspace hostname redacted",
+    "local username redacted"
+  ],
+  "hashQualification": "Private original wire/response hashes are retained. They differ after redaction; archive hashes below verify sanitized bytes. Original private files unchanged. No credential store read.",
+  "files": [
+    {
+      "name": "iris-advice-ablation-20260927.halted.json",
+      "originalSha256": "2ab7d4ea6606a4ccefb635cf44dd7ba08d07e4b3714f39439a9c2aa0dda19863",
+      "archiveSha256": "2ab7d4ea6606a4ccefb635cf44dd7ba08d07e4b3714f39439a9c2aa0dda19863",
+      "bytes": 86
+    },
+    {
+      "name": "iris-advice-ablation-20260927.json",
+      "originalSha256": "e05fd0ea6622a33717d9797654b95b0d38b0f96662f94568767caa44aa80b983",
+      "archiveSha256": "e05fd0ea6622a33717d9797654b95b0d38b0f96662f94568767caa44aa80b983",
+      "bytes": 280980
+    },
+    {
+      "name": "iris-advice-ablation-20260927.pending-1.json",
+      "originalSha256": "7c07aa1b7f7b70aaf5d5532a0338972ea928834d7e85f235d66126bcd3c242ef",
+      "archiveSha256": "7c07aa1b7f7b70aaf5d5532a0338972ea928834d7e85f235d66126bcd3c242ef",
+      "bytes": 193
+    },
+    {
+      "name": "iris-advice-ablation-20260927.pending-2.json",
+      "originalSha256": "48a0fb0d7add44b7aed1fd2a48d451d9180e202c5909de9f214e5658ac08a3d2",
+      "archiveSha256": "48a0fb0d7add44b7aed1fd2a48d451d9180e202c5909de9f214e5658ac08a3d2",
+      "bytes": 191
+    },
+    {
+      "name": "iris-advice-ablation-20260927.pending-3.json",
+      "originalSha256": "9affe2367a36b73bd80b34293bc4c04fadcccf7fb417112a872097433328503b",
+      "archiveSha256": "9affe2367a36b73bd80b34293bc4c04fadcccf7fb417112a872097433328503b",
+      "bytes": 182
+    },
+    {
+      "name": "iris-advice-ablation-20260927.pending-4.json",
+      "originalSha256": "6da230c63b3046c387af7cb39016d8a63e502194cd28bf85c5141baf515b9dde",
+      "archiveSha256": "6da230c63b3046c387af7cb39016d8a63e502194cd28bf85c5141baf515b9dde",
+      "bytes": 186
+    },
+    {
+      "name": "iris-advice-ablation-20260927.pending-5.json",
+      "originalSha256": "46b5af96d032025de2d571dcefb304a4dde61cb4a0cddb199a1ce567e75c7d31",
+      "archiveSha256": "46b5af96d032025de2d571dcefb304a4dde61cb4a0cddb199a1ce567e75c7d31",
+      "bytes": 184
+    },
+    {
+      "name": "iris-advice-ablation-20260927.pending-6.json",
+      "originalSha256": "93f55c1ae6f19dd2eb7420b5a38d920c32de316c7fb2021153ae58a87345e4dc",
+      "archiveSha256": "93f55c1ae6f19dd2eb7420b5a38d920c32de316c7fb2021153ae58a87345e4dc",
+      "bytes": 183
+    },
+    {
+      "name": "iris-advice-ablation-20260927.pending-7.json",
+      "originalSha256": "35df79d7e92c8de6acebf9954f5450c69e1c790afbd06bc2bccbc4bb13db6376",
+      "archiveSha256": "35df79d7e92c8de6acebf9954f5450c69e1c790afbd06bc2bccbc4bb13db6376",
+      "bytes": 184
+    },
+    {
+      "name": "iris-advice-ablation-20260927.quota-1.json",
+      "originalSha256": "a5ec801fc926161346293ec7f47abbbc980cc324e5f087fcffcbfc658055d096",
+      "archiveSha256": "a5ec801fc926161346293ec7f47abbbc980cc324e5f087fcffcbfc658055d096",
+      "bytes": 252
+    },
+    {
+      "name": "iris-advice-ablation-20260927.quota-2.json",
+      "originalSha256": "f49fe0784678f59f54bb255c35b3157cc4ce35e6f8824c973fbbe3278c473f26",
+      "archiveSha256": "f49fe0784678f59f54bb255c35b3157cc4ce35e6f8824c973fbbe3278c473f26",
+      "bytes": 252
+    },
+    {
+      "name": "iris-advice-ablation-20260927.quota-3.json",
+      "originalSha256": "6dae5ca075fb0573e95e403d5bb1e8627ffda60832e37028f1b93eae05b9b414",
+      "archiveSha256": "6dae5ca075fb0573e95e403d5bb1e8627ffda60832e37028f1b93eae05b9b414",
+      "bytes": 252
+    },
+    {
+      "name": "iris-advice-ablation-20260927.quota-4.json",
+      "originalSha256": "59d242bfee68ba49996302d607aebd1b80f87967b4c6d5e7342d104e33526971",
+      "archiveSha256": "59d242bfee68ba49996302d607aebd1b80f87967b4c6d5e7342d104e33526971",
+      "bytes": 252
+    },
+    {
+      "name": "iris-advice-ablation-20260927.quota-5.json",
+      "originalSha256": "b03dc2fe437fcebad5b83c51d66b768fc3433baf4307f97ab5a61435ca7bad6e",
+      "archiveSha256": "b03dc2fe437fcebad5b83c51d66b768fc3433baf4307f97ab5a61435ca7bad6e",
+      "bytes": 252
+    },
+    {
+      "name": "iris-advice-ablation-20260927.quota-6.json",
+      "originalSha256": "365ec4a4495ede91498911b5e9c6929d31214a3321f873223e2aa8ac231b8948",
+      "archiveSha256": "365ec4a4495ede91498911b5e9c6929d31214a3321f873223e2aa8ac231b8948",
+      "bytes": 252
+    },
+    {
+      "name": "iris-advice-ablation-20260927.quota-7.json",
+      "originalSha256": "833934f226afe6002a54410ca12bed1c1ae9f7c851a795285ae339ffadc13f6a",
+      "archiveSha256": "833934f226afe6002a54410ca12bed1c1ae9f7c851a795285ae339ffadc13f6a",
+      "bytes": 252
+    },
+    {
+      "name": "iris-advice-ablation-20260927.semantic-frozen-inference.json",
+      "originalSha256": "b0e2cc93f4d15e5eb6496a9922b9b4dc4c8a87559734daa427723807b5961059",
+      "archiveSha256": "b0e2cc93f4d15e5eb6496a9922b9b4dc4c8a87559734daa427723807b5961059",
+      "bytes": 411
+    },
+    {
+      "name": "iris-advice-ablation-20260927.started.json",
+      "originalSha256": "90cfac27a1fcdaeed0ed1651d0d47f7c024f2d4011248caed39e469ce1fb49be",
+      "archiveSha256": "90cfac27a1fcdaeed0ed1651d0d47f7c024f2d4011248caed39e469ce1fb49be",
+      "bytes": 1279
+    },
+    {
+      "name": "iris-advice-ablation-20260927.txt",
+      "originalSha256": "8a7c3dd241e6fcaf02165338b3511515187918aca06eb11988081601fbb75c4c",
+      "archiveSha256": "014966a3345bcb0793be7dd03745780d43c7d4871b4e57273704d9fc53a8f63d",
+      "bytes": 9884
+    },
+    {
+      "name": "iris-run-advice-ablation.txt",
+      "originalSha256": "cab59c135a7adca8da5288ab2ab60c20b9f50f4516d4a418a719f08b3c198d43",
+      "archiveSha256": "d825dea9dbd9841bda3990ee035e19f43d0b8e919f92a70ec183cc04b9104cd8",
+      "bytes": 1798
+    }
+  ]
+}

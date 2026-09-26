@@ -283,6 +283,16 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   risk qualification, duplicate suppression or complete product acceptance. Real results and the
   remaining blockers belong to the linked record, not an ever-growing prompt search.
 
+- **Do not universalize scenario-specific advice (2026-09-27):** A numeric-case prompt change
+  told every generated opinion to verify authorization. The [bounded removal](../development/iris-advice-ablation-20260927.md)
+  deletes that unconditional instruction while still allowing relevant permission checks. A
+  frozen-input render improved, but a fresh inference failed because review invented zero-value
+  obligations for unknown totals and kept them through final review. Unknown is not zero; a
+  locally valid quote is not proof of a useful or applicable requirement. Retain the original
+  semantic oracle and legitimate permission control; stop at first failed case rather than
+  iterating prompt variants or weakening receipt validation. This cleanup does not establish
+  review reliability; numeric applicability and other proactive defects remain open.
+
 ### Preserve issue history and the actual live-context producer contract
 
 - **Observed implementation failures (2026-09-15):** Review of unshipped Task4 candidate

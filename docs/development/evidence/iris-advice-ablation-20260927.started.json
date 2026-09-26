@@ -1,0 +1,34 @@
+{
+  "kind": "advice-ablation-20260927",
+  "syntheticOnly": true,
+  "commit": "1f00cc0efb286c0da4c4719981dc2b7a7078cec7",
+  "baselineSha256": "94e4a3dd1e3804bc66156f62ef96278eefcd6c1f729489144ca951c4561d570b",
+  "sourceHashes": {
+    "apps/core/src/proactive-discussion/arithmetic.ts": "4ff2e85c5f473a2d36c9ebc1c95a91a1e9e268428bff6abe2cc9db8b7440c2ca",
+    "apps/core/src/proactive-discussion/model.ts": "91f4dd7b8919c917fbce50dba089850c2b32409a409acdcbfbdaca3be8ac5a6f",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "9adea0a2ba18c3d9a77ff53cf94a43d27e3800b88464f4c09f3d4208023401e6",
+    "scripts/pilot/proactive-discussion-eval.ts": "cc8fd58a514fcc0540b0a6785662475f95befd434aa6683fe9289c9356f34dde"
+  },
+  "startedAt": "2026-09-26T16:15:57.252Z",
+  "model": "qwen3.8-max",
+  "maxRequests": 22,
+  "tokenStopBeforeNextRequest": 80000,
+  "maxTokens": 2048,
+  "enableThinking": false,
+  "requestTimeoutMs": 60000,
+  "windowMs": 1200000,
+  "selected": [
+    "frozen-inference",
+    "inference",
+    "separate-next",
+    "qualified-risk",
+    "paraphrase"
+  ],
+  "requests": [],
+  "completions": [],
+  "results": [],
+  "reportedUsageTokens": 0,
+  "seededGenerations": 0,
+  "independentSemanticReview": "per-case external gate; verdicts retained",
+  "halted": false
+}

@@ -29,6 +29,13 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Application `1f00cc0e` removes an [unconditional authorization-advice instruction](docs/development/iris-advice-ablation-20260927.md).
+Related local tests82 and type/build pass. The seven-request synthetic window still failed:
+one frozen-input render passed narrowly, but fresh inference returned no opinion after review
+invented required zero amounts for unknown values. Permission/risk/duplicate controls were not
+called after that failure. Proactive semantics remain unaccepted; no push, production access,
+deployment or Feishu delivery. Results below retain their historical application identities.
+
 Application `60a8c2ac` adds [deterministic checks for explicit arithmetic](docs/development/iris-executable-arithmetic-20260926.md)
 to initial/final proactive pair review without adding model calls. Core4811 passed/469 conditional
 skips, type/build and CLI7 passed. A bounded nine-HTTP synthetic window repaired the old wrong-sign

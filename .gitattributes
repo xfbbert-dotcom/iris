@@ -15,3 +15,5 @@ docs/development/evidence/iris-bailian-20260926-qwen38-fixed-review-* -text
 docs/development/evidence/iris-bailian-20260926-immutable-claims-* -text
 docs/development/evidence/iris-bailian-20260926-immutable-transfer-* -text
 docs/development/evidence/iris-zhipu-429-20260918-* -text
+docs/development/evidence/iris-advice-ablation-20260927* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-run-advice-ablation.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
