@@ -223,7 +223,7 @@ export function createPdModel({
       const review = parseScopeReviewContent(await client.complete(
         scopeReviewMessages({ ...input, draft, identityTarget }),
         { responseFormat: scopeReviewResponseFormat(draft.text) },
-      ), draft.text);
+      ), draft.text, undefined, generated.assessment);
       await assertActive?.();
       if (review.supported) return generated;
 
@@ -253,7 +253,7 @@ export function createPdModel({
       await assertActive?.();
       let finalReview: PdScopeReview;
       try {
-        finalReview = parseScopeReviewContent(finalReviewContent, repaired.draft.text, reviewHistory);
+        finalReview = parseScopeReviewContent(finalReviewContent, repaired.draft.text, reviewHistory, repaired.assessment);
       } catch {
         return null;
       }
@@ -421,14 +421,14 @@ function validatePdDraft(value: unknown, expectedRefs: readonly string[]): PdDra
   return { text: parsed.data.text, evidenceRefs: [...expectedRefs] };
 }
 
-function parseScopeReviewContent(content: string, draftText: string, history?: PdScopeReviewHistory): PdScopeReview {
+function parseScopeReviewContent(content: string, draftText: string, history?: PdScopeReviewHistory, assessment?: PdAssessment): PdScopeReview {
   let value: unknown;
   try {
     value = JSON.parse(content);
   } catch {
     throw new Error("proactive discussion scope review was invalid");
   }
-  return validatePdScopeReview(value, draftText, history);
+  return validatePdScopeReview(value, draftText, history, assessment);
 }
 
 function modelContext(context: PdContext) {

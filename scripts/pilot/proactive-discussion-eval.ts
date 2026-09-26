@@ -238,7 +238,7 @@ export async function runSyntheticProactiveDiscussionEval({
             content,
             redactions,
             stage,
-            scopeInput: stage === "scope_review" ? scopeReviewInput(messages) : undefined,
+            scopeInput: stage === "scope_review" ? scopeReviewInput(messages, active.context) : undefined,
           }));
         }
       } catch {
@@ -313,7 +313,7 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
   content: string;
   redactions: readonly string[];
   stage: SyntheticTraceStage;
-  scopeInput?: { draftText: string; history?: PdScopeReviewHistory };
+  scopeInput?: { draftText: string; history?: PdScopeReviewHistory; assessment: PdAssessment };
 }): SyntheticTraceRecord {
   const sanitization: SyntheticTraceSanitization = { truncatedFields: [], droppedFields: [], droppedReferenceCount: 0 };
   let value: unknown;
@@ -430,17 +430,18 @@ function replayDraftValidation(value: unknown, expectedRefs: readonly string[]):
   return { accepted: true, reason: "accepted" };
 }
 
-function scopeReviewInput(messages: readonly OpenAICompatibleChatMessage[]): { draftText: string; history?: PdScopeReviewHistory } | undefined {
+function scopeReviewInput(messages: readonly OpenAICompatibleChatMessage[], context: PdContext): { draftText: string; history?: PdScopeReviewHistory; assessment: PdAssessment } | undefined {
   const inputMessage = messages.filter(message => message.role === "user").at(-1);
   if (inputMessage === undefined) return undefined;
   try {
     const input: unknown = JSON.parse(inputMessage.content);
     if (isPlainRecord(input) && isPlainRecord(input.draft) && typeof input.draft.text === "string") {
-      if (input.previousReview === undefined) return { draftText: input.draft.text };
+      const assessment = validatePdAssessment(input.assessment, context);
+      if (input.previousReview === undefined) return { draftText: input.draft.text, assessment };
       const previous = validatePdScopeReview(input.previousReview, input.draft.text);
       if (!Array.isArray(input.evidence) || input.evidence.some(item =>
         !isPlainRecord(item) || typeof item.ref !== "string" || typeof item.text !== "string")) return undefined;
-      return { draftText: input.draft.text, history: {
+      return { draftText: input.draft.text, assessment, history: {
         previousNumbers: previous.requiredNumbers,
         evidence: input.evidence.map(item => ({ ref: item.ref as string, text: item.text as string })),
       } };
@@ -449,10 +450,10 @@ function scopeReviewInput(messages: readonly OpenAICompatibleChatMessage[]): { d
   return undefined;
 }
 
-function replayScopeReviewValidation(value: unknown, input: { draftText: string; history?: PdScopeReviewHistory } | undefined): { accepted: boolean; reason: string } {
+function replayScopeReviewValidation(value: unknown, input: { draftText: string; history?: PdScopeReviewHistory; assessment: PdAssessment } | undefined): { accepted: boolean; reason: string } {
   if (input === undefined) return { accepted: false, reason: "draft_missing" };
   try {
-    const review = validatePdScopeReview(value, input.draftText, input.history);
+    const review = validatePdScopeReview(value, input.draftText, input.history, input.assessment);
     if (isPlainRecord(value) && value.supported === true && !review.supported) {
       return { accepted: false, reason: "receipt_invalid" };
     }

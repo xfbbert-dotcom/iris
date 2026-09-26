@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { PdAssessment } from "./contracts.js";
+import { inspectPdCalculations } from "./arithmetic.js";
 
 const MAX_REASON_CHARS = 2_000;
 const MAX_FIELD_REASON_CHARS = 400;
@@ -59,12 +61,27 @@ export type PdScopeReviewHistory = {
   evidence: readonly { ref: string; text: string }[];
 };
 
-export function validatePdScopeReview(value: unknown, draftText: string, history?: PdScopeReviewHistory): PdScopeReview {
+export function validatePdScopeReview(value: unknown, draftText: string, history?: PdScopeReviewHistory, assessment?: PdAssessment): PdScopeReview {
   const hasHistory = history !== undefined && history.previousNumbers.length > 0;
   const parsed = (hasHistory ? finalScopeReviewSchema : scopeReviewSchema).safeParse(value);
   if (!parsed.success) throw new Error("proactive discussion scope review was invalid");
   const review: PdScopeReview = parsed.data;
   const failures: string[] = [];
+  const texts: [string, string][] = [["draft.text", draftText]];
+  if (assessment) texts.push(
+    ["assessment.issueRef.description", assessment.issueRef?.kind === "new" ? assessment.issueRef.description : ""],
+    ["assessment.observation", assessment.observation], ["assessment.reasoning", assessment.reasoning],
+    ["assessment.suggestion", assessment.suggestion], ["assessment.materialChange.explanation", assessment.materialChange.explanation],
+  );
+  // These are program-derived contradictions, not model approvals. Keep original
+  // field verdicts visible and route contradictions into the same single repair.
+  for (const [path, text] of texts) {
+    const wrong = inspectPdCalculations(text).filter(calculation => !calculation.matches);
+    if (wrong.length) {
+      const first = wrong[0]!;
+      failures.push(`本地算术矛盾 ${path}[${first.start}:${first.end}]：原文“${first.quote}”的运算结果不等于所写结果。按原运算方向核算并修正；不能用负数缺口等解释批准原式。本字段共${wrong.length}处；这不验证来源、口径或未来后果。`);
+    }
+  }
   // Completeness and conjunction are deterministic; the model's semantic
   // verdicts are still fallible. A correct draft cannot waive an assessment defect.
   const failedFields = PD_REVIEW_FIELDS.filter(field => !review.fieldChecks[field].supported);

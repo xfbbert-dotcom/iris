@@ -27,7 +27,7 @@ async function runSynthetic(input: Record<string, unknown>): Promise<SyntheticRu
   return (evaluator.runSyntheticProactiveDiscussionEval as (value: unknown) => Promise<SyntheticRun>)(input);
 }
 
-function scriptedClient({ scopeSupported = true }: { scopeSupported?: boolean } = {}) {
+function scriptedClient({ scopeSupported = true, wrongArithmetic = false }: { scopeSupported?: boolean; wrongArithmetic?: boolean } = {}) {
   const requests: unknown[] = [];
   const client: OpenAICompatibleChatCompletionsClient = {
     async complete(messages, options) {
@@ -46,7 +46,7 @@ function scriptedClient({ scopeSupported = true }: { scopeSupported?: boolean } 
         return JSON.stringify({
           assessment: { ...pdAssessment(), ...input.target,
             issueRef: { ...input.target.issueRef, description: "招聘预算不足" },
-            reasoning: "生成时复核：比10万元预算多6万元。",
+            reasoning: wrongArithmetic ? "16万元减10万元，差额为-6万元。" : "生成时复核：比10万元预算多6万元。",
             materialChange: { ...input.target.materialChange, explanation: "发现预算差额。" } },
           draft: { text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。",
             evidenceRefs: input.target.evidenceRefs },
@@ -64,6 +64,15 @@ function scriptedClient({ scopeSupported = true }: { scopeSupported?: boolean } 
   };
   return { client, requests };
 }
+
+test("trace replays the same assessment arithmetic rejection as runtime despite model approval", async () => {
+  const { client } = scriptedClient({ wrongArithmetic: true });
+  const result = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  expect(result.results.find(item => item.caseId === "arithmetic")).toMatchObject({ error: "draft_rejected", draft: null });
+  const reviews = result.syntheticTrace!.records.filter(item => item.caseId === "arithmetic" && item.stage === "scope_review");
+  expect(reviews).toHaveLength(2);
+  for (const review of reviews) expect(review).toMatchObject({ candidate: { supported: true }, replayValidation: { accepted: false } });
+});
 
 test("trace opt-in leaves model results and request payloads unchanged and keeps case-round calls separate", async () => {
   const offClient = scriptedClient();
