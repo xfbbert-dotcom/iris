@@ -1,0 +1,60 @@
+{
+  "startedAt": "2026-09-26T14:34:30.200Z",
+  "output": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/immutable-transfer-probe-20260926.json",
+  "commit": "1b80965c23be986f4031afabe48da8db5511e845",
+  "applicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca"
+  },
+  "archives": [
+    {
+      "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/qwen38-fixed-review-20260926.json",
+      "sha256": "7a6e3d31d90288d8d60b60a0f36be272d1544ec3d4d61d40f4a8a56145213f0a"
+    },
+    {
+      "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/field-review-negative-20260920.json",
+      "sha256": "a570fb4439e373217e19f12d7cf1b274932676389e8df596ffd117b27ef88ea0"
+    },
+    {
+      "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/identity-target-diagnostic-20260925.json",
+      "sha256": "f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215"
+    }
+  ],
+  "selectedControls": [
+    {
+      "id": "old-negative-arithmetic",
+      "expectedSupported": false,
+      "spanCount": 16,
+      "originalRequestSha256": "622eb5c30cfdac8e0663794354c66eca68673f038650fc902797b4f6e7bc2654"
+    },
+    {
+      "id": "qualified-risk",
+      "expectedSupported": false,
+      "spanCount": 11,
+      "originalRequestSha256": "edb0352bf5495ce40a9c8ac72211fd0f2d831f56ad26ceef319d6f6477840e0e"
+    },
+    {
+      "id": "paraphrase",
+      "expectedSupported": false,
+      "spanCount": 12,
+      "originalRequestSha256": "f8a95e73d7c1a7b9b1d3fa64d649a52c2168b66e5e37663ce242fa50ec3d116d"
+    },
+    {
+      "id": "arithmetic",
+      "expectedSupported": true,
+      "spanCount": 12,
+      "originalRequestSha256": "41e1310e9f7590e1940271e9d332f89c637472f0d7479e15759641dfd84d722a"
+    },
+    {
+      "id": "material-update",
+      "expectedSupported": true,
+      "spanCount": 12,
+      "originalRequestSha256": "fc98a97b65e0e0f38498bac08246087e7d9c75cf2fa2e133c594a7620459ad3c"
+    }
+  ],
+  "quotaEvidence": "2026-09-26 14:33 UTC authenticated exact qwen3.8-max row remaining 991.47K/1M, expiry 2026-12-18, free-exhaustion stop enabled. Same existing synthetic key already saved and reopened verified for only Qwen3.7-Plus + Qwen3.8-Max. No permission expansion."
+}

@@ -256,6 +256,16 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   returned six true fields and overall true. One HTTP200/1934 tokens then halted; five planned
   controls were never called. A preceding preflight failed before any request. This falsifies
   this private candidate's first control, not every model or all split-review architectures.
+- **Hand-paired discrimination did not transfer to full immutable review (2026-09-26):** A
+  private fixed-ID three-way sentence probe distinguished a sign error with hand-written
+  alternatives, then failed unknown-versus-contradicted classification. The separate
+  [no-alternative full-span transfer](../development/iris-immutable-review-20260926.md)
+  again accepted `16−10=−6`, rationalizing it as a negative shortage; all 16 spans were true.
+  Overall false came only from uncertainty labeling. Exhaustive byte binding proves which text
+  was checked, not that it was understood faithfully. Require target-specific negative results
+  and no-oracle positive controls; a rejection for another defect is not target repair, and
+  hand-authored correct choices cannot stand in for deployment input. Stop this failed candidate
+  rather than resampling it or changing its oracle. No application or production change occurred.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,

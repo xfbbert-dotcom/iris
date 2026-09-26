@@ -1,0 +1,204 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-26T14:32:16.253Z",
+  "transformations": [
+    "Replace exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace exact local Windows user path component with LOCAL_USER.",
+    "Provider raw responses were already absent from private report; retain decoded response and original response hash/byte metadata only."
+  ],
+  "note": "Private originals remain unchanged. No key/DPAPI file is read. Original raw response SHA256/bytes cannot be independently recomputed from the privacy-preserving report. Launcher is archived as inert text. Two controls uncalled; raw independentSemanticReview remains pending.",
+  "disposition": "Two of four immutable-claim controls called. Set-71 matched; set-24 mislabeled undetermined n8f3 as contradicted and halted. Not product or full-suite acceptance.",
+  "originalReportSha256": "67ed4a9aab7d597d5c9814a3bc133d8cebfdc792e1b3fe25c2fd9f0e881b9cb1",
+  "wireValidation": {
+    "requests": 2,
+    "http200": 2,
+    "reportedUsageTokens": 1409,
+    "requestBodyHashesVerified": true,
+    "hiddenOracleAbsentOnActualWire": true,
+    "decodedContentMatchesResult": true,
+    "fixedVerdicts": {
+      "set-71": true,
+      "set-24": false
+    },
+    "originalResponseHashesAndBytesRetainedNotReverifiable": [
+      {
+        "controlId": "set-71",
+        "sha256": "ad23262c2ae4646bdb372c0e1358073e973252ca9f311d5200eeb0e0ea660479",
+        "bytes": 935
+      },
+      {
+        "controlId": "set-24",
+        "sha256": "cf69cd5ab8446e9ee13875a28d3537d1de677df36d3930e20b350dbd9577ce18",
+        "bytes": 1072
+      }
+    ],
+    "providerReasoningRawAbsent": true,
+    "uncalledControls": [
+      "set-53",
+      "set-86"
+    ]
+  },
+  "sourceIdentity": {
+    "recordedApplicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+    "recordedHead": "1b80965c23be986f4031afabe48da8db5511e845",
+    "recordedWorkingTreeStatus": "",
+    "files": [
+      {
+        "path": "apps/core/src/config/env.ts",
+        "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedSha256": "0f6a9c820e876853fe9868bcc24552583b83d25b6c1da1191ed416e53017aeb5",
+        "currentWorkingTreeSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedBytes": 38698,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 1273
+      },
+      {
+        "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+        "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedSha256": "909f5559359bb8bd34d2d274b216d5435ee8b79a27272414ed6f09cd261c2f20",
+        "currentWorkingTreeSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedBytes": 11237,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 306
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/model.ts",
+        "recordedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "currentWorkingTreeSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedBytes": 45593,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+        "recordedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "currentWorkingTreeSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedBytes": 10345,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "scripts/pilot/proactive-discussion-eval.ts",
+        "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "currentWorkingTreeSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedBytes": 42439,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      }
+    ],
+    "originalHarnessAndLauncherHashesVerified": true
+  },
+  "files": [
+    {
+      "sourceName": "immutable-claim-probe-20260926.json",
+      "archivedName": "iris-bailian-20260926-immutable-claims-report.json",
+      "originalSha256": "67ed4a9aab7d597d5c9814a3bc133d8cebfdc792e1b3fe25c2fd9f0e881b9cb1",
+      "originalBytes": 26078,
+      "archivedSha256": "1f0605817b58be4a0e7d58c4a1d42e55808099330b232537e19981fd2e41a173",
+      "archivedBytes": 26080,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 3
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ],
+      "wireValidation": {
+        "requests": 2,
+        "http200": 2,
+        "reportedUsageTokens": 1409,
+        "requestBodyHashesVerified": true,
+        "hiddenOracleAbsentOnActualWire": true,
+        "decodedContentMatchesResult": true,
+        "fixedVerdicts": {
+          "set-71": true,
+          "set-24": false
+        },
+        "originalResponseHashesAndBytesRetainedNotReverifiable": [
+          {
+            "controlId": "set-71",
+            "sha256": "ad23262c2ae4646bdb372c0e1358073e973252ca9f311d5200eeb0e0ea660479",
+            "bytes": 935
+          },
+          {
+            "controlId": "set-24",
+            "sha256": "cf69cd5ab8446e9ee13875a28d3537d1de677df36d3930e20b350dbd9577ce18",
+            "bytes": 1072
+          }
+        ],
+        "providerReasoningRawAbsent": true,
+        "uncalledControls": [
+          "set-53",
+          "set-86"
+        ]
+      }
+    },
+    {
+      "sourceName": "immutable-claim-probe-20260926.started.json",
+      "archivedName": "iris-bailian-20260926-immutable-claims-started.json",
+      "originalSha256": "2bbed88531c4873ab5ce35a4588de45023900b6ae217540a1a201fa4def1ffa1",
+      "originalBytes": 1351,
+      "archivedSha256": "b023513fede5665ae450a7f347f481a0b18544ca3e45a53965debf690598605d",
+      "archivedBytes": 1356,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "immutable-claim-probe-20260926.halted.json",
+      "archivedName": "iris-bailian-20260926-immutable-claims-halt.json",
+      "originalSha256": "e611f9514c3f97189bf4165f5f7343b455f9435b74029ef956578d4c5ec1d2fb",
+      "originalBytes": 98,
+      "archivedSha256": "e611f9514c3f97189bf4165f5f7343b455f9435b74029ef956578d4c5ec1d2fb",
+      "archivedBytes": 98,
+      "exactRedactions": []
+    },
+    {
+      "sourceName": "immutable-claim-probe-20260926.mts",
+      "archivedName": "iris-bailian-20260926-immutable-claims-harness.txt",
+      "originalSha256": "94497ed190bffb1adef97c526c021bd15bbe5ec3a121c53b9c3c1a7cea054cfe",
+      "originalBytes": 23064,
+      "archivedSha256": "371981e1d6b845cdf0b9ff7aebb119e16ba4a30df951b02a8611944e78491000",
+      "archivedBytes": 23068,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-immutable-claim-probe.ps1",
+      "archivedName": "iris-bailian-20260926-immutable-claims-launcher.txt",
+      "originalSha256": "370c7aba46dad0fc1628edb0245aff4213a0de0b726d744e94e0d4c733611987",
+      "originalBytes": 3282,
+      "archivedSha256": "d7fec81bb9f3bcf9b8af435ab68522470900f5f2c40f71254fbf6f6fc8d42bee",
+      "archivedBytes": 3287,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,356 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createRequestPacedFetch } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918';
+const baseUrl = 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const endpoint = baseUrl + '/chat/completions';
+const modelName = 'qwen3.8-max';
+if (process.argv.length !== 5 || process.argv[2] !== '--fresh-quota-verified'
+  || process.argv[3] !== '--model-permission-verified' || !process.argv[4]?.trim()) {
+  throw Error('Fresh exact-model free quota and model permission verification required');
+}
+const quotaEvidence = process.argv[4].trim();
+const output = `${folder}/immutable-claim-probe-20260926.json`;
+const startedPath = `${folder}/immutable-claim-probe-20260926.started.json`;
+const haltPath = `${folder}/immutable-claim-probe-20260926.halted.json`;
+if ([output, startedPath, haltPath].some(path => existsSync(path))) {
+  throw Error('Existing immutable-claim probe artifact; no overwrite or repeat');
+}
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const hashFile = (path: string) => sha(readFileSync(path));
+const sourcePaths = ['apps/core/src/config/env.ts',
+  'apps/core/src/model/openai-compatible-chat-completions-client.ts',
+  'apps/core/src/proactive-discussion/model.ts',
+  'apps/core/src/proactive-discussion/review-receipts.ts',
+  'scripts/pilot/proactive-discussion-eval.ts'];
+const git = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const sourceStatus = git(['status', '--porcelain', '--', ...sourcePaths]);
+if (sourceStatus) throw Error('Application source paths must be committed and clean');
+const commit = git(['rev-parse', 'HEAD']);
+const applicationCommit = git(['log', '-1', '--format=%H', '--', ...sourcePaths]);
+const sourceHashes = Object.fromEntries(sourcePaths.map(path => [path, hashFile(`${root}/${path}`)]));
+const archivePath = `${folder}/qwen38-fixed-review-20260926.json`;
+const archiveSha256 = '7a6e3d31d90288d8d60b60a0f36be272d1544ec3d4d61d40f4a8a56145213f0a';
+if (hashFile(archivePath) !== archiveSha256) throw Error('Frozen Qwen3.8-Max archive hash mismatch');
+const archive = JSON.parse(readFileSync(archivePath, 'utf8'));
+if (archive.kind !== 'private-qwen38-fixed-product-review-comparison'
+  || archive.model !== modelName || archive.applicationCommit !== applicationCommit
+  || sourcePaths.some(path => archive.sourceHashes?.[path] !== sourceHashes[path])) {
+  throw Error('Frozen archive or current application source identity mismatch');
+}
+function archivedWire(controlId: string) {
+  const matches = archive.requests.filter((request: any) => request.controlId === controlId);
+  if (matches.length !== 1) throw Error(`Unique archived wire unavailable: ${controlId}`);
+  const record = matches[0];
+  if (sha(record.requestBodyRaw) !== record.requestBodySha256 || record.status !== 200) {
+    throw Error(`Archived wire changed or unsuccessful: ${controlId}`);
+  }
+  const wire = JSON.parse(record.requestBodyRaw);
+  if (wire.model !== modelName || wire.enable_thinking !== false || wire.max_tokens !== 2048
+    || wire.response_format?.type !== 'json_object' || !Array.isArray(wire.messages)) {
+    throw Error(`Unexpected archived model/profile: ${controlId}`);
+  }
+  const user = wire.messages.find((message: any) => message.role === 'user');
+  if (typeof user?.content !== 'string') throw Error(`Archived user wire unavailable: ${controlId}`);
+  const input = JSON.parse(user.content);
+  if (!Array.isArray(input.evidence) || !input.assessment || !input.draft
+    || typeof input.assessment.reasoning !== 'string' || typeof input.draft.text !== 'string') {
+    throw Error(`Archived source/candidate unavailable: ${controlId}`);
+  }
+  const sources = input.evidence.map((item: any) => {
+    if (typeof item.ref !== 'string' || typeof item.text !== 'string') throw Error('Archived source invalid');
+    return { ref: item.ref, text: item.text };
+  });
+  return { input, sources, archivedRequestSha256: record.requestBodySha256 };
+}
+const arithmetic = archivedWire('old-negative-arithmetic');
+const risk = archivedWire('qualified-risk');
+const firstSentence = (text: string) => text.split('。')[0] + '。';
+const wrongArithmetic = firstSentence(arithmetic.input.assessment.reasoning);
+const wrongRisk = risk.input.assessment.reasoning.split('。')
+  .find((sentence: string) => sentence.startsWith('若联调过程中发现阻塞性问题')) + '。';
+const wrongDraft = risk.input.draft.text.split('。')
+  .find((sentence: string) => sentence.startsWith('在关键技术路径未打通')) + '。';
+if (wrongArithmetic !== '根据已知事实进行直接算术核算：需求总额16万元减去可用预算10万元，差额为-6万元。'
+  || wrongRisk !== '若联调过程中发现阻塞性问题，将直接导致无法按承诺时间交付，从而产生履约风险。'
+  || wrongDraft !== '在关键技术路径未打通的情况下做出确定性承诺，一旦联调出现阻塞，将面临极高的违约风险。') {
+  throw Error('Frozen archived wrong claims no longer match the approved probe');
+}
+type Verdict = 'supported' | 'contradicted' | 'undetermined';
+type Claim = { id: string; text: string };
+type Control = { id: string; sourceKind: 'archived' | 'synthetic'; sources: { ref: string; text: string }[];
+  claims: Claim[]; expected: Record<string, Verdict>; archivedRequestSha256?: string };
+const controls: Control[] = [
+  { id: 'set-71', sourceKind: 'archived', sources: arithmetic.sources,
+    archivedRequestSha256: arithmetic.archivedRequestSha256,
+    claims: [
+      { id: 'u6p4', text: '预算10万元减去总需求16万元，余额为-6万元。' },
+      { id: 'a9m2', text: wrongArithmetic },
+      { id: 'k3t8', text: '总需求16万元减去预算10万元，缺口为6万元。' },
+    ], expected: { u6p4: 'supported', a9m2: 'contradicted', k3t8: 'supported' } },
+  { id: 'set-24', sourceKind: 'archived', sources: risk.sources,
+    archivedRequestSha256: risk.archivedRequestSha256,
+    claims: [
+      { id: 'n8f3', text: '即使出现阻塞问题也一定按时交付。' },
+      { id: 'b5q7', text: '如果发现阻塞问题，可能影响交付，需核实影响。' },
+      { id: 'r2w9', text: wrongRisk },
+    ], expected: { n8f3: 'undetermined', b5q7: 'supported', r2w9: 'undetermined' } },
+  { id: 'set-53', sourceKind: 'archived', sources: risk.sources,
+    archivedRequestSha256: risk.archivedRequestSha256,
+    claims: [
+      { id: 'v4h1', text: '供应商接口尚未联调验证，若后续出现问题，可能影响下周交付；建议先核实。' },
+      { id: 'd7s6', text: wrongDraft },
+      { id: 'c9j2', text: '接口联调已经失败。' },
+    ], expected: { v4h1: 'supported', d7s6: 'undetermined', c9j2: 'undetermined' } },
+  { id: 'set-86', sourceKind: 'synthetic',
+    sources: [{ ref: 'synthetic:external-team-rule',
+      text: '外部团队规则：若周五18:00前未解除接口阻塞，则本周版本无法按截止日交付；不存在替代接口。' }],
+    claims: [
+      { id: 'f6x2', text: '该接口阻塞已确认永远无法解决。' },
+      { id: 'm4r8', text: '即使周五18:00前未解除接口阻塞，本周版本仍一定能按截止日交付。' },
+      { id: 'q7p3', text: '若周五18:00前未解除接口阻塞，则本周版本无法按截止日交付。' },
+    ], expected: { f6x2: 'undetermined', m4r8: 'contradicted', q7p3: 'supported' } },
+];
+const allIds = controls.flatMap(control => control.claims.map(claim => claim.id));
+if (controls.length !== 4 || allIds.length !== 12 || new Set(allIds).size !== 12
+  || controls.some(control => control.claims.length !== 3
+    || Object.keys(control.expected).length !== 3
+    || control.claims.some(claim => !control.expected[claim.id]))) {
+  throw Error('Four fixed three-claim controls with opaque unique IDs required');
+}
+const apiKey = process.env.IRIS_BAILIAN_EVAL_KEY;
+if (!apiKey || apiKey !== apiKey.trim() || /[\r\n]/u.test(apiKey)) throw Error('Private process key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const redact = (value: string) => value.replaceAll(apiKey, '[REDACTED]');
+const safeError = (error: unknown) => error instanceof Error ? error.name : 'unknown';
+const auditSystem = [
+  '只对提供的来源原文与候选语句逐条做证据关系判定，不改写候选原句，不补充组织事实，不执行工具。',
+  'supported：来源直接支持，或候选仅作来源允许的谨慎条件风险表达；contradicted：来源或直接算术明确否定；undetermined：来源不足以证明或否定候选的确定性、发生状态或程度。',
+  '逐项独立判定；条件前件不等于已发生。每个固定 id 只输出 supported、contradicted 或 undetermined 之一及不超过160字的一句具体审计说明。',
+  '只输出指定 JSON，不输出思维链、正确/错误标签或改写建议。',
+].join('\n');
+const report: any = {
+  kind: 'private-immutable-claim-relation-spike', syntheticOnly: true,
+  startedAt: new Date().toISOString(), commit, applicationCommit,
+  applicationSourceWorkingTreeStatus: sourceStatus, sourceHashes,
+  harnessSha256: hashFile(fileURLToPath(import.meta.url)),
+  launcherSha256: hashFile(`${folder}/run-immutable-claim-probe.ps1`),
+  archive: { path: archivePath, sha256: archiveSha256,
+    arithmeticRequestSha256: arithmetic.archivedRequestSha256,
+    riskRequestSha256: risk.archivedRequestSha256 },
+  model: modelName, endpoint, structuredOutputMode: 'json_object', timeoutMs: 60000,
+  profile: { enable_thinking: false, max_tokens: 2048 },
+  wallMs: 300000, maxRequests: 4, maximumReportedUsageTokens: 20000,
+  reportedUsageTokens: 0, requestIntervalMs: 6000, automaticTransportRetry: false,
+  maximumResponseBytes: 262144, requests: [], results: [],
+  fixedControls: controls.map(control => ({ id: control.id, sourceKind: control.sourceKind,
+    sources: control.sources, claims: control.claims, expected: control.expected,
+    archivedRequestSha256: control.archivedRequestSha256 ?? null })),
+  independentSemanticReview: 'pending', executionPassed: false,
+  freeOnlyPrecondition: `Operator asserted fresh authenticated exact qwen3.8-max free quota, free-exhaustion stop, and this key's qwen3.8-max permission at launch: ${quotaEvidence}. This is not automated quota verification or a billing audit. No paid fallback.`,
+  acceptance: 'Discardable four-request claim-relation spike. Expected mapping remains local and is not in model prompts. First malformed, missing/duplicated ID, verdict mismatch, HTTP failure or hard boundary stops immediately. No repair, resampling, product pass, full suite or application change.',
+  limitation: 'Artificial paired controls and explicit source/candidate framing can bias this local probe. Even four matching responses are not product semantic acceptance, and no further unlimited hypothesis search is authorized.',
+  privacy: 'Provider reasoning_content is never printed or saved verbatim; only field path, byte count and SHA256 are retained if present.',
+};
+writeFileSync(startedPath, JSON.stringify({ startedAt: report.startedAt, output,
+  commit, applicationCommit, sourceHashes, archiveSha256,
+  controlIds: controls.map(control => control.id), quotaEvidence }, null, 2) + '\n', { flag: 'wx' });
+const deadline = AbortSignal.timeout(report.wallMs);
+let halted = false;
+let active: Control | undefined;
+function halt(reason: string) {
+  halted = true; report.haltReason ??= reason;
+  if (!existsSync(haltPath)) writeFileSync(haltPath,
+    JSON.stringify({ at: new Date().toISOString(), reason }, null, 2) + '\n', { flag: 'wx' });
+}
+function responseSchema(control: Control) {
+  return { type: 'object', additionalProperties: false,
+    required: ['verdicts'], properties: { verdicts: {
+      type: 'array', minItems: 3, maxItems: 3,
+      items: { type: 'object', additionalProperties: false,
+        required: ['id', 'verdict', 'reason'], properties: {
+          id: { type: 'string', enum: control.claims.map(claim => claim.id) },
+          verdict: { type: 'string', enum: ['supported', 'contradicted', 'undetermined'] },
+          reason: { type: 'string', minLength: 1, maxLength: 160 },
+        } },
+    } } };
+}
+function validateAnswer(value: any, control: Control) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || JSON.stringify(Object.keys(value)) !== JSON.stringify(['verdicts'])
+    || !Array.isArray(value.verdicts) || value.verdicts.length !== 3) {
+    throw Error('Probe receipt shape invalid');
+  }
+  const expectedIds = new Set(control.claims.map(claim => claim.id));
+  const seen = new Set<string>();
+  for (const item of value.verdicts) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+      || JSON.stringify(Object.keys(item).sort()) !== JSON.stringify(['id', 'reason', 'verdict'])
+      || typeof item.id !== 'string' || !expectedIds.has(item.id) || seen.has(item.id)
+      || !['supported', 'contradicted', 'undetermined'].includes(item.verdict)
+      || typeof item.reason !== 'string' || !item.reason.trim() || item.reason.length > 160
+      || (item.reason.match(/[。！？!?]/gu) ?? []).length > 1) {
+      throw Error('Probe receipt ID, verdict or one-sentence reason invalid');
+    }
+    seen.add(item.id);
+  }
+  if (seen.size !== expectedIds.size) throw Error('Probe receipt omitted a fixed ID');
+  return value.verdicts.every((item: any) => item.verdict === control.expected[item.id]);
+}
+function sanitizedProvider(value: any) {
+  const removed: any[] = [];
+  const visit = (part: any, path: string): any => {
+    if (Array.isArray(part)) return part.map((item, index) => visit(item, `${path}[${index}]`));
+    if (part && typeof part === 'object') {
+      const clean: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(part)) {
+        if (/^(reasoning_content|reasoning_text|thinking_content)$/iu.test(key)) {
+          const raw = typeof item === 'string' ? item : JSON.stringify(item);
+          removed.push({ path: `${path}.${key}`, bytes: Buffer.byteLength(raw), sha256: sha(raw) });
+        } else clean[key] = visit(item, `${path}.${key}`);
+      }
+      return clean;
+    }
+    return part;
+  };
+  return { decoded: visit(value, '$'), removed };
+}
+const client = createOpenAICompatibleChatCompletionsClient({
+  config: { provider: 'openai-compatible', baseUrl, model: modelName,
+    apiKey, timeoutMs: 60000, structuredOutputMode: 'json_object' },
+  sleep: async () => { halt('transport retry refused'); throw Error('No automatic transport retry'); },
+  fetch: createRequestPacedFetch({ requestIntervalMs: report.requestIntervalMs, fetch: async (url, init) => {
+    if (halted || deadline.aborted || !active || report.requests.length >= report.maxRequests
+      || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('request count, reported usage, deadline or stopped-window boundary');
+      throw Error('Bounded immutable-claim probe stopped');
+    }
+    const coreBody = JSON.parse(String(init?.body));
+    const user = coreBody.messages?.find((message: any) => message.role === 'user');
+    const input = JSON.parse(user?.content);
+    const schema = responseSchema(active);
+    if (String(url) !== endpoint || init?.method !== 'POST' || coreBody.model !== modelName
+      || coreBody.response_format?.type !== 'json_object'
+      || Object.keys(coreBody.response_format).length !== 1
+      || Object.keys(coreBody).some(key => !['model', 'messages', 'response_format'].includes(key))
+      || JSON.stringify(Object.keys(input).sort()) !== JSON.stringify(['claims', 'sources'])
+      || JSON.stringify(input.sources) !== JSON.stringify(active.sources)
+      || JSON.stringify(input.claims) !== JSON.stringify(active.claims)
+      || !coreBody.messages?.[0]?.content.endsWith('\n' + JSON.stringify(schema))
+      || JSON.stringify(coreBody).includes('expectedSupported')
+      || JSON.stringify(coreBody).includes('"expected"')) {
+      halt('exact source, candidate, model, schema or hidden-oracle outbound boundary');
+      throw Error('Fixed immutable-claim request boundary failed');
+    }
+    const outgoing = JSON.stringify({ ...coreBody, ...report.profile });
+    const record: any = { index: report.requests.length + 1, controlId: active.id,
+      startedAt: new Date().toISOString(), endpoint, method: 'POST',
+      requestBodyRaw: redact(outgoing), requestBodySha256: sha(outgoing),
+      originalSchemaSha256: sha(JSON.stringify(schema)), hiddenOracleAbsent: true };
+    report.requests.push(record);
+    console.log(JSON.stringify({ request: record.index, controlId: record.controlId,
+      reportedUsageTokens: report.reportedUsageTokens }));
+    try {
+      const response = await fetch(url, { ...init, redirect: 'error', body: outgoing,
+        signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+      record.status = response.status;
+      record.headers = Object.fromEntries(['content-type', 'x-request-id', 'x-dashscope-request-id',
+        'x-acs-request-id', 'request-id', 'retry-after'].flatMap(name => {
+        const value = response.headers.get(name); return value === null ? [] : [[name, redact(value)]];
+      }));
+      if (!response.ok) halt('first non-success HTTP response');
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = response.body?.getReader();
+      if (reader) while (true) {
+        const part = await reader.read(); if (part.done) break;
+        size += part.value.byteLength;
+        if (size > report.maximumResponseBytes) {
+          record.responseBodyTruncated = true; record.responseBytesObserved = size;
+          await reader.cancel(); halt('response byte cap'); throw Error('Response byte cap');
+        }
+        chunks.push(part.value);
+      }
+      const bytes = Buffer.concat(chunks);
+      record.responseBytes = bytes.length; record.responseBodySha256 = sha(bytes);
+      let decoded: any;
+      try { decoded = JSON.parse(bytes.toString('utf8')); }
+      catch { halt('provider response JSON invalid'); throw Error('Provider response JSON invalid'); }
+      const sanitized = sanitizedProvider(decoded);
+      record.responseDecodedSansReasoning = sanitized.decoded;
+      record.reasoningFields = sanitized.removed;
+      record.usage = decoded.usage ?? null;
+      record.businessCode = decoded.code ?? decoded.error?.code ?? null;
+      record.requestId = decoded.request_id ?? decoded.requestId ?? decoded.id ?? null;
+      record.finishReasons = Array.isArray(decoded.choices)
+        ? decoded.choices.map((choice: any) => choice.finish_reason ?? null) : [];
+      const validCount = (value: unknown): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+      const total = validCount(decoded.usage?.total_tokens) ? decoded.usage.total_tokens
+        : validCount(decoded.usage?.prompt_tokens) && validCount(decoded.usage?.completion_tokens)
+          ? decoded.usage.prompt_tokens + decoded.usage.completion_tokens : undefined;
+      if (validCount(total)) {
+        report.reportedUsageTokens += total; record.accountedUsageTokens = total;
+        record.cumulativeReportedUsageTokens = report.reportedUsageTokens;
+      } else if (response.ok) halt('successful response lacks valid usage accounting');
+      if (record.finishReasons.includes('length')) {
+        record.outputTruncated = true;
+        record.failureClassification = 'experimental_output_cap_truncation_not_semantic_quality';
+      }
+      if (decoded.error || !Array.isArray(decoded.choices) || record.finishReasons.length !== 1
+        || record.finishReasons[0] !== 'stop') halt('provider business error or non-stop finish');
+      if (halted) throw Error('Provider or usage boundary failed');
+      return new Response(bytes, { status: response.status,
+        headers: { 'content-type': response.headers.get('content-type') ?? 'application/json' } });
+    } catch (error) {
+      record.errorType = safeError(error); halt('transport, timeout or response-read failure'); throw error;
+    } finally { record.finishedAt = new Date().toISOString(); }
+  } }),
+});
+try {
+  for (const control of controls) {
+    if (halted || deadline.aborted || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('probe stopped before next fixed control'); break;
+    }
+    active = control;
+    const schema = responseSchema(control);
+    const responseFormat = { type: 'json_schema' as const, json_schema: {
+      name: 'iris_private_immutable_claim_relation', strict: true as const, schema } };
+    const messages = [{ role: 'system' as const, content: auditSystem },
+      { role: 'user' as const, content: JSON.stringify({ sources: control.sources,
+        claims: control.claims }) }];
+    const result: any = { controlId: control.id, expected: control.expected,
+      originalMessages: messages, originalResponseFormat: responseFormat,
+      startedAt: new Date().toISOString() };
+    report.results.push(result);
+    try {
+      const content = await client.complete(messages, { responseFormat });
+      result.content = redact(content); // Core returns final answer content only.
+      const value = JSON.parse(content);
+      result.schemaValid = true;
+      result.fixedVerdictsMatched = validateAnswer(value, control);
+      if (!result.fixedVerdictsMatched) halt('first fixed verdict mismatch; discard probe');
+    } catch (error) {
+      result.schemaValid = false; result.errorType = safeError(error);
+      halt('first schema, transport or receipt failure; discard probe');
+    } finally { result.finishedAt = new Date().toISOString(); }
+    if (halted) break;
+  }
+  report.executionPassed = !halted && report.results.length === 4 && report.requests.length === 4
+    && report.results.every((item: any) => item.fixedVerdictsMatched === true);
+  if (!report.executionPassed && !halted) halt('four-control probe incomplete');
+  process.exitCode = report.executionPassed ? 0 : 1;
+} catch (error) {
+  report.errorType = safeError(error); halt('probe execution failed'); process.exitCode = 1;
+} finally {
+  report.halted = halted; report.finishedAt = new Date().toISOString();
+  writeFileSync(output, redact(JSON.stringify(report, null, 2)) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length,
+    reportedUsageTokens: report.reportedUsageTokens, executionPassed: report.executionPassed,
+    halted, independentSemanticReview: report.independentSemanticReview }));
+}

@@ -1,0 +1,461 @@
+{
+  "kind": "private-immutable-claim-relation-spike",
+  "syntheticOnly": true,
+  "startedAt": "2026-09-26T14:05:01.784Z",
+  "commit": "1b80965c23be986f4031afabe48da8db5511e845",
+  "applicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+  "applicationSourceWorkingTreeStatus": "",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca"
+  },
+  "harnessSha256": "94497ed190bffb1adef97c526c021bd15bbe5ec3a121c53b9c3c1a7cea054cfe",
+  "launcherSha256": "370c7aba46dad0fc1628edb0245aff4213a0de0b726d744e94e0d4c733611987",
+  "archive": {
+    "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/qwen38-fixed-review-20260926.json",
+    "sha256": "7a6e3d31d90288d8d60b60a0f36be272d1544ec3d4d61d40f4a8a56145213f0a",
+    "arithmeticRequestSha256": "96a7fdc2ae20e49b76b860da65d0fd5a61f3911ac62bfd6bcddf6bae4aeb8aca",
+    "riskRequestSha256": "84934a6e537b6caa69574acfaf349b699675b589f96d3cfc9a9d182429c05654"
+  },
+  "model": "qwen3.8-max",
+  "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "structuredOutputMode": "json_object",
+  "timeoutMs": 60000,
+  "profile": {
+    "enable_thinking": false,
+    "max_tokens": 2048
+  },
+  "wallMs": 300000,
+  "maxRequests": 4,
+  "maximumReportedUsageTokens": 20000,
+  "reportedUsageTokens": 1409,
+  "requestIntervalMs": 6000,
+  "automaticTransportRetry": false,
+  "maximumResponseBytes": 262144,
+  "requests": [
+    {
+      "index": 1,
+      "controlId": "set-71",
+      "startedAt": "2026-09-26T14:05:01.788Z",
+      "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "method": "POST",
+      "requestBodyRaw": "{\"model\":\"qwen3.8-max\",\"messages\":[{\"role\":\"system\",\"content\":\"只对提供的来源原文与候选语句逐条做证据关系判定，不改写候选原句，不补充组织事实，不执行工具。\\nsupported：来源直接支持，或候选仅作来源允许的谨慎条件风险表达；contradicted：来源或直接算术明确否定；undetermined：来源不足以证明或否定候选的确定性、发生状态或程度。\\n逐项独立判定；条件前件不等于已发生。每个固定 id 只输出 supported、contradicted 或 undetermined 之一及不超过160字的一句具体审计说明。\\n只输出指定 JSON，不输出思维链、正确/错误标签或改写建议。\\n\\nReturn only a JSON object that satisfies the following JSON Schema, not the schema itself.\\nDo not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.\\n{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"verdicts\\\"],\\\"properties\\\":{\\\"verdicts\\\":{\\\"type\\\":\\\"array\\\",\\\"minItems\\\":3,\\\"maxItems\\\":3,\\\"items\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"id\\\",\\\"verdict\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"id\\\":{\\\"type\\\":\\\"string\\\",\\\"enum\\\":[\\\"u6p4\\\",\\\"a9m2\\\",\\\"k3t8\\\"]},\\\"verdict\\\":{\\\"type\\\":\\\"string\\\",\\\"enum\\\":[\\\"supported\\\",\\\"contradicted\\\",\\\"undetermined\\\"]},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":160}}}}}}\"},{\"role\":\"user\",\"content\":\"{\\\"sources\\\":[{\\\"ref\\\":\\\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\\\",\\\"text\\\":\\\"本季度招聘预算 10 万元。\\\"},{\\\"ref\\\":\\\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\\\",\\\"text\\\":\\\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\\\"}],\\\"claims\\\":[{\\\"id\\\":\\\"u6p4\\\",\\\"text\\\":\\\"预算10万元减去总需求16万元，余额为-6万元。\\\"},{\\\"id\\\":\\\"a9m2\\\",\\\"text\\\":\\\"根据已知事实进行直接算术核算：需求总额16万元减去可用预算10万元，差额为-6万元。\\\"},{\\\"id\\\":\\\"k3t8\\\",\\\"text\\\":\\\"总需求16万元减去预算10万元，缺口为6万元。\\\"}]}\"}],\"response_format\":{\"type\":\"json_object\"},\"enable_thinking\":false,\"max_tokens\":2048}",
+      "requestBodySha256": "7262ff8c763f120e0ffa3120c29b14664986531038e8fbf910d48def6554dbb3",
+      "originalSchemaSha256": "0f7ffc7418b73946282db8b64e3d11f5db614a4843d4c02436ca4ae1da031ad9",
+      "hiddenOracleAbsent": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "5fbc5e49-1562-9eba-9a33-f157c3fdb3a5"
+      },
+      "responseBytes": 935,
+      "responseBodySha256": "ad23262c2ae4646bdb372c0e1358073e973252ca9f311d5200eeb0e0ea660479",
+      "responseDecodedSansReasoning": {
+        "id": "chatcmpl-5fbc5e49-1562-9eba-9a33-f157c3fdb3a5",
+        "object": "chat.completion",
+        "created": 1790431502,
+        "model": "qwen3.8-max",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"verdicts\":[{\"id\":\"u6p4\",\"verdict\":\"supported\",\"reason\":\"来源给出预算10万元、两人各8万元共16万元，10减16等于-6万元，算术正确且由来源直接支持。\"},{\"id\":\"a9m2\",\"verdict\":\"contradicted\",\"reason\":\"来源数据为需求16万、预算10万，但16减10应等于6而非-6，候选的算术结果与来源直接算术明确矛盾。\"},{\"id\":\"k3t8\",\"verdict\":\"supported\",\"reason\":\"来源给出总需求16万元与预算10万元，16减10等于6万元缺口，算术正确且由来源直接支持。\"}]}"
+            },
+            "finish_reason": "stop",
+            "logprobs": null
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 561,
+          "total_tokens": 716,
+          "completion_tokens": 155,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 561
+          }
+        }
+      },
+      "reasoningFields": [],
+      "usage": {
+        "prompt_tokens": 561,
+        "total_tokens": 716,
+        "completion_tokens": 155,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 561
+        }
+      },
+      "businessCode": null,
+      "requestId": "chatcmpl-5fbc5e49-1562-9eba-9a33-f157c3fdb3a5",
+      "finishReasons": [
+        "stop"
+      ],
+      "accountedUsageTokens": 716,
+      "cumulativeReportedUsageTokens": 716,
+      "finishedAt": "2026-09-26T14:05:05.811Z"
+    },
+    {
+      "index": 2,
+      "controlId": "set-24",
+      "startedAt": "2026-09-26T14:05:07.800Z",
+      "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "method": "POST",
+      "requestBodyRaw": "{\"model\":\"qwen3.8-max\",\"messages\":[{\"role\":\"system\",\"content\":\"只对提供的来源原文与候选语句逐条做证据关系判定，不改写候选原句，不补充组织事实，不执行工具。\\nsupported：来源直接支持，或候选仅作来源允许的谨慎条件风险表达；contradicted：来源或直接算术明确否定；undetermined：来源不足以证明或否定候选的确定性、发生状态或程度。\\n逐项独立判定；条件前件不等于已发生。每个固定 id 只输出 supported、contradicted 或 undetermined 之一及不超过160字的一句具体审计说明。\\n只输出指定 JSON，不输出思维链、正确/错误标签或改写建议。\\n\\nReturn only a JSON object that satisfies the following JSON Schema, not the schema itself.\\nDo not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.\\n{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"verdicts\\\"],\\\"properties\\\":{\\\"verdicts\\\":{\\\"type\\\":\\\"array\\\",\\\"minItems\\\":3,\\\"maxItems\\\":3,\\\"items\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"id\\\",\\\"verdict\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"id\\\":{\\\"type\\\":\\\"string\\\",\\\"enum\\\":[\\\"n8f3\\\",\\\"b5q7\\\",\\\"r2w9\\\"]},\\\"verdict\\\":{\\\"type\\\":\\\"string\\\",\\\"enum\\\":[\\\"supported\\\",\\\"contradicted\\\",\\\"undetermined\\\"]},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":160}}}}}}\"},{\"role\":\"user\",\"content\":\"{\\\"sources\\\":[{\\\"ref\\\":\\\"message:5d0b43105e2670abbf29a15d5001e573caa32e547fa6079bf441c35f4ce31e06\\\",\\\"text\\\":\\\"交付依赖的供应商接口还没有联调验证。\\\"},{\\\"ref\\\":\\\"message:484fd37abfb31e7d2d607a0670d6c8d878a978da9d37598af702b78f053ed875\\\",\\\"text\\\":\\\"准备今天向客户承诺下周肯定交付。\\\"}],\\\"claims\\\":[{\\\"id\\\":\\\"n8f3\\\",\\\"text\\\":\\\"即使出现阻塞问题也一定按时交付。\\\"},{\\\"id\\\":\\\"b5q7\\\",\\\"text\\\":\\\"如果发现阻塞问题，可能影响交付，需核实影响。\\\"},{\\\"id\\\":\\\"r2w9\\\",\\\"text\\\":\\\"若联调过程中发现阻塞性问题，将直接导致无法按承诺时间交付，从而产生履约风险。\\\"}]}\"}],\"response_format\":{\"type\":\"json_object\"},\"enable_thinking\":false,\"max_tokens\":2048}",
+      "requestBodySha256": "d7cbd9fafea86c7ad12e9ac76fd26b9e6f9d3e2ab5dc5fc2a3b0f6bdc305e360",
+      "originalSchemaSha256": "9b77c856e6ad1699ae563163fb665b86897e8773b4575f2d3c55dfae91801c6f",
+      "hiddenOracleAbsent": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "b9fd7133-ef13-915e-b5b1-5e88e4fee633"
+      },
+      "responseBytes": 1072,
+      "responseBodySha256": "cf69cd5ab8446e9ee13875a28d3537d1de677df36d3930e20b350dbd9577ce18",
+      "responseDecodedSansReasoning": {
+        "id": "chatcmpl-b9fd7133-ef13-915e-b5b1-5e88e4fee633",
+        "object": "chat.completion",
+        "created": 1790431507,
+        "model": "qwen3.8-max",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"verdicts\":[{\"id\":\"n8f3\",\"verdict\":\"contradicted\",\"reason\":\"来源明确指出供应商接口尚未联调验证，存在未解决的依赖，无法支持即使出现阻塞也一定按时交付的绝对断言。\"},{\"id\":\"b5q7\",\"verdict\":\"supported\",\"reason\":\"来源指出供应商接口尚未联调验证且准备向客户承诺交付时间，候选以条件语气表达发现阻塞可能影响交付需核实，属来源允许的谨慎风险表达。\"},{\"id\":\"r2w9\",\"verdict\":\"undetermined\",\"reason\":\"来源仅说明接口未联调及拟承诺下周交付，未提供联调发现问题将直接导致无法按承诺交付并产生履约风险的确定性依据。\"}]}"
+            },
+            "finish_reason": "stop",
+            "logprobs": null
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 543,
+          "total_tokens": 693,
+          "completion_tokens": 150,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 543
+          }
+        }
+      },
+      "reasoningFields": [],
+      "usage": {
+        "prompt_tokens": 543,
+        "total_tokens": 693,
+        "completion_tokens": 150,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 543
+        }
+      },
+      "businessCode": null,
+      "requestId": "chatcmpl-b9fd7133-ef13-915e-b5b1-5e88e4fee633",
+      "finishReasons": [
+        "stop"
+      ],
+      "accountedUsageTokens": 693,
+      "cumulativeReportedUsageTokens": 1409,
+      "finishedAt": "2026-09-26T14:05:11.497Z"
+    }
+  ],
+  "results": [
+    {
+      "controlId": "set-71",
+      "expected": {
+        "u6p4": "supported",
+        "a9m2": "contradicted",
+        "k3t8": "supported"
+      },
+      "originalMessages": [
+        {
+          "role": "system",
+          "content": "只对提供的来源原文与候选语句逐条做证据关系判定，不改写候选原句，不补充组织事实，不执行工具。\nsupported：来源直接支持，或候选仅作来源允许的谨慎条件风险表达；contradicted：来源或直接算术明确否定；undetermined：来源不足以证明或否定候选的确定性、发生状态或程度。\n逐项独立判定；条件前件不等于已发生。每个固定 id 只输出 supported、contradicted 或 undetermined 之一及不超过160字的一句具体审计说明。\n只输出指定 JSON，不输出思维链、正确/错误标签或改写建议。"
+        },
+        {
+          "role": "user",
+          "content": "{\"sources\":[{\"ref\":\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\",\"text\":\"本季度招聘预算 10 万元。\"},{\"ref\":\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\",\"text\":\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\"}],\"claims\":[{\"id\":\"u6p4\",\"text\":\"预算10万元减去总需求16万元，余额为-6万元。\"},{\"id\":\"a9m2\",\"text\":\"根据已知事实进行直接算术核算：需求总额16万元减去可用预算10万元，差额为-6万元。\"},{\"id\":\"k3t8\",\"text\":\"总需求16万元减去预算10万元，缺口为6万元。\"}]}"
+        }
+      ],
+      "originalResponseFormat": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "iris_private_immutable_claim_relation",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "verdicts"
+            ],
+            "properties": {
+              "verdicts": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "verdict",
+                    "reason"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "enum": [
+                        "u6p4",
+                        "a9m2",
+                        "k3t8"
+                      ]
+                    },
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "supported",
+                        "contradicted",
+                        "undetermined"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "startedAt": "2026-09-26T14:05:01.788Z",
+      "content": "{\"verdicts\":[{\"id\":\"u6p4\",\"verdict\":\"supported\",\"reason\":\"来源给出预算10万元、两人各8万元共16万元，10减16等于-6万元，算术正确且由来源直接支持。\"},{\"id\":\"a9m2\",\"verdict\":\"contradicted\",\"reason\":\"来源数据为需求16万、预算10万，但16减10应等于6而非-6，候选的算术结果与来源直接算术明确矛盾。\"},{\"id\":\"k3t8\",\"verdict\":\"supported\",\"reason\":\"来源给出总需求16万元与预算10万元，16减10等于6万元缺口，算术正确且由来源直接支持。\"}]}",
+      "schemaValid": true,
+      "fixedVerdictsMatched": true,
+      "finishedAt": "2026-09-26T14:05:05.814Z"
+    },
+    {
+      "controlId": "set-24",
+      "expected": {
+        "n8f3": "undetermined",
+        "b5q7": "supported",
+        "r2w9": "undetermined"
+      },
+      "originalMessages": [
+        {
+          "role": "system",
+          "content": "只对提供的来源原文与候选语句逐条做证据关系判定，不改写候选原句，不补充组织事实，不执行工具。\nsupported：来源直接支持，或候选仅作来源允许的谨慎条件风险表达；contradicted：来源或直接算术明确否定；undetermined：来源不足以证明或否定候选的确定性、发生状态或程度。\n逐项独立判定；条件前件不等于已发生。每个固定 id 只输出 supported、contradicted 或 undetermined 之一及不超过160字的一句具体审计说明。\n只输出指定 JSON，不输出思维链、正确/错误标签或改写建议。"
+        },
+        {
+          "role": "user",
+          "content": "{\"sources\":[{\"ref\":\"message:5d0b43105e2670abbf29a15d5001e573caa32e547fa6079bf441c35f4ce31e06\",\"text\":\"交付依赖的供应商接口还没有联调验证。\"},{\"ref\":\"message:484fd37abfb31e7d2d607a0670d6c8d878a978da9d37598af702b78f053ed875\",\"text\":\"准备今天向客户承诺下周肯定交付。\"}],\"claims\":[{\"id\":\"n8f3\",\"text\":\"即使出现阻塞问题也一定按时交付。\"},{\"id\":\"b5q7\",\"text\":\"如果发现阻塞问题，可能影响交付，需核实影响。\"},{\"id\":\"r2w9\",\"text\":\"若联调过程中发现阻塞性问题，将直接导致无法按承诺时间交付，从而产生履约风险。\"}]}"
+        }
+      ],
+      "originalResponseFormat": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "iris_private_immutable_claim_relation",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "verdicts"
+            ],
+            "properties": {
+              "verdicts": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "verdict",
+                    "reason"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "enum": [
+                        "n8f3",
+                        "b5q7",
+                        "r2w9"
+                      ]
+                    },
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "supported",
+                        "contradicted",
+                        "undetermined"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "startedAt": "2026-09-26T14:05:05.814Z",
+      "content": "{\"verdicts\":[{\"id\":\"n8f3\",\"verdict\":\"contradicted\",\"reason\":\"来源明确指出供应商接口尚未联调验证，存在未解决的依赖，无法支持即使出现阻塞也一定按时交付的绝对断言。\"},{\"id\":\"b5q7\",\"verdict\":\"supported\",\"reason\":\"来源指出供应商接口尚未联调验证且准备向客户承诺交付时间，候选以条件语气表达发现阻塞可能影响交付需核实，属来源允许的谨慎风险表达。\"},{\"id\":\"r2w9\",\"verdict\":\"undetermined\",\"reason\":\"来源仅说明接口未联调及拟承诺下周交付，未提供联调发现问题将直接导致无法按承诺交付并产生履约风险的确定性依据。\"}]}",
+      "schemaValid": true,
+      "fixedVerdictsMatched": false,
+      "finishedAt": "2026-09-26T14:05:11.499Z"
+    }
+  ],
+  "fixedControls": [
+    {
+      "id": "set-71",
+      "sourceKind": "archived",
+      "sources": [
+        {
+          "ref": "message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2",
+          "text": "本季度招聘预算 10 万元。"
+        },
+        {
+          "ref": "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba",
+          "text": "招聘两个人，每人要 8 万元；我们认为这些预算足够。"
+        }
+      ],
+      "claims": [
+        {
+          "id": "u6p4",
+          "text": "预算10万元减去总需求16万元，余额为-6万元。"
+        },
+        {
+          "id": "a9m2",
+          "text": "根据已知事实进行直接算术核算：需求总额16万元减去可用预算10万元，差额为-6万元。"
+        },
+        {
+          "id": "k3t8",
+          "text": "总需求16万元减去预算10万元，缺口为6万元。"
+        }
+      ],
+      "expected": {
+        "u6p4": "supported",
+        "a9m2": "contradicted",
+        "k3t8": "supported"
+      },
+      "archivedRequestSha256": "96a7fdc2ae20e49b76b860da65d0fd5a61f3911ac62bfd6bcddf6bae4aeb8aca"
+    },
+    {
+      "id": "set-24",
+      "sourceKind": "archived",
+      "sources": [
+        {
+          "ref": "message:5d0b43105e2670abbf29a15d5001e573caa32e547fa6079bf441c35f4ce31e06",
+          "text": "交付依赖的供应商接口还没有联调验证。"
+        },
+        {
+          "ref": "message:484fd37abfb31e7d2d607a0670d6c8d878a978da9d37598af702b78f053ed875",
+          "text": "准备今天向客户承诺下周肯定交付。"
+        }
+      ],
+      "claims": [
+        {
+          "id": "n8f3",
+          "text": "即使出现阻塞问题也一定按时交付。"
+        },
+        {
+          "id": "b5q7",
+          "text": "如果发现阻塞问题，可能影响交付，需核实影响。"
+        },
+        {
+          "id": "r2w9",
+          "text": "若联调过程中发现阻塞性问题，将直接导致无法按承诺时间交付，从而产生履约风险。"
+        }
+      ],
+      "expected": {
+        "n8f3": "undetermined",
+        "b5q7": "supported",
+        "r2w9": "undetermined"
+      },
+      "archivedRequestSha256": "84934a6e537b6caa69574acfaf349b699675b589f96d3cfc9a9d182429c05654"
+    },
+    {
+      "id": "set-53",
+      "sourceKind": "archived",
+      "sources": [
+        {
+          "ref": "message:5d0b43105e2670abbf29a15d5001e573caa32e547fa6079bf441c35f4ce31e06",
+          "text": "交付依赖的供应商接口还没有联调验证。"
+        },
+        {
+          "ref": "message:484fd37abfb31e7d2d607a0670d6c8d878a978da9d37598af702b78f053ed875",
+          "text": "准备今天向客户承诺下周肯定交付。"
+        }
+      ],
+      "claims": [
+        {
+          "id": "v4h1",
+          "text": "供应商接口尚未联调验证，若后续出现问题，可能影响下周交付；建议先核实。"
+        },
+        {
+          "id": "d7s6",
+          "text": "在关键技术路径未打通的情况下做出确定性承诺，一旦联调出现阻塞，将面临极高的违约风险。"
+        },
+        {
+          "id": "c9j2",
+          "text": "接口联调已经失败。"
+        }
+      ],
+      "expected": {
+        "v4h1": "supported",
+        "d7s6": "undetermined",
+        "c9j2": "undetermined"
+      },
+      "archivedRequestSha256": "84934a6e537b6caa69574acfaf349b699675b589f96d3cfc9a9d182429c05654"
+    },
+    {
+      "id": "set-86",
+      "sourceKind": "synthetic",
+      "sources": [
+        {
+          "ref": "synthetic:external-team-rule",
+          "text": "外部团队规则：若周五18:00前未解除接口阻塞，则本周版本无法按截止日交付；不存在替代接口。"
+        }
+      ],
+      "claims": [
+        {
+          "id": "f6x2",
+          "text": "该接口阻塞已确认永远无法解决。"
+        },
+        {
+          "id": "m4r8",
+          "text": "即使周五18:00前未解除接口阻塞，本周版本仍一定能按截止日交付。"
+        },
+        {
+          "id": "q7p3",
+          "text": "若周五18:00前未解除接口阻塞，则本周版本无法按截止日交付。"
+        }
+      ],
+      "expected": {
+        "f6x2": "undetermined",
+        "m4r8": "contradicted",
+        "q7p3": "supported"
+      },
+      "archivedRequestSha256": null
+    }
+  ],
+  "independentSemanticReview": "pending",
+  "executionPassed": false,
+  "freeOnlyPrecondition": "Operator asserted fresh authenticated exact qwen3.8-max free quota, free-exhaustion stop, and this key's qwen3.8-max permission at launch: 2026-09-26 14:03 UTC authenticated exact qwen3.8-max row: remaining 992.88K/1M, expiry 2026-12-18, free-exhaustion stop enabled. Same key model scope was saved and reopened verified earlier this session: only Qwen3.7-Plus and Qwen3.8-Max. Synthetic-only.. This is not automated quota verification or a billing audit. No paid fallback.",
+  "acceptance": "Discardable four-request claim-relation spike. Expected mapping remains local and is not in model prompts. First malformed, missing/duplicated ID, verdict mismatch, HTTP failure or hard boundary stops immediately. No repair, resampling, product pass, full suite or application change.",
+  "limitation": "Artificial paired controls and explicit source/candidate framing can bias this local probe. Even four matching responses are not product semantic acceptance, and no further unlimited hypothesis search is authorized.",
+  "privacy": "Provider reasoning_content is never printed or saved verbatim; only field path, byte count and SHA256 are retained if present.",
+  "haltReason": "first fixed verdict mismatch; discard probe",
+  "halted": true,
+  "finishedAt": "2026-09-26T14:05:11.499Z"
+}

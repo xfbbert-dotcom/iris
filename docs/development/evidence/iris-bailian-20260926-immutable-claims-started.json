@@ -1,0 +1,21 @@
+{
+  "startedAt": "2026-09-26T14:05:01.784Z",
+  "output": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/immutable-claim-probe-20260926.json",
+  "commit": "1b80965c23be986f4031afabe48da8db5511e845",
+  "applicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca"
+  },
+  "archiveSha256": "7a6e3d31d90288d8d60b60a0f36be272d1544ec3d4d61d40f4a8a56145213f0a",
+  "controlIds": [
+    "set-71",
+    "set-24",
+    "set-53",
+    "set-86"
+  ],
+  "quotaEvidence": "2026-09-26 14:03 UTC authenticated exact qwen3.8-max row: remaining 992.88K/1M, expiry 2026-12-18, free-exhaustion stop enabled. Same key model scope was saved and reopened verified earlier this session: only Qwen3.7-Plus and Qwen3.8-Max. Synthetic-only."
+}

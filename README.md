@@ -29,6 +29,13 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [September 26 immutable-review probes](docs/development/iris-immutable-review-20260926.md)
+did not repair the current application. A hand-paired sentence test distinguished the arithmetic
+sign but failed its three-way relation classification; removing those alternatives and restoring
+the frozen full review again accepted the wrong `16−10=−6` sentence. The transfer stopped after
+one HTTP200 call, with four controls uncalled. This candidate is rejected; do not rerun it as a
+new product gate or promote the paired result. Production and application `04aa3a09` are unchanged.
+
 The [September 26 fixed-review model comparison](docs/development/iris-qwen38-review-20260926.md)
 used newly authorized `Qwen3.8-Max` on the existing synthetic-test key, without an
 application or production model change. It stopped after two HTTP200 calls: the old arithmetic
