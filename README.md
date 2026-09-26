@@ -29,12 +29,20 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Application `60a8c2ac` adds [deterministic checks for explicit arithmetic](docs/development/iris-executable-arithmetic-20260926.md)
+to initial/final proactive pair review without adding model calls. Core4811 passed/469 conditional
+skips, type/build and CLI7 passed. A bounded nine-HTTP synthetic window repaired the old wrong-sign
+pair and passed fresh arithmetic, but failed inference: the final advice made gathering payment
+evidence conditional on approval policy. Risk and paraphrase cases were not called after that
+failure. Full proactive semantics remain unaccepted; no push, production access, deployment or
+Feishu delivery occurred. The entries below retain their historical application identities.
+
 The [September 26 immutable-review probes](docs/development/iris-immutable-review-20260926.md)
 did not repair the current application. A hand-paired sentence test distinguished the arithmetic
 sign but failed its three-way relation classification; removing those alternatives and restoring
 the frozen full review again accepted the wrong `16−10=−6` sentence. The transfer stopped after
 one HTTP200 call, with four controls uncalled. This candidate is rejected; do not rerun it as a
-new product gate or promote the paired result. Production and application `04aa3a09` are unchanged.
+new product gate or promote the paired result. That probe did not change application `04aa3a09` or production.
 
 The [September 26 fixed-review model comparison](docs/development/iris-qwen38-review-20260926.md)
 used newly authorized `Qwen3.8-Max` on the existing synthetic-test key, without an

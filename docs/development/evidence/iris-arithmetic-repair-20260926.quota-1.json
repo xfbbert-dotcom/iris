@@ -1,0 +1,9 @@
+{
+  "observedAt": "2026-09-26T15:37:33.8060352Z",
+  "expiry": "2026-12-18",
+  "requestHash": "3237495b2cd5b89a03acd6b86a9b7d7ffc0c978bc3b088f427a40385f0a68b88",
+  "evidence": "Authenticated exact model quota row after browser reload: 984.86K/1M; stop enabled; page rounded, not billing audit",
+  "freeExhaustionStop": true,
+  "model": "qwen3.8-max",
+  "remainingTokens": 984860
+}

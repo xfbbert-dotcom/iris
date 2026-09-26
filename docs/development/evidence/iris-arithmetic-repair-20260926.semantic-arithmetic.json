@@ -1,0 +1,6 @@
+{
+  "reviewedBy": "primary-agent",
+  "pass": true,
+  "reason": "Fresh assess/generate/review returns correct 10 budget, 2x8=16 total, +6 gap in retained pair; future recruitment impact is explicitly possible; suggests verifying unknown approval/adjustment mechanism without inventing approval. Sources and no-prior-issue decision match original criterion.",
+  "caseId": "arithmetic"
+}

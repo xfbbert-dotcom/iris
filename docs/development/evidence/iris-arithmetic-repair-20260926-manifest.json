@@ -1,0 +1,167 @@
+{
+  "kind": "arithmetic-repair-sanitized-evidence",
+  "applicationCommit": "60a8c2ac70bd7cc3d027f70d6e3596334f8e82dc",
+  "transformations": [
+    "private workspace hostname redacted",
+    "local username redacted"
+  ],
+  "hashQualification": "Private original wire/response hashes are retained. They differ after redaction; archive hashes below verify sanitized bytes. Original private files unchanged. No credential store read.",
+  "files": [
+    {
+      "name": "iris-arithmetic-repair-20260926.halted.json",
+      "originalSha256": "87e3a0abb6dfd0c202e08fa355884a8c6d25dc93432d1187960debf6e54eb303",
+      "archiveSha256": "87e3a0abb6dfd0c202e08fa355884a8c6d25dc93432d1187960debf6e54eb303",
+      "bytes": 130
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.json",
+      "originalSha256": "94e4a3dd1e3804bc66156f62ef96278eefcd6c1f729489144ca951c4561d570b",
+      "archiveSha256": "94e4a3dd1e3804bc66156f62ef96278eefcd6c1f729489144ca951c4561d570b",
+      "bytes": 336657
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-1.json",
+      "originalSha256": "6c554c4a5e80cd13de29ebd2085cb31c51a1d51d570cb8cdae847290aa9d6803",
+      "archiveSha256": "6c554c4a5e80cd13de29ebd2085cb31c51a1d51d570cb8cdae847290aa9d6803",
+      "bytes": 200
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-2.json",
+      "originalSha256": "0d0fe110d21d8d3307aedd4cdc304f50ce2227a9674b255758b292c45bd2184a",
+      "archiveSha256": "0d0fe110d21d8d3307aedd4cdc304f50ce2227a9674b255758b292c45bd2184a",
+      "bytes": 199
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-3.json",
+      "originalSha256": "fedc3e53cd7d4c15f33d8639277ed82556eb1114ddfdb2588130267d295fdd6d",
+      "archiveSha256": "fedc3e53cd7d4c15f33d8639277ed82556eb1114ddfdb2588130267d295fdd6d",
+      "bytes": 200
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-4.json",
+      "originalSha256": "9bfc5ce0e34ed9b2d775a061942e0641cdb7933646eba19314b0474513f509e3",
+      "archiveSha256": "9bfc5ce0e34ed9b2d775a061942e0641cdb7933646eba19314b0474513f509e3",
+      "bytes": 183
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-5.json",
+      "originalSha256": "84681fcfca7d5e1b3e268d8c1b02c0b97315c67aebf1727d299529d186dacd64",
+      "archiveSha256": "84681fcfca7d5e1b3e268d8c1b02c0b97315c67aebf1727d299529d186dacd64",
+      "bytes": 187
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-6.json",
+      "originalSha256": "ad2e185aa6cab21111bc01e8e89338f3dc81eadf43874e72d03745f38d13af25",
+      "archiveSha256": "ad2e185aa6cab21111bc01e8e89338f3dc81eadf43874e72d03745f38d13af25",
+      "bytes": 185
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-7.json",
+      "originalSha256": "4eae97589778b0ed97c30af1f4992308b2dac06e2afaf7e7fc95a037f6a92d41",
+      "archiveSha256": "4eae97589778b0ed97c30af1f4992308b2dac06e2afaf7e7fc95a037f6a92d41",
+      "bytes": 182
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-8.json",
+      "originalSha256": "c9486c6ef60df0a185dab98134ed80506bf653603ad3c2bd234f70aeba273fca",
+      "archiveSha256": "c9486c6ef60df0a185dab98134ed80506bf653603ad3c2bd234f70aeba273fca",
+      "bytes": 186
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.pending-9.json",
+      "originalSha256": "50cc375dbcb1ce752b13a80068dd12ba1be8d59760f4dd9158aafbd904c6de5f",
+      "archiveSha256": "50cc375dbcb1ce752b13a80068dd12ba1be8d59760f4dd9158aafbd904c6de5f",
+      "bytes": 184
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-1.json",
+      "originalSha256": "5ccf1fc75028e44cb41dc7167169d47ff1dcbd959c85d2583203ac2b03903ecc",
+      "archiveSha256": "5ccf1fc75028e44cb41dc7167169d47ff1dcbd959c85d2583203ac2b03903ecc",
+      "bytes": 387
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-2.json",
+      "originalSha256": "3310d2e49dbef748fc86b0f9210602d20f6072b2a8a8c1830286aecb263d94f0",
+      "archiveSha256": "3310d2e49dbef748fc86b0f9210602d20f6072b2a8a8c1830286aecb263d94f0",
+      "bytes": 358
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-3.json",
+      "originalSha256": "e88d9e7573abe082ab2b15887d83f50797c068b2c58c3f76a9d95b99c4baaa2d",
+      "archiveSha256": "e88d9e7573abe082ab2b15887d83f50797c068b2c58c3f76a9d95b99c4baaa2d",
+      "bytes": 378
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-4.json",
+      "originalSha256": "9bec5a36fd9887acc519c26369446b9d54493baa1758bb44fcd35bf8390d21b2",
+      "archiveSha256": "9bec5a36fd9887acc519c26369446b9d54493baa1758bb44fcd35bf8390d21b2",
+      "bytes": 335
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-5.json",
+      "originalSha256": "59ad5c92e2e847467c85f2a208d61e770aebd096ddfed40728c303d8dfb387ee",
+      "archiveSha256": "59ad5c92e2e847467c85f2a208d61e770aebd096ddfed40728c303d8dfb387ee",
+      "bytes": 335
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-6.json",
+      "originalSha256": "e155b0ae8e416006ea25c66c8f0ad32cfc197b0a2a166d17c093425d8ae63add",
+      "archiveSha256": "e155b0ae8e416006ea25c66c8f0ad32cfc197b0a2a166d17c093425d8ae63add",
+      "bytes": 335
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-7.json",
+      "originalSha256": "8d55e828725f6e65b0baf8ffc9c366d77e57d3a10cb3cb604eb552c4c1376df2",
+      "archiveSha256": "8d55e828725f6e65b0baf8ffc9c366d77e57d3a10cb3cb604eb552c4c1376df2",
+      "bytes": 345
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-8.json",
+      "originalSha256": "5ce1b25ea65ba111d88731087642843a374d249c9ecf7a353d5963a24a2c93c1",
+      "archiveSha256": "5ce1b25ea65ba111d88731087642843a374d249c9ecf7a353d5963a24a2c93c1",
+      "bytes": 335
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.quota-9.json",
+      "originalSha256": "e7b9f82083e24465115053c3257e04f2fee193dfd5af287fcf72c493a022f834",
+      "archiveSha256": "e7b9f82083e24465115053c3257e04f2fee193dfd5af287fcf72c493a022f834",
+      "bytes": 335
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.semantic-arithmetic.json",
+      "originalSha256": "41e013f0adc100f444acab1e720caee50735e23ddc2fc97c3fff5bd4129ce522",
+      "archiveSha256": "41e013f0adc100f444acab1e720caee50735e23ddc2fc97c3fff5bd4129ce522",
+      "bytes": 389
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.semantic-fixed-negative-arithmetic.json",
+      "originalSha256": "192063b9ac370ac05d270c748a15a703c829c376b17e4df61f69a3e31d44003c",
+      "archiveSha256": "192063b9ac370ac05d270c748a15a703c829c376b17e4df61f69a3e31d44003c",
+      "bytes": 532
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.semantic-inference.json",
+      "originalSha256": "6316eb9df3786e9bcd05a7366d535ed8ce908f42467c57fa99f495982f4efe0a",
+      "archiveSha256": "6316eb9df3786e9bcd05a7366d535ed8ce908f42467c57fa99f495982f4efe0a",
+      "bytes": 735
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.started.json",
+      "originalSha256": "dcb72eb8857fcedcfada7b93c62b5d2b75e719f91fdfc84baddb695bfd7570c2",
+      "archiveSha256": "dcb72eb8857fcedcfada7b93c62b5d2b75e719f91fdfc84baddb695bfd7570c2",
+      "bytes": 1287
+    },
+    {
+      "name": "iris-arithmetic-repair-20260926.txt",
+      "originalSha256": "f200d3ffaa5b2f33031dafe53aa726b38f7c8acffdc5e7d8588f6ec505d94cd2",
+      "archiveSha256": "f97f8f07dfec0d2f84a90b82073ce690271b03ae3c6da84fddfeb803c78db630",
+      "bytes": 10019
+    },
+    {
+      "name": "iris-run-arithmetic-repair.txt",
+      "originalSha256": "59e6f409bcc7c23cf88f0938fb4c6a1342a02129c06d331c82250344b496c33d",
+      "archiveSha256": "b29569febb5b16c6debf2c0c428b3bdd09625be441598914cb365eb1c066f874",
+      "bytes": 1802
+    }
+  ]
+}

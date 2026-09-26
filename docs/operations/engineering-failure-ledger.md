@@ -272,6 +272,17 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   real-model drafts and one-group real-Feishu acceptance must be recorded separately before this
   feature is declared delivered.
 
+- **Executable arithmetic versus interpretive approval (2026-09-26):** The
+  [bounded calculation repair](../development/iris-executable-arithmetic-20260926.md) adds a local
+  contradiction check over unchanged explicit calculation spans in both retained assessment and
+  draft. A model approving a plausible reinterpretation cannot override a detected wrong sign.
+  Extraction itself needs regression: arbitrary Han labels swallowed negative signs and Chinese
+  chained expressions were truncated during review; preserve these counterexamples and exclude
+  ambiguous/quoted/negated grammar instead of claiming general natural-language verification.
+  Exit at the existing one-repair/final-review bound; correct local arithmetic does not establish
+  risk qualification, duplicate suppression or complete product acceptance. Real results and the
+  remaining blockers belong to the linked record, not an ever-growing prompt search.
+
 ### Preserve issue history and the actual live-context producer contract
 
 - **Observed implementation failures (2026-09-15):** Review of unshipped Task4 candidate

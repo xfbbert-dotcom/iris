@@ -1,0 +1,9 @@
+{
+  "observedAt": "2026-09-26T15:38:01.0567113Z",
+  "remainingTokens": 984860,
+  "model": "qwen3.8-max",
+  "evidence": "Authenticated exact row after refresh: 984.86K/1M; stop enabled; display may lag usage",
+  "requestHash": "91efe6c9ba93509c8ede3c03f18f4fec955187255a4a569da15f448e99a6dd83",
+  "expiry": "2026-12-18",
+  "freeExhaustionStop": true
+}

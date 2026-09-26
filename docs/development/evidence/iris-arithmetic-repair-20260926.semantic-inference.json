@@ -1,0 +1,6 @@
+{
+  "caseId": "inference",
+  "reviewedBy": "primary-agent and independent-reviewer",
+  "pass": false,
+  "reason": "Original criterion requires recommending validation of willingness to pay. Final assessment and draft condition collecting conversion evidence on absence of an approval policy (若无/如果没有). Policy permission cannot establish willingness to pay; this makes empirical validation optional for an unrelated reason. Initial assessment recommended actual payment testing, but regenerated pair lost it and review approved the regression. Correctly identifies 5 liking != all paying, invents no payment data and does not claim nobody buys; those partial positives do not satisfy useful recommendation criterion."
+}

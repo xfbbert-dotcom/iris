@@ -1,0 +1,6 @@
+{
+  "reason": "Compared retained pair against two original synthetic sources: 16-10 is now +6 in assessment and draft; future consequence qualified as possible; suggestions not executed/approved claims. Final review receipts retain 10/16/6. First review still missed sign; final numberRevisions explanation has unnecessary literal-change commentary, not proof of semantic reviewer reliability. Seeded generation, not fresh generation.",
+  "reviewedBy": "primary-agent",
+  "pass": true,
+  "caseId": "fixed-negative-arithmetic"
+}

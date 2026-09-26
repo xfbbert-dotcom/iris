@@ -222,6 +222,18 @@ true、本地true；其余五控制未调用。仅说明这个私有候选首例
 全部六例结果、新产品方案或完整验收。
 IRIS-CORE-005仍**部分实现**；完整语义、精确SHA CI、真实单群和部署未验收。
 
+### 2026-09-26 明确算式程序核算
+
+应用`60a8c2ac`在初审/终审直接核算候选中有限语法的明确算式，保留原句、位置、
+符号和操作数，矛盾进入原有唯一修正；模型批准不能覆盖本地矛盾。见
+[修复及验收记录](../../development/iris-executable-arithmetic-20260926.md)。Core4811通过/
+469条件跳过，类型/构建及CLI7通过；算式解析和trace回归含先失败后通过及独立复核。
+受限实模9次HTTP200/33717tokens：旧错误pair修正及新鲜算术各一例通过，inference
+最终建议却让审批许可替代付费意愿证据，模型审核批准，独立语义失败后停止。
+qualified-risk及paraphrase未调用，原失败保留；未知语法和正确算式均不证明事实
+支持、建议有用或非重复。IRIS-CORE-005仍**部分实现**，没有完整15×2、真实飞书
+或部署验收，没有push、生产核验或能力启用。
+
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates
 
 - Managed existing-page update code is implemented and locally verified behind the independent

@@ -561,6 +561,13 @@ future implications uncertain. Do not echo invalid/private candidate output to r
 failure. The [same-model diagnostic](../../development/iris-prompt-contract-diagnostic-20260917.md)
 records a bounded prompt repair separately from unresolved structured-output and semantic gates.
 
+Explicit calculation contradictions detected from unchanged candidate spans must also fail local
+review, even when all model verdicts are positive. Apply the same check to retained assessment and
+outward draft before and after the sole correction. The [bounded calculation detector](../../development/iris-executable-arithmetic-20260926.md)
+preserves literal operand order and signs and uses exact arithmetic; it does not infer missing
+business operands or establish factual support. Unsupported, quoted or negated grammar remains
+unverified, and a matching equation cannot waive semantic, source, novelty or delivery checks.
+
 An explicitly enabled, versioned, exact-group low-risk discussion policy may authorize these
 interventions without per-message human review. Record policy authorization truthfully; never
 manufacture a human approval or use the legacy reminder approval API as an automatic-send shortcut.

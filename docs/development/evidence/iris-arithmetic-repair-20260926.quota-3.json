@@ -1,0 +1,9 @@
+{
+  "observedAt": "2026-09-26T15:39:26.7943399Z",
+  "expiry": "2026-12-18",
+  "model": "qwen3.8-max",
+  "evidence": "Authenticated exact row after reload control remains 984.86K/1M; stop enabled; not real-time billing audit",
+  "requestHash": "1e534f48f6a17cf628bd7887b77472a82200240d18761cc6f28094aa1f18d546",
+  "freeExhaustionStop": true,
+  "remainingTokens": 984860
+}

@@ -1,0 +1,34 @@
+{
+  "kind": "arithmetic-repair-20260926",
+  "syntheticOnly": true,
+  "commit": "60a8c2ac70bd7cc3d027f70d6e3596334f8e82dc",
+  "baselineSha256": "5d6884000b801e85b35f6281256826f1b6b9b604c9e89cc50d2a95a61573dd8b",
+  "sourceHashes": {
+    "apps/core/src/proactive-discussion/arithmetic.ts": "4ff2e85c5f473a2d36c9ebc1c95a91a1e9e268428bff6abe2cc9db8b7440c2ca",
+    "apps/core/src/proactive-discussion/model.ts": "94f55481c43987cc144176bd42b10429ef45947572e20d05c9c4df4138d5819b",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "9adea0a2ba18c3d9a77ff53cf94a43d27e3800b88464f4c09f3d4208023401e6",
+    "scripts/pilot/proactive-discussion-eval.ts": "cc8fd58a514fcc0540b0a6785662475f95befd434aa6683fe9289c9356f34dde"
+  },
+  "startedAt": "2026-09-26T15:36:51.231Z",
+  "model": "qwen3.8-max",
+  "maxRequests": 23,
+  "tokenStopBeforeNextRequest": 80000,
+  "maxTokens": 2048,
+  "enableThinking": false,
+  "requestTimeoutMs": 60000,
+  "windowMs": 1200000,
+  "selected": [
+    "fixed-negative-arithmetic",
+    "arithmetic",
+    "inference",
+    "qualified-risk",
+    "paraphrase"
+  ],
+  "requests": [],
+  "completions": [],
+  "results": [],
+  "reportedUsageTokens": 0,
+  "seededGenerations": 0,
+  "independentSemanticReview": "per-case external gate; verdicts retained",
+  "halted": false
+}
