@@ -1,6 +1,6 @@
 *.sh text eol=lf
-docs/development/evidence/iris-arithmetic-repair-20260926* -text
-docs/development/evidence/iris-run-arithmetic-repair.txt -text
+docs/development/evidence/iris-arithmetic-repair-20260926* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-run-arithmetic-repair.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-schema-visible-20260918-* -text
 docs/development/evidence/iris-glm47-json-mode-20260918-* -text
 docs/development/evidence/iris-instruct-20260918-* -text
