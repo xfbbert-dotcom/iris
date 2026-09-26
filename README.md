@@ -38,6 +38,9 @@ ended with 17 HTTP200 calls but failed execution on inference and paraphrase; in
 semantic review passed four of seven, failing inference, qualified-risk and paraphrase.
 An unchanged-app thinking-profile comparison stopped after its first `qualified-risk` review
 again accepted the overcertain consequence; four planned controls were not called.
+An unchanged-app private claims/draft isolation probe also stopped at its first claims-only
+control: the reviewer missed `16−10=−6` despite actual wire isolation. Five planned controls
+were not called; neither probe is a product change or an accepted architecture.
 No full-suite or live-group acceptance is claimed.
 
 The [September 25 literal-receipt diagnostic](docs/development/iris-literal-receipts-20260925.md)

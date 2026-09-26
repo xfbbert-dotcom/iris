@@ -215,6 +215,11 @@ review漏检、`paraphrase`无视真实历史同义复述）。原报告semantic
 1次HTTP200/5486 reported usage tokens（含1614 reasoning tokens），审核六字段
 与整体true、本地也true，仍误通过；其余四例未调用。不得把它写成五例结果或
 把thinking当默认修复。IRIS-CORE-005状态不变。
+另一次同应用的私有claims/draft物理隔离probe，先行preflight零HTTP退出；
+最终首个`old-negative-arithmetic` claims控制1次HTTP200/1934 reported usage tokens，
+实际wire无draft正文/凭据/schema仍漏`16−10=−6`及无依据确定风险，六字段和整体
+true、本地true；其余五控制未调用。仅说明这个私有候选首例失败，不构成
+全部六例结果、新产品方案或完整验收。
 IRIS-CORE-005仍**部分实现**；完整语义、精确SHA CI、真实单群和部署未验收。
 
 ## Status Amendment - 2026-08-22 Managed Existing-Page Updates

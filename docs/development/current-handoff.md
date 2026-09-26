@@ -17,6 +17,16 @@ review全true，`paraphrase`漏真实历史、同义复述误介入。原report�
 同应用、同首次review Core输入的thinking开启/budget4096私有对照在首例
 `qualified-risk`即误判：1次HTTP200/5486 usage（含1614 reasoning tokens），
 六字段及整体true、本地也true；余四例未调用，profile未提升，不是五例结果。
+另一次不改应用的私有claims/draft物理隔离probe，preflight先因归档同名review条数
+误判而零请求退出；修正后的唯一首例`old-negative-arithmetic`为1次HTTP200/
+1934 usage，实际wire没有draft正文/凭据或schema，仍把`16−10=−6`当正确
+并漏无事实依据的确定后果，六字段/整体/本地true。后五项未调用，私有方案首例失败，
+不推断所有模型无能力，也不把它当新产品代码或六例结果。
+当前下一步是等待已向用户提出的精确授权：是否仅为合成测试给现有测试key新增
+`Qwen3.8-Max`权限。只读UI快照显示该key自定义权限目前仅`Qwen3.7-Plus`一项，
+已取消编辑而未保存；`Qwen3.8-Max`精确免费quota行尚余1M/1M、到期2026-12-18、
+用完即停已开启。这不等于现有key有调用权限；未获用户明确确认前不得修改key或
+调用该候选。不是等待当前额度耗尽或明天重试，也不继续同配置`Qwen3.7-Plus`采样。
 
 前一应用`bdef93c045903146e009d624799264b4cae300a0`的
 [数字字面凭据澄清及六例诊断](iris-literal-receipts-20260925.md)已结束：16次HTTP200、
@@ -308,7 +318,7 @@ Task 8 应用 `89f299f5` 已新增真实非 @ ingress → PG 登记 → worker �
 
 ## 未完成事项与下一步
 
-- 最新应用为`04aa3a09`，本地门禁、七例独立语义4通过/3失败与thinking首例误通过见[评估身份记录](iris-review-identity-20260925.md)；前一`bdef93c0`六例执行5成功/1拒稿、独立语义4通过/2失败见[数字字面凭据记录](iris-literal-receipts-20260925.md)。`a0a7f2a0`六例4通过/2未完整见[当前讨论记录](iris-review-context-20260925.md)；`dcaa2995`完整实模见[来源优先记录§3.2](iris-source-first-generation-20260920.md#32-9月25日完整15例两轮)，仅22/30语义通过，不把HTTP200或executionPassed当作语义核准。
+- 最新应用为`04aa3a09`，本地门禁、七例独立语义4通过/3失败及thinking/物理隔离两个首例负向probe见[评估身份记录](iris-review-identity-20260925.md)；下一步仅等待用户对现有测试key新增`Qwen3.8-Max`合成测试权限的明确确认，未授权不改key、不调用候选。前一`bdef93c0`六例执行5成功/1拒稿、独立语义4通过/2失败见[数字字面凭据记录](iris-literal-receipts-20260925.md)。`a0a7f2a0`六例4通过/2未完整见[当前讨论记录](iris-review-context-20260925.md)；`dcaa2995`完整实模见[来源优先记录§3.2](iris-source-first-generation-20260920.md#32-9月25日完整15例两轮)，仅22/30语义通过，不把HTTP200或executionPassed当作语义核准。
 - 当前优先项是完整集的事实、数字、推断限定、漏报与重复介入验收。旧[字段复核](iris-field-review-20260920.md)与[连续性修复](iris-review-continuity-20260917.md)的失败和误通过仍保留，不重开包装/引文接线/连续性审查。若完整集出现具体失败，仅据原始输入输出形成下一项有限修复；不重复创建key、扩大模型权限、同配置抽样、付费回退或密集重试。通过后仍须精确SHA CI及另行获准的真实单群投递/停止/恢复，不能直接宣布已部署。没有当次授权不得推送、部署或开能力。
 - P2：缺少第三版的补充场景曾把已知新版错称第三版；后续重放正常不证明根治。原定两版比较若发生同类混淆，应重新判断是否阻塞。
 - P2/P3：来源标签和正式措辞、意图不确定时的提示表达；继续用具体用户反馈驱动，不无限扩展本轮修复。

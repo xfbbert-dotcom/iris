@@ -1,0 +1,418 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { createRequestPacedFetch } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918';
+const baseUrl = 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const endpoint = baseUrl + '/chat/completions';
+const modelName = 'qwen3.7-plus';
+if (process.argv.length !== 4 || process.argv[2] !== '--quota-verified'
+  || !process.argv[3]?.trim()) throw Error('Fresh exact-model free-quota verification and description required');
+const quotaEvidence = process.argv[3].trim();
+const output = `${folder}/isolated-claims-draft-probe-20260925.json`;
+const startedPath = `${folder}/isolated-claims-draft-probe-20260925.started.json`;
+const haltPath = `${folder}/isolated-claims-draft-probe-20260925.halted.json`;
+if ([output, startedPath, haltPath].some(path => existsSync(path))) throw Error('One-shot probe artifact already exists');
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const hashFile = (path: string) => sha(readFileSync(path));
+const sourcePaths = ['apps/core/src/config/env.ts',
+  'apps/core/src/model/openai-compatible-chat-completions-client.ts',
+  'apps/core/src/proactive-discussion/model.ts',
+  'apps/core/src/proactive-discussion/review-receipts.ts',
+  'scripts/pilot/proactive-discussion-eval.ts'];
+const git = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const sourceStatus = git(['status', '--porcelain', '--', ...sourcePaths]);
+if (sourceStatus) throw Error('Application source paths must be committed and clean');
+const commit = git(['rev-parse', 'HEAD']);
+const applicationCommit = git(['log', '-1', '--format=%H', '--', ...sourcePaths]);
+const sourceHashes = Object.fromEntries(sourcePaths.map(path => [path, hashFile(`${root}/${path}`)]));
+const oldPath = `${folder}/field-review-negative-20260920.json`;
+const oldSha256 = 'a570fb4439e373217e19f12d7cf1b274932676389e8df596ffd117b27ef88ea0';
+const newPath = `${folder}/identity-target-diagnostic-20260925.json`;
+const newSha256 = 'f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215';
+if (hashFile(oldPath) !== oldSha256 || hashFile(newPath) !== newSha256) throw Error('Fixed archive hash mismatch');
+const oldArchive = JSON.parse(readFileSync(oldPath, 'utf8'));
+const newArchive = JSON.parse(readFileSync(newPath, 'utf8'));
+if (oldArchive.kind !== 'bailian-free-only-field-review-diagnostic'
+  || newArchive.kind !== 'bailian-free-only-identity-target-diagnostic'
+  || newArchive.applicationCommit !== applicationCommit
+  || sourcePaths.some(path => newArchive.sourceHashes?.[path] !== sourceHashes[path])) {
+  throw Error('Archive, current application commit or five source hashes changed');
+}
+const oldReviews = oldArchive.completions.filter((item: any) => {
+  if (item.stage !== 'iris_proactive_discussion_scope_review') return false;
+  const user = item.originalMessages?.find((message: any) => message.role === 'user');
+  if (typeof user?.content !== 'string') return false;
+  const input = JSON.parse(user.content);
+  return !Object.hasOwn(input, 'previousReview') && !Object.hasOwn(input, 'originalAssessment');
+});
+if (oldReviews.length !== 1) throw Error('Unique September 20 negative review unavailable');
+const oldInput = JSON.parse(oldReviews[0].originalMessages.find((item: any) => item.role === 'user').content);
+function newInput(caseId: string) {
+  const reviews = newArchive.completions.filter((item: any) => item.caseId === caseId
+    && item.stage === 'iris_proactive_discussion_scope_review' && item.attempt === 1);
+  if (reviews.length !== 1) throw Error(`Unique September 25 first review unavailable: ${caseId}`);
+  return JSON.parse(reviews[0].originalMessages.find((item: any) => item.role === 'user').content);
+}
+const arithmetic = newInput('arithmetic');
+const risk = newInput('qualified-risk');
+const paraphrase = newInput('paraphrase');
+if (JSON.stringify(oldInput.evidence) !== JSON.stringify(arithmetic.evidence)
+  || !oldInput.assessment || !oldInput.draft || !arithmetic.assessment || !arithmetic.draft
+  || !risk.assessment || !risk.draft || !paraphrase.assessment
+  || !arithmetic.discussion || !risk.discussion || !paraphrase.discussion
+  || !arithmetic.evaluationContext || !risk.evaluationContext || !paraphrase.evaluationContext) {
+  throw Error('Fixed same-source controls or discussion/evaluation context unavailable');
+}
+const fields = ['issueRef', 'observation', 'reasoning', 'suggestion', 'uncertainty', 'materialChange'] as const;
+const fieldCheck = { type: 'object', additionalProperties: false,
+  required: ['supported', 'reason'], properties: {
+    supported: { type: 'boolean' }, reason: { type: 'string', minLength: 1, maxLength: 400 },
+  } };
+const claimsSchema = { type: 'object', additionalProperties: false,
+  required: ['fieldChecks', 'supported', 'reason'], properties: {
+    fieldChecks: { type: 'object', additionalProperties: false, required: [...fields],
+      properties: Object.fromEntries(fields.map(field => [field, fieldCheck])) },
+    supported: { type: 'boolean' }, reason: { type: 'string', minLength: 1, maxLength: 200 },
+  } };
+const draftSchema = { type: 'object', additionalProperties: false,
+  required: ['supported', 'reason', 'requiredNumbers', 'adviceQuote'], properties: {
+    supported: { type: 'boolean' }, reason: { type: 'string', minLength: 1, maxLength: 200 },
+    requiredNumbers: { type: 'array', maxItems: 8, items: { type: 'object', additionalProperties: false,
+      required: ['label', 'expectedValue', 'unit', 'draftQuote'], properties: {
+        label: { type: 'string', minLength: 1, maxLength: 80 },
+        expectedValue: { type: 'string', maxLength: 40, pattern: '^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$' },
+        unit: { type: 'string', minLength: 1, maxLength: 24 },
+        draftQuote: { anyOf: [{ type: 'string', minLength: 1, maxLength: 1200 }, { type: 'null' }] },
+      } } },
+    adviceQuote: { anyOf: [{ type: 'string', minLength: 1, maxLength: 1200 }, { type: 'null' }] },
+  } };
+const claimsSystem = [
+  '你是独立的内部判断审查员。仅依据给定授权原文、真实历史和当前候选判断，核查是否值得现在发言及所有断言是否有依据。',
+  '逐项审查 issueRef、observation、reasoning、suggestion、uncertainty、materialChange，各给 supported 与具体简短理由；整体 supported 必须与逐项合取一致。',
+  '核对算式方向、数值、单位；区分原文事实、条件推断和未来后果；已有问题须对照真实已提醒内容和本次实质新证据。不能把条件语法本身当作必然结论的证据。',
+  '不借用外部公司事实、不假定权限或动作已获批准，不执行工具。只输出指定 JSON，不输出思维链。',
+].join('\n');
+const draftSystem = [
+  '你是独立的最终文案审查员。仅依据给定授权原文核对当前候选文案的事实、算术、推断限定、建议和权限边界。',
+  '不能将未验证条件说成已发生、必然发生或有未经证实的概率程度；不能把原文的“未验证”改写成“已失败”。',
+  'requiredNumbers 只列原文允许且文案必需的可核算数字；expectedValue 是文案原样十进制数字、unit 是其原样单位，draftQuote 必须是当前文案逐字原句，缺失用 null；无必要数字用 []。adviceQuote 逐字引用具体建议，没有用 null。',
+  '任一实质缺陷或必要数字/建议遗漏则 supported=false。只输出指定 JSON，不输出思维链。',
+].join('\n');
+type Stage = 'claims' | 'draft';
+type Control = { id: string; stage: Stage; expectedSupported: boolean; user: Record<string, unknown>;
+  schema: Record<string, unknown>; system: string; forbiddenTexts: string[] };
+const claimsUser = (input: any, assessment: any) => ({ assessment,
+  evidence: input.evidence, discussion: input.discussion, evaluationContext: input.evaluationContext });
+const controls: Control[] = [
+  { id: 'old-negative-arithmetic', stage: 'claims', expectedSupported: false,
+    user: claimsUser(arithmetic, oldInput.assessment), schema: claimsSchema, system: claimsSystem,
+    forbiddenTexts: [oldInput.draft.text] },
+  { id: 'current-positive-arithmetic', stage: 'claims', expectedSupported: true,
+    user: claimsUser(arithmetic, arithmetic.assessment), schema: claimsSchema, system: claimsSystem,
+    forbiddenTexts: [arithmetic.draft.text] },
+  { id: 'current-negative-qualified-risk', stage: 'claims', expectedSupported: false,
+    user: claimsUser(risk, risk.assessment), schema: claimsSchema, system: claimsSystem,
+    forbiddenTexts: [risk.draft.text] },
+  { id: 'current-negative-paraphrase', stage: 'claims', expectedSupported: false,
+    user: claimsUser(paraphrase, paraphrase.assessment), schema: claimsSchema, system: claimsSystem,
+    forbiddenTexts: [paraphrase.draft.text] },
+  { id: 'current-positive-arithmetic-draft', stage: 'draft', expectedSupported: true,
+    user: { evidence: arithmetic.evidence, draft: arithmetic.draft }, schema: draftSchema,
+    system: draftSystem, forbiddenTexts: [arithmetic.assessment.reasoning,
+      arithmetic.assessment.observation, arithmetic.assessment.suggestion] },
+  { id: 'current-negative-qualified-risk-draft', stage: 'draft', expectedSupported: false,
+    user: { evidence: risk.evidence, draft: risk.draft }, schema: draftSchema,
+    system: draftSystem, forbiddenTexts: [risk.assessment.reasoning,
+      risk.assessment.observation, risk.assessment.suggestion] },
+];
+function uniqueSentinel(texts: string[], allowed: string) {
+  for (const text of texts) for (const size of [40, 32, 24, 16]) {
+    for (let start = 0; start + size <= text.length; start++) {
+      const span = text.slice(start, start + size);
+      if (span.trim().length >= 12 && !allowed.includes(span)) return span;
+    }
+  }
+  throw Error('No unique other-artifact sentinel; isolation cannot be shown');
+}
+for (const control of controls) {
+  const allowed = JSON.stringify({ system: control.system, user: control.user, schema: control.schema });
+  const sentinel = uniqueSentinel(control.forbiddenTexts, allowed);
+  if (control.forbiddenTexts.some(text => allowed.includes(text)) || allowed.includes(sentinel)) {
+    throw Error(`Other artifact already in isolated input: ${control.id}`);
+  }
+  (control as any).sentinel = sentinel;
+}
+const apiKey = process.env.IRIS_BAILIAN_EVAL_KEY;
+if (!apiKey || apiKey !== apiKey.trim() || /[\r\n]/u.test(apiKey)) throw Error('Private process key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const redact = (value: string) => value.replaceAll(apiKey, '[REDACTED]');
+const safeError = (error: unknown) => error instanceof Error ? error.name : 'unknown';
+const report: any = {
+  kind: 'private-physical-claims-draft-isolation-probe', syntheticOnly: true,
+  startedAt: new Date().toISOString(), commit, applicationCommit,
+  applicationSourceWorkingTreeStatus: sourceStatus, sourceHashes,
+  harnessSha256: hashFile(fileURLToPath(import.meta.url)),
+  launcherSha256: hashFile(`${folder}/run-isolated-claims-draft-probe.ps1`),
+  archives: [{ path: oldPath, sha256: oldSha256 }, { path: newPath, sha256: newSha256 }],
+  preflightHistory: 'A preceding launch aborted before the started/report markers and before any model request: the September 20 archive has both first and final scope reviews under one stage name. This harness now selects only the unique first review by excluding user payloads containing previousReview or originalAssessment. The failed preflight incurred zero HTTP requests and zero reported model usage; it is not a semantic result.',
+  model: modelName, endpoint, structuredOutputMode: 'json_object', timeoutMs: 60000,
+  profile: { enable_thinking: false, max_tokens: 2048 },
+  wallMs: 480000, maxRequests: 6, maximumReportedUsageTokens: 60000,
+  reportedUsageTokens: 0, requestIntervalMs: 6000, automaticTransportRetry: false,
+  maximumResponseBytes: 262144, requests: [], results: [],
+  expectedControls: controls.map(({ id, stage, expectedSupported }) => ({ id, stage, expectedSupported })),
+  independentSemanticReview: 'pending', executionPassed: false,
+  freeOnlyPrecondition: `Operator supplied fresh exact-model free-quota evidence at launch: ${quotaEvidence}. This is an assertion, not automated quota verification or billing audit. Stop-when-free-exhausted must remain enabled; no paid fallback.`,
+  acceptance: 'Private architecture probe only. Fixed archived candidates and source/history, no generated answers or product code. The four claims-only verdicts and two document-only verdicts must be locally well-formed and match fixed expectations, with independent semantic review of reasons. First failure stops; no repeated configuration, full suite, product promotion, or relaxation of existing production validator.',
+  privacy: 'Provider reasoning_content is not printed or saved verbatim; only field path/byte count/SHA256 is retained if present.',
+};
+writeFileSync(startedPath, JSON.stringify({ startedAt: report.startedAt, output,
+  commit, applicationCommit, sourceHashes, archives: report.archives,
+  controls: report.expectedControls, quotaEvidence }, null, 2) + '\n', { flag: 'wx' });
+const deadline = AbortSignal.timeout(report.wallMs);
+let halted = false;
+let active: Control | undefined;
+function halt(reason: string) {
+  halted = true; report.haltReason ??= reason;
+  if (!existsSync(haltPath)) writeFileSync(haltPath,
+    JSON.stringify({ at: new Date().toISOString(), reason }, null, 2) + '\n', { flag: 'wx' });
+}
+function strictKeys(value: any, keys: string[]) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+function validateClaims(value: any) {
+  if (!strictKeys(value, ['fieldChecks', 'supported', 'reason'])
+    || !strictKeys(value.fieldChecks, [...fields]) || typeof value.supported !== 'boolean'
+    || typeof value.reason !== 'string' || !value.reason.trim() || value.reason.length > 200
+    || fields.some(field => !strictKeys(value.fieldChecks[field], ['supported', 'reason'])
+      || typeof value.fieldChecks[field].supported !== 'boolean'
+      || typeof value.fieldChecks[field].reason !== 'string'
+      || !value.fieldChecks[field].reason.trim() || value.fieldChecks[field].reason.length > 400)
+    || value.supported !== fields.every(field => value.fieldChecks[field].supported === true)) {
+    throw Error('Claims-only receipt shape/conjunction invalid');
+  }
+  return value.supported as boolean;
+}
+function validateDraft(value: any, draftText: string) {
+  if (!strictKeys(value, ['supported', 'reason', 'requiredNumbers', 'adviceQuote'])
+    || typeof value.supported !== 'boolean' || typeof value.reason !== 'string'
+    || !value.reason.trim() || value.reason.length > 200
+    || !Array.isArray(value.requiredNumbers) || value.requiredNumbers.length > 8
+    || !(value.adviceQuote === null || (typeof value.adviceQuote === 'string'
+      && value.adviceQuote.length > 0 && value.adviceQuote.length <= 1200))) {
+    throw Error('Document-only receipt shape invalid');
+  }
+  if (value.requiredNumbers.some((entry: any) => !strictKeys(entry,
+    ['label', 'expectedValue', 'unit', 'draftQuote'])
+    || typeof entry.label !== 'string' || !entry.label.trim() || entry.label.length > 80
+    || typeof entry.expectedValue !== 'string'
+    || entry.expectedValue.length > 40
+    || !/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/u.test(entry.expectedValue)
+    || typeof entry.unit !== 'string' || !entry.unit.trim() || entry.unit.length > 24
+    || !(entry.draftQuote === null || (typeof entry.draftQuote === 'string'
+      && entry.draftQuote.length > 0 && entry.draftQuote.length <= 1200)))) {
+    throw Error('Document-only number receipt shape invalid');
+  }
+  const numberQuoteMatches = (entry: any) => {
+    if (entry.draftQuote === null) return false;
+    const tokens = draftText.matchAll(/(?:[+\-−－负]\s*)?\p{Nd}+(?:[.,，．]\p{Nd}+)*(?:[eE][+\-]?\p{Nd}+)?/gu);
+    for (const token of tokens) {
+      if (token[0] !== entry.expectedValue) continue;
+      const start = token.index!;
+      const numberEnd = start + token[0].length;
+      const gap = /^[ \t]*/u.exec(draftText.slice(numberEnd))![0].length;
+      const unitStart = numberEnd + gap;
+      const end = unitStart + entry.unit.length;
+      if (!draftText.startsWith(entry.unit, unitStart)) continue;
+      const quoteStart = draftText.lastIndexOf(entry.draftQuote, start);
+      if (quoteStart !== -1 && end <= quoteStart + entry.draftQuote.length) return true;
+    }
+    return false;
+  };
+  const invalidQuote = value.requiredNumbers.some((entry: any) => entry.draftQuote !== null
+    && !numberQuoteMatches(entry));
+  const invalidAdvice = value.adviceQuote !== null && !draftText.includes(value.adviceQuote);
+  if (invalidQuote || invalidAdvice || (value.supported && (value.adviceQuote === null
+    || value.requiredNumbers.some((entry: any) => entry.draftQuote === null)))) {
+    throw Error('Document-only literal receipt invalid');
+  }
+  return value.supported as boolean;
+}
+function sanitizedProvider(value: any) {
+  const removed: any[] = [];
+  const visit = (part: any, path: string): any => {
+    if (Array.isArray(part)) return part.map((item, index) => visit(item, `${path}[${index}]`));
+    if (part && typeof part === 'object') {
+      const clean: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(part)) {
+        if (/^(reasoning_content|reasoning_text|thinking_content)$/iu.test(key)) {
+          const raw = typeof item === 'string' ? item : JSON.stringify(item);
+          removed.push({ path: `${path}.${key}`, bytes: Buffer.byteLength(raw), sha256: sha(raw) });
+        } else clean[key] = visit(item, `${path}.${key}`);
+      }
+      return clean;
+    }
+    return part;
+  };
+  return { decoded: visit(value, '$'), removed };
+}
+const client = createOpenAICompatibleChatCompletionsClient({
+  config: { provider: 'openai-compatible', baseUrl, model: modelName,
+    apiKey, timeoutMs: 60000, structuredOutputMode: 'json_object' },
+  sleep: async () => { halt('transport retry refused'); throw Error('No automatic transport retry'); },
+  fetch: createRequestPacedFetch({ requestIntervalMs: report.requestIntervalMs, fetch: async (url, init) => {
+    if (halted || deadline.aborted || !active || report.requests.length >= report.maxRequests
+      || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('request count, reported usage, deadline or stopped-window boundary');
+      throw Error('Bounded isolation probe stopped');
+    }
+    const body = JSON.parse(String(init?.body));
+    const userMessage = body.messages?.find((message: any) => message.role === 'user');
+    const systemMessage = body.messages?.find((message: any) => message.role === 'system');
+    const user = JSON.parse(userMessage?.content);
+    const schema = active.schema;
+    const expectedUserKeys = active.stage === 'claims'
+      ? ['assessment', 'evidence', 'discussion', 'evaluationContext'] : ['draft', 'evidence'];
+    const expectedSchemaKeys = active.stage === 'claims'
+      ? ['fieldChecks', 'supported', 'reason'] : ['supported', 'reason', 'requiredNumbers', 'adviceQuote'];
+    const wire = JSON.stringify(body);
+    const sentinel = (active as any).sentinel as string;
+    if (String(url) !== endpoint || init?.method !== 'POST' || body.model !== modelName
+      || Object.keys(body).some(key => !['model', 'messages', 'response_format'].includes(key))
+      || body.response_format?.type !== 'json_object'
+      || Object.keys(body.response_format).length !== 1
+      || !strictKeys(user, expectedUserKeys)
+      || JSON.stringify(user) !== JSON.stringify(active.user)
+      || !strictKeys(schema.properties, expectedSchemaKeys)
+      || !systemMessage?.content.endsWith('\n' + JSON.stringify(schema))
+      || active.forbiddenTexts.some(text => wire.includes(text)) || wire.includes(sentinel)
+      || (active.stage === 'claims' && (JSON.stringify(schema).includes('draftQuote')
+        || JSON.stringify(schema).includes('adviceQuote')
+        || JSON.stringify(schema).includes('requiredNumbers')
+        || systemMessage.content.includes('draftQuote')
+        || systemMessage.content.includes('adviceQuote')
+        || systemMessage.content.includes('requiredNumbers')
+        || 'draft' in user))
+      || (active.stage === 'draft' && ('assessment' in user || wire.includes('"fieldChecks"')))) {
+      halt('physical input/schema isolation or exact outbound boundary');
+      throw Error('Other artifact leaked into isolated review');
+    }
+    const outgoing = JSON.stringify({ ...body, ...report.profile });
+    const record: any = { index: report.requests.length + 1, controlId: active.id,
+      stage: active.stage, startedAt: new Date().toISOString(), endpoint, method: 'POST',
+      requestBodyRaw: redact(outgoing), requestBodySha256: sha(outgoing),
+      coreBodySha256: sha(wire), originalSchemaSha256: sha(JSON.stringify(schema)),
+      isolationProof: { userKeys: Object.keys(user), schemaKeys: Object.keys(schema.properties as Record<string, unknown>),
+        otherArtifactFullTextAbsent: true, otherArtifactSentinelAbsent: true,
+        bannedFieldKeysAbsent: true, sentinelSha256: sha(sentinel), sentinelLength: sentinel.length } };
+    report.requests.push(record);
+    console.log(JSON.stringify({ request: record.index, controlId: record.controlId,
+      stage: active.stage, reportedUsageTokens: report.reportedUsageTokens }));
+    try {
+      const response = await fetch(url, { ...init, redirect: 'error', body: outgoing,
+        signal: AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : [])]) });
+      record.status = response.status;
+      record.headers = Object.fromEntries(['content-type', 'x-request-id', 'x-dashscope-request-id',
+        'x-acs-request-id', 'request-id', 'retry-after'].flatMap(name => {
+        const value = response.headers.get(name); return value === null ? [] : [[name, redact(value)]];
+      }));
+      if (!response.ok) halt('first non-success HTTP response');
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = response.body?.getReader();
+      if (reader) while (true) {
+        const part = await reader.read(); if (part.done) break;
+        size += part.value.byteLength;
+        if (size > report.maximumResponseBytes) {
+          record.responseBodyTruncated = true; record.responseBytesObserved = size;
+          await reader.cancel(); halt('response byte cap'); throw Error('Response byte cap');
+        }
+        chunks.push(part.value);
+      }
+      const bytes = Buffer.concat(chunks);
+      record.responseBytes = bytes.length; record.responseBodySha256 = sha(bytes);
+      let decoded: any;
+      try { decoded = JSON.parse(bytes.toString('utf8')); }
+      catch { halt('provider response JSON invalid'); throw Error('Provider response JSON invalid'); }
+      const sanitized = sanitizedProvider(decoded);
+      record.responseDecodedSansReasoning = sanitized.decoded;
+      record.reasoningFields = sanitized.removed;
+      record.usage = decoded.usage ?? null;
+      record.businessCode = decoded.code ?? decoded.error?.code ?? null;
+      record.requestId = decoded.request_id ?? decoded.requestId ?? decoded.id ?? null;
+      record.finishReasons = Array.isArray(decoded.choices)
+        ? decoded.choices.map((choice: any) => choice.finish_reason ?? null) : [];
+      const validCount = (value: unknown): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+      const total = validCount(decoded.usage?.total_tokens) ? decoded.usage.total_tokens
+        : validCount(decoded.usage?.prompt_tokens) && validCount(decoded.usage?.completion_tokens)
+          ? decoded.usage.prompt_tokens + decoded.usage.completion_tokens : undefined;
+      if (validCount(total)) {
+        report.reportedUsageTokens += total; record.accountedUsageTokens = total;
+        record.cumulativeReportedUsageTokens = report.reportedUsageTokens;
+      } else if (response.ok) halt('successful response lacks valid usage accounting');
+      if (record.finishReasons.includes('length')) {
+        record.outputTruncated = true;
+        record.failureClassification = 'experimental_output_cap_truncation_not_semantic_quality';
+      }
+      if (decoded.error || !Array.isArray(decoded.choices) || record.finishReasons.length !== 1
+        || record.finishReasons[0] !== 'stop') halt('provider business error or non-stop finish');
+      if (halted) throw Error('Provider or usage boundary failed');
+      return new Response(bytes, { status: response.status,
+        headers: { 'content-type': response.headers.get('content-type') ?? 'application/json' } });
+    } catch (error) {
+      record.errorType = safeError(error); halt('transport, timeout or response-read failure'); throw error;
+    } finally { record.finishedAt = new Date().toISOString(); }
+  } }),
+});
+try {
+  for (const control of controls) {
+    if (halted || deadline.aborted || report.reportedUsageTokens >= report.maximumReportedUsageTokens) {
+      halt('probe stopped before next fixed control'); break;
+    }
+    active = control;
+    const responseFormat = { type: 'json_schema' as const, json_schema: {
+      name: control.stage === 'claims' ? 'iris_private_claims_only_review' : 'iris_private_draft_only_review',
+      strict: true as const, schema: control.schema } };
+    const messages = [{ role: 'system' as const, content: control.system },
+      { role: 'user' as const, content: JSON.stringify(control.user) }];
+    const result: any = { controlId: control.id, stage: control.stage,
+      expectedSupported: control.expectedSupported, originalMessages: messages,
+      originalResponseFormat: responseFormat, startedAt: new Date().toISOString() };
+    report.results.push(result);
+    try {
+      const content = await client.complete(messages, { responseFormat });
+      result.content = redact(content);
+      const value = JSON.parse(content);
+      const locallySupported = control.stage === 'claims'
+        ? validateClaims(value) : validateDraft(value, (control.user.draft as any).text);
+      result.schemaValid = true;
+      result.rawSupported = value.supported;
+      result.locallySupported = locallySupported;
+      result.profileVerdictMatched = locallySupported === control.expectedSupported;
+      if (!result.profileVerdictMatched) halt('first fixed-control judgement mismatch; probe failed');
+    } catch (error) {
+      result.schemaValid = false; result.errorType = safeError(error);
+      halt('first fixed-control schema, transport or validation failure; probe failed');
+    } finally { result.finishedAt = new Date().toISOString(); }
+    if (halted) break;
+  }
+  report.executionPassed = !halted && report.results.length === 6 && report.requests.length === 6
+    && report.results.every((item: any) => item.profileVerdictMatched === true);
+  if (!report.executionPassed && !halted) halt('six-control probe incomplete');
+  process.exitCode = report.executionPassed ? 0 : 1;
+} catch (error) {
+  report.errorType = safeError(error); halt('probe execution failed'); process.exitCode = 1;
+} finally {
+  report.halted = halted; report.finishedAt = new Date().toISOString();
+  writeFileSync(output, redact(JSON.stringify(report, null, 2)) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ output, requests: report.requests.length,
+    reportedUsageTokens: report.reportedUsageTokens, executionPassed: report.executionPassed,
+    halted, independentSemanticReview: report.independentSemanticReview }));
+}

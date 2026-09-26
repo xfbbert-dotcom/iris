@@ -1,0 +1,338 @@
+{
+  "kind": "private-physical-claims-draft-isolation-probe",
+  "syntheticOnly": true,
+  "startedAt": "2026-09-25T13:55:03.391Z",
+  "commit": "f91cbcb04aa232304c961dd48887f1a3c8635492",
+  "applicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+  "applicationSourceWorkingTreeStatus": "",
+  "sourceHashes": {
+    "apps/core/src/config/env.ts": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+    "apps/core/src/proactive-discussion/model.ts": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+    "scripts/pilot/proactive-discussion-eval.ts": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca"
+  },
+  "harnessSha256": "4593f9a05ea430255aa785101b1a0240d3a8a8c32066d83d0accb079af1e006f",
+  "launcherSha256": "524ea4ce0c121fa2e8046ee0a9970b8500d2993813ae4f3ffe24e387214f52f3",
+  "archives": [
+    {
+      "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/field-review-negative-20260920.json",
+      "sha256": "a570fb4439e373217e19f12d7cf1b274932676389e8df596ffd117b27ef88ea0"
+    },
+    {
+      "path": "C:/Users/LOCAL_USER/AppData/Local/Iris/bailian-eval-20260918/identity-target-diagnostic-20260925.json",
+      "sha256": "f13a5354df8d37965d8950b0599886ff0b785f90a8922499e0b85f2fd385c215"
+    }
+  ],
+  "preflightHistory": "A preceding launch aborted before the started/report markers and before any model request: the September 20 archive has both first and final scope reviews under one stage name. This harness now selects only the unique first review by excluding user payloads containing previousReview or originalAssessment. The failed preflight incurred zero HTTP requests and zero reported model usage; it is not a semantic result.",
+  "model": "qwen3.7-plus",
+  "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "structuredOutputMode": "json_object",
+  "timeoutMs": 60000,
+  "profile": {
+    "enable_thinking": false,
+    "max_tokens": 2048
+  },
+  "wallMs": 480000,
+  "maxRequests": 6,
+  "maximumReportedUsageTokens": 60000,
+  "reportedUsageTokens": 1934,
+  "requestIntervalMs": 6000,
+  "automaticTransportRetry": false,
+  "maximumResponseBytes": 262144,
+  "requests": [
+    {
+      "index": 1,
+      "controlId": "old-negative-arithmetic",
+      "stage": "claims",
+      "startedAt": "2026-09-25T13:55:03.401Z",
+      "endpoint": "https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "method": "POST",
+      "requestBodyRaw": "{\"model\":\"qwen3.7-plus\",\"messages\":[{\"role\":\"system\",\"content\":\"你是独立的内部判断审查员。仅依据给定授权原文、真实历史和当前候选判断，核查是否值得现在发言及所有断言是否有依据。\\n逐项审查 issueRef、observation、reasoning、suggestion、uncertainty、materialChange，各给 supported 与具体简短理由；整体 supported 必须与逐项合取一致。\\n核对算式方向、数值、单位；区分原文事实、条件推断和未来后果；已有问题须对照真实已提醒内容和本次实质新证据。不能把条件语法本身当作必然结论的证据。\\n不借用外部公司事实、不假定权限或动作已获批准，不执行工具。只输出指定 JSON，不输出思维链。\\n\\nReturn only a JSON object that satisfies the following JSON Schema, not the schema itself.\\nDo not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.\\n{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"fieldChecks\\\",\\\"supported\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"fieldChecks\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"issueRef\\\",\\\"observation\\\",\\\"reasoning\\\",\\\"suggestion\\\",\\\"uncertainty\\\",\\\"materialChange\\\"],\\\"properties\\\":{\\\"issueRef\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"supported\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"supported\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":400}}},\\\"observation\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"supported\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"supported\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":400}}},\\\"reasoning\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"supported\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"supported\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":400}}},\\\"suggestion\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"supported\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"supported\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":400}}},\\\"uncertainty\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"supported\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"supported\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":400}}},\\\"materialChange\\\":{\\\"type\\\":\\\"object\\\",\\\"additionalProperties\\\":false,\\\"required\\\":[\\\"supported\\\",\\\"reason\\\"],\\\"properties\\\":{\\\"supported\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":400}}}}},\\\"supported\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"reason\\\":{\\\"type\\\":\\\"string\\\",\\\"minLength\\\":1,\\\"maxLength\\\":200}}}\"},{\"role\":\"user\",\"content\":\"{\\\"assessment\\\":{\\\"decision\\\":\\\"intervene\\\",\\\"reason\\\":\\\"material_issue\\\",\\\"issueRef\\\":{\\\"kind\\\":\\\"new\\\",\\\"description\\\":\\\"招聘预算严重不足：计划支出16万元超出本季度10万元预算6万元\\\"},\\\"evidenceRefs\\\":[\\\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\\\",\\\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\\\"],\\\"observation\\\":\\\"材料显示本季度招聘预算为10万元（ref: message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2）。当前计划招聘两人，每人成本8万元，合计需16万元（ref: message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba）。团队认为预算足够，但实际存在6万元的资金缺口。\\\",\\\"reasoning\\\":\\\"根据已知事实进行直接算术核算：需求总额16万元减去可用预算10万元，差额为-6万元。当前决策基于‘预算足够’这一错误前提，若不纠正将导致承诺无法履行或违规超支。这是一个可立即核实的实质财务冲突，无需等待风险发生即可指出。\\\",\\\"suggestion\\\":\\\"请立即重新评估招聘计划。建议采取以下任一措施：1. 申请追加至少6万元的招聘预算；2. 减少招聘人数至1人（剩余2万元结余）；3. 降低单人招聘成本标准至5万元以内。在解决资金缺口前，不应对外做出录用承诺。\\\",\\\"uncertainty\\\":\\\"fact\\\",\\\"materialChange\\\":{\\\"kind\\\":\\\"new_issue\\\",\\\"explanation\\\":\\\"发现新的实质性问题：招聘计划所需资金（16万元）明确超出授权预算（10万元），差额6万元，且团队误判预算充足。\\\",\\\"evidenceRefs\\\":[\\\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\\\",\\\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\\\"]}},\\\"evidence\\\":[{\\\"ref\\\":\\\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\\\",\\\"text\\\":\\\"本季度招聘预算 10 万元。\\\",\\\"kind\\\":\\\"message\\\"},{\\\"ref\\\":\\\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\\\",\\\"text\\\":\\\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\\\",\\\"kind\\\":\\\"message\\\"}],\\\"discussion\\\":{\\\"triggerMaterial\\\":{\\\"ref\\\":\\\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\\\",\\\"text\\\":\\\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\\\"},\\\"materials\\\":[{\\\"ref\\\":\\\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\\\",\\\"text\\\":\\\"本季度招聘预算 10 万元。\\\"},{\\\"ref\\\":\\\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\\\",\\\"text\\\":\\\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\\\"}],\\\"suppliedIssues\\\":[]},\\\"evaluationContext\\\":{\\\"deliveryState\\\":\\\"not_sent\\\",\\\"identityTargetRole\\\":\\\"identity_only\\\",\\\"priorHandlingSource\\\":\\\"discussion\\\"}}\"}],\"response_format\":{\"type\":\"json_object\"},\"enable_thinking\":false,\"max_tokens\":2048}",
+      "requestBodySha256": "387c5e48949c8f7e61428dd5591256b06bf6cda57dcedd57aa15201e01ce08ee",
+      "coreBodySha256": "3a5a4ddbfe015e4995d711a6b9299ed685986f0b5fb21ea5bfab7b46d1d393e8",
+      "originalSchemaSha256": "5b64611b92c2b2665eba9e9f299b94d38432e8e651f33d7a180b3ae53e17cd7d",
+      "isolationProof": {
+        "userKeys": [
+          "assessment",
+          "evidence",
+          "discussion",
+          "evaluationContext"
+        ],
+        "schemaKeys": [
+          "fieldChecks",
+          "supported",
+          "reason"
+        ],
+        "otherArtifactFullTextAbsent": true,
+        "otherArtifactSentinelAbsent": true,
+        "bannedFieldKeysAbsent": true,
+        "sentinelSha256": "7db3682faa02b44bc9b8ea633563e434a4a70a32f8d6d581706b559ffc551d43",
+        "sentinelLength": 40
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "ccf1ea00-2026-91fa-b05a-5298bbd6b25e"
+      },
+      "responseBytes": 1646,
+      "responseBodySha256": "596ad77033bde212dd8910512e453c2c776ba7e55c96dd545d1980eab05031f6",
+      "responseDecodedSansReasoning": {
+        "id": "chatcmpl-ccf1ea00-2026-91fa-b05a-5298bbd6b25e",
+        "object": "chat.completion",
+        "created": 1790344503,
+        "model": "qwen3.7-plus",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"fieldChecks\": {\n    \"issueRef\": {\n      \"supported\": true,\n      \"reason\": \"准确识别了预算（10万）与计划支出（16万）之间的6万元缺口，符合证据内容。\"\n    },\n    \"observation\": {\n      \"supported\": true,\n      \"reason\": \"客观陈述了证据中的数值事实及团队关于预算充足的错误判断，无臆测。\"\n    },\n    \"reasoning\": {\n      \"supported\": true,\n      \"reason\": \"算术逻辑正确（16-10=6），且正确指出基于错误前提的决策风险，依据充分。\"\n    },\n    \"suggestion\": {\n      \"supported\": true,\n      \"reason\": \"提出的追加预算、减员或降本方案均能解决资金缺口，建议合理且具操作性。\"\n    },\n    \"uncertainty\": {\n      \"supported\": true,\n      \"reason\": \"标记为fact恰当，因为预算和成本数据来自明确的消息记录，无模糊空间。\"\n    },\n    \"materialChange\": {\n      \"supported\": true,\n      \"reason\": \"揭示了实质性的财务违规风险，属于新发现的重要问题，符合干预标准。\"\n    }\n  },\n  \"supported\": true,\n  \"reason\": \"所有字段均有确凿证据支持，计算无误，逻辑严密，建议可行，符合干预条件。\"\n}"
+            },
+            "finish_reason": "stop",
+            "logprobs": null
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1615,
+          "total_tokens": 1934,
+          "completion_tokens": 319,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1615
+          }
+        }
+      },
+      "reasoningFields": [],
+      "usage": {
+        "prompt_tokens": 1615,
+        "total_tokens": 1934,
+        "completion_tokens": 319,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 1615
+        }
+      },
+      "businessCode": null,
+      "requestId": "chatcmpl-ccf1ea00-2026-91fa-b05a-5298bbd6b25e",
+      "finishReasons": [
+        "stop"
+      ],
+      "accountedUsageTokens": 1934,
+      "cumulativeReportedUsageTokens": 1934,
+      "finishedAt": "2026-09-25T13:55:08.999Z"
+    }
+  ],
+  "results": [
+    {
+      "controlId": "old-negative-arithmetic",
+      "stage": "claims",
+      "expectedSupported": false,
+      "originalMessages": [
+        {
+          "role": "system",
+          "content": "你是独立的内部判断审查员。仅依据给定授权原文、真实历史和当前候选判断，核查是否值得现在发言及所有断言是否有依据。\n逐项审查 issueRef、observation、reasoning、suggestion、uncertainty、materialChange，各给 supported 与具体简短理由；整体 supported 必须与逐项合取一致。\n核对算式方向、数值、单位；区分原文事实、条件推断和未来后果；已有问题须对照真实已提醒内容和本次实质新证据。不能把条件语法本身当作必然结论的证据。\n不借用外部公司事实、不假定权限或动作已获批准，不执行工具。只输出指定 JSON，不输出思维链。"
+        },
+        {
+          "role": "user",
+          "content": "{\"assessment\":{\"decision\":\"intervene\",\"reason\":\"material_issue\",\"issueRef\":{\"kind\":\"new\",\"description\":\"招聘预算严重不足：计划支出16万元超出本季度10万元预算6万元\"},\"evidenceRefs\":[\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\",\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\"],\"observation\":\"材料显示本季度招聘预算为10万元（ref: message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2）。当前计划招聘两人，每人成本8万元，合计需16万元（ref: message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba）。团队认为预算足够，但实际存在6万元的资金缺口。\",\"reasoning\":\"根据已知事实进行直接算术核算：需求总额16万元减去可用预算10万元，差额为-6万元。当前决策基于‘预算足够’这一错误前提，若不纠正将导致承诺无法履行或违规超支。这是一个可立即核实的实质财务冲突，无需等待风险发生即可指出。\",\"suggestion\":\"请立即重新评估招聘计划。建议采取以下任一措施：1. 申请追加至少6万元的招聘预算；2. 减少招聘人数至1人（剩余2万元结余）；3. 降低单人招聘成本标准至5万元以内。在解决资金缺口前，不应对外做出录用承诺。\",\"uncertainty\":\"fact\",\"materialChange\":{\"kind\":\"new_issue\",\"explanation\":\"发现新的实质性问题：招聘计划所需资金（16万元）明确超出授权预算（10万元），差额6万元，且团队误判预算充足。\",\"evidenceRefs\":[\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\",\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\"]}},\"evidence\":[{\"ref\":\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\",\"text\":\"本季度招聘预算 10 万元。\",\"kind\":\"message\"},{\"ref\":\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\",\"text\":\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\",\"kind\":\"message\"}],\"discussion\":{\"triggerMaterial\":{\"ref\":\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\",\"text\":\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\"},\"materials\":[{\"ref\":\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\",\"text\":\"本季度招聘预算 10 万元。\"},{\"ref\":\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\",\"text\":\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\"}],\"suppliedIssues\":[]},\"evaluationContext\":{\"deliveryState\":\"not_sent\",\"identityTargetRole\":\"identity_only\",\"priorHandlingSource\":\"discussion\"}}"
+        }
+      ],
+      "originalResponseFormat": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "iris_private_claims_only_review",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fieldChecks",
+              "supported",
+              "reason"
+            ],
+            "properties": {
+              "fieldChecks": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "issueRef",
+                  "observation",
+                  "reasoning",
+                  "suggestion",
+                  "uncertainty",
+                  "materialChange"
+                ],
+                "properties": {
+                  "issueRef": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "supported",
+                      "reason"
+                    ],
+                    "properties": {
+                      "supported": {
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "observation": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "supported",
+                      "reason"
+                    ],
+                    "properties": {
+                      "supported": {
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "reasoning": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "supported",
+                      "reason"
+                    ],
+                    "properties": {
+                      "supported": {
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "suggestion": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "supported",
+                      "reason"
+                    ],
+                    "properties": {
+                      "supported": {
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "uncertainty": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "supported",
+                      "reason"
+                    ],
+                    "properties": {
+                      "supported": {
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "materialChange": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "supported",
+                      "reason"
+                    ],
+                    "properties": {
+                      "supported": {
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 400
+                      }
+                    }
+                  }
+                }
+              },
+              "supported": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        }
+      },
+      "startedAt": "2026-09-25T13:55:03.398Z",
+      "content": "{\n  \"fieldChecks\": {\n    \"issueRef\": {\n      \"supported\": true,\n      \"reason\": \"准确识别了预算（10万）与计划支出（16万）之间的6万元缺口，符合证据内容。\"\n    },\n    \"observation\": {\n      \"supported\": true,\n      \"reason\": \"客观陈述了证据中的数值事实及团队关于预算充足的错误判断，无臆测。\"\n    },\n    \"reasoning\": {\n      \"supported\": true,\n      \"reason\": \"算术逻辑正确（16-10=6），且正确指出基于错误前提的决策风险，依据充分。\"\n    },\n    \"suggestion\": {\n      \"supported\": true,\n      \"reason\": \"提出的追加预算、减员或降本方案均能解决资金缺口，建议合理且具操作性。\"\n    },\n    \"uncertainty\": {\n      \"supported\": true,\n      \"reason\": \"标记为fact恰当，因为预算和成本数据来自明确的消息记录，无模糊空间。\"\n    },\n    \"materialChange\": {\n      \"supported\": true,\n      \"reason\": \"揭示了实质性的财务违规风险，属于新发现的重要问题，符合干预标准。\"\n    }\n  },\n  \"supported\": true,\n  \"reason\": \"所有字段均有确凿证据支持，计算无误，逻辑严密，建议可行，符合干预条件。\"\n}",
+      "schemaValid": true,
+      "rawSupported": true,
+      "locallySupported": true,
+      "profileVerdictMatched": false,
+      "finishedAt": "2026-09-25T13:55:09.011Z"
+    }
+  ],
+  "expectedControls": [
+    {
+      "id": "old-negative-arithmetic",
+      "stage": "claims",
+      "expectedSupported": false
+    },
+    {
+      "id": "current-positive-arithmetic",
+      "stage": "claims",
+      "expectedSupported": true
+    },
+    {
+      "id": "current-negative-qualified-risk",
+      "stage": "claims",
+      "expectedSupported": false
+    },
+    {
+      "id": "current-negative-paraphrase",
+      "stage": "claims",
+      "expectedSupported": false
+    },
+    {
+      "id": "current-positive-arithmetic-draft",
+      "stage": "draft",
+      "expectedSupported": true
+    },
+    {
+      "id": "current-negative-qualified-risk-draft",
+      "stage": "draft",
+      "expectedSupported": false
+    }
+  ],
+  "independentSemanticReview": "pending",
+  "executionPassed": false,
+  "freeOnlyPrecondition": "Operator supplied fresh exact-model free-quota evidence at launch: 2026-09-25 13:42 UTC browser reload exact qwen3.7-plus row: remaining 557.08K of 1M, expiry 2026/12/18, stop when free exhausted enabled; no setting changed. Intervening harness preflight had zero model calls.. This is an assertion, not automated quota verification or billing audit. Stop-when-free-exhausted must remain enabled; no paid fallback.",
+  "acceptance": "Private architecture probe only. Fixed archived candidates and source/history, no generated answers or product code. The four claims-only verdicts and two document-only verdicts must be locally well-formed and match fixed expectations, with independent semantic review of reasons. First failure stops; no repeated configuration, full suite, product promotion, or relaxation of existing production validator.",
+  "privacy": "Provider reasoning_content is not printed or saved verbatim; only field path/byte count/SHA256 is retained if present.",
+  "haltReason": "first fixed-control judgement mismatch; probe failed",
+  "halted": true,
+  "finishedAt": "2026-09-25T13:55:09.011Z"
+}

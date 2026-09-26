@@ -1,0 +1,176 @@
+{
+  "kind": "redacted-evidence-copy-manifest",
+  "archivedAt": "2026-09-25T14:02:36.753Z",
+  "transformations": [
+    "Replace exact private workspace hostname with workspace-redacted.cn-beijing.maas.aliyuncs.com.",
+    "Replace exact local Windows user path component with LOCAL_USER.",
+    "Provider raw response was already omitted from private report; preserve only decoded response and original response hash/byte metadata."
+  ],
+  "note": "Private originals remain unchanged. No credential/DPAPI file is read. Original raw response SHA256/bytes are retained but cannot be independently recomputed from this privacy-preserving report. A preceding preflight used zero HTTP requests. Launcher is inert text.",
+  "disposition": "One claims-only negative control was a false positive; five controls not called. No product, six-case, full-suite or deployment acceptance.",
+  "originalReportSha256": "9bfdcf2e4b6b1420ddfef649717effb85ddd2047cb4b03657a45562d2a8e3fd9",
+  "wireValidation": {
+    "requests": 1,
+    "http200": 1,
+    "requestBodySha256Verified": true,
+    "actualWireClaimsOnly": true,
+    "draftTextAndSchemaAbsent": true,
+    "decodedContentMatchesResult": true,
+    "localSixFieldFalsePositiveRecorded": true,
+    "originalResponseSha256RetainedNotReverifiable": "596ad77033bde212dd8910512e453c2c776ba7e55c96dd545d1980eab05031f6",
+    "rawResponseBytesRecordedNotReverifiable": 1646,
+    "providerReasoningRawAbsent": true,
+    "providerReasoningFieldsRetained": 0,
+    "preflightRequests": 0,
+    "fivePlannedControlsNotCalled": true
+  },
+  "sourceIdentity": {
+    "recordedApplicationCommit": "04aa3a09f8548865b9178b001d575d7f800785b4",
+    "recordedHead": "f91cbcb04aa232304c961dd48887f1a3c8635492",
+    "recordedWorkingTreeStatus": "",
+    "files": [
+      {
+        "path": "apps/core/src/config/env.ts",
+        "recordedSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedSha256": "0f6a9c820e876853fe9868bcc24552583b83d25b6c1da1191ed416e53017aeb5",
+        "currentWorkingTreeSha256": "36ce4b6b3fd77fe59c5d719fcd558f0271b802f87dbd3e68dd4f877aa3d1db41",
+        "committedBytes": 38698,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 1273
+      },
+      {
+        "path": "apps/core/src/model/openai-compatible-chat-completions-client.ts",
+        "recordedSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedSha256": "909f5559359bb8bd34d2d274b216d5435ee8b79a27272414ed6f09cd261c2f20",
+        "currentWorkingTreeSha256": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+        "committedBytes": 11237,
+        "verification": "exact_recorded_worktree_crlf_to_committed_lf",
+        "crlfPairsConverted": 306
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/model.ts",
+        "recordedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "currentWorkingTreeSha256": "ddba8b2cfbf938477f27cc94bdeca9d9b63001ee367897852f5cc86cfd7be51a",
+        "committedBytes": 45593,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "apps/core/src/proactive-discussion/review-receipts.ts",
+        "recordedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "currentWorkingTreeSha256": "11ae2f2f99d86dbfe3a301fb9e0002a29c0c5acd875f0b2a946796303c9aa726",
+        "committedBytes": 10345,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      },
+      {
+        "path": "scripts/pilot/proactive-discussion-eval.ts",
+        "recordedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "currentWorkingTreeSha256": "1c38295735daed961b630d6b504933e28f831ab567fe6ae0ca0d462b0f3060ca",
+        "committedBytes": 42439,
+        "verification": "exact_committed_blob",
+        "crlfPairsConverted": 0
+      }
+    ],
+    "originalHarnessAndLauncherHashesVerified": true
+  },
+  "files": [
+    {
+      "sourceName": "isolated-claims-draft-probe-20260925.json",
+      "archivedName": "iris-bailian-20260925-isolated-claims-draft-probe-report.json",
+      "originalSha256": "9bfdcf2e4b6b1420ddfef649717effb85ddd2047cb4b03657a45562d2a8e3fd9",
+      "originalBytes": 25078,
+      "archivedSha256": "64c14bea96b9976215f70f530b3facd9f7e021479c9f7ef1ba846e7974900e32",
+      "archivedBytes": 25086,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 2
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 2
+        }
+      ],
+      "wireValidation": {
+        "requests": 1,
+        "http200": 1,
+        "requestBodySha256Verified": true,
+        "actualWireClaimsOnly": true,
+        "draftTextAndSchemaAbsent": true,
+        "decodedContentMatchesResult": true,
+        "localSixFieldFalsePositiveRecorded": true,
+        "originalResponseSha256RetainedNotReverifiable": "596ad77033bde212dd8910512e453c2c776ba7e55c96dd545d1980eab05031f6",
+        "rawResponseBytesRecordedNotReverifiable": 1646,
+        "providerReasoningRawAbsent": true,
+        "providerReasoningFieldsRetained": 0,
+        "preflightRequests": 0,
+        "fivePlannedControlsNotCalled": true
+      }
+    },
+    {
+      "sourceName": "isolated-claims-draft-probe-20260925.started.json",
+      "archivedName": "iris-bailian-20260925-isolated-claims-draft-probe-started.json",
+      "originalSha256": "0ed2b81816549e572b5e5b53798c160feffb9f419a5d2f0c39763b0fbdf9461f",
+      "originalBytes": 2298,
+      "archivedSha256": "2252c0ddc1020d446d57cd2abaf854f054f1fd020d06eb7e70357f2eb5388fa3",
+      "archivedBytes": 2313,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 3
+        }
+      ]
+    },
+    {
+      "sourceName": "isolated-claims-draft-probe-20260925.halted.json",
+      "archivedName": "iris-bailian-20260925-isolated-claims-draft-probe-halt.json",
+      "originalSha256": "5fa266f3b988b694dc95f22d573d0100a8de92e7728bb2dd2baa5dd61fa5aacc",
+      "originalBytes": 107,
+      "archivedSha256": "5fa266f3b988b694dc95f22d573d0100a8de92e7728bb2dd2baa5dd61fa5aacc",
+      "archivedBytes": 107,
+      "exactRedactions": []
+    },
+    {
+      "sourceName": "isolated-claims-draft-probe-20260925.mts",
+      "archivedName": "iris-bailian-20260925-isolated-claims-draft-probe-harness.txt",
+      "originalSha256": "4593f9a05ea430255aa785101b1a0240d3a8a8c32066d83d0accb079af1e006f",
+      "originalBytes": 28123,
+      "archivedSha256": "0325e74b4e9ecfb9df5316ef60f1e14e10909d82729f09e4ee3a60515efb1302",
+      "archivedBytes": 28127,
+      "exactRedactions": [
+        {
+          "from": "exact private workspace hostname",
+          "to": "workspace-redacted.cn-beijing.maas.aliyuncs.com",
+          "replacements": 1
+        },
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    },
+    {
+      "sourceName": "run-isolated-claims-draft-probe.ps1",
+      "archivedName": "iris-bailian-20260925-isolated-claims-draft-probe-launcher.txt",
+      "originalSha256": "524ea4ce0c121fa2e8046ee0a9970b8500d2993813ae4f3ffe24e387214f52f3",
+      "originalBytes": 3303,
+      "archivedSha256": "ab8766a33b2bdfceb9ce8017ca264741d545f4b7f1cbf2dd6ba24e4902b2777a",
+      "archivedBytes": 3308,
+      "exactRedactions": [
+        {
+          "from": "exact local Windows user path component",
+          "to": "C:/Users/LOCAL_USER/",
+          "replacements": 1
+        }
+      ]
+    }
+  ]
+}

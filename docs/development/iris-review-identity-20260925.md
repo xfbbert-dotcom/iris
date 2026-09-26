@@ -89,13 +89,46 @@ budget4096（因此是**profile**对照，不能归因为单个参数）。原�
 因原件没有raw response而**不能独立重算**。reasoning正文未公开，
 只留7504字节/哈希元数据；私有原件未改、凭据/DPAPI未读取。
 
+### 同应用、私有物理隔离双面审查probe（首例负向）
+
+文档检查点`f91cbcb0`后、应用仍为`04aa3a09`，用私有诊断harness探索把
+assessment各字段断言与draft字面凭据**物理隔离**后分别审查的能力边界；不是
+产品代码修改或生产方案。一次先行preflight因误认旧归档只有一条同名review
+而在创建报告/发起请求前退出，零HTTP/零reported usage；最终报告
+`preflightHistory`保留此事实，不把它计为语义结果。
+
+最终六个预定控制只执行首个`old-negative-arithmetic`的claims阶段：
+13:55:03.391–13:55:09.011 UTC，**1次HTTP200/1934 reported usage tokens**。
+实际请求体的`isolationProof`确认只发送assessment、授权evidence、真实discussion
+和evaluationContext；没有draft正文或draft凭据/schema，也无其他artifact全文。
+当前assessment的reasoning却写成`16−10=−6`，又把没有事实依据的
+违规/履约风险说得确定。review仍称`16−10=6`算术正确，六字段全true，
+整体及本地校验也true，首例预期false，故即时停止。`current-positive-arithmetic`、
+`current-negative-qualified-risk`、`current-negative-paraphrase`、
+`current-positive-arithmetic-draft`和`current-negative-qualified-risk-draft`
+五项**未调用**。此一次负向说明该私有隔离方案的首例未能检出错误，
+不证明所有模型都无能力，也不是“六例均失败”；不再据同配置抽样或堆prompt
+宣称修复，下一能力候选/架构取舍须另行审议。完整15×2、CI、真实群及部署状态不变。
+私有报告SHA256 `9bfdcf2e4b6b1420ddfef649717effb85ddd2047cb4b03657a45562d2a8e3fd9`
+已冻结；原`independentSemanticReview=pending`字段不改写。
+[脱敏归档清单](evidence/iris-bailian-20260925-isolated-claims-draft-probe-manifest.json)、
+[报告](evidence/iris-bailian-20260925-isolated-claims-draft-probe-report.json)、
+[起始标记](evidence/iris-bailian-20260925-isolated-claims-draft-probe-started.json)、
+[停止标记](evidence/iris-bailian-20260925-isolated-claims-draft-probe-halt.json)、
+[harness](evidence/iris-bailian-20260925-isolated-claims-draft-probe-harness.txt)和
+[launcher](evidence/iris-bailian-20260925-isolated-claims-draft-probe-launcher.txt)已归档。
+主代理完整阅读离线归档脚本后执行并回读，核对固定原报告、请求体哈希、
+claims-only实际wire、六字段误通过、应用来源和harness/launcher哈希。
+原响应1646字节/哈希只保留元数据，原件无raw response故不能独立重算；
+未读取凭据/DPAPI、未改私有原件、未产生模型调用。
+
 ## 四处文档处置
 
 | 核对项 | disposition与理由 |
 |---|---|
-| 白皮书 | **reviewed-unchanged**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)已经要求区分当前讨论与先前意见、只按授权原文核对、避免重复及过度确定后果；本次是有限输入投影及独立profile诊断，七例仍有三项语义失败，thinking首例又误通过，不新增产品行为规则。 |
-| 工程故障台账 | **updated**：[主动讨论条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)记录投影修复后七例仍失败及thinking首例误通过。 |
-| 核心需求覆盖基线 | **updated**：[IRIS-CORE-005补记](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-25-本轮评估身份与真实历史分离)区分本地门禁、七例4/3语义与独立thinking负向对照。 |
-| README / AGENTS / 当前交接 | **updated**：[README](../../README.md#current-product-state)及[当前接手入口](current-handoff.md#当前正在推进)列出应用SHA、七例4/3和thinking首例结果。**reviewed-unchanged**：[AGENTS](../../AGENTS.md)的工作树定位、授权边界与四处闭环要求仍有效。 |
+| 白皮书 | **reviewed-unchanged**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)已经要求区分当前讨论与先前意见、只按授权原文核对、避免重复及过度确定后果；本次有限输入投影及两个私有负向probe未产生新产品行为规则。 |
+| 工程故障台账 | **updated**：[主动讨论条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)记录七例4/3、thinking首例误通过及物理隔离首例仍漏负算术。 |
+| 核心需求覆盖基线 | **updated**：[IRIS-CORE-005补记](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-25-本轮评估身份与真实历史分离)区分本地门禁、七例4/3语义和两次独立probe负向结果。 |
+| README / AGENTS / 当前交接 | **updated**：[README](../../README.md#current-product-state)及[当前接手入口](current-handoff.md#当前正在推进)列出应用SHA、七例4/3与两次首例负向结果。**reviewed-unchanged**：[AGENTS](../../AGENTS.md)的工作树定位、授权边界与四处闭环要求仍有效。 |
 
 本记录不把文档提交、本地回归或已结束但失败的模型窗口当作发布批准。

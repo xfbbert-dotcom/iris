@@ -248,6 +248,14 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   accepted the unsupported extreme consequence. The bounded [profile comparison](../development/iris-review-identity-20260925.md#同应用独立thinking-profile对照负向)
   stopped after one HTTP200/5486 usage tokens (1614 reasoning tokens); four planned cases
   were not called. This is not a full five-case failure or a reason to promote thinking.
+- **Private physical split still missed a negative claim (2026-09-25):** On unchanged application
+  `04aa3a09`, a private [claims/draft isolation probe](../development/iris-review-identity-20260925.md#同应用私有物理隔离双面审查probe首例负向)
+  sent only assessment, evidence, real discussion and evaluation role in its first claims call;
+  actual wire isolation excluded draft text, draft receipts and draft schema. Despite
+  `16−10=−6` in current reasoning and unsupported certain risk claims, model and local review
+  returned six true fields and overall true. One HTTP200/1934 tokens then halted; five planned
+  controls were never called. A preceding preflight failed before any request. This falsifies
+  this private candidate's first control, not every model or all split-review architectures.
 - **Exit condition:** Unmentioned material risks receive useful, qualified intervention; normal
   discussion stays quiet; distinct consecutive risks are not blocked by a cooldown; corrected,
   duplicate, unauthorized and stopped issues are not sent. Deterministic tests, real Postgres,
