@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import { validatePdScopeReview, createPdScopeReviewJsonSchema } from "../src/proactive-discussion/review-receipts.js";
 import { pdAssessment, pdContext, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 

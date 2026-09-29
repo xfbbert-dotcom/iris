@@ -1,7 +1,8 @@
 import { expect, test, vi } from "vitest";
+import { proseFixtureClient } from "./fixtures/proactive-discussion-prose-client.js";
 
 import type { OpenAICompatibleChatCompletionOptions, OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
-import { createPdModel, type PdReviewedIntervention } from "../src/proactive-discussion/model.js";
+import { createPdModel, type PdReviewedIntervention } from "./fixtures/proactive-discussion-prose-client.js";
 import { pdAssessment, pdContext, pdContextWithIssue, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 import type { PdContext } from "../src/proactive-discussion/contracts.js";
 
@@ -37,7 +38,7 @@ test("first generation and review replace the stale assessment together with the
   const input = JSON.parse(client.complete.mock.calls[1]![0][1]!.content);
   expect(input).toMatchObject({ ...pair, identityTarget: { issueRef: original.issueRef,
     evidenceRefs: original.evidenceRefs } });
-  expect(client.complete.mock.calls[0]![1]!.responseFormat!.json_schema.schema.required).toEqual(["assessment", "draft"]);
+  expect(client.complete.mock.calls[0]![1]!.responseFormat!.json_schema.schema.required).toEqual(["prose"]);
 });
 
 test("first generation reconstructs from authorized sources without copying unverified candidate prose", async () => {
@@ -171,12 +172,12 @@ test("synthetic evaluation records and redacts the accepted generated pair, not 
     if (stage === "iris_proactive_discussion_scope_review") return review();
     return stage === "iris_proactive_discussion_draft" ? pair.draft : pair;
   });
-  const result = await runSyntheticProactiveDiscussionEval({ client, rounds: 1, includeTrace: true, traceRedactions: ["synthetic-secret"] });
+  const result = await runSyntheticProactiveDiscussionEval({ client: proseFixtureClient(client), rounds: 1, includeTrace: true, traceRedactions: ["synthetic-secret"] });
   expect(result.results.find((entry: { caseId: string }) => entry.caseId === "arithmetic")).toMatchObject({ assessment: pair.assessment, draft: pair.draft, error: null });
   expect(result.syntheticTrace?.complete).toBe(true);
   const record = result.syntheticTrace?.records.find((entry: { stage: string }) => entry.stage === "generated_pair");
   expect(record).toMatchObject({ replayValidation: { accepted: true }, acceptedDraft: true,
-    candidate: { assessment: { uncertainty: "qualified_inference" }, draft: pair.draft } });
+    boundCandidate: { assessment: { uncertainty: "qualified_inference" }, draft: pair.draft } });
   expect(JSON.stringify(record)).not.toContain("synthetic-secret");
   expect(JSON.stringify(record?.candidate)).toContain("16万元减10万元为6万元");
 });

@@ -410,6 +410,12 @@ answers, source coverage and isolation as separate gates. The approved repair is
 
 ## 6. Permission, Safety, And Proactive Behavior
 
+After proactive assessment has validated and locked issue identity and source references,
+generation and its single correction emit editable prose only. The application binds the
+immutable fields and validates the complete candidate before semantic review. Binding is
+not evidence of factual support; the original source, identity and novelty reviews still apply.
+See the [contract and acceptance record](../../development/iris-bound-prose-20260929.md).
+
 Iris is proactive by design. It can participate like a teammate, not only respond after being mentioned.
 
 Iris may proactively:

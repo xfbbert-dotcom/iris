@@ -1,5 +1,14 @@
 # Iris Engineering Failure Ledger
 
+## 2026-09-29: Do not ask generation to recopy locked references
+
+A valid source hash was shortened by the model during proactive generation even though the
+same reference was correct elsewhere in its response. Local rejection was correct. Once
+assessment has selected and validated identity and sources, the program should retain those
+immutable fields; generation and correction output editable prose only. Reject extra fields
+instead of overwriting conflicting model identity. Source binding still does not prove semantic
+support. [Implementation, failed predecessor and bounded acceptance](../development/iris-bound-prose-20260929.md).
+
 This ledger records failures that changed how Iris should be designed, tested, or released. It is
 not an incident timeline. Add an entry only when it produces a reusable prevention rule or an
 automated guard.

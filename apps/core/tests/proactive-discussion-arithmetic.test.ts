@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import { validatePdScopeReview } from "../src/proactive-discussion/review-receipts.js";
 import { pdAssessment, pdContext, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 import { inspectPdCalculations } from "../src/proactive-discussion/arithmetic.js";

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Ajv } from "ajv";
 import { expect, test, vi } from "vitest";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import { createPdScopeReviewJsonSchema, validatePdScopeReview } from "../src/proactive-discussion/review-receipts.js";
 import type { OpenAICompatibleChatCompletionOptions, OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
 import { pdAssessment, pdContext } from "./fixtures/proactive-discussion.js";

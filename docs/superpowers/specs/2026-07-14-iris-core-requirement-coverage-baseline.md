@@ -1,5 +1,12 @@
 # Iris 核心需求覆盖基线
 
+## 2026-09-29: Program-bound proactive prose
+
+The [generation/correction contract](../../development/iris-bound-prose-20260929.md) separates
+editable prose from program-held identity and references. The preceding six-HTTP recovery
+window still failed at a malformed hash in risk generation. Contract correctness does not upgrade
+IRIS-CORE-005 from partial implementation; real semantic and Feishu acceptance remain distinct.
+
 > 基线日期：2026-07-14
 > 最高架构依据：`2026-06-30-iris-architecture-whitepaper.md`
 > 判定规则：只有存在可运行代码路径和自动化/真实验收证据时才标记为“已实现”。仅有配置项、类型、接口或 capability 开关不算实现。

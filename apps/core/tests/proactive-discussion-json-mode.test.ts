@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { createOpenAICompatibleChatCompletionsClient } from "../src/model/openai-compatible-chat-completions-client.js";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import { pdAssessment, pdContext } from "./fixtures/proactive-discussion.js";
 
 test("JSON-mode transport preserves proactive relationship validation and its two-attempt bound", async () => {

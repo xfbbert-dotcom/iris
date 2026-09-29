@@ -1,7 +1,7 @@
 import { Ajv } from "ajv";
 import { expect, test, vi } from "vitest";
 import type { OpenAICompatibleChatCompletionOptions, OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import type { PdAssessment, PdContext } from "../src/proactive-discussion/contracts.js";
 import { createPdSourceRef } from "../src/proactive-discussion/contracts.js";
 import { pdAssessment, pdContext, pdContextWithIssue, pdSkipAssessment } from "./fixtures/proactive-discussion.js";

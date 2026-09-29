@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel, validatePdGeneratedIntervention } from "../src/proactive-discussion/model.js";
 import type { PdContext } from "../src/proactive-discussion/contracts.js";
 import { pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 import type { OpenAICompatibleChatMessage, OpenAICompatibleChatCompletionOptions } from "../src/model/openai-compatible-chat-completions-client.js";
@@ -25,15 +25,14 @@ function clientFor(value = original, supported = true, invalidRepair = false) {
   }) };
 }
 
-test("rebuilds the archived incomplete draft from only its current generated assessment before review", async () => {
+test("offline historical recovery preserves its candidate but live requires prose", async () => {
   const client = clientFor();
   const earlier = { ...original.assessment, reasoning: "旧初判错误不可抄", suggestion: "旧建议不可回填" };
-  const result = await createPdModel({ client }).render({ context: await context(), assessment: earlier });
+  const result = validatePdGeneratedIntervention(original, await context(), earlier).pair;
   expect(result).toEqual({ assessment: original.assessment, draft: { text: projection(), evidenceRefs: original.assessment.evidenceRefs } });
-  expect(client.complete).toHaveBeenCalledTimes(2);
-  const reviewInput = JSON.parse(client.complete.mock.calls[1]![0][1]!.content);
-  expect(reviewInput.draft.text).toBe(projection());
-  expect(reviewInput.draft.text).not.toContain("旧初判");
+  await expect(createPdModel({ client }).render({ context: await context(), assessment: earlier })).rejects.toThrow();
+  expect(client.complete).toHaveBeenCalledTimes(1);
+  expect(result.draft.text).not.toContain("旧初判");
   expect(original.draft).not.toHaveProperty("evidenceRefs");
 });
 
@@ -54,15 +53,15 @@ test.each([
   expect(client.complete).toHaveBeenCalledTimes(1);
 });
 
-test("reconstruction is a candidate, not approval: the original one-repair limit still rejects", async () => {
+test("legacy reconstruction cannot bypass the live prose contract", async () => {
   const client = clientFor(original, false);
-  expect(await createPdModel({ client }).render({ context: await context(), assessment: original.assessment })).toBeNull();
-  expect(client.complete).toHaveBeenCalledTimes(4);
+  await expect(createPdModel({ client }).render({ context: await context(), assessment: original.assessment })).rejects.toThrow();
+  expect(client.complete).toHaveBeenCalledTimes(1);
 });
 
-test("does not reconstruct an incomplete pair returned by the sole semantic repair", async () => {
+test("complete legacy output is also rejected by the live contract", async () => {
   const complete = { assessment: original.assessment, draft: { text: projection(), evidenceRefs: original.assessment.evidenceRefs } };
   const client = clientFor(complete, false, true);
-  expect(await createPdModel({ client }).render({ context: await context(), assessment: original.assessment })).toBeNull();
-  expect(client.complete).toHaveBeenCalledTimes(3);
+  await expect(createPdModel({ client }).render({ context: await context(), assessment: original.assessment })).rejects.toThrow();
+  expect(client.complete).toHaveBeenCalledTimes(1);
 });

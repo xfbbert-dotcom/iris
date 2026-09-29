@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import type { OpenAICompatibleChatCompletionOptions, OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import { pdAssessment, pdContextWithIssue, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 
 test("existing issue generation keeps the verified old baseline in every locked pair reference set", async () => {

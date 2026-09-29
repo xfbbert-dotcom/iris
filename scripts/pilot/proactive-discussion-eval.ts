@@ -6,7 +6,7 @@ import {
   type OpenAICompatibleChatMessage,
 } from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider-error.js";
-import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdGeneratedIntervention, validatePdRepairedIntervention, validatePdScopeReview, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
+import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdProseIntervention, validatePdScopeReview, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 import { PD_REVIEW_FIELDS, type PdScopeReviewHistory } from "../../apps/core/src/proactive-discussion/review-receipts.js";
@@ -35,7 +35,8 @@ type SyntheticTraceRecord = {
   replayValidation: { accepted: boolean; reason: string };
   sanitization: SyntheticTraceSanitization;
   acceptedDraft?: boolean;
-  draftOrigin?: "model" | "assessment_projection";
+  draftOrigin?: "model" | "assessment_projection" | "model_prose";
+  boundCandidate?: Record<string, unknown>;
 };
 export type SyntheticPdEvalTrace = {
   complete: boolean;
@@ -344,17 +345,36 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
   }
   if (stage === "pair_repair" || stage === "generated_pair") {
     let accepted = false;
-    let draftOrigin: "model" | "assessment_projection" | undefined;
+    let draftOrigin: "model" | "assessment_projection" | "model_prose" | undefined;
+    let boundCandidate: Record<string, unknown> | undefined;
     if (active.assessment) {
       try {
-        if (stage === "generated_pair") draftOrigin = validatePdGeneratedIntervention(value, active.context, active.assessment).draftOrigin;
-        else validatePdRepairedIntervention(value, active.context, active.assessment);
+        validatePdProseIntervention(value, active.context, active.assessment);
+
+        if (isPlainRecord(value) && "prose" in value) {
+          draftOrigin = "model_prose";
+          const bound = validatePdProseIntervention(value, active.context, active.assessment);
+          boundCandidate = { assessment: sanitizeAssessmentCandidate(bound.assessment, active.context, redactions, sanitization),
+            draft: sanitizeDraftCandidate(bound.draft, active.context, redactions, sanitization) };
+        }
         accepted = true;
       }
       catch { /* Fixed diagnostic only; never retain arbitrary thrown details. */ }
     }
     let candidate: Record<string, unknown> | null = null;
-    if (isPlainRecord(value)) {
+    if (isPlainRecord(value) && "prose" in value) {
+      noteUnknownFields(value, ["prose"], sanitization);
+      const prose: Record<string, unknown> = {};
+      if (isPlainRecord(value.prose)) {
+        const fields = ["issueDescription", "observation", "reasoning", "suggestion", "uncertainty", "changeExplanation", "draftText"];
+        noteUnknownFields(value.prose, fields, sanitization);
+        for (const field of fields) {
+          if (typeof value.prose[field] === "string") prose[field] = sanitizeTraceText(value.prose[field], `prose.${field}`, redactions, sanitization);
+          else if (field === "issueDescription" && value.prose[field] === null) prose[field] = null;
+        }
+      }
+      candidate = { prose };
+    } else if (isPlainRecord(value)) {
       noteUnknownFields(value, ["assessment", "draft"], sanitization);
       candidate = {
         assessment: sanitizeAssessmentCandidate(value.assessment, active.context, redactions, sanitization),
@@ -364,7 +384,7 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
     return { ...baseSyntheticTraceRecord(active, attempt, callIndex, stage, candidate,
       accepted, accepted ? draftOrigin === "assessment_projection" ? "reconstructed_candidate" : "accepted"
         : stage === "generated_pair" ? "generation_invalid" : "repair_invalid", sanitization),
-      ...(draftOrigin ? { draftOrigin } : {}) };
+      ...(draftOrigin ? { draftOrigin } : {}), ...(boundCandidate ? { boundCandidate } : {}) };
   }
   const replayValidation = replayScopeReviewValidation(value, scopeInput);
   return baseSyntheticTraceRecord(active, attempt, callIndex, stage,

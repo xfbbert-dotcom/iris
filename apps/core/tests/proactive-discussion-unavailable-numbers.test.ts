@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { Ajv } from "ajv";
-import { createPdModel, validatePdScopeReview } from "../src/proactive-discussion/model.js";
+import { createPdModel, validatePdScopeReview } from "./fixtures/proactive-discussion-prose-client.js";
 import { createPdScopeReviewJsonSchema, type PdScopeReviewHistory } from "../src/proactive-discussion/review-receipts.js";
 import type { PdContext } from "../src/proactive-discussion/contracts.js";
 import { pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";

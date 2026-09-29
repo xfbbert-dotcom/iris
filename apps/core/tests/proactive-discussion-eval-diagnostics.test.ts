@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import { createOpenAICompatibleChatCompletionsClient } from "../src/model/openai-compatible-chat-completions-client.js";
 import { pdContext, pdAssessment } from "./fixtures/proactive-discussion.js";
 

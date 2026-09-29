@@ -7,7 +7,7 @@ import type {
 import {
   createPdModel,
   validatePdAssessment,
-} from "../src/proactive-discussion/model.js";
+} from "./fixtures/proactive-discussion-prose-client.js";
 import type { PdAssessment, PdContext } from "../src/proactive-discussion/contracts.js";
 import { createPdSourceRef } from "../src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../src/memory/local-message-source.js";
@@ -321,13 +321,9 @@ describe("PdModel.render", () => {
       strict: true,
       schema: expect.objectContaining({
         properties: expect.objectContaining({
-          draft: expect.objectContaining({
+          prose: expect.objectContaining({
             properties: expect.objectContaining({
-              text: expect.objectContaining({ maxLength: 1_200 }),
-              evidenceRefs: expect.objectContaining({
-                uniqueItems: true,
-                items: expect.objectContaining({ enum: assessment.evidenceRefs }),
-              }),
+              draftText: expect.objectContaining({ maxLength: 1_200 }),
             }),
           }),
         }),

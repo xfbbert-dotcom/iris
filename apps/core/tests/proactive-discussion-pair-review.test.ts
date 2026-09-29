@@ -5,7 +5,7 @@ import type {
   OpenAICompatibleChatMessage,
 } from "../src/model/openai-compatible-chat-completions-client.js";
 import { createOpenAICompatibleChatCompletionsClient } from "../src/model/openai-compatible-chat-completions-client.js";
-import { createPdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel } from "./fixtures/proactive-discussion-prose-client.js";
 import type { PdAssessment, PdContext, PdDraft } from "../src/proactive-discussion/contracts.js";
 import { pdAssessment, pdContext, pdContextWithIssue, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 

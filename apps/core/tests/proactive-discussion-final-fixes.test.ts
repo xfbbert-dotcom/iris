@@ -3,7 +3,7 @@ import { openPdDatabase, preparePdDelivery, pdTestAt as at, pdTestTime as time }
 import { pdContext, pdAssessment, pdSkipAssessment, pdReviewFieldChecks, PILOT_CHAT } from "./fixtures/proactive-discussion.js";
 import { createPdContextBuilder } from "../src/proactive-discussion/context-builder.js";
 import { createPdSourceVerifier } from "../src/proactive-discussion/source-verifier.js";
-import { createPdModel, validatePdAssessment } from "../src/proactive-discussion/model.js";
+import { createPdModel, validatePdAssessment } from "./fixtures/proactive-discussion-prose-client.js";
 import { createPdEvaluationWorker } from "../src/proactive-discussion/evaluation-worker.js";
 import { createPdDeliveryWorker } from "../src/proactive-discussion/delivery-worker.js";
 import { createPdSourceRef, type PdAssessment, type PdJob } from "../src/proactive-discussion/contracts.js";

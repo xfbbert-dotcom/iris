@@ -62,9 +62,9 @@ const assessmentSystem = [
 ].join("\n");
 
 const proseSystem = [
-  "只根据 evidence 中的授权原文，重新生成同一份可保留的 assessment 与自然中文 draft，根对象只能包含这两个字段。",
+  "只根据 evidence 中的授权原文，生成同一问题的评估正文与自然中文工作交流；只输出指定的 prose 对象。程序持有已锁定的身份和引用，禁止在 prose 中输出 decision、reason、issueRef、evidenceRefs 或 materialChange。",
   "target 只锁定要处理的问题与结构，不是已核实的结论。问题描述仅用于定位主题；从原文独立写出描述、观察、理由、建议、uncertainty 和实质变化说明，再把同一判断写成一小段自然中文工作交流。",
-  "保留 target 的 decision、reason、issue kind、已有 issue ID、全部 evidenceRefs 以及 materialChange.kind 和 evidenceRefs；可纠正新问题描述，但不得换成另一个问题。existingIssueDescription 若提供也只用于定位已有问题。",
+  "target 的身份和来源由程序保留。新问题的 issueDescription 可纠正措辞但不得换问题；已有问题的 issueDescription 必须为 null。changeExplanation 写本次实质变化说明，draftText 写最终发言。existingIssueDescription 若提供也只用于定位已有问题。",
   "授权原文是唯一事实依据：保留原文的事实类别、单位和范围；问题名称里没有原文支持的事实或确定性结论不能照抄。将有依据但未证实的影响明确写成可能性，不把建议写成公司现行规定。建议可以核实未知权限或制度，但不能称它是“授权原文中的”内容，除非原文确实提供了这项权限或制度。",
   "推断用恰当的怀疑或条件表达，不新增事实、不承诺已创建任务。",
   "保留判断所需的总额、与基准的差额以及相对原方案的增减量；可从授权数字直接核算，不能只说缺口较大或进一步扩大。确定的算术不要用似乎、或许弱化，未来风险仍需条件限定；不假定已有审批制度。",
@@ -108,7 +108,7 @@ const repairedPairScopeReviewSystem = [
 ].join("\n");
 
 const pairRepairSystem = [
-  "根据授权原文和首次复核结果，只修正一次 assessment 与 draft 的语义表达，并只输出指定 JSON。",
+  "根据授权原文和首次复核结果，只修正一次 assessment 与 draft 的语义表达，只输出指定 prose 对象；程序保留原身份和引用，不在 prose 中输出这些不可变字段。issueDescription 仅用于新问题，已有问题必须为null；changeExplanation为变化说明，draftText为最终发言。",
   evaluationContextSystem,
   "复核理由是待核对的诊断，不是事实裁决；授权原文优先。只修正确有依据的缺陷，不能通过删去有依据的关键数值迎合错误复核。",
   "本地报告的当前草稿数字/单位与引文不匹配也必须处理；算术等价不代表字面凭据合格。若预期金额经授权原文核对正确而只是单位表达不同，在同一草稿中明确写出该值及单位，保留必要的总额、差额与增量，不返回未改的草稿。若诊断数值本身错误，不照抄错误数值，仍以原文为准。",
@@ -213,10 +213,10 @@ export function createPdModel({
 
       await assertActive?.();
       const generatedContent = await client.complete(renderMessages(generationInput(context, validated)), {
-        responseFormat: pairRepairResponseFormat(context, validated, "iris_proactive_discussion_generated_pair"),
+        responseFormat: proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
       });
       let generated: PdReviewedIntervention;
-      try { generated = validatePdGeneratedIntervention(JSON.parse(generatedContent), context, validated).pair; }
+      try { generated = validatePdProseIntervention(JSON.parse(generatedContent), context, validated); }
       catch { throw new Error("proactive discussion draft was invalid"); }
       const input = renderInput(context, generated.assessment);
       const { draft } = generated;
@@ -230,12 +230,12 @@ export function createPdModel({
 
       const repairedContent = await client.complete(
         pairRepairMessages({ ...input, draft, review, identityTarget }),
-        { responseFormat: pairRepairResponseFormat(context, validated) },
+        { responseFormat: proseResponseFormat(validated) },
       );
       await assertActive?.();
       let repaired: PdReviewedIntervention;
       try {
-        repaired = parsePdRepairedIntervention(repairedContent, context, validated);
+        repaired = validatePdProseIntervention(JSON.parse(repairedContent), context, validated);
       } catch {
         return null;
       }
@@ -378,14 +378,15 @@ export function unwrapPdAssessmentResponse(value: unknown): unknown {
   return envelope.data.assessment;
 }
 
-/** Recovery produces an unapproved candidate from this generation only. */
+/** Offline historical replay only. Live generation and repair require the prose contract. */
 export function validatePdGeneratedIntervention(
   value: unknown,
   context: PdContext,
   originalAssessment: PdAssessment,
-): { pair: PdReviewedIntervention; draftOrigin: "model" | "assessment_projection" } {
+): { pair: PdReviewedIntervention; draftOrigin: "model" | "assessment_projection" | "model_prose" } {
   try {
-    return { pair: validatePdRepairedIntervention(value, context, originalAssessment), draftOrigin: "model" };
+    return { pair: validatePdRepairedIntervention(value, context, originalAssessment),
+      draftOrigin: typeof value === "object" && value !== null && "prose" in value ? "model_prose" : "model" };
   } catch { /* Only the narrow partial-draft shape below is recoverable. */ }
   try {
     const partial = z.object({
@@ -413,6 +414,34 @@ export function validatePdRepairedIntervention(
   context: PdContext,
   originalAssessment: PdAssessment,
 ): PdReviewedIntervention {
+  return validateCompletePair(value, context, originalAssessment);
+}
+
+export function validatePdProseIntervention(value: unknown, context: PdContext, originalAssessment: PdAssessment): PdReviewedIntervention {
+  if (typeof value !== "object" || value === null || !("prose" in value)) throw new Error("prose output required");
+  if (typeof value === "object" && value !== null && "prose" in value) {
+    const output = z.object({ prose: z.object({
+      issueDescription: boundedOutputText.nullable(), observation: boundedOutputText,
+      reasoning: boundedOutputText, suggestion: boundedOutputText,
+      uncertainty: z.enum(["fact", "qualified_inference"]), changeExplanation: boundedOutputText,
+      draftText: draftShapeSchema.shape.text,
+    }).strict() }).strict().parse(value).prose;
+    const identity = originalAssessment.issueRef;
+    if (originalAssessment.decision !== "intervene" || !identity
+      || (identity.kind === "existing" && output.issueDescription !== null)
+      || (identity.kind === "new" && !output.issueDescription)) throw new Error("invalid prose identity");
+    value = { assessment: {
+      ...originalAssessment,
+      issueRef: identity.kind === "existing" ? { ...identity } : { kind: "new", description: output.issueDescription },
+      observation: output.observation, reasoning: output.reasoning, suggestion: output.suggestion,
+      uncertainty: output.uncertainty,
+      materialChange: { ...originalAssessment.materialChange, explanation: output.changeExplanation },
+    }, draft: { text: output.draftText, evidenceRefs: [...originalAssessment.evidenceRefs] } };
+  }
+  return validateCompletePair(value, context, originalAssessment);
+}
+
+function validateCompletePair(value: unknown, context: PdContext, originalAssessment: PdAssessment): PdReviewedIntervention {
   try {
     const pair = z.object({ assessment: assessmentShapeSchema, draft: draftShapeSchema }).strict().parse(value);
     const assessment = validatePdAssessment(pair.assessment, context);
@@ -428,20 +457,6 @@ export function validatePdRepairedIntervention(
   } catch {
     throw new Error("proactive discussion pair repair was invalid");
   }
-}
-
-function parsePdRepairedIntervention(
-  content: string,
-  context: PdContext,
-  originalAssessment: PdAssessment,
-): PdReviewedIntervention {
-  let value: unknown;
-  try {
-    value = JSON.parse(content);
-  } catch {
-    throw new Error("proactive discussion pair repair was invalid");
-  }
-  return validatePdRepairedIntervention(value, context, originalAssessment);
 }
 
 function validatePdDraft(value: unknown, expectedRefs: readonly string[]): PdDraft {
@@ -778,68 +793,26 @@ function flatAssessmentResponseFormat(context: PdContext): OpenAICompatibleJsonS
   };
 }
 
-function pairRepairResponseFormat(
-  context: PdContext,
+function proseResponseFormat(
   originalAssessment: PdAssessment,
   name = "iris_proactive_discussion_pair_repair",
 ): OpenAICompatibleJsonSchemaResponseFormat {
-  const assessmentSchema = flatAssessmentResponseFormat(context).json_schema.schema;
-  const assessmentProperties = assessmentSchema.properties as Record<string, unknown>;
-  const materialChange = assessmentProperties.materialChange as Record<string, unknown>;
-  const materialChangeProperties = materialChange.properties as Record<string, unknown>;
-  const issueRef = originalAssessment.issueRef?.kind === "existing"
-    ? {
-      type: "object", additionalProperties: false, required: ["kind", "id"],
-      properties: { kind: { type: "string", enum: ["existing"] }, id: { type: "string", enum: [originalAssessment.issueRef.id] } },
-    }
-    : {
-      type: "object", additionalProperties: false, required: ["kind", "description"],
-      properties: { kind: { type: "string", enum: ["new"] }, description: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS) },
-    };
-  const exactEvidenceRefs = exactReferenceArraySchema(originalAssessment.evidenceRefs);
-  return {
-    type: "json_schema",
-    json_schema: {
-      name,
-      strict: true,
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["assessment", "draft"],
-        properties: {
-          assessment: {
-            ...assessmentSchema,
-            properties: {
-              ...assessmentProperties,
-              decision: { type: "string", enum: [originalAssessment.decision] },
-              reason: { type: "string", enum: [originalAssessment.reason] },
-              issueRef,
-              evidenceRefs: exactEvidenceRefs,
-              materialChange: {
-                ...materialChange,
-                properties: {
-                  ...materialChangeProperties,
-                  kind: { type: "string", enum: [originalAssessment.materialChange.kind] },
-                  evidenceRefs: exactReferenceArraySchema(originalAssessment.materialChange.evidenceRefs),
-                },
-              },
-            },
-          },
-          draft: {
-            type: "object",
-            additionalProperties: false,
-            required: ["text", "evidenceRefs"],
-            properties: {
-              text: boundedStringSchema(MAX_DRAFT_TEXT_CHARS),
-              evidenceRefs: exactEvidenceRefs,
-            },
-          },
-        },
-      },
-    },
+  const fields = {
+    issueDescription: originalAssessment.issueRef?.kind === "existing"
+      ? { type: "null" } : boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+    observation: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+    reasoning: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+    suggestion: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+    uncertainty: { type: "string", enum: ["fact", "qualified_inference"] },
+    changeExplanation: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS),
+    draftText: boundedStringSchema(MAX_DRAFT_TEXT_CHARS),
   };
+  return { type: "json_schema", json_schema: { name, strict: true,
+    schema: { type: "object", additionalProperties: false, required: ["prose"], properties: {
+      prose: { type: "object", additionalProperties: false, required: Object.keys(fields), properties: fields },
+    } },
+  } };
 }
-
 function scopeReviewResponseFormat(draftText: string, history?: PdScopeReviewHistory): OpenAICompatibleJsonSchemaResponseFormat {
   return {
     type: "json_schema",
@@ -858,10 +831,6 @@ function referenceArraySchema(refs: readonly string[], maxItems: number) {
     uniqueItems: true,
     items: { type: "string", enum: [...refs] },
   };
-}
-
-function exactReferenceArraySchema(refs: readonly string[]) {
-  return { ...referenceArraySchema(refs, refs.length), minItems: refs.length };
 }
 
 function boundedStringSchema(maxLength: number) {

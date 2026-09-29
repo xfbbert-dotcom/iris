@@ -1,3 +1,4 @@
+import { proseFixtureClient } from "./fixtures/proactive-discussion-prose-client.js";
 import { expect, test } from "vitest";
 
 import type {
@@ -24,7 +25,7 @@ type SyntheticRun = {
 async function runSynthetic(input: Record<string, unknown>): Promise<SyntheticRun> {
   const evaluator = await import(evalPath) as unknown as Record<string, unknown>;
   expect(evaluator.runSyntheticProactiveDiscussionEval).toBeTypeOf("function");
-  return (evaluator.runSyntheticProactiveDiscussionEval as (value: unknown) => Promise<SyntheticRun>)(input);
+  return (evaluator.runSyntheticProactiveDiscussionEval as (value: unknown) => Promise<SyntheticRun>)({ ...input, client: proseFixtureClient(input.client as OpenAICompatibleChatCompletionsClient) });
 }
 
 function scriptedClient({ scopeSupported = true, wrongArithmetic = false }: { scopeSupported?: boolean; wrongArithmetic?: boolean } = {}) {
@@ -90,7 +91,28 @@ test("trace preserves unavailable number inputs and agrees with runtime review",
   });
 });
 
-test("trace preserves incomplete model draft and distinguishes the reviewed reconstructed candidate", async () => {
+test("trace separates model prose from program-bound source identity", async () => {
+  const original = scriptedClient().client;
+  const client: OpenAICompatibleChatCompletionsClient = { async complete(messages, options) {
+    const value = JSON.parse(await original.complete(messages, options));
+    if (options?.responseFormat?.json_schema.name !== "iris_proactive_discussion_generated_pair") return JSON.stringify(value);
+    const a = value.assessment;
+    return JSON.stringify({ prose: { issueDescription: a.issueRef.description, observation: a.observation,
+      reasoning: a.reasoning, suggestion: a.suggestion, uncertainty: a.uncertainty,
+      changeExplanation: a.materialChange.explanation, draftText: value.draft.text } });
+  } };
+  const result = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  expect(result.results.find(item => item.caseId === "arithmetic")?.error).toBeNull();
+  const generated = result.syntheticTrace!.records.find(item => item.stage === "generated_pair")!;
+  expect(generated).toMatchObject({ draftOrigin: "model_prose", acceptedDraft: true,
+    candidate: { prose: { reasoning: "生成时复核：比10万元预算多6万元。" } },
+    boundCandidate: { assessment: { issueRef: { kind: "new" } } } });
+  expect(generated.candidate).not.toHaveProperty("assessment");
+  expect(generated.candidate.prose).not.toHaveProperty("evidenceRefs");
+  expect(generated.boundCandidate.draft.evidenceRefs).toHaveLength(2);
+});
+
+test("trace preserves legacy incomplete draft as rejected wire output", async () => {
   const original = scriptedClient().client;
   let reviewedDraft: unknown;
   const client: OpenAICompatibleChatCompletionsClient = { async complete(messages, options) {
@@ -103,14 +125,12 @@ test("trace preserves incomplete model draft and distinguishes the reviewed reco
   } };
   const result = await runSynthetic({ client, rounds: 1, includeTrace: true });
   const arithmetic = result.results.find(item => item.caseId === "arithmetic")!;
-  expect(arithmetic.error).toBeNull();
-  expect(arithmetic.draft).toEqual(reviewedDraft);
-  expect(JSON.stringify(arithmetic.draft)).not.toContain("未完成的原稿");
+  expect(arithmetic.error).toBe("render_failed");
+  expect(arithmetic.draft).toBeNull();
+  expect(reviewedDraft).toBeUndefined();
   expect(result.syntheticTrace!.records.find(item => item.stage === "generated_pair")).toMatchObject({
     candidate: { draft: { text: "未完成的原稿" } },
-    draftOrigin: "assessment_projection",
-    replayValidation: { accepted: true, reason: "reconstructed_candidate" },
-    acceptedDraft: true,
+    replayValidation: { accepted: false, reason: "generation_invalid" }, acceptedDraft: false,
   });
 });
 
@@ -138,7 +158,7 @@ test("trace opt-in leaves model results and request payloads unchanged and keeps
   expect(generated).toHaveLength(2);
   for (const record of generated) {
     expect(record).toMatchObject({ acceptedDraft: true, attempt: 1,
-      candidate: { assessment: { reasoning: "生成时复核：比10万元预算多6万元。" },
+      boundCandidate: { assessment: { reasoning: "生成时复核：比10万元预算多6万元。" },
         draft: { text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。" } },
       replayValidation: { accepted: true, reason: "accepted" },
     });
@@ -217,7 +237,7 @@ test("a scope-rejected draft remains visible as a bounded non-accepted candidate
 
   expect(result).toMatchObject({ draft: null, error: "draft_rejected" });
   expect(draft).toMatchObject({ acceptedDraft: false,
-    candidate: { assessment: { reasoning: "生成时复核：比10万元预算多6万元。" },
+    boundCandidate: { assessment: { reasoning: "生成时复核：比10万元预算多6万元。" },
       draft: { text: "两人总成本 16 万，比 10 万预算多 6 万，建议核对预算。" } },
     replayValidation: { accepted: true, reason: "accepted" } });
   expect(scope).toMatchObject({ candidate: { supported: false, reason: "候选遗漏必要限定。" },
@@ -304,7 +324,7 @@ test.each([false, true])("final scope receipt replay checks the current untrunca
     replayValidation: { accepted: !stale, reason: stale ? "receipt_invalid" : "accepted" },
   });
   const repair = records.find(record => record.stage === "pair_repair");
-  expect(repair!.candidate.draft.text).toHaveLength(500);
+  expect(repair!.candidate.prose.draftText).toHaveLength(500);
   expect(repair!.acceptedDraft).toBe(!stale);
   expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject(stale
     ? { draft: null, error: "draft_rejected" } : { draft: { text: repairedText }, error: null });
@@ -468,7 +488,7 @@ test("trace follows one pair repair and marks only its final reviewed draft acce
   expect(records.map(record => record.stage)).toEqual(["assessment", "generated_pair", "scope_review", "pair_repair", "scope_review"]);
   expect(records[1]).toMatchObject({ acceptedDraft: false });
   expect(records[3]).toMatchObject({ acceptedDraft: true, attempt: 1,
-    candidate: { assessment: { reasoning: "按现有材料，两人总成本比预算多6万元。" }, draft: { text: "两人共16万元，较预算多6万元。建议确认预算或调整人数。" } },
+    boundCandidate: { assessment: { reasoning: "按现有材料，两人总成本比预算多6万元。" }, draft: { text: "两人共16万元，较预算多6万元。建议确认预算或调整人数。" } },
     replayValidation: { accepted: true, reason: "accepted" } });
   expect(records[4]).toMatchObject({ attempt: 2, candidate: { supported: true } });
   expect(on.results.find(result => result.caseId === "arithmetic")).toMatchObject({
