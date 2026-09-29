@@ -85,13 +85,13 @@ test("limits quote choices to unchanged current-draft segments and its complete 
   const draft = "总额 16 万元； 差额 6 万元。\n建议核对预算？建议调整预算！\r\n保留 e\u0301;重复。重复。";
   const schema = createPdScopeReviewJsonSchema(draft) as ReviewWireSchema;
   const choices = ["总额 16 万元；", " 差额 6 万元。", "建议核对预算？", "建议调整预算！", "保留 e\u0301;", "重复。", draft];
-  for (const quote of [schema.properties.adviceQuote, schema.properties.requiredNumbers.items.properties.draftQuote]) {
+  for (const quote of [schema.properties.adviceQuote, schema.properties.requiredNumbers.items.anyOf[0].properties.draftQuote]) {
     expect(quote.anyOf).toEqual([
       { type: "string", minLength: 1, maxLength: 1200, enum: choices },
       { type: "null" },
     ]);
   }
-  expect(schema.properties.requiredNumbers.items.properties.expectedValue).not.toHaveProperty("enum");
+  expect(schema.properties.requiredNumbers.items.anyOf[0].properties.expectedValue).not.toHaveProperty("enum");
 });
 
 test.each([
@@ -112,7 +112,7 @@ test.each([
 type ReviewWireSchema = {
   properties: {
     adviceQuote: QuoteWireSchema;
-    requiredNumbers: { items: { properties: { draftQuote: QuoteWireSchema; expectedValue: unknown } } };
+    requiredNumbers: { items: { anyOf: [{ properties: { draftQuote: QuoteWireSchema; expectedValue: unknown } }] } };
   };
 };
 type QuoteWireSchema = { anyOf: [{ type: "string"; enum: string[] }, { type: "null" }] };

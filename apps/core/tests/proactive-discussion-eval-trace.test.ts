@@ -74,6 +74,22 @@ test("trace replays the same assessment arithmetic rejection as runtime despite 
   for (const review of reviews) expect(review).toMatchObject({ candidate: { supported: true }, replayValidation: { accepted: false } });
 });
 
+test("trace preserves unavailable number inputs and agrees with runtime review", async () => {
+  const original = scriptedClient().client;
+  const unavailable = { label: "后续收入", expectedValue: null, unit: null, draftQuote: null,
+    missingInputs: "来源只有招聘预算，没有收入的用户数与单价。" };
+  const client: OpenAICompatibleChatCompletionsClient = { async complete(messages, options) {
+    const value = JSON.parse(await original.complete(messages, options));
+    if (options?.responseFormat?.json_schema.name === "iris_proactive_discussion_scope_review") value.requiredNumbers = [unavailable];
+    return JSON.stringify(value);
+  } };
+  const result = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  expect(result.results.find(item => item.caseId === "arithmetic")?.error).toBeNull();
+  expect(result.syntheticTrace!.records.find(item => item.stage === "scope_review")).toMatchObject({
+    candidate: { requiredNumbers: [unavailable] }, replayValidation: { accepted: true },
+  });
+});
+
 test("trace opt-in leaves model results and request payloads unchanged and keeps case-round calls separate", async () => {
   const offClient = scriptedClient();
   const onClient = scriptedClient();

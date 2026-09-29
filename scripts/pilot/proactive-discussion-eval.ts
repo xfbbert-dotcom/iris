@@ -578,11 +578,11 @@ function sanitizeScopeCandidate(
         addTraceMarker(sanitization.droppedFields, field);
         continue;
       }
-      noteUnknownFields(item, ["label", "expectedValue", "unit", "draftQuote"], sanitization);
+      noteUnknownFields(item, ["label", "expectedValue", "unit", "draftQuote", "missingInputs"], sanitization);
       const receipt: Record<string, unknown> = {};
-      for (const key of ["label", "expectedValue", "unit", "draftQuote"] as const) {
+      for (const key of ["label", "expectedValue", "unit", "draftQuote", "missingInputs"] as const) {
         if (typeof item[key] === "string") receipt[key] = sanitizeTraceText(item[key], `${field}.${key}`, redactions, sanitization);
-        else if (key === "draftQuote" && item[key] === null) receipt[key] = null;
+        else if ((key === "draftQuote" || key === "expectedValue" || key === "unit") && item[key] === null) receipt[key] = null;
         else if (item[key] !== undefined) addTraceMarker(sanitization.droppedFields, `${field}.${key}`);
       }
       requiredNumbers.push(receipt);

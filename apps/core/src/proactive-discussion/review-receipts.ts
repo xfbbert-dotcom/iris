@@ -27,18 +27,25 @@ const fieldChecksSchema = z.object({
   uncertainty: fieldCheckSchema,
   materialChange: fieldCheckSchema,
 }).strict();
+const numberLabelSchema = z.string().min(1).max(MAX_LABEL_CHARS).refine(value => value.trim().length > 0);
+const computableNumberSchema = z.object({
+  label: numberLabelSchema,
+  expectedValue: z.string().max(MAX_VALUE_CHARS).regex(new RegExp(DECIMAL_VALUE_PATTERN, "u")),
+  unit: z.string().min(1).max(MAX_UNIT_CHARS).refine(value => value === value.trim()),
+  draftQuote: quoteSchema,
+}).strict();
+const unavailableNumberSchema = z.object({
+  label: numberLabelSchema,
+  expectedValue: z.null(), unit: z.null(), draftQuote: z.null(),
+  missingInputs: z.string().min(1).max(MAX_FIELD_REASON_CHARS).regex(/\S/u),
+}).strict();
 const scopeReviewSchema = z.object({
   fieldChecks: fieldChecksSchema,
   supported: z.boolean(),
   reason: z.string().max(MAX_REASON_CHARS)
     .transform(value => value.normalize("NFC").trim())
     .refine(value => value.length > 0),
-  requiredNumbers: z.array(z.object({
-    label: z.string().min(1).max(MAX_LABEL_CHARS).refine(value => value.trim().length > 0),
-    expectedValue: z.string().max(MAX_VALUE_CHARS).regex(new RegExp(DECIMAL_VALUE_PATTERN, "u")),
-    unit: z.string().min(1).max(MAX_UNIT_CHARS).refine(value => value === value.trim()),
-    draftQuote: quoteSchema,
-  }).strict()).max(MAX_NUMBER_RECEIPTS),
+  requiredNumbers: z.array(z.union([computableNumberSchema, unavailableNumberSchema])).max(MAX_NUMBER_RECEIPTS),
   adviceQuote: quoteSchema,
 }).strict();
 
@@ -91,7 +98,7 @@ export function validatePdScopeReview(value: unknown, draftText: string, history
   // This proves only the returned quote claims, not that the model listed every
   // necessary number or correctly assessed the meaning of the quoted text.
   const invalidNumbers = review.requiredNumbers.flatMap((number, index) =>
-    numberQuoteMatches(draftText, number) ? [] : [{ number, index }]);
+    number.expectedValue === null || numberQuoteMatches(draftText, number) ? [] : [{ number, index }]);
   const adviceInvalid = review.adviceQuote === null || !draftText.includes(review.adviceQuote);
   if (draftText.length > MAX_QUOTE_CHARS || adviceInvalid || invalidNumbers.length > 0) {
     failures.push("复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。");
@@ -127,11 +134,11 @@ function numberHistoryAccountedFor(review: PdScopeReview, history: PdScopeReview
   // A previous diagnosis is fallible. Revisions must explicitly account for it
   // using current authorized source text, rather than silently dropping it or
   // forcing its value into the draft. Literal support is not semantic proof.
-  return history.previousNumbers.every((prior, index) => revised.has(index)
+  return history.previousNumbers.every((prior, index) => prior.expectedValue === null || revised.has(index)
     || review.requiredNumbers.some(current => current.expectedValue === prior.expectedValue && current.unit === prior.unit));
 }
 
-function numberQuoteMatches(draftText: string, number: PdScopeReview["requiredNumbers"][number]): boolean {
+function numberQuoteMatches(draftText: string, number: z.infer<typeof computableNumberSchema>): boolean {
   if (number.draftQuote === null) return false;
   // Scan full-draft tokens before quote spans: '6万元' is also a substring of
   // '16万元'. Signed, decimal, grouped and exponential tokens are not converted.
@@ -182,7 +189,7 @@ export function createPdScopeReviewJsonSchema(draftText: string, history?: PdSco
       reason: { type: "string", minLength: 1, maxLength: MAX_REASON_CHARS },
       requiredNumbers: {
         type: "array", maxItems: MAX_NUMBER_RECEIPTS,
-        items: {
+        items: { anyOf: [{
           type: "object", additionalProperties: false,
           required: ["label", "expectedValue", "unit", "draftQuote"],
           properties: {
@@ -191,7 +198,15 @@ export function createPdScopeReviewJsonSchema(draftText: string, history?: PdSco
             unit: { type: "string", minLength: 1, maxLength: MAX_UNIT_CHARS },
             draftQuote: quote,
           },
-        },
+        }, {
+          type: "object", additionalProperties: false,
+          required: ["label", "expectedValue", "unit", "draftQuote", "missingInputs"],
+          properties: {
+            label: { type: "string", minLength: 1, maxLength: MAX_LABEL_CHARS },
+            expectedValue: { type: "null" }, unit: { type: "null" }, draftQuote: { type: "null" },
+            missingInputs: { type: "string", minLength: 1, maxLength: MAX_FIELD_REASON_CHARS, pattern: "\\S" },
+          },
+        }] },
       },
       adviceQuote: quote,
       ...(hasHistory ? { numberRevisions: {

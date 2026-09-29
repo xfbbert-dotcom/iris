@@ -261,11 +261,11 @@ test("uses the existing pair repair when an affirmative review cites the 6 insid
   const scopeFormat = client.complete.mock.calls[1]?.[1]?.responseFormat?.json_schema.schema;
   expect(scopeFormat).toMatchObject({ type: "object", additionalProperties: false,
     required: ["fieldChecks", "supported", "reason", "requiredNumbers", "adviceQuote"], properties: {
-      requiredNumbers: { type: "array", maxItems: 8, items: { additionalProperties: false,
+      requiredNumbers: { type: "array", maxItems: 8, items: { anyOf: [{ additionalProperties: false,
         required: ["label", "expectedValue", "unit", "draftQuote"], properties: {
           expectedValue: { type: "string", maxLength: 40 }, unit: { type: "string", maxLength: 30 },
           draftQuote: { anyOf: [{ type: "string", minLength: 1, maxLength: 1200 }, { type: "null" }] },
-        } } },
+        } }, { required: ["label", "expectedValue", "unit", "draftQuote", "missingInputs"] }] } },
       adviceQuote: { anyOf: [{ type: "string", minLength: 1, maxLength: 1200 }, { type: "null" }] },
     } });
 });
@@ -319,14 +319,14 @@ test.each(["json_schema", "json_object"] as const)("sends only the current draft
       : JSON.parse(body.messages[0]!.content.slice(body.messages[0]!.content.indexOf('{"type":"object"')));
     if (structuredOutputMode === "json_object") expect(body.response_format).toEqual({ type: "json_object" });
     expect(JSON.parse(body.messages[1]!.content).draft.text).toBe(draft);
-    for (const quote of [schema.properties.adviceQuote, schema.properties.requiredNumbers.items.properties.draftQuote]) {
+    for (const quote of [schema.properties.adviceQuote, schema.properties.requiredNumbers.items.anyOf[0].properties.draftQuote]) {
       expect(quote.anyOf[0].enum).toEqual(expected);
       expect(quote.anyOf[1]).toEqual({ type: "null" });
       expect(quote.anyOf[0].enum).not.toContain("建议先核对预算口径，再决定是否调整人数或预算。");
       expect(quote.anyOf[0].enum).not.toContain(pdContext().items[0]!.text);
       if (index === 3) expect(quote.anyOf[0].enum).not.toContain(originalDraft.text);
     }
-    expect(schema.properties.requiredNumbers.items.properties.expectedValue).not.toHaveProperty("enum");
+    expect(schema.properties.requiredNumbers.items.anyOf[0].properties.expectedValue).not.toHaveProperty("enum");
   }
 });
 
