@@ -292,6 +292,12 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   semantic oracle and legitimate permission control; stop at first failed case rather than
   iterating prompt variants or weakening receipt validation. This cleanup does not establish
   review reliability; numeric applicability and other proactive defects remain open.
+  The [September 29 state fix](../development/iris-unavailable-numbers-20260929.md) represents
+  unavailable inputs explicitly instead of forcing a numeric placeholder into a listed item.
+  Mixed states are invalid; real zero values and known-amount continuity retain their checks.
+  Exit requires both unavailable-input inference and computable-budget/update controls, not
+  merely schema acceptance. Local4824/469 passed/skipped; real-model validation has not started
+  because the free-quota console needs login. Model classification remains unproven.
 
 ### Preserve issue history and the actual live-context producer contract
 

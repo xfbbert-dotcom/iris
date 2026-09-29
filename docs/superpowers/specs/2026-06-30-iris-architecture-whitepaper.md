@@ -568,6 +568,12 @@ preserves literal operand order and signs and uses exact arithmetic; it does not
 business operands or establish factual support. Unsupported, quoted or negated grammar remains
 unverified, and a matching equation cannot waive semantic, source, novelty or delivery checks.
 
+Missing calculation inputs and missing known values in a draft are different states. Record
+unavailable inputs without inventing a zero or a placeholder unit, and do not create draft-filling
+obligations from them. Known quantities retain receipt and explicit evidence-based revision checks.
+An unavailable state is not proof that inputs are absent or candidate claims are supported; its
+semantic applicability still needs verification. See the [bounded state fix](../../development/iris-unavailable-numbers-20260929.md).
+
 An explicitly enabled, versioned, exact-group low-risk discussion policy may authorize these
 interventions without per-message human review. Record policy authorization truthfully; never
 manufacture a human approval or use the legacy reminder approval API as an automatic-send shortcut.

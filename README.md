@@ -29,6 +29,13 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Application `88f7a169` adds an [explicit unavailable-quantity state](docs/development/iris-unavailable-numbers-20260929.md)
+to proactive review, preserving known-value and arithmetic checks without forcing unknown
+amounts into drafts as zero. Core4824 passed/469 conditional skips, type/build and CLI7 passed.
+Real-model validation has not started: the free-quota console requires login before live
+quota and free-exhaustion-stop verification. Zero model requests; semantic applicability is
+unproven. No production access, push, deployment or Feishu delivery.
+
 Application `1f00cc0e` removes an [unconditional authorization-advice instruction](docs/development/iris-advice-ablation-20260927.md).
 Related local tests82 and type/build pass. The seven-request synthetic window still failed:
 one frozen-input render passed narrowly, but fresh inference returned no opinion after review
