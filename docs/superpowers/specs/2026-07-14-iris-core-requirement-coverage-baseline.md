@@ -7,6 +7,12 @@ editable prose from program-held identity and references. The preceding six-HTTP
 window still failed at a malformed hash in risk generation. Contract correctness does not upgrade
 IRIS-CORE-005 from partial implementation; real semantic and Feishu acceptance remain distinct.
 
+Application `3e7636b8`: Core4845 passed/469 skipped; final focused43, type/build and CLI7 passed.
+The new 4HTTP/11706-token window failed at the sole repair after review correctly rejected
+unsupported numeric claims. New issue description was null; change explanation confused the
+internal edit with business change. No final review; four remaining cases uncalled. No upgrade
+to semantic acceptance, production deployment or real Feishu completion.
+
 > 基线日期：2026-07-14
 > 最高架构依据：`2026-06-30-iris-architecture-whitepaper.md`
 > 判定规则：只有存在可运行代码路径和自动化/真实验收证据时才标记为“已实现”。仅有配置项、类型、接口或 capability 开关不算实现。

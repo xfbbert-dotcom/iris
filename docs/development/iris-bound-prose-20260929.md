@@ -1,6 +1,6 @@
 # 主动讨论：程序持有不可变身份和引用
 
-2026-09-29。起点`0b852b10`，此前应用`8b39e8db`。工作树/分支见
+2026-09-29。应用`3e7636b8244d4a6ff6732fb658052fdb81c53de6`，起点`0b852b10`，此前应用`8b39e8db`。工作树/分支见
 [交接](current-handoff.md)。无push、生产访问、部署、飞书外发或能力启用。
 
 ## 问题与实现路径
@@ -37,7 +37,38 @@ qualified-risk、paraphrase、arithmetic、inference、material-update，各一�
 风险必须限定后果、建议验证依赖；重复必须skip；已知16/6及24/+8完整，未知金额
 不得编0；建议不能用审批替代证据。首次执行或独立语义失败停止，无同配置重采。
 上限22HTTP、70000 reported tokens、20分钟、每请求60秒，精确qwen3.8-max免费
-额度每请求前新鲜核对≥100K及用完即停，无付费回退。当前没有实模通过声明。
+额度每请求前新鲜核对≥100K及用完即停，无付费回退。
+
+## 实际窗口：审核识别错误，但唯一修正未能返回合格对象
+
+**4次HTTP200 / 11706 reported tokens**，首例qualified-risk失败后停止；
+paraphrase、arithmetic、inference、material-update均未调用。结束时间
+2026-09-29T02:15:19.493Z。没有同配置重采或追加变体。
+
+1. 初判有无依据的确定后果，但旧初判正文仍未流入生成。新prose生成进入真实
+   审核，程序持有引用；生成reasoning却把业务状态写为“已验证接口0、必需至少1、
+   缺口1”的确定算术，原文未提供可核算的接口数量。
+2. 初审准确指出该错误，reasoning=false、整体false、requiredNumbers=[]。
+   **这是识别了目标缺陷的拒绝**，不能记成标签失败或审核漏检。
+3. 唯一修正删除了reasoning中的伪算术，却返回issueDescription=null；target为
+   new，请求schema要求非空string。因此本地拒绝，render=null，没有终审。
+4. 独立阅读还确认changeExplanation把“修改reasoning”当作业务实质变化，并
+   声称draft同步删除数字，而前稿draft本就没有这段数字。即使只补描述，也不能
+   把这个候选判为语义通过。缺少的是符合完整契约、准确描述业务问题/新依据的
+   修正稿及真实终审，不是用户许可、额度或HTTP可达性。
+
+独立审查核对上述事实；[执行审计](evidence/iris-bound-prose-20260929.audit.json)
+逐一验证raw/client一致、wire/response hash和每次quota新鲜度。
+[15份脱敏证据清单](evidence/iris-bound-prose-20260929-manifest.json)保存实际
+请求、响应、运行器、启动器、停止及额度记录。结束页面878.8K/1M，用完即停开启，
+2026-12-18到期；页面读数滞后，不作tokens账单对账。
+
+**代码已改、本地通过；本窗口实模未通过；真实飞书未验收、未部署。**
+取消不可变字段复制解决一个执行职责问题，不能推断解决模型语义能力。修正把
+本轮编辑和真实业务变化混为一谈仍未解决；模型能力、提示复杂度与任务分工的
+因果影响尚未分离。该窗口结束，不追加同类变体，也不把历史两例提升为本应用
+的风险或重复验收。下一项应针对修正可变字段的业务语义职责设计，保留此次
+“审核正确拒绝、修正失败”反例；尚未确定或验证新的修复方案。
 
 ## 四处文档处置
 
@@ -46,6 +77,6 @@ qualified-risk、paraphrase、arithmetic、inference、material-update，各一�
 | 白皮书 | **updated**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)说明不可变结构由程序持有，正文仍须来源和语义审核。 |
 | 工程故障台账 | **updated**：[台账](../operations/engineering-failure-ledger.md)增加模型复制已锁定身份/引用的职责教训及本记录链接。 |
 | 核心需求覆盖基线 | **updated**：[基线](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)记录本轮契约变更，部分实现不升级为已验收。 |
-| README / AGENTS / current-handoff | **updated**：[交接](current-handoff.md)定位本轮；**reviewed-unchanged**：[README](../../README.md#current-product-state)保留此前已提交事实并指向交接，[AGENTS](../../AGENTS.md)授权及闭环规则未改变。最终验收后同步README。 |
+| README / AGENTS / current-handoff | **updated**：[交接](current-handoff.md)与[README](../../README.md#current-product-state)定位本应用及失败窗口；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)授权及闭环规则未改变。 |
 
 整体主动能力未关闭；没有真实飞书或部署结果。

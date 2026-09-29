@@ -29,6 +29,12 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Application `3e7636b8` keeps [immutable issue identity and references outside model prose](docs/development/iris-bound-prose-20260929.md).
+Core4845 passed/469 conditional skips; final focused43, type/build and CLI7 passed. The bounded
+four-HTTP window (11706 tokens) failed: review correctly rejected invented interface arithmetic,
+but the sole repair returned a null new-issue description and confused editing with business
+change. No final review or remaining four cases ran. No deployment or real Feishu acceptance.
+
 Application `8b39e8db` adds [bounded recovery of incomplete initial drafts](docs/development/iris-generated-recovery-20260929.md).
 Core4837 passed/469 conditional skips, type/build and CLI7 passed. Six HTTP200 requests/21799
 tokens passed the frozen recovery and fresh cost-update cases, then stopped on a malformed

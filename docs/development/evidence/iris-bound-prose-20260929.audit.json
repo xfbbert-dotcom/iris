@@ -1,0 +1,13 @@
+{
+  "commit": "3e7636b8244d4a6ff6732fb658052fdb81c53de6",
+  "requests": 4,
+  "http200": 4,
+  "reportedTokens": 11706,
+  "rawMatchesClient": true,
+  "wireResponseHashesValid": true,
+  "freshQuotaForEveryRequest": true,
+  "finalReviewCalled": false,
+  "remainingCasesCalled": false,
+  "executionPassed": false,
+  "observed": "Reviewer rejected invented 0/1 interface arithmetic. Sole repair omitted required new issue description and described editing instead of a work-discussion material change. Runtime rejected before final review. No retry."
+}

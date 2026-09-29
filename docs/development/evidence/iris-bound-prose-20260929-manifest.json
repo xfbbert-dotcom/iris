@@ -1,0 +1,102 @@
+{
+  "kind": "bound-prose-sanitized-evidence",
+  "applicationCommit": "3e7636b8244d4a6ff6732fb658052fdb81c53de6",
+  "checkoutCommit": "3e7636b8244d4a6ff6732fb658052fdb81c53de6",
+  "transformations": [
+    "private workspace hostname redacted",
+    "local username redacted"
+  ],
+  "hashQualification": "Private original wire/response hashes are retained. They differ after redaction; archive hashes below verify sanitized bytes. Original private files unchanged. No credential store read.",
+  "files": [
+    {
+      "name": "iris-bound-prose-20260929.audit.json",
+      "originalSha256": "900f609dda8c72594de995d5bb26b492e4829982cc6d761ca24a7fb7ccece579",
+      "archiveSha256": "900f609dda8c72594de995d5bb26b492e4829982cc6d761ca24a7fb7ccece579",
+      "bytes": 547
+    },
+    {
+      "name": "iris-bound-prose-20260929.halted.json",
+      "originalSha256": "b18db63ee9063d5af12c74cdfe90853034c076e60b1e9caf66743ac687daddc0",
+      "archiveSha256": "b18db63ee9063d5af12c74cdfe90853034c076e60b1e9caf66743ac687daddc0",
+      "bytes": 86
+    },
+    {
+      "name": "iris-bound-prose-20260929.json",
+      "originalSha256": "84bbd2e04da56286b1c7b19ef5f0cd7fb1ac2683feb9daebf80e56d0fa662b2d",
+      "archiveSha256": "84bbd2e04da56286b1c7b19ef5f0cd7fb1ac2683feb9daebf80e56d0fa662b2d",
+      "bytes": 121902
+    },
+    {
+      "name": "iris-bound-prose-20260929.pending-1.json",
+      "originalSha256": "1fdf154f9c5f30c3074a889a42c479a92e201f7cf5808b7fa162a18cff289548",
+      "archiveSha256": "1fdf154f9c5f30c3074a889a42c479a92e201f7cf5808b7fa162a18cff289548",
+      "bytes": 187
+    },
+    {
+      "name": "iris-bound-prose-20260929.pending-2.json",
+      "originalSha256": "b02d6ea9893a5957f95c32fee59bd2eea4608ca13887df9304c15c08ce10b2e9",
+      "archiveSha256": "b02d6ea9893a5957f95c32fee59bd2eea4608ca13887df9304c15c08ce10b2e9",
+      "bytes": 191
+    },
+    {
+      "name": "iris-bound-prose-20260929.pending-3.json",
+      "originalSha256": "72956df97023cb7798dea6a33aaf2265e1e7ae40ae85223baf1810722f7d23c7",
+      "archiveSha256": "72956df97023cb7798dea6a33aaf2265e1e7ae40ae85223baf1810722f7d23c7",
+      "bytes": 189
+    },
+    {
+      "name": "iris-bound-prose-20260929.pending-4.json",
+      "originalSha256": "f2e4f27da0fa5f146be8ab47ef7eea2e96d27b9f432d82493443e49a367a51dc",
+      "archiveSha256": "f2e4f27da0fa5f146be8ab47ef7eea2e96d27b9f432d82493443e49a367a51dc",
+      "bytes": 188
+    },
+    {
+      "name": "iris-bound-prose-20260929.quota-1.json",
+      "originalSha256": "609436f6c53e5a1f3906ddaf1ff99bcdd87fd5fb4216001e88e0ea05e261ddd9",
+      "archiveSha256": "609436f6c53e5a1f3906ddaf1ff99bcdd87fd5fb4216001e88e0ea05e261ddd9",
+      "bytes": 254
+    },
+    {
+      "name": "iris-bound-prose-20260929.quota-2.json",
+      "originalSha256": "bc375b1ceb58d4741af0b51e5ee20bbdca5fa5c49a6bccce926b7caa8890b67b",
+      "archiveSha256": "bc375b1ceb58d4741af0b51e5ee20bbdca5fa5c49a6bccce926b7caa8890b67b",
+      "bytes": 254
+    },
+    {
+      "name": "iris-bound-prose-20260929.quota-3.json",
+      "originalSha256": "33d113126721fd262c40739f2bdaefa64652c01987b8ca6c1db13602d6a9528e",
+      "archiveSha256": "33d113126721fd262c40739f2bdaefa64652c01987b8ca6c1db13602d6a9528e",
+      "bytes": 254
+    },
+    {
+      "name": "iris-bound-prose-20260929.quota-4.json",
+      "originalSha256": "4974ac2678283c68bbbd275fd813deaf5528699e6450b69971a47c6f176a7c55",
+      "archiveSha256": "4974ac2678283c68bbbd275fd813deaf5528699e6450b69971a47c6f176a7c55",
+      "bytes": 254
+    },
+    {
+      "name": "iris-bound-prose-20260929.quota-end.json",
+      "originalSha256": "8d93c5d778e3cb953c45781f1b5a495aee838ef921ca3feb02fe337c7668c9a4",
+      "archiveSha256": "8d93c5d778e3cb953c45781f1b5a495aee838ef921ca3feb02fe337c7668c9a4",
+      "bytes": 232
+    },
+    {
+      "name": "iris-bound-prose-20260929.started.json",
+      "originalSha256": "4f518451d699ed115985d4d0709afc20c5dd30e6c5bcccd421f5c8f05482d66e",
+      "archiveSha256": "4f518451d699ed115985d4d0709afc20c5dd30e6c5bcccd421f5c8f05482d66e",
+      "bytes": 1271
+    },
+    {
+      "name": "iris-bound-prose-20260929.txt",
+      "originalSha256": "a34fa350861ea2e6f89c42830832a17df9709b54385f5850c563ec35d3d14ee5",
+      "archiveSha256": "51e00b6791f793c76e1c56d3ead0b8ba6624d18ee8a14e15b2aab10439c7df87",
+      "bytes": 9863
+    },
+    {
+      "name": "iris-run-bound-prose.txt",
+      "originalSha256": "35d9249eb206d1958eba8bd78796b5823f605eb8639280ec645d8efb7362cca4",
+      "archiveSha256": "a612b170bf787f491670c6f50e78b2447043ab148cd5d31226fd49cb49313b85",
+      "bytes": 1790
+    }
+  ]
+}

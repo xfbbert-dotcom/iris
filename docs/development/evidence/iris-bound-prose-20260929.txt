@@ -1,0 +1,124 @@
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import assert from 'node:assert/strict';
+import { createPdModel, validatePdScopeReview, validatePdRepairedIntervention, validatePdProseIntervention } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { inspectPdCalculations } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/arithmetic.ts';
+import { createProactiveDiscussionEvalCases } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/REDACTED/AppData/Local/Iris/bailian-eval-20260918';
+const prefix = `${folder}/bound-prose-20260929`;
+const hash = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
+const baselinePath = `${root}/docs/development/evidence/iris-unavailable-numbers-20260929.json`;
+const baselineBytes = readFileSync(baselinePath);
+const oldReport = JSON.parse(baselineBytes.toString());
+const original = oldReport.completions.find((c:any)=>c.caseId==='arithmetic' && c.stage==='iris_proactive_discussion_generated_pair');
+const frozenPair = JSON.parse(original.content);
+const catalog = createProactiveDiscussionEvalCases();
+const inference = catalog.find(c => c.id === 'arithmetic')!;
+const a=frozenPair.assessment;
+const prose={issueDescription:a.issueRef.description, observation:a.observation, reasoning:a.reasoning,
+  suggestion:a.suggestion,uncertainty:a.uncertainty,changeExplanation:a.materialChange.explanation,
+  draftText:[a.observation,a.reasoning,a.suggestion].join('\n\n')};
+const bound=validatePdProseIntervention({prose},inference.context,a);
+assert.deepEqual(bound.assessment.evidenceRefs,a.evidenceRefs);
+assert.throws(()=>validatePdProseIntervention(frozenPair,inference.context,a));
+if(process.argv[2]==='--preflight'){console.log('preflight passed: strict prose binding and legacy rejection; zero HTTP');process.exit(0);}
+assert.equal(process.argv[2], '--run');
+assert(!existsSync(`${prefix}.started.json`), 'one window only; no restart or overwrite');
+const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const sources = ['apps/core/src/proactive-discussion/arithmetic.ts','apps/core/src/proactive-discussion/model.ts','apps/core/src/proactive-discussion/review-receipts.ts','scripts/pilot/proactive-discussion-eval.ts'];
+assert.equal(git('status','--porcelain','--',...sources), '', 'commit application before requests');
+const key = process.env.IRIS_BAILIAN_EVAL_KEY;
+assert(key && !/[\r\n]/u.test(key));
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const baseUrl = 'https://workspace-redacted.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const modelName = 'qwen3.8-max';
+const report: any = { kind: 'bound-prose-20260929', syntheticOnly: true, commit: git('rev-parse','HEAD'),
+  baselineSha256: hash(baselineBytes), sourceHashes: Object.fromEntries(sources.map(p => [p,hash(readFileSync(`${root}/${p}`))])),
+  startedAt: new Date().toISOString(), model: modelName, maxRequests: 22, tokenStopBeforeNextRequest: 70000,
+  maxTokens: 2048, enableThinking: false, requestTimeoutMs: 60000, windowMs: 1200000,
+  selected: ['qualified-risk','paraphrase','arithmetic','inference','material-update'],
+  requests: [], completions: [], results: [], reportedUsageTokens: 0, seededGenerations: 0,
+  independentSemanticReview: 'per-case external gate; verdicts retained', halted: false };
+const safe = (value: string) => value.replaceAll(key!, '[REDACTED]');
+const save = () => writeFileSync(`${prefix}.json`, safe(JSON.stringify(report,null,2))+'\n');
+writeFileSync(`${prefix}.started.json`, JSON.stringify(report,null,2), { flag: 'wx' });
+const deadline = Date.now() + report.windowMs;
+let activeCase = ''; let activeStage = ''; let requestHash = ''; let stageCounts: Record<string,number> = {};
+async function waitFile(path: string) {
+  const waitDeadline = Math.min(deadline, Date.now()+300000);
+  while (!existsSync(path)) { if (Date.now() > waitDeadline) throw Error('gate timeout'); await new Promise(r => setTimeout(r,250)); }
+  return JSON.parse(readFileSync(path,'utf8'));
+}
+const base = createOpenAICompatibleChatCompletionsClient({
+  config: { provider: 'openai-compatible', baseUrl, apiKey: key!, model: modelName, timeoutMs: 60000, structuredOutputMode: 'json_object' },
+  sleep: async () => { throw Error('automatic retry prohibited'); },
+  fetch: async (url, init) => {
+    assert.equal(String(url), `${baseUrl}/chat/completions`);
+    assert.equal(init?.method, 'POST');
+    assert(report.requests.length < report.maxRequests && report.reportedUsageTokens < report.tokenStopBeforeNextRequest && Date.now() < deadline);
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.model, modelName); assert.equal(body.response_format.type,'json_object');
+    const wire = JSON.stringify({...body,enable_thinking:false,max_tokens:2048});
+    requestHash = hash(wire);
+    const index = report.requests.length+1;
+    const pending = { index, caseId: activeCase, stage: activeStage, requestHash, model: modelName };
+    writeFileSync(`${prefix}.pending-${index}.json`,JSON.stringify(pending),{flag:'wx'});
+    console.log(JSON.stringify({ waitingForQuota: index, caseId: activeCase, stage: activeStage, requestHash }));
+    const quota = await waitFile(`${prefix}.quota-${index}.json`);
+    assert.equal(quota.requestHash, requestHash); assert.equal(quota.model,modelName);
+    assert.equal(quota.freeExhaustionStop,true); assert(quota.remainingTokens >= 100000);
+    assert(Date.now()-Date.parse(quota.observedAt) >= 0 && Date.now()-Date.parse(quota.observedAt) < 60000);
+    assert(Date.now() < deadline, 'window expired while awaiting quota');
+    const record: any = { ...pending,quota,wire,startedAt:new Date().toISOString() };
+    report.requests.push(record); save();
+    const response = await fetch(url, { ...init, body:wire, redirect:'error', signal:AbortSignal.timeout(Math.max(1,Math.min(60000,deadline-Date.now()))) });
+    record.status = response.status;
+    const reader = response.body!.getReader(); const chunks: Uint8Array[] = []; let size=0;
+    while(true) { const part=await reader.read(); if(part.done) break; size+=part.value.byteLength;
+      if(size>262144) { await reader.cancel(); throw Error('response size limit'); } chunks.push(part.value); }
+    const bytes=Buffer.concat(chunks); record.rawResponse=safe(bytes.toString()); record.responseSha256=hash(bytes);
+    record.finishedAt=new Date().toISOString(); save();
+    assert(response.ok, 'non-success HTTP; no retry');
+    const decoded=JSON.parse(bytes.toString());
+    assert.equal(decoded.model,modelName); assert.equal(decoded.choices?.length,1); assert.equal(decoded.choices[0].finish_reason,'stop');
+    assert(Number.isSafeInteger(decoded.usage?.total_tokens) && decoded.usage.total_tokens>0);
+    report.reportedUsageTokens+=decoded.usage.total_tokens; save();
+    return new Response(bytes,{status:response.status,headers:{'content-type':'application/json'}});
+  },
+});
+const client = { async complete(messages: any, options: any) {
+  activeStage=options.responseFormat.json_schema.name;
+  const count=(stageCounts[activeStage]??0)+1; stageCounts[activeStage]=count;
+  assert(count <= (activeStage.endsWith('assessment') || activeStage.endsWith('scope_review') ? 2 : 1));
+  if(activeCase==='frozen-arithmetic' && activeStage==='iris_proactive_discussion_generated_pair') {report.seededGenerations++; return JSON.stringify(frozenPair);}
+  const entry: any = {caseId:activeCase,stage:activeStage,messages,responseFormat:options.responseFormat}; report.completions.push(entry);
+  entry.content=await base.complete(messages,options); save(); return entry.content;
+} };
+try {
+  for(const id of report.selected) {
+    activeCase=id; stageCounts={};
+    const item=id==='frozen-arithmetic' ? inference : catalog.find(c=>c.id===id)!;
+    const context=structuredClone(item.context); const pd=createPdModel({client});
+    const assessment=id==='frozen-arithmetic' ? frozenPair.assessment : await pd.assess(context);
+    const pair=assessment.decision==='intervene' ? await pd.render({context,assessment}) : null;
+    const result={caseId:id,assessment:pair?.assessment??assessment,draft:pair?.draft??null,expectedDecision:item.expectedDecision};
+    report.results.push(result); save();
+    assert.equal(assessment.decision,item.expectedDecision,'decision mismatch');
+    if(assessment.decision==='intervene') assert(pair,'pair rejected or incomplete');
+    console.log(JSON.stringify({waitingForSemanticReview:id,resultPath:`${prefix}.json`}));
+    const semantic=await waitFile(`${prefix}.semantic-${id}.json`);
+    assert.equal(semantic.caseId,id); report.results.at(-1).semantic=semantic; save();
+    assert.equal(semantic.pass,true,'independent semantic failure; stop before next case');
+  }
+  report.executionPassed=true;
+} catch(error) {
+  report.halted=true; report.executionPassed=false; report.haltReason=safe(error instanceof Error?error.message:'unknown'); process.exitCode=1;
+} finally {
+  report.finishedAt=new Date().toISOString(); save();
+  writeFileSync(`${prefix}.halted.json`,JSON.stringify({at:report.finishedAt,halted:report.halted,reason:report.haltReason??'bounded window completed'}),{flag:'wx'});
+  console.log(JSON.stringify({done:true,requests:report.requests.length,tokens:report.reportedUsageTokens,passed:report.executionPassed,reason:report.haltReason}));
+}

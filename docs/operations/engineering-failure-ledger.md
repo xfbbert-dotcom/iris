@@ -9,6 +9,12 @@ immutable fields; generation and correction output editable prose only. Reject e
 instead of overwriting conflicting model identity. Source binding still does not prove semantic
 support. [Implementation, failed predecessor and bounded acceptance](../development/iris-bound-prose-20260929.md).
 
+The first live prose-contract window reached review, which correctly rejected invented 0/1
+interface arithmetic. Its sole repair then returned a null new-issue description and described
+editing the candidate as the business change. It was rejected before final review (4HTTP/11706
+tokens). Removing copy obligations does not resolve semantic role confusion; do not patch the
+missing description and call this a pass. Preserve this counterexample for the next bounded design.
+
 This ledger records failures that changed how Iris should be designed, tested, or released. It is
 not an incident timeline. Add an entry only when it produces a reusable prevention rule or an
 automated guard.

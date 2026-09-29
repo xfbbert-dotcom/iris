@@ -21,3 +21,5 @@ docs/development/evidence/iris-unavailable-numbers-20260929* -text whitespace=bl
 docs/development/evidence/iris-run-unavailable-numbers.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-generated-recovery-20260929* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-run-generated-recovery.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-bound-prose-20260929* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-run-bound-prose.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
