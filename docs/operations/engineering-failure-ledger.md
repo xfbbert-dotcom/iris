@@ -15,6 +15,11 @@ editing the candidate as the business change. It was rejected before final revie
 tokens). Removing copy obligations does not resolve semantic role confusion; do not patch the
 missing description and call this a pass. Preserve this counterexample for the next bounded design.
 
+The correction contract unnecessarily required all seven prose fields again even when review
+identified one defective field. [Explicit field updates](../development/iris-repair-updates-20260929.md)
+preserve unspecified text from the current generation, with complete validation and final review.
+This removes compulsory rewriting; it does not prove the retained or edited content is supported.
+
 This ledger records failures that changed how Iris should be designed, tested, or released. It is
 not an incident timeline. Add an entry only when it produces a reusable prevention rule or an
 automated guard.

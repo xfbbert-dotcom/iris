@@ -416,6 +416,11 @@ immutable fields and validates the complete candidate before semantic review. Bi
 not evidence of factual support; the original source, identity and novelty reviews still apply.
 See the [contract and acceptance record](../../development/iris-bound-prose-20260929.md).
 
+The single correction emits explicit field replacements instead of regenerating every prose
+field. Unspecified text comes from the current generated candidate, never the earlier assessment.
+The complete resulting candidate still requires final semantic and source review; retention does
+not confer approval. [Correction contract and evidence](../../development/iris-repair-updates-20260929.md).
+
 Iris is proactive by design. It can participate like a teammate, not only respond after being mentioned.
 
 Iris may proactively:

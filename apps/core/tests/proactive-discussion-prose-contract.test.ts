@@ -28,7 +28,7 @@ test.each(["evidenceRefs", "decision", "issueRef", "materialChange"])("prose can
 });
 test("program-bound prose repair still receives final review and cannot self-approve", async () => {
   const rejected = { ...review, supported: false };
-  const client = sequence([{ prose }, rejected, { prose: { ...prose, reasoning: "修正后的有条件判断。" } }, rejected]);
+  const client = sequence([{ prose }, rejected, { updates: [{ field: "reasoning", value: "修正后的有条件判断。" }] }, rejected]);
   expect(await createPdModel({ client }).render({ context: pdContext(), assessment: pdAssessment() })).toBeNull();
   expect(client.complete).toHaveBeenCalledTimes(4);
 });

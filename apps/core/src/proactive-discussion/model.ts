@@ -108,7 +108,7 @@ const repairedPairScopeReviewSystem = [
 ].join("\n");
 
 const pairRepairSystem = [
-  "根据授权原文和首次复核结果，只修正一次 assessment 与 draft 的语义表达，只输出指定 prose 对象；程序保留原身份和引用，不在 prose 中输出这些不可变字段。issueDescription 仅用于新问题，已有问题必须为null；changeExplanation为变化说明，draftText为最终发言。",
+  "根据授权原文和首次复核结果，只修正一次当前候选。输出 updates 数组，每项 field 指定需要替换的正文字段，value 是该字段完整的新正文；不输出整份 prose，不为未修改的字段占位。程序保留本次候选中未指定的字段及锁定身份、引用。无需改动时返回空数组，仍需最终审核。issueDescription仅可修改新问题描述；changeExplanation描述讨论中的业务问题或新依据，不能写本轮改稿过程；draftText为最终发言。",
   evaluationContextSystem,
   "复核理由是待核对的诊断，不是事实裁决；授权原文优先。只修正确有依据的缺陷，不能通过删去有依据的关键数值迎合错误复核。",
   "本地报告的当前草稿数字/单位与引文不匹配也必须处理；算术等价不代表字面凭据合格。若预期金额经授权原文核对正确而只是单位表达不同，在同一草稿中明确写出该值及单位，保留必要的总额、差额与增量，不返回未改的草稿。若诊断数值本身错误，不照抄错误数值，仍以原文为准。",
@@ -230,12 +230,12 @@ export function createPdModel({
 
       const repairedContent = await client.complete(
         pairRepairMessages({ ...input, draft, review, identityTarget }),
-        { responseFormat: proseResponseFormat(validated) },
+        { responseFormat: repairUpdatesResponseFormat(validated) },
       );
       await assertActive?.();
       let repaired: PdReviewedIntervention;
       try {
-        repaired = validatePdProseIntervention(JSON.parse(repairedContent), context, validated);
+        repaired = validatePdRepairUpdates(JSON.parse(repairedContent), context, validated, generated);
       } catch {
         return null;
       }
@@ -439,6 +439,29 @@ export function validatePdProseIntervention(value: unknown, context: PdContext, 
     }, draft: { text: output.draftText, evidenceRefs: [...originalAssessment.evidenceRefs] } };
   }
   return validateCompletePair(value, context, originalAssessment);
+}
+
+const repairFields = ["issueDescription", "observation", "reasoning", "suggestion", "uncertainty", "changeExplanation", "draftText"] as const;
+
+export function validatePdRepairUpdates(
+  value: unknown, context: PdContext, identity: PdAssessment, current: PdReviewedIntervention,
+): PdReviewedIntervention {
+  const pair = validateCompletePair(current, context, identity);
+  const { updates } = z.object({ updates: z.array(z.object({
+    field: z.enum(repairFields), value: boundedOutputText.refine(text => text.length > 0),
+  }).strict()).max(repairFields.length) }).strict().parse(value);
+  if (new Set(updates.map(update => update.field)).size !== updates.length) throw new Error("duplicate repair field");
+  const prose = {
+    issueDescription: pair.assessment.issueRef?.kind === "new" ? pair.assessment.issueRef.description : null,
+    observation: pair.assessment.observation, reasoning: pair.assessment.reasoning,
+    suggestion: pair.assessment.suggestion, uncertainty: pair.assessment.uncertainty as string,
+    changeExplanation: pair.assessment.materialChange.explanation, draftText: pair.draft.text,
+  };
+  for (const update of updates) {
+    if (update.field === "issueDescription" && pair.assessment.issueRef?.kind !== "new") throw new Error("existing identity is locked");
+    prose[update.field] = update.value;
+  }
+  return validatePdProseIntervention({ prose }, context, identity);
 }
 
 function validateCompletePair(value: unknown, context: PdContext, originalAssessment: PdAssessment): PdReviewedIntervention {
@@ -822,6 +845,21 @@ function scopeReviewResponseFormat(draftText: string, history?: PdScopeReviewHis
       schema: createPdScopeReviewJsonSchema(draftText, history),
     },
   };
+}
+
+function repairUpdatesResponseFormat(identity: PdAssessment): OpenAICompatibleJsonSchemaResponseFormat {
+  const fields = repairFields.filter(field => field !== "issueDescription" || identity.issueRef?.kind === "new");
+  return { type: "json_schema", json_schema: { name: "iris_proactive_discussion_pair_repair", strict: true,
+    schema: { type: "object", additionalProperties: false, required: ["updates"], properties: {
+      updates: { type: "array", maxItems: fields.length, items: { anyOf: fields.map(field => ({
+        type: "object", additionalProperties: false, required: ["field", "value"], properties: {
+          field: { type: "string", enum: [field] },
+          value: field === "uncertainty" ? { type: "string", enum: ["fact", "qualified_inference"] }
+            : boundedStringSchema(field === "draftText" ? MAX_DRAFT_TEXT_CHARS : MAX_ASSESSMENT_TEXT_CHARS),
+        },
+      })) } },
+    } },
+  } };
 }
 
 function referenceArraySchema(refs: readonly string[], maxItems: number) {

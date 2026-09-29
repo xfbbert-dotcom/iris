@@ -324,7 +324,7 @@ test.each([false, true])("final scope receipt replay checks the current untrunca
     replayValidation: { accepted: !stale, reason: stale ? "receipt_invalid" : "accepted" },
   });
   const repair = records.find(record => record.stage === "pair_repair");
-  expect(repair!.candidate.prose.draftText).toHaveLength(500);
+  expect(repair!.candidate.updates.find((update: { field: string }) => update.field === "draftText").value).toHaveLength(500);
   expect(repair!.acceptedDraft).toBe(!stale);
   expect(run.results.find(result => result.caseId === "arithmetic")).toMatchObject(stale
     ? { draft: null, error: "draft_rejected" } : { draft: { text: repairedText }, error: null });

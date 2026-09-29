@@ -29,11 +29,20 @@ export function proseFixtureClient(client: OpenAICompatibleChatCompletionsClient
         || !sameRefs(a.evidenceRefs, target.evidenceRefs) || !sameRefs(pair.draft.evidenceRefs, target.evidenceRefs)
         || a.materialChange.kind !== target.materialChange.kind
         || !sameRefs(a.materialChange.evidenceRefs, target.materialChange.evidenceRefs)) return content;
-      return JSON.stringify({ prose: {
+      const prose = {
         issueDescription: a.issueRef.kind === "new" ? a.issueRef.description : null,
         observation: a.observation, reasoning: a.reasoning, suggestion: a.suggestion,
         uncertainty: a.uncertainty, changeExplanation: a.materialChange.explanation, draftText: pair.draft.text,
-      } });
+      };
+      if (stage === "iris_proactive_discussion_pair_repair") {
+        const base = input.assessment;
+        const previous: Record<string, unknown> = { issueDescription: base.issueRef.kind === "new" ? base.issueRef.description : null,
+          observation: base.observation, reasoning: base.reasoning, suggestion: base.suggestion,
+          uncertainty: base.uncertainty, changeExplanation: base.materialChange.explanation, draftText: input.draft.text };
+        return JSON.stringify({ updates: Object.entries(prose).filter(([field, value]) => value !== previous[field])
+          .map(([field, value]) => ({ field, value })) });
+      }
+      return JSON.stringify({ prose });
     } catch { return content; }
   } };
 }

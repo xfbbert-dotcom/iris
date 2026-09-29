@@ -2,6 +2,10 @@
 
 ## 2026-09-29: Program-bound proactive prose
 
+Follow-up [explicit correction updates](../../development/iris-repair-updates-20260929.md) retains
+unmodified current candidate prose instead of requiring a full rewrite. Complete final review and
+the one-correction bound remain; no acceptance upgrade without the bounded real-model results.
+
 The [generation/correction contract](../../development/iris-bound-prose-20260929.md) separates
 editable prose from program-held identity and references. The preceding six-HTTP recovery
 window still failed at a malformed hash in risk generation. Contract correctness does not upgrade
