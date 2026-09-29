@@ -29,6 +29,11 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The latest [review receipt-duty ablation](docs/development/iris-review-duty-ablation-20260929.md)
+made no application change. One HTTP200/3240-token diagnostic identified unsupported quantities
+but missed the required conditional-consequence defect; it stopped before the positive control.
+The proposed split was not integrated. Application remains `a2b3c449`; no deployment or Feishu acceptance.
+
 Application `a2b3c449` makes the single correction [update explicit prose fields](docs/development/iris-repair-updates-20260929.md)
 while preserving the current generated candidate. Core4853 passed/469 conditional skips;
 type/build and CLI7 passed. A five-HTTP window (16794 tokens) passed the frozen correction and

@@ -1,0 +1,77 @@
+{
+  "kind": "review-duty-ablation-20260929",
+  "files": [
+    {
+      "source": "review-duty-ablation-20260929.json",
+      "target": "iris-review-duty-ablation-20260929.json",
+      "sha256": "4222e2035ed48852c23de41b91e03a3d50a1f3c951c24d7ee397d5e9587b6d11",
+      "bytes": 80852
+    },
+    {
+      "source": "review-duty-ablation-20260929.started.json",
+      "target": "iris-review-duty-ablation-20260929.started.json",
+      "sha256": "a84efe4ddefab98b91af87fdb63162f3f81bb3b14a26e03dc9d97088eed51489",
+      "bytes": 78
+    },
+    {
+      "source": "review-duty-ablation-20260929.pending-1.json",
+      "target": "iris-review-duty-ablation-20260929.pending-1.json",
+      "sha256": "59d851ca57d0b614a52eabd2b42f9476691d45453862adce7cfac97d80612949",
+      "bytes": 137
+    },
+    {
+      "source": "review-duty-ablation-20260929.quota-1.json",
+      "target": "iris-review-duty-ablation-20260929.quota-1.json",
+      "sha256": "9a210e9fb97eeb522014d82843064249149476b56793a6b73ea68b3e41854ad0",
+      "bytes": 252
+    },
+    {
+      "source": "review-duty-ablation-20260929.semantic-frozen-risk.json",
+      "target": "iris-review-duty-ablation-20260929.semantic-frozen-risk.json",
+      "sha256": "088712582f9e63f7b172426810444f19ae3bd79eb536589cbdc82956727501b0",
+      "bytes": 463
+    },
+    {
+      "source": "review-duty-ablation-20260929.halted.json",
+      "target": "iris-review-duty-ablation-20260929.halted.json",
+      "sha256": "2b91f5259ed7a4954b021f363c5f77bf4a00d6d51464ec0cbb28e2bd99948bab",
+      "bytes": 117
+    },
+    {
+      "source": "review-duty-ablation-20260929.quota-end.json",
+      "target": "iris-review-duty-ablation-20260929.quota-end.json",
+      "sha256": "782dd2777c74fff48a574de870684590fa642bbd202ad281d22a804761a1403b",
+      "bytes": 223
+    },
+    {
+      "source": "review-duty-ablation-20260929.independent-review.json",
+      "target": "iris-review-duty-ablation-20260929.independent-review.json",
+      "sha256": "1bde15e750e4ddf08aff08d9768b2a2208bc275e1aac66783ea521c8136b2c5b",
+      "bytes": 394
+    },
+    {
+      "source": "review-duty-ablation-20260929.audit.json",
+      "target": "iris-review-duty-ablation-20260929.audit.json",
+      "sha256": "27cfbb546bd6dd4d72e7ffd10f4df7819c9989f821a5d2b9a9f8088d37c4e88f",
+      "bytes": 250
+    },
+    {
+      "source": "review-duty-ablation-20260929.mjs",
+      "target": "iris-review-duty-ablation-20260929.txt",
+      "sha256": "22c0f0348cf1aebd6e41588c38a3402150eecd6292040aa49a14ba01639868e2",
+      "bytes": 8406
+    },
+    {
+      "source": "run-review-duty-ablation.ps1",
+      "target": "iris-run-review-duty-ablation.txt",
+      "sha256": "001b31fa90a20091cb53b8ee4d4ca75b98864f600295801c4436c6e7748dee60",
+      "bytes": 1805
+    },
+    {
+      "source": "archive-review-duty-ablation-20260929.mjs",
+      "target": "iris-archive-review-duty-ablation-20260929.txt",
+      "sha256": "b2d943b7df5357721f646c4b7c4fc2d0f88e9e0cc38ab994e6bbd77d090e08e3",
+      "bytes": 3294
+    }
+  ]
+}

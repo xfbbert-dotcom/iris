@@ -1,0 +1,9 @@
+{
+  "caseId": "frozen-risk",
+  "pass": false,
+  "reviewer": "primary",
+  "unsupportedQuantities": "identified 0 and 100%; all-workload wording not independently addressed",
+  "conditionalCertainConsequence": "not identified in any field or overall reason",
+  "reason": "Frozen acceptance requires both numerical and conditional-consequence defects; overall false based only on quantities is insufficient.",
+  "recordedAt": "2026-09-29T04:40:07.8613394Z"
+}

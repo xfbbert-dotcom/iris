@@ -1,4 +1,4 @@
-# 审核凭据职责消融：调用前冻结记录
+# 审核凭据职责消融：首例未通过，候选停止
 
 日期：2026-09-29。应用保持 `a2b3c449`，本记录不是应用修复或部署。
 前置事实：[定点修正窗口](iris-repair-updates-20260929.md)的新鲜风险候选同时含
@@ -43,4 +43,42 @@
 
 ## 实际结果
 
-待本窗口完成；不得把设计审查或preflight写成实模通过。
+冻结设计提交 `2cb65f21` 后，实际 **1次HTTP200 / 3240 reported tokens**。
+模型明确拒绝把“尚未联调”变成0或100%的精确算术；reasoning=false、整体false。
+但它没有指出“全部工作量缺口”这一非数字表述仍无依据，也没有指出“一旦……
+将直接导致无法按期履约”的必然后果超出来源。uncertainty=true仅认可标签，
+不能替代原句强度核验。合理建议没有被误拒。
+
+主代理及独立审查均按事前双重目标判 **失败**，正向算术例未调用。运行器已经
+停止，没有第二请求、重采、修正或额外变体。应用代码未变；此拆分候选不接入产品。
+这次输出在数量识别上与历史原件不同，但不能据此声称凭据职责是根因，更不能
+推断模型能力是唯一原因。完整上下文与判断对象没有变；提示长度和schema随职责
+一并变化，因果归属仍未完成。
+
+[原始请求与响应](evidence/iris-review-duty-ablation-20260929.json)、
+[独立审查](evidence/iris-review-duty-ablation-20260929.independent-review.json)、
+[执行审计](evidence/iris-review-duty-ablation-20260929.audit.json)、
+[停止记录](evidence/iris-review-duty-ablation-20260929.halted.json)、
+[12份文件哈希清单](evidence/iris-review-duty-ablation-20260929-manifest.json)。
+审计核对原user逐字不变、system仅约定删除、schema仅去两字段、raw/client content
+一致、请求/响应哈希、单请求用量及quota观察距请求9.053秒。开始及结束页面均为
+852.89K/1M、2026-12-18到期、用完即停开启；页面可能滞后，不当作账单对账。
+
+本轮仅有诊断脚本的语法、PowerShell AST、离线preflight和证据审计；没有应用
+修改，因此没有重跑或重新宣称Core全量通过。a2b3c449的4853/469仍是前一轮本地
+证据。**代码未改／本轮实模诊断失败／真实飞书未验收／未部署**。
+
+## 四处文档处置与未解决条件
+
+| 核对项 | disposition与理由 |
+|---|---|
+| 白皮书 | **reviewed-unchanged**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)要求全候选来源/推断复核，且明确结构合规不证明语义；失败探针没有改变产品契约。 |
+| 工程故障台账 | **updated**：[主动讨论条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)补充职责消融的解释边界与失败出口，避免因数字识别改善而放过其他目标。 |
+| 需求覆盖基线 | **reviewed-unchanged**：[IRIS-CORE-005当前实现](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-29-program-bound-proactive-prose)仍是部分实现；没有应用修复、端到端或真实群覆盖提升。 |
+| README / AGENTS / current-handoff | **updated**：[README](../../README.md#current-product-state)与[交接](current-handoff.md#当前正在推进)指向此失败且保留应用a2b3c449；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)定位、授权与闭环规则仍适用。 |
+
+当前卡点具体是：同一完整风险候选被识别出数量问题后，仍没有形成针对其必然
+后果的有效诊断。数字计算、字段恢复或减少凭据字段均未提供这一能力的验收证据。
+缺少的是能够忠实核对这种自然语言断言、并在新鲜生成→修正→终审中保持效果的
+已验证方案；不是缺用户许可、不是429、不是等免费额度。没有依据把本轮的职责
+删除直接产品化。整体缺陷继续开放，不把归档完成写成修复完成。

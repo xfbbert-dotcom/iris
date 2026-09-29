@@ -1,0 +1,8 @@
+{
+  "pass": false,
+  "reviewer": "arithmetic_review",
+  "quantities": "0/100% unsupported identified; all-workload qualitative claim incompletely covered",
+  "conditionalCertainConsequence": "not identified despite unchanged input",
+  "decision": "stop before second request; do not integrate the split",
+  "source": "independent read-only review of full archived request and response"
+}

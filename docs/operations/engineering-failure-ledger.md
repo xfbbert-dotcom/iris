@@ -43,6 +43,13 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 
 ### Proactive collaboration is not a deadline reminder
 
+- **Receipt-duty ablation boundary (2026-09-29):** Removing numeric/advice receipt tasks while
+  retaining the complete candidate and semantic requirements identified unsupported quantities,
+  but missed the conditional certain consequence in that same candidate. The [one-request probe](../development/iris-review-duty-ablation-20260929.md)
+  failed its frozen targets. Do not convert one correctly rejected defect or overall false into
+  full semantic acceptance, or interpret duty/length/schema changes as proven causal attribution.
+  Keep an unsuccessful split out of the product; do not compensate with repeated prompt variants.
+
 - **Observed design failure (2026-09-09):** The next proactive pilot was proposed as quiet-thread
   and overdue-task reminders with a two-per-day budget and a 24-hour cooldown. The user rejected
   this: Iris should notice material problems in ongoing work and explain its own assessment;

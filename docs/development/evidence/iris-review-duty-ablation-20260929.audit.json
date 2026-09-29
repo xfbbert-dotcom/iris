@@ -1,0 +1,12 @@
+{
+  "requests": 1,
+  "http200": 1,
+  "totalTokens": 3240,
+  "quotaAgeMs": 9053,
+  "userUnchanged": true,
+  "systemDeletionOnly": true,
+  "schemaTwoFieldsRemovedOnly": true,
+  "rawContentMatches": true,
+  "passed": false,
+  "positiveUncalled": true
+}
