@@ -1,0 +1,120 @@
+{
+  "kind": "repair-updates-sanitized-evidence",
+  "applicationCommit": "a2b3c449e65b50f38ae199abf2e5b5288f3d2951",
+  "checkoutCommit": "a2b3c449e65b50f38ae199abf2e5b5288f3d2951",
+  "transformations": [
+    "private workspace hostname redacted",
+    "local username redacted"
+  ],
+  "hashQualification": "Private original wire/response hashes are retained. They differ after redaction; archive hashes below verify sanitized bytes. Original private files unchanged. No credential store read.",
+  "files": [
+    {
+      "name": "iris-repair-updates-20260929.audit.json",
+      "originalSha256": "3e9cd9e8e2a4f0fe71f5bf36c9266960c3840da89507a85922735e81c0ca94fe",
+      "archiveSha256": "3e9cd9e8e2a4f0fe71f5bf36c9266960c3840da89507a85922735e81c0ca94fe",
+      "bytes": 565
+    },
+    {
+      "name": "iris-repair-updates-20260929.halted.json",
+      "originalSha256": "ff5b4081a8b15c368730f9b1a24d8514ee7dbd1394392d87aba2720e9a64e40c",
+      "archiveSha256": "ff5b4081a8b15c368730f9b1a24d8514ee7dbd1394392d87aba2720e9a64e40c",
+      "bytes": 104
+    },
+    {
+      "name": "iris-repair-updates-20260929.json",
+      "originalSha256": "edfd913d7c26310c21e861cd4ce7e61d4e47b827c4e4382de1cb30046091f8f5",
+      "archiveSha256": "edfd913d7c26310c21e861cd4ce7e61d4e47b827c4e4382de1cb30046091f8f5",
+      "bytes": 179222
+    },
+    {
+      "name": "iris-repair-updates-20260929.pending-1.json",
+      "originalSha256": "0f1e3433edc7b9495b76f81263c71ebd2a3ed18a85c912b9650ef9df6c0e8e58",
+      "archiveSha256": "0f1e3433edc7b9495b76f81263c71ebd2a3ed18a85c912b9650ef9df6c0e8e58",
+      "bytes": 185
+    },
+    {
+      "name": "iris-repair-updates-20260929.pending-2.json",
+      "originalSha256": "ec529c0d37c2e3e1e69a96e08175ba8e8431e9bf54fb95210dacedce67172eb8",
+      "archiveSha256": "ec529c0d37c2e3e1e69a96e08175ba8e8431e9bf54fb95210dacedce67172eb8",
+      "bytes": 186
+    },
+    {
+      "name": "iris-repair-updates-20260929.pending-3.json",
+      "originalSha256": "7898bc730d3ea68aa4b64b094f79596e8529f70a9ca48dc7ebe4c09b10a2fdca",
+      "archiveSha256": "7898bc730d3ea68aa4b64b094f79596e8529f70a9ca48dc7ebe4c09b10a2fdca",
+      "bytes": 187
+    },
+    {
+      "name": "iris-repair-updates-20260929.pending-4.json",
+      "originalSha256": "24641cc84d44c69c9996351c2577b3421e0de81133a10fc653629b885a42699d",
+      "archiveSha256": "24641cc84d44c69c9996351c2577b3421e0de81133a10fc653629b885a42699d",
+      "bytes": 191
+    },
+    {
+      "name": "iris-repair-updates-20260929.pending-5.json",
+      "originalSha256": "20e2436acc0e4e499c0140d1b728675fed547103e44f67fc64f8604acbe84e5d",
+      "archiveSha256": "20e2436acc0e4e499c0140d1b728675fed547103e44f67fc64f8604acbe84e5d",
+      "bytes": 189
+    },
+    {
+      "name": "iris-repair-updates-20260929.quota-1.json",
+      "originalSha256": "3713d7c11a68f6bec10b05aed58b04614a45056a06265d2d1d069984369ec0cd",
+      "archiveSha256": "3713d7c11a68f6bec10b05aed58b04614a45056a06265d2d1d069984369ec0cd",
+      "bytes": 254
+    },
+    {
+      "name": "iris-repair-updates-20260929.quota-2.json",
+      "originalSha256": "5e2353e4629d679f0844d642a590e4f037329745c7124a84751070f373f1541c",
+      "archiveSha256": "5e2353e4629d679f0844d642a590e4f037329745c7124a84751070f373f1541c",
+      "bytes": 254
+    },
+    {
+      "name": "iris-repair-updates-20260929.quota-3.json",
+      "originalSha256": "42be6874b925f84c2640badf59ce83734cedc6c44071bb98721373a91efdcd1b",
+      "archiveSha256": "42be6874b925f84c2640badf59ce83734cedc6c44071bb98721373a91efdcd1b",
+      "bytes": 254
+    },
+    {
+      "name": "iris-repair-updates-20260929.quota-4.json",
+      "originalSha256": "4ee597333949d186070ec70c6ae98effa1e95aef20ce3d50975fac578aff00b2",
+      "archiveSha256": "4ee597333949d186070ec70c6ae98effa1e95aef20ce3d50975fac578aff00b2",
+      "bytes": 254
+    },
+    {
+      "name": "iris-repair-updates-20260929.quota-5.json",
+      "originalSha256": "faed6eb78ccc9eea692e9f2e773442d7c9a24216d2de211de7c0d827bbbe17a5",
+      "archiveSha256": "faed6eb78ccc9eea692e9f2e773442d7c9a24216d2de211de7c0d827bbbe17a5",
+      "bytes": 254
+    },
+    {
+      "name": "iris-repair-updates-20260929.quota-end.json",
+      "originalSha256": "d19e99e22ac96e25fa82c5413f74f971b579f763ad473462a7450341148fe71b",
+      "archiveSha256": "d19e99e22ac96e25fa82c5413f74f971b579f763ad473462a7450341148fe71b",
+      "bytes": 239
+    },
+    {
+      "name": "iris-repair-updates-20260929.semantic-frozen-risk.json",
+      "originalSha256": "6d5904cc65cfdddcc1ed94985462b3ae7872ef3fa49ebe90f167e1d5c169a591",
+      "archiveSha256": "6d5904cc65cfdddcc1ed94985462b3ae7872ef3fa49ebe90f167e1d5c169a591",
+      "bytes": 506
+    },
+    {
+      "name": "iris-repair-updates-20260929.started.json",
+      "originalSha256": "4480b9ac7e4af92261f07150cc3ea2a9a6064b2b6f41a1b55b29464b091c19b7",
+      "archiveSha256": "4480b9ac7e4af92261f07150cc3ea2a9a6064b2b6f41a1b55b29464b091c19b7",
+      "bytes": 1315
+    },
+    {
+      "name": "iris-repair-updates-20260929.txt",
+      "originalSha256": "4a61008510cd7307ce8d93cdc9fdfc6db158e759c52a6da86e34f8d4fa9501ad",
+      "archiveSha256": "224e3f6e178decb4503f4c459e2191fcac7c32f9357ef1a8ee142299a6a7703e",
+      "bytes": 9940
+    },
+    {
+      "name": "iris-run-repair-updates.txt",
+      "originalSha256": "8f1e0697a89bd9ae45953a4953ebed6cd9c0f595f774b325e2ea3a1ea2baae3c",
+      "archiveSha256": "9b04280536582a90392902e2e1b5945f29895d8f94086a8f655ddb36533cbcfa",
+      "bytes": 1796
+    }
+  ]
+}

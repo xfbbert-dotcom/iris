@@ -1,0 +1,6 @@
+{
+  "reason": "基于未联调和准备确定承诺两条来源，存续稿说明无法保证交付而非保证延期，建议确认联调/如实限定承诺。唯一updates只改reasoning，伪0/1已消失，描述及业务问题说明保留本次生成版本而非旧初判或编辑日志。终审确实执行。仅冻结生成/初审后的有限通过，不是新鲜生成或稳定性证明。",
+  "caseId": "frozen-risk",
+  "pass": true,
+  "reviewer": "primary-independent-of-provider-verdict"
+}

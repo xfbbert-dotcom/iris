@@ -1,0 +1,15 @@
+{
+  "commit": "a2b3c449e65b50f38ae199abf2e5b5288f3d2951",
+  "requests": 5,
+  "http200": 5,
+  "reportedTokens": 16794,
+  "rawMatchesClient": true,
+  "wireResponseHashesValid": true,
+  "freshQuotaForEveryRequest": true,
+  "frozenRepairPassed": true,
+  "freshRiskExecutionPassed": false,
+  "freshRiskFailure": "initial review schema invalid: empty number unit; repair not called",
+  "freshRiskSemanticFailure": "review approved unsupported progress arithmetic and a deterministic conditional consequence",
+  "remainingCasesCalled": false,
+  "executionPassed": false
+}

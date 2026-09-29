@@ -6,6 +6,12 @@ Follow-up [explicit correction updates](../../development/iris-repair-updates-20
 unmodified current candidate prose instead of requiring a full rewrite. Complete final review and
 the one-correction bound remain; no acceptance upgrade without the bounded real-model results.
 
+Application `a2b3c449`: Core4853 passed/469 conditional skips, type/build and CLI7 passed.
+Five HTTP200/16794 tokens: frozen correction and final review passed narrowly; fresh risk initial
+review approved unsupported quantities and certain consequences, then failed schema on an empty
+unit. No correction/final review for that case; four later cases uncalled. IRIS-CORE-005 remains
+partial, with no real Feishu acceptance or deployment.
+
 The [generation/correction contract](../../development/iris-bound-prose-20260929.md) separates
 editable prose from program-held identity and references. The preceding six-HTTP recovery
 window still failed at a malformed hash in risk generation. Contract correctness does not upgrade

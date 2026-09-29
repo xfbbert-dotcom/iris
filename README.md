@@ -29,6 +29,13 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Application `a2b3c449` makes the single correction [update explicit prose fields](docs/development/iris-repair-updates-20260929.md)
+while preserving the current generated candidate. Core4853 passed/469 conditional skips;
+type/build and CLI7 passed. A five-HTTP window (16794 tokens) passed the frozen correction and
+final review, then failed on fresh risk: review approved unsupported quantities and certain
+consequences before an empty numeric unit caused local rejection. Four cases were uncalled.
+The window failed; no push, production access, deployment or real Feishu acceptance.
+
 Application `3e7636b8` keeps [immutable issue identity and references outside model prose](docs/development/iris-bound-prose-20260929.md).
 Core4845 passed/469 conditional skips; final focused43, type/build and CLI7 passed. The bounded
 four-HTTP window (11706 tokens) failed: review correctly rejected invented interface arithmetic,

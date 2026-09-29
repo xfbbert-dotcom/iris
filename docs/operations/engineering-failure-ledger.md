@@ -20,6 +20,12 @@ identified one defective field. [Explicit field updates](../development/iris-rep
 preserve unspecified text from the current generation, with complete validation and final review.
 This removes compulsory rewriting; it does not prove the retained or edited content is supported.
 
+Application a2b3c449 passed the frozen targeted correction and final review. Its fresh risk case
+still had unsupported progress quantities and a deterministic conditional consequence approved
+by initial review, then rejected locally for an empty number unit (5HTTP/16794 tokens total).
+That failure occurred before updates. A format rejection is not semantic detection; do not relax
+the unit contract or count the narrower correction success as complete proactive acceptance.
+
 This ledger records failures that changed how Iris should be designed, tested, or released. It is
 not an incident timeline. Add an entry only when it produces a reusable prevention rule or an
 automated guard.

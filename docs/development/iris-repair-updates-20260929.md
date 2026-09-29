@@ -1,6 +1,6 @@
 # 主动讨论：修正只替换明确选中的正文
 
-2026-09-29，起点`d911d271`，此前应用`3e7636b8`；工作树和分支见
+2026-09-29，应用`a2b3c449e65b50f38ae199abf2e5b5288f3d2951`，起点`d911d271`，此前应用`3e7636b8`；工作树和分支见
 [交接](current-handoff.md)。只做已授权本地工作和免费合成验证，无部署或外发。
 
 ## 故障、选择与边界
@@ -40,6 +40,38 @@ arithmetic、inference、material-update各一轮；必须指出工作问题、�
 25分钟，每请求60秒；精确qwen3.8-max免费额度逐请求核对≥100K、期限及用完即停，
 无付费回退。冻结通过不证明新鲜生成稳定；任何一例失败，不标完整验收。
 
+## 实际结果：定点修正通过，前置审核仍错批新鲜风险稿
+
+本窗口 **5次HTTP200 / 16794 reported tokens** 后首败停止，无重采或追加变体。
+程序确实注入原件生成和原件初审各一次；未提供人工正确的改稿选项。
+
+- frozen-risk：2次真实HTTP（修正3173、终审4776 tokens）。模型只更新reasoning，
+  去掉伪0/1接口数量；本次生成的问题描述、业务风险说明和draft未被重写。真实
+  终审返回完整pair，主代理与独立语义审查均有限通过。风险以可能/无法保证限定，
+  建议核实联调和限定承诺；不是新鲜生成或稳定性证明。
+- qualified-risk：3次HTTP（判断/生成/初审），执行失败。新生成reasoning将未联调
+  扩成0进度、100%依赖项及全部工作量缺口，并写“一旦……将直接导致无法按期履约”；
+  draft也包含进度0及全部工作量。来源未支持这些数量及必然后果。
+- 初审reasoning=true、整体true，理由把上述数量当合理算术、把条件句当恰当限定。
+  其requiredNumbers第一项unit=""导致本地schema失败，抛scope review was invalid；
+  第二项100%的凭据也不是草稿中的逐字数值。**不是语义错误被成功识别**。
+  本例没有进入updates修正或终审，不能把失败归为字段合并失败。
+- paraphrase、arithmetic、inference、material-update均未调用。原语义标准不变，
+  不把冻结例通过或格式拒绝提升为本窗口完整验收。
+
+独立审查确认5个raw content与客户端一致及上述两层失败。
+[执行审计](evidence/iris-repair-updates-20260929.audit.json)核对wire/response hash、
+usage和逐请求quota新鲜度；[18份证据清单](evidence/iris-repair-updates-20260929-manifest.json)
+保留实际请求、响应、脚本、语义判断、quota及停止记录。结束页面861.73K/1M、
+用完即停开启、2026-12-18到期；页面滞后不作账单对账。
+
+**层级：代码已改／本地通过／冻结修正实模有限通过但新鲜窗口失败／真实飞书未验收／未部署。**
+当前有界修正路径已完成验证并保留失败出口，不继续扩大字段恢复或放宽数字契约。
+剩余实质问题是生成与前置审核对数量适用性、风险强度及凭据的忠实核对；本次没有
+因果分离提示复杂度、任务分工与模型能力，也没有证明新的审核修复方向。后续应
+以这份完整新鲜失败原件设计独立可否证的审核职责方案，不重采本配置或追加同类
+prompt变体。没有等待用户许可、额度刷新或生产条件的阻塞；整体能力缺陷仍开放。
+
 ## 四处文档处置
 
 | 核对项 | disposition |
@@ -47,6 +79,6 @@ arithmetic、inference、material-update各一轮；必须指出工作问题、�
 | 白皮书 | **updated**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)补充唯一修正采用明确字段更新、以当前生成稿为基底且仍完整终审。 |
 | 工程故障台账 | **updated**：[职责条目](../operations/engineering-failure-ledger.md#2026-09-29-do-not-ask-generation-to-recopy-locked-references)记录强制全量改稿导致无关字段退步，链接本次证据及限制。 |
 | 需求覆盖基线 | **updated**：[本轮条目](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-29-program-bound-proactive-prose)记录修正契约；IRIS-CORE-005仍部分实现，不提升成生产或飞书通过。 |
-| README / AGENTS / current-handoff | **updated**：[交接](current-handoff.md)定位本次工作；**reviewed-unchanged**：[README](../../README.md#current-product-state)保留已提交历史事实及交接入口，[AGENTS](../../AGENTS.md)现有授权、定位和闭环规则适用。最终结果后同步README。 |
+| README / AGENTS / current-handoff | **updated**：[交接](current-handoff.md)与[README](../../README.md#current-product-state)定位本应用、本地检查及实模首败；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)现有授权、定位和闭环规则适用。 |
 
 此前所有失败窗口保留；文档提交不是部署。整体缺陷未关闭。

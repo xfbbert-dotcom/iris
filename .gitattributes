@@ -23,3 +23,5 @@ docs/development/evidence/iris-generated-recovery-20260929* -text whitespace=bla
 docs/development/evidence/iris-run-generated-recovery.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-bound-prose-20260929* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-run-bound-prose.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-repair-updates-20260929* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-run-repair-updates.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

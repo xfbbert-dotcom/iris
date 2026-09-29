@@ -1,0 +1,8 @@
+{
+  "model": "qwen3.8-max",
+  "qualification": "UI snapshot may lag; not billing reconciliation",
+  "expiresAt": "2026-12-18",
+  "observedAt": "2026-09-29T02:54:59.619Z",
+  "remainingTokens": 861730,
+  "freeExhaustionStop": true
+}
