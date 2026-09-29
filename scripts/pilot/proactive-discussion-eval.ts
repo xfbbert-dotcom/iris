@@ -6,7 +6,7 @@ import {
   type OpenAICompatibleChatMessage,
 } from "../../apps/core/src/model/openai-compatible-chat-completions-client.js";
 import { ModelProviderHttpError } from "../../apps/core/src/model/model-provider-error.js";
-import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdRepairedIntervention, validatePdScopeReview, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
+import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, validatePdGeneratedIntervention, validatePdRepairedIntervention, validatePdScopeReview, type PdModel } from "../../apps/core/src/proactive-discussion/model.js";
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 import { PD_REVIEW_FIELDS, type PdScopeReviewHistory } from "../../apps/core/src/proactive-discussion/review-receipts.js";
@@ -35,6 +35,7 @@ type SyntheticTraceRecord = {
   replayValidation: { accepted: boolean; reason: string };
   sanitization: SyntheticTraceSanitization;
   acceptedDraft?: boolean;
+  draftOrigin?: "model" | "assessment_projection";
 };
 export type SyntheticPdEvalTrace = {
   complete: boolean;
@@ -343,8 +344,13 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
   }
   if (stage === "pair_repair" || stage === "generated_pair") {
     let accepted = false;
+    let draftOrigin: "model" | "assessment_projection" | undefined;
     if (active.assessment) {
-      try { validatePdRepairedIntervention(value, active.context, active.assessment); accepted = true; }
+      try {
+        if (stage === "generated_pair") draftOrigin = validatePdGeneratedIntervention(value, active.context, active.assessment).draftOrigin;
+        else validatePdRepairedIntervention(value, active.context, active.assessment);
+        accepted = true;
+      }
       catch { /* Fixed diagnostic only; never retain arbitrary thrown details. */ }
     }
     let candidate: Record<string, unknown> | null = null;
@@ -355,8 +361,10 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
         draft: sanitizeDraftCandidate(value.draft, active.context, redactions, sanitization),
       };
     }
-    return baseSyntheticTraceRecord(active, attempt, callIndex, stage, candidate,
-      accepted, accepted ? "accepted" : stage === "generated_pair" ? "generation_invalid" : "repair_invalid", sanitization);
+    return { ...baseSyntheticTraceRecord(active, attempt, callIndex, stage, candidate,
+      accepted, accepted ? draftOrigin === "assessment_projection" ? "reconstructed_candidate" : "accepted"
+        : stage === "generated_pair" ? "generation_invalid" : "repair_invalid", sanitization),
+      ...(draftOrigin ? { draftOrigin } : {}) };
   }
   const replayValidation = replayScopeReviewValidation(value, scopeInput);
   return baseSyntheticTraceRecord(active, attempt, callIndex, stage,

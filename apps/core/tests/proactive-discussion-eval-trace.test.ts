@@ -90,6 +90,30 @@ test("trace preserves unavailable number inputs and agrees with runtime review",
   });
 });
 
+test("trace preserves incomplete model draft and distinguishes the reviewed reconstructed candidate", async () => {
+  const original = scriptedClient().client;
+  let reviewedDraft: unknown;
+  const client: OpenAICompatibleChatCompletionsClient = { async complete(messages, options) {
+    const stage = options?.responseFormat?.json_schema.name;
+    if (stage === "iris_proactive_discussion_scope_review") reviewedDraft = JSON.parse(messages[1]!.content).draft;
+    const value = JSON.parse(await original.complete(messages, options));
+    if (stage === "iris_proactive_discussion_generated_pair") value.draft = { text: "未完成的原稿" };
+    if (stage === "iris_proactive_discussion_scope_review") value.adviceQuote = JSON.parse(messages[1]!.content).assessment.suggestion;
+    return JSON.stringify(value);
+  } };
+  const result = await runSynthetic({ client, rounds: 1, includeTrace: true });
+  const arithmetic = result.results.find(item => item.caseId === "arithmetic")!;
+  expect(arithmetic.error).toBeNull();
+  expect(arithmetic.draft).toEqual(reviewedDraft);
+  expect(JSON.stringify(arithmetic.draft)).not.toContain("未完成的原稿");
+  expect(result.syntheticTrace!.records.find(item => item.stage === "generated_pair")).toMatchObject({
+    candidate: { draft: { text: "未完成的原稿" } },
+    draftOrigin: "assessment_projection",
+    replayValidation: { accepted: true, reason: "reconstructed_candidate" },
+    acceptedDraft: true,
+  });
+});
+
 test("trace opt-in leaves model results and request payloads unchanged and keeps case-round calls separate", async () => {
   const offClient = scriptedClient();
   const onClient = scriptedClient();

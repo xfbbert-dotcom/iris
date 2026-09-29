@@ -216,7 +216,7 @@ export function createPdModel({
         responseFormat: pairRepairResponseFormat(context, validated, "iris_proactive_discussion_generated_pair"),
       });
       let generated: PdReviewedIntervention;
-      try { generated = parsePdRepairedIntervention(generatedContent, context, validated); }
+      try { generated = validatePdGeneratedIntervention(JSON.parse(generatedContent), context, validated).pair; }
       catch { throw new Error("proactive discussion draft was invalid"); }
       const input = renderInput(context, generated.assessment);
       const { draft } = generated;
@@ -376,6 +376,36 @@ export function unwrapPdAssessmentResponse(value: unknown): unknown {
   const envelope = z.object({ assessment: z.unknown() }).strict().safeParse(value);
   if (!envelope.success) throw assessmentInvalid("assessment shape is invalid");
   return envelope.data.assessment;
+}
+
+/** Recovery produces an unapproved candidate from this generation only. */
+export function validatePdGeneratedIntervention(
+  value: unknown,
+  context: PdContext,
+  originalAssessment: PdAssessment,
+): { pair: PdReviewedIntervention; draftOrigin: "model" | "assessment_projection" } {
+  try {
+    return { pair: validatePdRepairedIntervention(value, context, originalAssessment), draftOrigin: "model" };
+  } catch { /* Only the narrow partial-draft shape below is recoverable. */ }
+  try {
+    const partial = z.object({
+      assessment: assessmentShapeSchema,
+      // A supplied wrong/duplicate reference list or extra field must still fail.
+      draft: z.object({ text: draftShapeSchema.shape.text }).strict(),
+    }).strict().parse(value);
+    const parts = [partial.assessment.observation, partial.assessment.reasoning, partial.assessment.suggestion];
+    if (partial.assessment.decision !== "intervene"
+      || parts.some(text => originalAssessment.evidenceRefs.some(ref => text.includes(ref)))) {
+      throw new Error("unusable generated assessment prose");
+    }
+    const pair = validatePdRepairedIntervention({ assessment: partial.assessment,
+      draft: { text: parts.join("\n\n"), evidenceRefs: [...originalAssessment.evidenceRefs] },
+    }, context, originalAssessment);
+    // No truncation, old assessment prose, model retry, or semantic approval.
+    return { pair, draftOrigin: "assessment_projection" };
+  } catch {
+    throw new Error("proactive discussion generated pair was invalid");
+  }
 }
 
 export function validatePdRepairedIntervention(
