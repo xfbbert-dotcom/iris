@@ -1,0 +1,132 @@
+{
+  "kind": "unavailable-numbers-sanitized-evidence",
+  "applicationCommit": "88f7a169d7e406b0c0af4d13d129e6768d4b07d2",
+  "checkoutCommit": "ac163d82799087941f09d12522556ce97b0a90f8",
+  "transformations": [
+    "private workspace hostname redacted",
+    "local username redacted"
+  ],
+  "hashQualification": "Private original wire/response hashes are retained. They differ after redaction; archive hashes below verify sanitized bytes. Original private files unchanged. No credential store read.",
+  "files": [
+    {
+      "name": "iris-unavailable-numbers-20260929.audit.json",
+      "originalSha256": "ffb3ec3fcb4a174d040ba3d5ce719bd9e018ffbc19e5fb451f37292463b152db",
+      "archiveSha256": "ffb3ec3fcb4a174d040ba3d5ce719bd9e018ffbc19e5fb451f37292463b152db",
+      "bytes": 1241
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.halted.json",
+      "originalSha256": "e2bdc45ed12631094d76ff08a2e72655e3d9f5b6f8c4b65536c1aba6dfba4298",
+      "archiveSha256": "e2bdc45ed12631094d76ff08a2e72655e3d9f5b6f8c4b65536c1aba6dfba4298",
+      "bytes": 97
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.json",
+      "originalSha256": "349bc91d26d87c9e2694f8f27016d13cf9f42ebe2b87e422047ac684c31298ce",
+      "archiveSha256": "349bc91d26d87c9e2694f8f27016d13cf9f42ebe2b87e422047ac684c31298ce",
+      "bytes": 207067
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.pending-1.json",
+      "originalSha256": "adf9147fe6b10134f55712b9a147ab0f4413cd4e0e145b043e58775bc3bac23e",
+      "archiveSha256": "adf9147fe6b10134f55712b9a147ab0f4413cd4e0e145b043e58775bc3bac23e",
+      "bytes": 191
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.pending-2.json",
+      "originalSha256": "829c2fda5e2fadf3289a5c49b962c7faffea506cff6b435a3b9b4897f8e332e4",
+      "archiveSha256": "829c2fda5e2fadf3289a5c49b962c7faffea506cff6b435a3b9b4897f8e332e4",
+      "bytes": 182
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.pending-3.json",
+      "originalSha256": "8848492c3e8e855642b25cf1fba090d8d3d18296e23b005e50c21f8dc3f78386",
+      "archiveSha256": "8848492c3e8e855642b25cf1fba090d8d3d18296e23b005e50c21f8dc3f78386",
+      "bytes": 186
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.pending-4.json",
+      "originalSha256": "55aca071169009c9ac3553cf125533913185fd90b31c06bf4333a6b68a698534",
+      "archiveSha256": "55aca071169009c9ac3553cf125533913185fd90b31c06bf4333a6b68a698534",
+      "bytes": 184
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.pending-5.json",
+      "originalSha256": "2bc6b3099bb88da0a40f3bf43197ebc90d2df56f541697c1456dc096348f3a11",
+      "archiveSha256": "2bc6b3099bb88da0a40f3bf43197ebc90d2df56f541697c1456dc096348f3a11",
+      "bytes": 183
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.pending-6.json",
+      "originalSha256": "c10f58ddbe46b3dcdffc3794d513324369036f9a8892a070f8ef15af778a6a35",
+      "archiveSha256": "c10f58ddbe46b3dcdffc3794d513324369036f9a8892a070f8ef15af778a6a35",
+      "bytes": 187
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.quota-1.json",
+      "originalSha256": "503f343c9cf83c2f856b3ea481834afb4cc1a0c301630efcd7939c53395f7893",
+      "archiveSha256": "503f343c9cf83c2f856b3ea481834afb4cc1a0c301630efcd7939c53395f7893",
+      "bytes": 252
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.quota-2.json",
+      "originalSha256": "f434422743f5c3cfcab9f316aa07fe1ec88739c10c15b39e2c0bf71dd8a7297b",
+      "archiveSha256": "f434422743f5c3cfcab9f316aa07fe1ec88739c10c15b39e2c0bf71dd8a7297b",
+      "bytes": 252
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.quota-3.json",
+      "originalSha256": "bf84081ab8cd4c34dee53fd3c1dd503eb12a40f4606938ca53202a1fba0d3b2c",
+      "archiveSha256": "bf84081ab8cd4c34dee53fd3c1dd503eb12a40f4606938ca53202a1fba0d3b2c",
+      "bytes": 252
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.quota-4.json",
+      "originalSha256": "7cf58e299123d6a2cb29d7fe52ce16de8d80c85db9f29ac9333659b2d4d7b18d",
+      "archiveSha256": "7cf58e299123d6a2cb29d7fe52ce16de8d80c85db9f29ac9333659b2d4d7b18d",
+      "bytes": 252
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.quota-5.json",
+      "originalSha256": "cc39c522c977590aada55e14a9f16ff01ce04790a10eac4ac4d0c3faf133eb71",
+      "archiveSha256": "cc39c522c977590aada55e14a9f16ff01ce04790a10eac4ac4d0c3faf133eb71",
+      "bytes": 252
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.quota-6.json",
+      "originalSha256": "e8b1852c146f97999800b9ac569825aef6dcc891d4f2ed195a7a0deb8a593cba",
+      "archiveSha256": "e8b1852c146f97999800b9ac569825aef6dcc891d4f2ed195a7a0deb8a593cba",
+      "bytes": 252
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.semantic-frozen-inference.json",
+      "originalSha256": "980d18ebdb9960da928b13baa6744e1bffe74cb313a468599dece0f9b16fc665",
+      "archiveSha256": "980d18ebdb9960da928b13baa6744e1bffe74cb313a468599dece0f9b16fc665",
+      "bytes": 457
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.semantic-inference.json",
+      "originalSha256": "0f6bd5cdd8d42eee4de2d24401996361a5f043d89641869e5bdb9d1f95a3c759",
+      "archiveSha256": "0f6bd5cdd8d42eee4de2d24401996361a5f043d89641869e5bdb9d1f95a3c759",
+      "bytes": 477
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.started.json",
+      "originalSha256": "b7a158d25100aa0ace9e8986a2ae0f0c10fe2e74c87511ac9b938788d78ea87b",
+      "archiveSha256": "b7a158d25100aa0ace9e8986a2ae0f0c10fe2e74c87511ac9b938788d78ea87b",
+      "bytes": 1303
+    },
+    {
+      "name": "iris-unavailable-numbers-20260929.txt",
+      "originalSha256": "dbde8bd326ed4896e1e3517506cf4c87cd6651fdd901de96877c5623c12a405e",
+      "archiveSha256": "fccbb2ad1deeb71e7d5f481541c83f283cc7e6f946dd5b023789c745b764cebe",
+      "bytes": 9945
+    },
+    {
+      "name": "iris-run-unavailable-numbers.txt",
+      "originalSha256": "949fcb9e1f831ee21bf50136f50619a8042f2ee346f5927815ad6f3dface3e73",
+      "archiveSha256": "95ce108f6f2e4e39e983ef655fdc463c98e40233173df0c18e66b8aeae1322f4",
+      "bytes": 1806
+    }
+  ]
+}

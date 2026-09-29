@@ -1,0 +1,43 @@
+{
+  "kind": "independent-execution-audit",
+  "applicationCommit": "88f7a169",
+  "checkoutCommit": "ac163d82799087941f09d12522556ce97b0a90f8",
+  "requests": 6,
+  "reportedUsageTokens": 19517,
+  "rawContentMatchesClient": true,
+  "rawFinishReason": "stop",
+  "completionTokens": 619,
+  "maxTokens": 2048,
+  "windowFailed": true,
+  "results": [
+    {
+      "caseId": "frozen-inference",
+      "semantic": "limited_pass",
+      "freshGeneration": false
+    },
+    {
+      "caseId": "inference",
+      "semantic": "limited_pass",
+      "freshGeneration": true
+    },
+    {
+      "caseId": "arithmetic",
+      "execution": "failed_at_generated_pair",
+      "semantic": "incomplete",
+      "reason": "Valid JSON, incomplete draft ending mid-sentence with no advice and no evidenceRefs; correctly rejected before scope review. No observed client truncation or max-token exhaustion."
+    }
+  ],
+  "uncalled": [
+    "material-update",
+    "qualified-risk",
+    "paraphrase"
+  ],
+  "postQuota": {
+    "observedAt": "2026-09-29T01:37:03.111Z",
+    "model": "qwen3.8-max",
+    "remainingDisplay": "908.17K / 1M",
+    "freeExhaustionStop": true,
+    "expiresOn": "2026-12-18",
+    "qualification": "UI reading may lag; not a billing reconciliation"
+  }
+}

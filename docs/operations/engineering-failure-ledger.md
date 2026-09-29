@@ -296,8 +296,12 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   unavailable inputs explicitly instead of forcing a numeric placeholder into a listed item.
   Mixed states are invalid; real zero values and known-amount continuity retain their checks.
   Exit requires both unavailable-input inference and computable-budget/update controls, not
-  merely schema acceptance. Local4824/469 passed/skipped; real-model validation has not started
-  because the free-quota console needs login. Model classification remains unproven.
+  merely schema acceptance. Local4824/469 passed/skipped. After login recovery, the bounded
+  six-HTTP window returned two limited inference passes, then stopped on an incomplete budget
+  draft before review; the remaining three controls were uncalled. Valid JSON and finish_reason
+  stop do not establish a complete candidate: the raw/client contents matched, and output619
+  was below max2048. Do not blame token exhaustion or mark known-value applicability accepted.
+  Complete classification and generation reliability remain unproven.
 
 ### Preserve issue history and the actual live-context producer contract
 
