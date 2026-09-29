@@ -1,0 +1,6 @@
+{
+  "reviewer": "primary-independent-of-provider-verdict",
+  "caseId": "frozen-arithmetic",
+  "pass": true,
+  "reason": "原来源10万、2人每人8万支持16万总额和正6万差额；未来风险以可能限定。建议核实额外资金或调整人数/成本，没有断言资金已批准。授权原文措辞生硬但三段完整可读，无内部引用和策略词；审批仅为待核实事项，不能代替资金。此为冻结生成恢复，不是新鲜生成稳定性证明。"
+}

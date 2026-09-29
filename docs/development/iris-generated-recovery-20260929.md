@@ -1,6 +1,6 @@
 # 初次生成残缺发言稿的有界恢复
 
-2026-09-29，起点 `6bbd3cd4`，原应用 `88f7a169`。当前工作树及分支见
+2026-09-29，应用 `8b39e8db`，起点 `6bbd3cd4`，原应用 `88f7a169`。当前工作树及分支见
 [交接](current-handoff.md)。本记录不关闭整体主动讨论缺陷，不代表部署。
 
 ## 证据与边界
@@ -24,7 +24,7 @@
 
 归档失败对象回归在旧代码中2项失败，修复后12项通过；增加 trace 原始内容及
 恢复来源回归。Core **4837通过 / 469条件跳过**，typecheck/build、CLI7通过。
-没有真实PG/Redis或CI结果。独立代码审查及实模结论待补，不引用旧窗口为新通过。
+没有真实PG/Redis或CI结果。独立代码审查无阻断，另跑73项通过。
 
 有限实模窗口：冻结上述失败生成对象，通过真实 render 审核链验证恢复，再运行
 material-update、qualified-risk、paraphrase 各一轮。最多18次HTTP、60000 reported
@@ -33,6 +33,27 @@ tokens、20分钟、单请求60秒；首次执行或独立语义失败停止，�
 仅既有合成授权及精确 qwen3.8-max 免费模式，每请求前核对实时额度≥100K、
 用完即停及期限，绑定请求 hash；无付费回退。冻结例不算新鲜生成证明。
 
+## 实际结果：两例通过，风险例来源哈希抄错后停止
+
+应用 `8b39e8db0f0d7524405e50dd5072679b2c8e6002`，**6次HTTP200 / 21799 tokens**。
+原始报告和脚本见[证据清单](evidence/iris-generated-recovery-20260929-manifest.json)。
+每请求前核对免费额度与用完即停。未重采、未追加变体；01:58:20.588Z停止。
+
+- frozen-arithmetic：1次真实审核，恢复稿原样返回；16万元总额、正6万元缺口及
+  限定风险正确，建议核实资金或调整人数/成本。主代理与独立审查按原标准通过。
+  “授权原文”略生硬但完整可读；不证明新鲜生成稳定性。
+- material-update：3次请求，判断/完整生成/审核返回pair；明确24万元、较原方案
+  增8万元、缺口14万元，建议追加预算、调整人数或谈价。七项已知数字未误标null，
+  主代理及独立审查有限通过。不是报价已审批，也没复制旧16万元意见。
+- qualified-risk：2次请求后执行失败。生成 assessment 的第一来源哈希缺少
+  `441c35` 片段，draft与materialChange引用正确。严格校验拒绝，未进入审核；
+  本次恢复不适用，也没有以另两处引用正确为由修补错误。风险语义未获本次验收。
+- paraphrase：未调用。整体窗口未通过，既有重复和过度确定问题未关闭。
+
+代码已改、本地通过、恢复及已知更新两例实模有限通过；**真实飞书未验收、未部署**。
+下一步审视已锁定的不可变来源/身份为何仍要求模型逐字重写；不将本次失败改判
+成功，也不重复同一配置。生成原始响应是证据，不以恢复后的候选覆盖它。
+
 ## 四处文档处置
 
 | 核对项 | 处置 |
@@ -40,6 +61,6 @@ tokens、20分钟、单请求60秒；首次执行或独立语义失败停止，�
 | 白皮书 | **reviewed-unchanged**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)原来源约束、语义审核及一次修正边界继续适用；恢复只产生待审核候选，无新权限或自动批准。 |
 | 工程故障台账 | **reviewed-unchanged**：[台账](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)已记完整对象与语义通过不同、合法JSON不等于完整输出；本次不改变其规则，具体恢复和证据在本记录。 |
 | 核心需求覆盖基线 | **reviewed-unchanged**：[基线](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-09-29-不可核算数字状态)整体仍部分实现，既有窗口失败和未完成正对照仍有效；尚无新实模覆盖可以升级。 |
-| README / AGENTS / current-handoff | **updated**：[交接](current-handoff.md#当前正在推进)加入本次实现及有限门禁；**reviewed-unchanged**：[README](../../README.md#current-product-state)、[AGENTS](../../AGENTS.md)仍通过交接定位最新事实，授权、未部署及四处核对规则不变。 |
+| README / AGENTS / current-handoff | **updated**：[交接](current-handoff.md#当前正在推进)与[README](../../README.md#current-product-state)加入本次实现及实际失败窗口；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)授权、未部署及四处核对规则不变。 |
 
 无push、生产访问、部署、能力启用或飞书外发。

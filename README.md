@@ -29,6 +29,12 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Application `8b39e8db` adds [bounded recovery of incomplete initial drafts](docs/development/iris-generated-recovery-20260929.md).
+Core4837 passed/469 conditional skips, type/build and CLI7 passed. Six HTTP200 requests/21799
+tokens passed the frozen recovery and fresh cost-update cases, then stopped on a malformed
+source hash in risk generation before review. Duplicate control was uncalled. The window failed;
+no production access, push, deployment or Feishu delivery. Earlier records below remain historical.
+
 Application `88f7a169` adds an [explicit unavailable-quantity state](docs/development/iris-unavailable-numbers-20260929.md)
 to proactive review, preserving known-value and arithmetic checks without forcing unknown
 amounts into drafts as zero. Core4824 passed/469 conditional skips, type/build and CLI7 passed.
