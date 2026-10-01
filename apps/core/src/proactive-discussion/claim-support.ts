@@ -18,26 +18,46 @@ const resultSchema = z.object({ verdict: z.enum(["supported", "contradicted", "i
 }).strict();
 const fields = ["observation", "reasoning", "suggestion"] as const;
 export type PdClaimField = typeof fields[number];
+export type PdUnsupportedClaim = { field: PdClaimField; quote: string };
 
-/** Local candidate only. Full fields preserve conditions and quotation context.
+/** No split at commas, semicolons, newlines, decimal points or inside quotes. */
+export function splitPdClaimSentences(text: string): string[] {
+  const quotes: Record<string, string> = { "“": "”", "‘": "’", "「": "」", "『": "』", '"': '"', "'": "'" };
+  const stack: string[] = [], parts: string[] = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (stack.length && char === stack.at(-1)) stack.pop();
+    else if (quotes[char] && !(char === "'" && /[a-z]/iu.test(text[index - 1] ?? "") && /[a-z]/iu.test(text[index + 1] ?? ""))) stack.push(quotes[char]!);
+    if (!stack.length && /[。！？!?]/u.test(char)) {
+      parts.push(text.slice(start, index + 1)); start = index + 1;
+    }
+  }
+  if (start < text.length) parts.push(text.slice(start));
+  return parts;
+}
+
+/** Local candidate only. Every sentence retains its complete original text.
  * Callers must separately enforce canonical draft coverage and original review. */
 export async function reviewPdClaimSupport(
   client: OpenAICompatibleChatCompletionsClient,
   assessment: Pick<PdAssessment, PdClaimField>,
   evidence: readonly { text: string }[],
   assertActive?: () => Promise<void>,
-): Promise<PdClaimField[]> {
-  const unsupported: PdClaimField[] = [];
-  for (const field of fields) {
+): Promise<PdUnsupportedClaim[]> {
+  const claims = fields.flatMap(field => splitPdClaimSentences(assessment[field]).map(quote => ({ field, quote })));
+  if (claims.length > 16) throw new Error("too many claim sentences");
+  const unsupported: PdUnsupportedClaim[] = [];
+  for (const claim of claims) {
     await assertActive?.();
     const content = await client.complete([
       { role: "system", content: claimSupportSystem },
-      { role: "user", content: JSON.stringify({ sources: evidence.map(source => source.text), claim: assessment[field] }) },
+      { role: "user", content: JSON.stringify({ sources: evidence.map(source => source.text), claim: claim.quote }) },
     ], { responseFormat: claimSupportFormat });
     await assertActive?.();
     try {
       const result = resultSchema.parse(JSON.parse(content));
-      if (result.verdict !== "supported") unsupported.push(field);
+      if (result.verdict !== "supported") unsupported.push(claim);
     } catch { throw new Error("proactive discussion claim support review was invalid"); }
   }
   return unsupported;

@@ -1,0 +1,11 @@
+{
+  "executionPassed": false,
+  "http200": 3,
+  "tokens": 1021,
+  "c": "PASS",
+  "badReasoning": "FAIL: source-only field still approves necessary consequence based on correct core fact",
+  "badSuggestionNotCalled": true,
+  "goodNotCalled": true,
+  "reviewer": "primary and /root/arithmetic_review",
+  "stop": "Owned diagnostic process terminated before pending request 4; raw report intentionally remains incomplete, stop recorded separately."
+}

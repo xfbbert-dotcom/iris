@@ -1,5 +1,11 @@
 # Iris Engineering Failure Ledger
 
+The complete-field transfer also failed: correct core facts were used to approve an entire
+paragraph containing an unsupported necessary consequence. An isolated successful sentence
+must not be promoted to a successful paragraph. The next mechanical sentence boundary preserves
+all text and quotes; cross-sentence meaning remains an explicit acceptance risk, not an assumed fix.
+
+
 [A conservative support-permission candidate](../development/iris-claim-support-20261001.md)
 does not promote a provider's contradicted verdict into a company fact or opposite conclusion.
 Both rejection categories only withhold permission. This changes the consumer obligation, not

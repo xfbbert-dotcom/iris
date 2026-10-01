@@ -1,0 +1,107 @@
+{
+  "kind": "claim-support-transfer-20261001",
+  "files": [
+    {
+      "source": "claim-support-transfer-20261001.json",
+      "target": "iris-claim-support-transfer-20261001.json",
+      "sha256": "879f5d872ffbbe33faaf089f2e81a738ffcabef504614354eaceb2d6ffffab0c",
+      "bytes": 18314
+    },
+    {
+      "source": "claim-support-transfer-20261001.started.json",
+      "target": "iris-claim-support-transfer-20261001.started.json",
+      "sha256": "dfdb794a7821290210b47dc3de5a9b79b15173af0c83bb1d46e145cb6bb27e19",
+      "bytes": 1533
+    },
+    {
+      "source": "claim-support-transfer-20261001.halted.json",
+      "target": "iris-claim-support-transfer-20261001.halted.json",
+      "sha256": "a72a0279b3cda330725d6413bb214796564b656d5cdaa21f1432e5f6e2044748",
+      "bytes": 255
+    },
+    {
+      "source": "claim-support-transfer-20261001.independent-review.json",
+      "target": "iris-claim-support-transfer-20261001.independent-review.json",
+      "sha256": "1621da47fc2692b9be4d058ed4f0a10ccef7c0e51d1a8349e6fea7eb84fa36af",
+      "bytes": 458
+    },
+    {
+      "source": "claim-support-transfer-20261001.quota-end.json",
+      "target": "iris-claim-support-transfer-20261001.quota-end.json",
+      "sha256": "46a6195a0a264d543757e8401687e6fd48064e1d353d93a10288f6eeabafcf0c",
+      "bytes": 265
+    },
+    {
+      "source": "claim-support-transfer-20261001.audit.json",
+      "target": "iris-claim-support-transfer-20261001.audit.json",
+      "sha256": "e4d681c0dddb55a8f6793686dae3ba5482a75321e92f9f5e5b474e1b75b95e01",
+      "bytes": 598
+    },
+    {
+      "source": "claim-support-transfer-20261001.semantic-c.json",
+      "target": "iris-claim-support-transfer-20261001.semantic-c.json",
+      "sha256": "cff77f56d6acdfee831f06b7da5038460ff737c30d64e99244431118576b716d",
+      "bytes": 320
+    },
+    {
+      "source": "claim-support-transfer-20261001.pending-1.json",
+      "target": "iris-claim-support-transfer-20261001.pending-1.json",
+      "sha256": "e103982f57d3c4d4c25875397efe7ef2e381fcc359dbf66ea78fecaa498c44ac",
+      "bytes": 164
+    },
+    {
+      "source": "claim-support-transfer-20261001.pending-2.json",
+      "target": "iris-claim-support-transfer-20261001.pending-2.json",
+      "sha256": "d4a8f051a568c37ad6fdc0b594358c2768edd57a7fe5371bdfd10e906e6424d2",
+      "bytes": 166
+    },
+    {
+      "source": "claim-support-transfer-20261001.pending-3.json",
+      "target": "iris-claim-support-transfer-20261001.pending-3.json",
+      "sha256": "a952f50307afc29f000e076f40175724757e3876f4a792583d58e75514eb5fe0",
+      "bytes": 166
+    },
+    {
+      "source": "claim-support-transfer-20261001.pending-4.json",
+      "target": "iris-claim-support-transfer-20261001.pending-4.json",
+      "sha256": "8e67be415838829cf6ca8a6b3b49fb97a738fb8c7e423ee37b872d19e990f355",
+      "bytes": 166
+    },
+    {
+      "source": "claim-support-transfer-20261001.quota-1.json",
+      "target": "iris-claim-support-transfer-20261001.quota-1.json",
+      "sha256": "0d58e748e2d43054b1a82c9a7cb0adce52e24c8145fb2de9dd3c4431e71b8e8b",
+      "bytes": 324
+    },
+    {
+      "source": "claim-support-transfer-20261001.quota-2.json",
+      "target": "iris-claim-support-transfer-20261001.quota-2.json",
+      "sha256": "d8479da5c0a66329d98eef1661dc0991d64d9a2e4cf14d881cada4fd000c9392",
+      "bytes": 324
+    },
+    {
+      "source": "claim-support-transfer-20261001.quota-3.json",
+      "target": "iris-claim-support-transfer-20261001.quota-3.json",
+      "sha256": "9ff19dc87c34f58f364dc658f2fe6bbf0dec87100409aeccea396a5321c238a6",
+      "bytes": 324
+    },
+    {
+      "source": "claim-support-transfer-20261001.mts",
+      "target": "iris-claim-support-transfer-20261001-runner.txt",
+      "sha256": "8b5eb143ad08678f0371f3a07b5da1c061f67af49b82020b144d0b506f0e0088",
+      "bytes": 10303
+    },
+    {
+      "source": "run-claim-support-transfer.ps1",
+      "target": "iris-claim-support-transfer-20261001-launcher.txt",
+      "sha256": "c541ffc46c63ca01c06916300e40b761927c409489ae629cf35656a0edd18f30",
+      "bytes": 1852
+    },
+    {
+      "source": "archive-claim-support-transfer-20261001.mjs",
+      "target": "iris-claim-support-transfer-20261001-archive.txt",
+      "sha256": "be61b9b8df191960ef80b2ef90f319be68b61e96f29a3b859ccb6c7fe73bc3f1",
+      "bytes": 3761
+    }
+  ]
+}

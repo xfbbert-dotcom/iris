@@ -1,0 +1,6 @@
+{
+  "caseId": "c",
+  "resultSha256": "2a7fa484b1863455dabafe11523df3a90f5c80b5216f333a1603e14d6daaa72c",
+  "pass": true,
+  "reason": "Original untested interface fact supported; possible influence on delivery is a qualified inference, no necessity added. Provider reason faithfully identifies this distinction."
+}

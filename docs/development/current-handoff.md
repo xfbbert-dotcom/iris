@@ -1,5 +1,10 @@
 # Iris 当前接手入口
 
+支持许可完整字段迁移3HTTP200/1021tokens失败：c通过，坏reasoning仍被批准。
+在请求4发出前已停止，17证据归档。[机械完整句候选](iris-claim-support-20261001.md)
+仅改拆分粒度，6测试通过，仍不接入runtime；下一bad/good有界验证，原FAIL不改。
+
+
 当前[支持许可helper](iris-claim-support-20261001.md)尚未接入model/runtime。
 Qwen3.7相同最小对照2HTTP200/661tokens在b误判contradicted，原FAIL保留；新程序
 不消费事实否定/理由，只接受supported作为额外许可，需先正控及完整三字段迁移。

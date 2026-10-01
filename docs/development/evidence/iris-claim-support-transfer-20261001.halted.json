@@ -1,0 +1,7 @@
+{
+  "at": "2026-10-01T13:49:25.8698047Z",
+  "halted": true,
+  "reason": "independent semantic failure on bad reasoning; stopped owned process before pending request 4, no additional HTTP",
+  "pendingRequestNotSent": 4,
+  "executionPassed": false
+}

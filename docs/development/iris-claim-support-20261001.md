@@ -42,3 +42,24 @@ supported；再将assessment-opinion-continuation原坏风险完整三字段全�
 | README / AGENTS / handoff | **updated**：[交接](current-handoff.md)指向当前候选；**reviewed-unchanged**：[README](../../README.md)部分实现/未实群验收仍有效，[AGENTS](../../AGENTS.md)授权定位和闭环规则不变。 |
 
 未部署、未生产访问、未push、未改变生产模型、未飞书外发。
+
+## 完整字段迁移失败与机械完整句边界
+
+7ea879db实际3HTTP200/1021tokens：c合理可能性句通过；完整坏稿observation通过，
+reasoning也被错误批准，理由仅认核心事实正确、隐含风险合理，未拒必然后果。
+在pending请求4发出前终止本轮owned node，不补发建议字段。原报告保持未正常
+结束的状态，另有真实停止记录；[17份证据](evidence/iris-claim-support-transfer-20261001-manifest.json)。
+原字段隔离候选FAIL，不改判，健康稿未调用。
+
+下一修复只改输入粒度，prompt/schema/精确模型不变：三个正文全部机械按完整句
+分开，绝不手选错误句或删去难句。保留所有字符，原样拼回字段；逗号、分号、
+换行、小数点及中英引号内标点不切分。最多16句，超限在HTTP前拒绝；结果只含
+未获支持的原句及字段，无provider理由。4RED/2通过后6项GREEN，独立6项通过。
+跨句指代/假设仍可能依赖前句，不能假定完整句自动自足，需健康全文控制检验。
+
+单一有界完整bad→good迁移，不重采已通过c，不重复已失败字段输入。每个候选
+全部句子；bad目标必要后果原句必须被拒，不能仅拒“首次”；good所有句子及建议
+都必须通过。最多24HTTP/24000reportedtokens/20分钟，单次60秒、逐请求免费
+核对不变；已知目标句一旦误批准立即停止，不等case结束，也可用abortReason
+停止尚未发出的请求。成功才允许继续设计产品组合，目前仍未接入model/runtime。
+四处闭环沿用本记录表格，台账/交接同步实际失败，基线仍partial且无覆盖提升。
