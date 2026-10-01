@@ -43,6 +43,13 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 
 ### Proactive collaboration is not a deadline reminder
 
+- **Counterexamples are hypotheses (2026-10-01 candidate):** A compatible alternative can expose
+  an unsupported necessary consequence, but is not an observed company fact. Bind diagnostics
+  to current original quotes, never invent positive field verdicts when scope review was skipped,
+  and retain full review after the sole correction. An empty counterexample list is not approval.
+  The [local candidate](../development/iris-counterexample-review-20261001.md) is default off and
+  not semantically accepted; literal binding does not prove hypothetical compatibility.
+
 - **Receipt-duty ablation boundary (2026-09-29):** Removing numeric/advice receipt tasks while
   retaining the complete candidate and semantic requirements identified unsupported quantities,
   but missed the conditional certain consequence in that same candidate. The [one-request probe](../development/iris-review-duty-ablation-20260929.md)

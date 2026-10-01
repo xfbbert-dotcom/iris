@@ -1,0 +1,34 @@
+{
+  "recordedAt": "2026-10-01T09:41:27.8123689Z",
+  "baseline": "422ff85c",
+  "candidateDefaultEnabled": false,
+  "httpRequests": 0,
+  "reportedTokens": 0,
+  "windowStarted": false,
+  "blockingCondition": "quota console logged out; fresh exact free quota and stop-after-exhaustion not verifiable",
+  "core": {
+    "logSha256": "eb5b68e8bfbf43a85ba883d27d3c9635cf28880214667ea39b4eec763d8063b2",
+    "filesSkipped": 13,
+    "conditionalSkipped": 469,
+    "passed": 4860,
+    "filesPassed": 267
+  },
+  "focusedFinal": 17,
+  "additionalCasesAfterFullRun": 3,
+  "typecheck": "passed",
+  "build": "passed",
+  "cli": 7,
+  "independentFocused": 10,
+  "files": [
+    {
+      "source": "counterexample-review-20261001.mts",
+      "sha256": "4351d902a925a3b67dbaa03891698eed838ae9661004e6cf3257c13d0711d648",
+      "target": "iris-counterexample-review-20261001-runner.txt"
+    },
+    {
+      "source": "run-counterexample-review.ps1",
+      "sha256": "ae1a759e8dea895bea2530d8161a2700833c77010af299ca5c795127f9d13aee",
+      "target": "iris-counterexample-review-20261001-launcher.txt"
+    }
+  ]
+}

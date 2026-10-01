@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { reviewPdCounterexamples, type PdCounterexampleRejection } from "./counterexamples.js";
 
 import type {
   OpenAICompatibleChatCompletionsClient,
@@ -180,8 +181,11 @@ export interface PdModel {
 
 export function createPdModel({
   client,
+  counterexampleReview = false,
 }: {
   client: OpenAICompatibleChatCompletionsClient;
+  /** Local candidate only; runtime does not enable this until semantic acceptance. */
+  counterexampleReview?: boolean;
 }): PdModel {
   return {
     async assess(context, assertActive) {
@@ -221,7 +225,9 @@ export function createPdModel({
       const input = renderInput(context, generated.assessment);
       const { draft } = generated;
       await assertActive?.();
-      const review = parseScopeReviewContent(await client.complete(
+      const challenge = counterexampleReview ? await reviewPdCounterexamples(client, { ...input, draft }) : null;
+      if (counterexampleReview) await assertActive?.();
+      const review = challenge ?? parseScopeReviewContent(await client.complete(
         scopeReviewMessages({ ...input, draft, identityTarget }),
         { responseFormat: scopeReviewResponseFormat(draft.text) },
       ), draft.text, undefined, generated.assessment);
@@ -242,6 +248,14 @@ export function createPdModel({
 
       const repairedInput = renderInput(context, repaired.assessment);
       const reviewHistory: PdScopeReviewHistory = { previousNumbers: review.requiredNumbers, evidence: repairedInput.evidence };
+      if (counterexampleReview) {
+        const challenge = await reviewPdCounterexamples(client, { ...repairedInput, draft: repaired.draft }).catch(error => {
+          if (error instanceof Error && error.message === "proactive discussion counterexample review was invalid") return undefined;
+          throw error;
+        });
+        await assertActive?.();
+        if (challenge !== null) return null;
+      }
       const finalReviewContent = await client.complete(
         repairedPairScopeReviewMessages({
           ...repairedInput,
@@ -643,7 +657,7 @@ function scopeReviewMessages(
 }
 
 function repairedPairScopeReviewMessages(
-  input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget; previousReview: PdScopeReview },
+  input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget; previousReview: PdScopeReview | PdCounterexampleRejection },
 ): OpenAICompatibleChatMessage[] {
   return [
     { role: "system", content: repairedPairScopeReviewSystem },
@@ -652,7 +666,7 @@ function repairedPairScopeReviewMessages(
 }
 
 function pairRepairMessages(
-  input: ReturnType<typeof renderInput> & { draft: PdDraft; review: PdScopeReview; identityTarget: PdIdentityTarget },
+  input: ReturnType<typeof renderInput> & { draft: PdDraft; review: PdScopeReview | PdCounterexampleRejection; identityTarget: PdIdentityTarget },
 ): OpenAICompatibleChatMessage[] {
   return [
     { role: "system", content: pairRepairSystem },

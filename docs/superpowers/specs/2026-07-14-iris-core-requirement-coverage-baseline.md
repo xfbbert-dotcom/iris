@@ -1,5 +1,13 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-01: Counterexample review candidate
+
+[Explicit local candidate](../../development/iris-counterexample-review-20261001.md) binds
+hypothetical counterexamples to current candidate quotes and preserves one correction plus full
+final review. Default false; runtime not enabled. Core4860 passed/469 skipped, type/build/CLI7
+passed; final focused17 includes three added cases. Real-model window has not started because
+the quota console is logged out. IRIS-CORE-005 remains partial; no semantic or Feishu acceptance.
+
 ## 2026-09-29: Program-bound proactive prose
 
 Follow-up [explicit correction updates](../../development/iris-repair-updates-20260929.md) retains
