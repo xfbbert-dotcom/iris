@@ -1,0 +1,12 @@
+{
+  "executionPassed": false,
+  "reviewer": "/root/arithmetic_review",
+  "reason": "material-update advice presupposes supplier relationship absent from authorized source; original review approved it",
+  "numericTargets": "24,+8,14 correct",
+  "uncalled": [
+    "paraphrase",
+    "handled"
+  ],
+  "http200": 3,
+  "tokens": 10272
+}

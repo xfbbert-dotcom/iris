@@ -1,5 +1,13 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-01: Advice can hide an unsupported premise
+
+A cost-update opinion had correct 24/+8/14 calculations but invented a supplier relationship
+inside a recommendation. Scope review approved it as advice. Recommendations do not exempt
+their business premises from source grounding. The [next bounded candidate](../development/iris-assessment-opinion-20261001.md)
+removes a redundant author stage, not the semantic requirement; success is still unproven.
+
+
 ## 2026-10-01: Separate receipt false negatives from semantic failures
 
 [Source-focus window and count-word correction](../development/iris-source-focus-20261001.md)

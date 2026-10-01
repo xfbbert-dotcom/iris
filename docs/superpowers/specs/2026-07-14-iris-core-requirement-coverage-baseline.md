@@ -1,5 +1,13 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-01: Direct initial-opinion candidate
+
+[Assessment projection](../../development/iris-assessment-opinion-20261001.md) removes the second
+free generation. Core4906/469 skipped, type/build/CLI7 passed; default off pending semantics.
+Predecessor continuation failed unsupported supplier premise despite correct 24/+8/14 arithmetic
+(3HTTP200/10272tokens); two silence cases uncalled. IRIS-CORE-005 remains partial.
+
+
 ## 2026-10-01: Source focus and Chinese count receipt
 
 [Bounded continuation](../../development/iris-source-focus-20261001.md): source-bound candidate

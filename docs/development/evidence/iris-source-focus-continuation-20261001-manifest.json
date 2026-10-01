@@ -1,0 +1,101 @@
+{
+  "kind": "source-focus-continuation-20261001",
+  "files": [
+    {
+      "source": "source-focus-continuation-20261001.json",
+      "target": "iris-source-focus-continuation-20261001.json",
+      "sha256": "5d1b1f2490e35320f8f1d85803c7a374b4be163ff80d6721b1e33861dd85cba5",
+      "bytes": 107251
+    },
+    {
+      "source": "source-focus-continuation-20261001.started.json",
+      "target": "iris-source-focus-continuation-20261001.started.json",
+      "sha256": "d3567298bd090c7f459f9f090331b09131501d598269f64ad1991d08cb4b29df",
+      "bytes": 1434
+    },
+    {
+      "source": "source-focus-continuation-20261001.halted.json",
+      "target": "iris-source-focus-continuation-20261001.halted.json",
+      "sha256": "4a6aa5b7f2355748d0556f6d64614bb34fcec7a962ba056e18e19b85d14ee96a",
+      "bytes": 130
+    },
+    {
+      "source": "source-focus-continuation-20261001.independent-review.json",
+      "target": "iris-source-focus-continuation-20261001.independent-review.json",
+      "sha256": "5998e3e4f288d46ccd6569faca9319ce58cee95479eb0b4bdce78f63fa0e512b",
+      "bytes": 343
+    },
+    {
+      "source": "source-focus-continuation-20261001.quota-end.json",
+      "target": "iris-source-focus-continuation-20261001.quota-end.json",
+      "sha256": "fc414e7077bbb96ff73cad168bb83fe334adc4115ee785d25579eca2b85608d5",
+      "bytes": 213
+    },
+    {
+      "source": "source-focus-continuation-20261001.audit.json",
+      "target": "iris-source-focus-continuation-20261001.audit.json",
+      "sha256": "e49e73f353c44384199d272257269aff8a7c59471a536e3880b1a45e5cd65c3a",
+      "bytes": 670
+    },
+    {
+      "source": "source-focus-continuation-20261001.semantic-material-update.json",
+      "target": "iris-source-focus-continuation-20261001.semantic-material-update.json",
+      "sha256": "d8b78912ad596a0769cffa8d54300f7461b65a99ce4e4a861a5bf56c5c207668",
+      "bytes": 399
+    },
+    {
+      "source": "source-focus-continuation-20261001.pending-1.json",
+      "target": "iris-source-focus-continuation-20261001.pending-1.json",
+      "sha256": "2a35328bb5d75bf0eeb1d83092295b6dd13a4d0bd8f71116fafc938e3e0f6686",
+      "bytes": 188
+    },
+    {
+      "source": "source-focus-continuation-20261001.pending-2.json",
+      "target": "iris-source-focus-continuation-20261001.pending-2.json",
+      "sha256": "3ec727193f9984d433c2a5acdb96adcc9a17a25b80e4914e70cf498af7c6bb7f",
+      "bytes": 202
+    },
+    {
+      "source": "source-focus-continuation-20261001.pending-3.json",
+      "target": "iris-source-focus-continuation-20261001.pending-3.json",
+      "sha256": "24fabf712954ccf3ba2d272cbdc7c6913ce605ad20f6225fe3ad7da7ac476cca",
+      "bytes": 190
+    },
+    {
+      "source": "source-focus-continuation-20261001.quota-1.json",
+      "target": "iris-source-focus-continuation-20261001.quota-1.json",
+      "sha256": "df1a38e63f906ab2fea130ed62994a02789bc654a330b15ba16a9efb2a5c1ebe",
+      "bytes": 323
+    },
+    {
+      "source": "source-focus-continuation-20261001.quota-2.json",
+      "target": "iris-source-focus-continuation-20261001.quota-2.json",
+      "sha256": "ed67385fd308e3c7d40fcbdc070460f6a5bf181aff31a160b5a14883188ed6cf",
+      "bytes": 323
+    },
+    {
+      "source": "source-focus-continuation-20261001.quota-3.json",
+      "target": "iris-source-focus-continuation-20261001.quota-3.json",
+      "sha256": "db3d21afea59f81005aaafe69bf2fac63e016dc416948b6e510721ba62e5202e",
+      "bytes": 323
+    },
+    {
+      "source": "source-focus-continuation-20261001.mts",
+      "target": "iris-source-focus-continuation-20261001-runner.txt",
+      "sha256": "f7847267ac8d0690d1addb54f8b7577133a20c7e298759e2dd7b559c0a4144a3",
+      "bytes": 9142
+    },
+    {
+      "source": "run-source-focus-continuation.ps1",
+      "target": "iris-source-focus-continuation-20261001-launcher.txt",
+      "sha256": "a1141c22ea09a71491e1c15b35734ba1642e26b47aece82010f46549f0a1c232",
+      "bytes": 1858
+    },
+    {
+      "source": "archive-source-focus-continuation-20261001.mjs",
+      "target": "iris-source-focus-continuation-20261001-archive.txt",
+      "sha256": "30b1d3a373bc2da9d11034a3e6a426486cf575b5bc14971fa720bdcf4266c732",
+      "bytes": 3641
+    }
+  ]
+}

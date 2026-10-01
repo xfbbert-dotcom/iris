@@ -171,6 +171,15 @@ const draftShapeSchema = z.object({
 type ModelContext = ReturnType<typeof modelContext>;
 type PdIdentityTarget = ReturnType<typeof projectIdentityTarget>;
 
+function projectAssessmentOpinion(assessment: PdAssessment, context: PdContext): PdReviewedIntervention {
+  const prose = canonicalOpinionProse({ opinion: { segments: [
+    { role: "observation", text: assessment.observation },
+    { role: "reasoning", text: assessment.reasoning },
+    { role: "suggestion", text: assessment.suggestion },
+  ], uncertainty: assessment.uncertainty } }, assessment.issueRef?.kind === "new");
+  return validatePdProseIntervention(prose, context, assessment);
+}
+
 export type PdReviewedIntervention = {
   assessment: PdAssessment;
   draft: PdDraft;
@@ -186,6 +195,7 @@ export function createPdModel({
   counterexampleReview = false,
   canonicalOpinion = false,
   sourceBoundIdentity = false,
+  assessmentOpinion = false,
 }: {
   client: OpenAICompatibleChatCompletionsClient;
   /** Local candidate only; runtime does not enable this until semantic acceptance. */
@@ -194,9 +204,12 @@ export function createPdModel({
   canonicalOpinion?: boolean;
   /** Local source-quotation identity candidate; no runtime enablement. */
   sourceBoundIdentity?: boolean;
+  /** Local candidate: review the initial opinion without a second author call. */
+  assessmentOpinion?: boolean;
 }): PdModel {
   if (canonicalOpinion && counterexampleReview) throw new Error("review candidates cannot be combined");
   if (sourceBoundIdentity && !canonicalOpinion) throw new Error("source focus candidate requires canonical opinion");
+  if (assessmentOpinion && !sourceBoundIdentity) throw new Error("assessment opinion requires source focus");
   return {
     async assess(context, assertActive) {
       const input = modelContext(context);
@@ -206,13 +219,19 @@ export function createPdModel({
       for (let attempt = 0; attempt < MAX_INVALID_ASSESSMENT_ATTEMPTS; attempt += 1) {
         await assertActive?.();
         const content = await client.complete(sourceBoundIdentity
-          ? messages.map(message => message.role === "system" ? { ...message, content: `${message.content}\n${sourceFocusAssessmentSystem}` } : message)
+          ? messages.map(message => message.role === "system" ? { ...message, content: [message.content, sourceFocusAssessmentSystem,
+            ...(assessmentOpinion ? ["observation、reasoning、suggestion将依次原样连接成待审发言，不会再由另一个调用改写。请写自然、简短的中文工作意见，三字段合计不超过1200字；reasoning同时说明当前新增价值或首次发言价值。"] : []),
+          ].join("\n") } : message)
           : messages, { responseFormat });
         try {
           const assessment = closeIssueBasisEvidence(parseAssessmentContent(content, context), context);
           if (sourceBoundIdentity) {
             try { pdSourceFocus(assessment, context); }
             catch { throw assessmentInvalid("new issue source focus must be a sentence from selected evidence"); }
+          }
+          if (assessmentOpinion && assessment.decision === "intervene") {
+            try { projectAssessmentOpinion(assessment, context); }
+            catch { throw assessmentInvalid("initial opinion must contain complete prose within 1200 characters"); }
           }
           return assessment;
         } catch (error) {
@@ -233,19 +252,24 @@ export function createPdModel({
       const identityTarget = projectIdentityTarget(validated, sourceBoundIdentity ? context : undefined);
 
       await assertActive?.();
-      const generation = generationInput(context, validated, sourceBoundIdentity);
-      const generatedContent = await client.complete(canonicalOpinion ? [
-        { role: "system", content: [canonicalOpinionSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
-        { role: "user", content: JSON.stringify(generation) },
-      ] : renderMessages(generation), {
-        responseFormat: canonicalOpinion ? canonicalOpinionFormat() : proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
-      });
       let generated: PdReviewedIntervention;
-      try {
-        const value: unknown = JSON.parse(generatedContent);
-        generated = validatePdProseIntervention(canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new") : value, context, validated);
+      if (assessmentOpinion) {
+        try { generated = projectAssessmentOpinion(validated, context); }
+        catch { throw new Error("proactive discussion draft was invalid"); }
+      } else {
+        const generation = generationInput(context, validated, sourceBoundIdentity);
+        const generatedContent = await client.complete(canonicalOpinion ? [
+          { role: "system", content: [canonicalOpinionSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
+          { role: "user", content: JSON.stringify(generation) },
+        ] : renderMessages(generation), {
+          responseFormat: canonicalOpinion ? canonicalOpinionFormat() : proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
+        });
+        try {
+          const value: unknown = JSON.parse(generatedContent);
+          generated = validatePdProseIntervention(canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new") : value, context, validated);
+        }
+        catch { throw new Error("proactive discussion draft was invalid"); }
       }
-      catch { throw new Error("proactive discussion draft was invalid"); }
       const input = renderInput(context, generated.assessment);
       const { draft } = generated;
       await assertActive?.();

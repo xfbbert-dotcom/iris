@@ -1,0 +1,6 @@
+{
+  "caseId": "material-update",
+  "resultSha256": "8ab80f9bba478ef866d105b00a2bbd90fff194683b0623f8212f78b6b7f3614b",
+  "pass": false,
+  "reason": "24/+8/14 and material change correct, but advice presupposes a supplier relationship absent from source; independent reviewer /root/arithmetic_review identifies unsupported business premise. Suggestions are not exempt from source grounding."
+}
