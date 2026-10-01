@@ -1,5 +1,10 @@
 # Iris 当前接手入口
 
+当前应用候选707eddc2，本地Core4925/469跳过、type/build/CLI7及独立审查通过。
+下一[三例原句含义转换边界](iris-claim-meaning-20261001.md)是诊断，尚未实模调用，不接入
+应用。旧审核语义错批不因正文/介入价值分离而消失，未宣称整个能力修复。
+
+
 ## 2026-10-01 继续修复：独立介入说明
 
 [当前限定修复](iris-intervention-value-20261001.md)新增显式separateInterventionValue候选：
