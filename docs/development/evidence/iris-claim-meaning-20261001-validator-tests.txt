@@ -1,0 +1,61 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { validateMeaning, resolveAnchor } from './claim-meaning-validation.mts';
+const anchor = (quote: string, occurrence: number | null = null) => ({ quote, occurrence });
+const example = () => ({
+  coverage: ['Check whether the ', 'plan is approved.'],
+  units: [
+    { id: 'u1', anchor: anchor('Check whether the plan is approved.'), speechAct: 'proposal',
+      epistemicStrength: 'not_asserted', normativeForce: 'recommended', polarity: 'positive',
+      operatorAnchors: [anchor('Check')], parentId: null,
+      condition: { connective: 'none', operatorAnchor: null, clauses: [] } },
+    { id: 'u2', anchor: anchor('whether the plan is approved'), speechAct: 'question',
+      epistemicStrength: 'not_asserted', normativeForce: 'none', polarity: 'positive',
+      operatorAnchors: [anchor('whether')], parentId: 'u1',
+      condition: { connective: 'none', operatorAnchor: null, clauses: [] } },
+  ],
+  relations: [],
+  referents: [{ ownerId: 'u1', mention: anchor('the plan'), stance: 'assumed_existing', relationAnchor: anchor('Check whether the plan is approved.') }],
+});
+const claim = 'Check whether the plan is approved.';
+test('accepts an exact complete graph, separating a proposal from an embedded unanswered question', () => {
+  assert.deepEqual(validateMeaning(example(), claim), example());
+});
+test('requires unique quotes unless an explicit occurrence resolves repetition', () => {
+  assert.deepEqual(resolveAnchor(anchor('a', 2), 'a a'), { start: 2, end: 3 });
+  assert.throws(() => resolveAnchor(anchor('a'), 'a a'), /ambiguous/);
+  assert.throws(() => resolveAnchor(anchor('a', 3), 'a a'), /occurrence/);
+  assert.throws(() => resolveAnchor(anchor('b'), 'a a'), /absent/);
+});
+test('requires literal contiguous coverage and all graph keys, including no added verdict', () => {
+  const omitted = example(); omitted.coverage = ['Check whether the plan approved.'];
+  assert.throws(() => validateMeaning(omitted, claim), /coverage/);
+  assert.throws(() => validateMeaning({ ...example(), supported: true }, claim), /keys/);
+});
+test('checks graph references and rejects parent cycles or out-of-parent anchors', () => {
+  const missing = example(); missing.units[1]!.parentId = 'not-provided';
+  assert.throws(() => validateMeaning(missing, claim), /parent/);
+  const cycle = example(); cycle.units[0]!.parentId = 'u2';
+  assert.throws(() => validateMeaning(cycle, claim), /cycle|parent/);
+  const relation = example(); relation.relations.push({ kind: 'precedes', fromId: 'u1', toId: 'missing', operatorAnchor: anchor('Check') } as never);
+  assert.throws(() => validateMeaning(relation, claim), /reference/);
+});
+test('represents OR conditions without treating them as all conditions', () => {
+  const text = 'If A or B, C will fail.';
+  const value = { coverage: [text], units: [{ id:'u1', anchor:anchor(text), speechAct:'assertion', epistemicStrength:'certain', normativeForce:'none', polarity:'negative', operatorAnchors:[anchor('will')], parentId:null, condition:{connective:'any',operatorAnchor:anchor('or'),clauses:[anchor('A'),anchor('B')]}}], relations:[], referents:[] };
+  assert.deepEqual(validateMeaning(value, text), value);
+  value.units[0]!.condition.clauses = [anchor('A')];
+  assert.throws(() => validateMeaning(value, text), /condition/);
+});
+test('rejects an asserted epistemic force on a proposal or question', () => {
+  const value = example(); value.units[0]!.epistemicStrength = 'certain';
+  assert.throws(() => validateMeaning(value, claim), /speech act/);
+});
+test('requires a referent and relation anchor to belong to its owner scope', () => {
+  const value = example(); value.referents[0]!.ownerId = 'u2';
+  assert.throws(() => validateMeaning(value, claim), /referent/);
+});
+test('rejects graphs whose root units do not cover substantive original text', () => {
+  const value = example(); value.units = [value.units[1]!]; value.units[0]!.parentId = null; value.referents = [];
+  assert.throws(() => validateMeaning(value, claim), /unit coverage/);
+});

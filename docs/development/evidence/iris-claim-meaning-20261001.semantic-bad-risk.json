@@ -1,0 +1,6 @@
+{
+  "caseId": "bad-risk",
+  "resultSha256": "fc2a725837a469e71ac3ab83fcf254f6744d5e1e76698f494c6fbaef4d7b5865",
+  "pass": false,
+  "reason": "OR and necessary non-delivery retained, but graph invents precedes from whole parent sentence to its child and substitutes temporal precedence for causation; explicit modality/negation anchors missing. Schema lacks causation but does not force these wrong edges. Full meaning-fidelity FAIL; remaining two uncalled."
+}

@@ -1,5 +1,13 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-01：含义转换不能把因果压成时间先后
+
+[原句转换诊断](../development/iris-claim-meaning-20261001.md)1HTTP200/2863tokens，模态
+主目标正确但整图新增父句先于子句、以precedes替代因果的关系，完整忠实性FAIL。合同
+未提供causes是表达缺口；错误父子端点不是被合同强制，归因分开。原文字符覆盖不能
+证明含义忠实。下一步先本地验证合同可表达性和端点约束，不能加schema即声称已修复。
+
+
 ## 2026-10-01：内部介入价值被强制变成群聊业务正文
 
 [修复记录](../development/iris-intervention-value-20261001.md)。canonical候选把reasoning

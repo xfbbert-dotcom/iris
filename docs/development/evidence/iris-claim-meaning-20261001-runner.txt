@@ -1,0 +1,159 @@
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import assert from 'node:assert/strict';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+import { meaningSystem, meaningFormat, validateMeaning } from './claim-meaning-validation.mts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918';
+const prefix = `${folder}/claim-meaning-20261001`;
+const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/u, ''));
+const git = (...args: string[]) => execFileSync('git', args, { cwd:root, encoding:'utf8' }).trim();
+const selected = ['bad-risk','healthy-advice','supplier-presupposition'];
+const frozen = readJson(`${prefix}.inputs.json`);
+assert.equal(frozen.kind, 'claim-meaning-frozen-originals');
+assert.deepEqual(frozen.cases.map((item: any) => item.caseId), selected);
+for (const item of frozen.cases) {
+  assert.equal(item.claimSha256, hash(item.claim));
+  assert.equal(item.source.sha256, hash(readFileSync(item.source.path)), 'archived source hash changed');
+  const source = readJson(item.source.path);
+  const original = item.caseId === 'supplier-presupposition'
+    ? source.results.find((result: any) => result.caseId === 'material-update').assessment.suggestion
+    : JSON.parse(source.completions[item.caseId === 'bad-risk' ? 2 : 5].messages[1].content).claim;
+  assert.equal(item.claim, original, 'claim must be mechanically extracted unchanged');
+}
+const modelName = 'qwen3.7-plus';
+const maxTokens = 4096;
+const appSources = ['apps/core/src/model/openai-compatible-chat-completions-client.ts'];
+const privateSources = ['claim-meaning-20261001.mts','claim-meaning-validation.mts','claim-meaning-validation.test.mts','claim-meaning-20261001.inputs.json','run-claim-meaning.ps1'];
+const currentHashes = () => ({
+  application: Object.fromEntries(appSources.map(path => [path, hash(readFileSync(`${root}/${path}`))])),
+  probe: Object.fromEntries(privateSources.map(path => [path, hash(readFileSync(`${folder}/${path}`))])),
+});
+const messagesFor = (claim: string) => [{ role:'system' as const, content:meaningSystem }, { role:'user' as const, content:JSON.stringify({claim}) }];
+const makeWire = (body: string) => {
+  const parsed = JSON.parse(body);
+  assert.equal(parsed.model, modelName); assert.deepEqual(parsed.response_format, {type:'json_object'});
+  return JSON.stringify({...parsed, enable_thinking:false, max_tokens:maxTokens});
+};
+const previews: any[] = [];
+const preflightClient = createOpenAICompatibleChatCompletionsClient({
+  config:{ provider:'openai-compatible', baseUrl:'https://offline.invalid/v1', apiKey:'offline-placeholder', model:modelName, timeoutMs:60000, structuredOutputMode:'json_object' },
+  sleep:async () => { throw Error('automatic retry prohibited'); },
+  fetch:async (url, init) => {
+    // No network: this is the adapter-generated body captured in memory.
+    assert.equal(String(url), 'https://offline.invalid/v1/chat/completions');
+    const wire = makeWire(String(init?.body));
+    const body = JSON.parse(wire);
+    assert.deepEqual(Object.keys(JSON.parse(body.messages[1].content)), ['claim']);
+    assert.equal(body.messages.length, 2);
+    previews.push({ caseId:selected[previews.length], requestHash:hash(wire), wire });
+    return new Response(JSON.stringify({ choices:[{message:{content:'{}'}}] }), {status:200,headers:{'content-type':'application/json'}});
+  },
+});
+for (const item of frozen.cases) await preflightClient.complete(messagesFor(item.claim), {responseFormat:meaningFormat});
+
+if (process.argv.length === 3 && process.argv[2] === '--preflight') {
+  assert(!existsSync(`${prefix}.started.json`), 'cannot alter preflight after window started');
+  const prepared = {kind:'claim-meaning-offline-preflight', networkRequests:0, credentialRead:false, model:modelName,
+    maxTokens, sourceHashes:currentHashes(), previews, claimHashes:frozen.cases.map((item: any) => ({caseId:item.caseId,claimSha256:item.claimSha256}))};
+  writeFileSync(`${prefix}.preflight.json`, JSON.stringify(prepared,null,2)+'\n');
+  console.log(JSON.stringify({preflightPassed:true,networkRequests:0,credentialRead:false,cases:selected,sourceHashes:prepared.sourceHashes,previewPath:`${prefix}.preflight.json`}));
+  process.exit(0);
+}
+assert(process.argv.length === 3 && process.argv[2] === '--run', 'only --preflight or --run is allowed');
+assert(!existsSync(`${prefix}.started.json`), 'one window only; no restart or overwrite');
+const prepared = readJson(`${prefix}.preflight.json`);
+assert.deepEqual(prepared.sourceHashes, currentHashes(), 'probe changed after offline preflight');
+assert.deepEqual(prepared.previews, previews, 'wire changed after offline preflight');
+assert.equal(git('status','--porcelain','--',...appSources), '', 'commit adapter before requests');
+const key = process.env.IRIS_BAILIAN_EVAL_KEY;
+assert(key && !/[\r\n]/u.test(key), 'protected launcher key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const baseUrl = 'https://ws-5mqqdooo3d7i0spz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const report: any = {kind:'claim-meaning-20261001',syntheticOnly:true,task:'original meaning extraction only; not source support or product acceptance',
+  commit:git('rev-parse','HEAD'),sourceHashes:currentHashes(),inputOrigins:frozen.cases.map((item: any) => ({caseId:item.caseId,claimSha256:item.claimSha256,source:item.source})),
+  startedAt:new Date().toISOString(),model:modelName,maxRequests:3,tokenStopBeforeNextRequest:24000,maxTokens,enableThinking:false,requestTimeoutMs:60000,windowMs:900000,
+  selected,requests:[],completions:[],results:[],reportedUsageTokens:0,seededGenerations:0,seededReviews:0,
+  independentSemanticReview:'per-case external gate; oracle never read by runner or sent to model',halted:false};
+const safe = (value: string) => value.replaceAll(key, '[REDACTED]');
+const save = () => writeFileSync(`${prefix}.json`, safe(JSON.stringify(report,null,2))+'\n');
+writeFileSync(`${prefix}.started.json`, JSON.stringify(report,null,2), {flag:'wx'});
+const deadline = Date.now()+report.windowMs;
+async function waitFile(path: string) {
+  const gateDeadline = Math.min(deadline, Date.now()+300000);
+  while (!existsSync(path)) {
+    if (Date.now() >= gateDeadline) throw Error('gate timeout');
+    if (existsSync(`${prefix}.abort.json`)) {
+      const aborted = readJson(`${prefix}.abort.json`); assert(typeof aborted.abortReason === 'string' && aborted.abortReason.length > 0);
+      throw Error(aborted.abortReason);
+    }
+    await new Promise(resolve => setTimeout(resolve,250));
+  }
+  const value = readJson(path);
+  if (typeof value.abortReason === 'string') throw Error(value.abortReason);
+  return value;
+}
+let activeCase = '';
+const live = createOpenAICompatibleChatCompletionsClient({
+  config:{provider:'openai-compatible',baseUrl,apiKey:key,model:modelName,timeoutMs:60000,structuredOutputMode:'json_object'},
+  sleep:async () => { throw Error('automatic retry prohibited'); },
+  fetch:async (url,init) => {
+    assert.equal(String(url), `${baseUrl}/chat/completions`); assert.equal(init?.method,'POST');
+    assert(report.requests.length < 3 && report.reportedUsageTokens < 24000 && Date.now() < deadline, 'bounded window exhausted');
+    assert(!report.requests.some((entry: any) => entry.caseId === activeCase), 'one HTTP per case; no retry');
+    const wire = makeWire(String(init?.body)); const requestHash = hash(wire);
+    assert.equal(wire, previews.find(item => item.caseId === activeCase)!.wire, 'live wire differs from offline-reviewed wire');
+    const index = report.requests.length+1;
+    const pending = {index,caseId:activeCase,stage:meaningFormat.json_schema.name,requestHash,model:modelName};
+    writeFileSync(`${prefix}.pending-${index}.json`,JSON.stringify(pending),{flag:'wx'});
+    console.log(JSON.stringify({waitingForQuota:index,caseId:activeCase,requestHash}));
+    const quota = await waitFile(`${prefix}.quota-${index}.json`);
+    assert.equal(quota.requestHash,requestHash); assert.equal(quota.model,modelName); assert.equal(quota.freeExhaustionStop,true);
+    assert(Number.isFinite(quota.remainingTokens) && quota.remainingTokens >= 150000, 'free quota insufficient');
+    assert(Date.parse(quota.expiresAt)>Date.now(), 'free quota expired');
+    const age = Date.now()-Date.parse(quota.observedAt); assert(age>=0 && age<60000, 'quota observation stale');
+    assert(Date.now()<deadline, 'window expired while awaiting quota');
+    const record: any = {...pending,quota,wire,startedAt:new Date().toISOString()}; report.requests.push(record); save();
+    const response = await fetch(url,{...init,body:wire,redirect:'error',signal:AbortSignal.timeout(Math.max(1,Math.min(60000,deadline-Date.now())))});
+    record.status=response.status;
+    assert(response.body, 'missing response body');
+    const reader=response.body.getReader(); const chunks:Uint8Array[]=[]; let size=0;
+    while(true) { const part=await reader.read(); if(part.done) break; size+=part.value.byteLength;
+      if(size>262144) { await reader.cancel(); throw Error('response size limit'); } chunks.push(part.value); }
+    const bytes=Buffer.concat(chunks); record.rawResponse=safe(bytes.toString()); record.responseSha256=hash(bytes);
+    record.finishedAt=new Date().toISOString(); save();
+    assert(response.ok, 'non-success HTTP; no retry');
+    const decoded=JSON.parse(bytes.toString());
+    assert.equal(decoded.model,modelName); assert.equal(decoded.choices?.length,1);
+    assert(Number.isSafeInteger(decoded.usage?.total_tokens) && decoded.usage.total_tokens>0, 'reported usage unavailable');
+    report.reportedUsageTokens+=decoded.usage.total_tokens; save();
+    assert.equal(decoded.choices[0].finish_reason,'stop','completion truncated or otherwise not finished; no retry');
+    return new Response(bytes,{status:response.status,headers:{'content-type':'application/json'}});
+  },
+});
+try {
+  for(const item of frozen.cases) {
+    activeCase=item.caseId;
+    const entry:any={caseId:activeCase,stage:meaningFormat.json_schema.name,messages:messagesFor(item.claim),responseFormat:meaningFormat};
+    report.completions.push(entry); save();
+    entry.content=await live.complete(entry.messages,{responseFormat:meaningFormat}); entry.contentSha256=hash(entry.content); save();
+    const meaning=validateMeaning(JSON.parse(entry.content),item.claim);
+    const result:any={caseId:activeCase,claim:item.claim,claimSha256:item.claimSha256,meaning,structuralValidation:'passed; not semantic completeness proof'};
+    report.results.push(result); save();
+    console.log(JSON.stringify({waitingForSemanticReview:activeCase,resultPath:`${prefix}.json`,resultSha256:hash(JSON.stringify(result))}));
+    const semantic=await waitFile(`${prefix}.semantic-${activeCase}.json`);
+    assert.equal(semantic.caseId,activeCase); assert.equal(semantic.resultSha256,hash(JSON.stringify(result)));
+    result.semantic=semantic; save();
+    assert.equal(semantic.pass,true,'independent meaning-fidelity failure; stop before next case');
+  }
+  report.executionPassed=true;
+} catch(error) {
+  report.halted=true; report.executionPassed=false; report.haltReason=safe(error instanceof Error?error.message:'unknown'); process.exitCode=1;
+} finally {
+  report.finishedAt=new Date().toISOString(); save();
+  writeFileSync(`${prefix}.halted.json`,JSON.stringify({at:report.finishedAt,halted:report.halted,executionPassed:report.executionPassed,reason:report.haltReason??'bounded extraction window completed'}),{flag:'wx'});
+  console.log(JSON.stringify({done:true,requests:report.requests.length,tokens:report.reportedUsageTokens,passed:report.executionPassed,reason:report.haltReason}));
+}

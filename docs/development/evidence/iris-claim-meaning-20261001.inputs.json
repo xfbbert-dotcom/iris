@@ -1,0 +1,35 @@
+{
+  "kind": "claim-meaning-frozen-originals",
+  "cases": [
+    {
+      "caseId": "bad-risk",
+      "claim": "若联调发现问题或供应商侧延迟，将直接导致无法按期交付，造成对客户的违约风险并损害信任。",
+      "claimSha256": "c769f257bd6cca1a9e50ea0536107cfa23b1223951b2ef72da1138b5a20fb656",
+      "source": {
+        "path": "D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence/iris-claim-sentence-transfer-20261001.json",
+        "sha256": "e9e66d3f190ba99355abb0f81c58ba3c711f10f814c6d6f085a8afb312efc8a2",
+        "selector": "completions[2].messages[1].content(JSON).claim"
+      }
+    },
+    {
+      "caseId": "healthy-advice",
+      "claim": "先推动完成供应商接口的联调验证，评估实际进度和风险后，再与客户沟通一个有条件或留有缓冲的交付计划；如必须今天回复客户，应明确说明交付时间取决于联调结果，避免使用'肯定'等绝对措辞。",
+      "claimSha256": "99a237fcebcac2753ff66a6bfc348142730d76782d893107594987c53ff517fb",
+      "source": {
+        "path": "D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence/iris-claim-sentence-transfer-20261001.json",
+        "sha256": "e9e66d3f190ba99355abb0f81c58ba3c711f10f814c6d6f085a8afb312efc8a2",
+        "selector": "completions[5].messages[1].content(JSON).claim"
+      }
+    },
+    {
+      "caseId": "supplier-presupposition",
+      "claim": "建议尽快与供应商核实12万元的新报价口径及是否仍有协商空间，同时请管理层确认是否批准追加预算、缩减招聘人数或调整岗位方案。",
+      "claimSha256": "f3676b8afe3c2c66439dfd70dec9265768e85e7360af70ee592cf2ed82496ff0",
+      "source": {
+        "path": "D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence/iris-source-focus-continuation-20261001.json",
+        "sha256": "5d1b1f2490e35320f8f1d85803c7a374b4be163ff80d6721b1e33861dd85cba5",
+        "selector": "results[caseId=material-update].assessment.suggestion"
+      }
+    }
+  ]
+}

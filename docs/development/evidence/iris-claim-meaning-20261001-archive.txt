@@ -1,0 +1,38 @@
+from pathlib import Path
+import json,hashlib,re
+src=Path('C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918')
+dst=Path('D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence')
+b='claim-meaning-20261001'
+h=lambda x:hashlib.sha256(x).hexdigest()
+read=lambda name:json.loads((src/name).read_text(encoding='utf-8-sig'))
+r=read(b+'.json');pre=read(b+'.preflight.json');assert r['executionPassed']==False and len(r['requests'])==1
+assert r['seededGenerations']==0 and r['seededReviews']==0
+used=0
+for req in r['requests']:
+ assert req['status']==200 and h(req['wire'].encode())==req['requestHash'] and h(req['rawResponse'].encode())==req['responseSha256']
+ wire=json.loads(req['wire']);raw=json.loads(req['rawResponse']);c=r['completions'][req['index']-1]
+ assert wire['model']==raw['model']=='qwen3.7-plus' and wire['max_tokens']==4096 and wire['enable_thinking']==False
+ assert wire['messages'][1]['content']==json.dumps({'claim':r['results'][0]['claim']},ensure_ascii=False,separators=(',',':'))
+ assert next(v for v in pre['previews'] if v['caseId']==req['caseId'])['wire']==req['wire']
+ assert raw['choices'][0]['message']['content']==c['content'] and h(c['content'].encode())==c['contentSha256']
+ assert raw['choices'][0]['finish_reason']=='stop'
+ q=req['quota'];assert q['requestHash']==req['requestHash'] and q['model']==wire['model'] and q['freeExhaustionStop']==True and q['remainingTokens']>=150000
+ from datetime import datetime
+ parse=lambda s:datetime.fromisoformat(s.replace('Z','+00:00'))
+ age=(parse(req['startedAt'])-parse(q['observedAt'])).total_seconds();assert 0<=age<60 and parse(q['expiresAt'])>parse(req['startedAt'])
+ used+=raw['usage']['total_tokens']
+assert used==r['reportedUsageTokens']==2863
+for result in r['results']:
+ body={k:v for k,v in result.items() if k!='semantic'}
+ assert result['semantic']['resultSha256']==h(json.dumps(body,ensure_ascii=False,separators=(',',':')).encode())
+ assert result['semantic']['pass']==False
+extras=['.json','.started.json','.halted.json','.inputs.json','.preflight.json','.oracle.md','.semantic-bad-risk.json','.quota-1.json','.pending-1.json','.independent-review.json','.quota-end.json']
+files=[(b+s,'iris-'+b+s) for s in extras]
+files += [(b+'.mts','iris-'+b+'-runner.txt'),('run-claim-meaning.ps1','iris-'+b+'-launcher.txt'),('claim-meaning-validation.mts','iris-'+b+'-validator.txt'),('claim-meaning-validation.test.mts','iris-'+b+'-validator-tests.txt'),('archive-'+b+'.py','iris-'+b+'-archive.txt')]
+manifest={'kind':b,'http200':len(r['requests']),'reportedTokens':used,'executionPassed':False,'files':[]}
+for source,target in files:
+ data=(src/source).read_bytes();assert not re.search(rb'Bearer\s+sk-|sk-[A-Za-z0-9]{20,}',data)
+ (dst/target).write_bytes(data);assert h((dst/target).read_bytes())==h(data)
+ manifest['files'].append({'source':source,'target':target,'sha256':h(data),'bytes':len(data)})
+(dst/('iris-'+b+'-manifest.json')).write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
+print(json.dumps({'archived':len(files),'http200':1,'tokens':used,'passed':False}))

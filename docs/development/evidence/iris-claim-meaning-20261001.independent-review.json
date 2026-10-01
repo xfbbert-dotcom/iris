@@ -1,0 +1,15 @@
+{
+  "pass": false,
+  "reviewers": [
+    "primary",
+    "arithmetic_review"
+  ],
+  "targetMeaning": "OR and certain non-delivery correctly retained",
+  "failure": "causation represented as precedes; parent sentence precedes own subunit; missing explicit operator anchors",
+  "attribution": "contract lacks causes but wrong parent edge not forced by schema",
+  "uncalled": [
+    "healthy-advice",
+    "supplier-presupposition"
+  ],
+  "parameterDiscrepancy": "private oracle footer retained stale 2048; before any request commit3a1a3879 and refreshed preflight fixed actual max_tokens4096; semantic oracle unchanged"
+}

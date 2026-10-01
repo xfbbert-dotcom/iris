@@ -1,0 +1,104 @@
+{
+  "kind": "claim-meaning-20261001",
+  "http200": 1,
+  "reportedTokens": 2863,
+  "executionPassed": false,
+  "files": [
+    {
+      "source": "claim-meaning-20261001.json",
+      "target": "iris-claim-meaning-20261001.json",
+      "sha256": "df6147df5fe9ca3a6169f8a8954a86ad39c8891f624626ef2805c24f83922c25",
+      "bytes": 45499
+    },
+    {
+      "source": "claim-meaning-20261001.started.json",
+      "target": "iris-claim-meaning-20261001.started.json",
+      "sha256": "a3b3f2bc7ec1de36964df693ab60192aa2036510392e09b5e1a10530d1b9d51c",
+      "bytes": 2925
+    },
+    {
+      "source": "claim-meaning-20261001.halted.json",
+      "target": "iris-claim-meaning-20261001.halted.json",
+      "sha256": "b278c13402fe32e3a88748cd04cdd55d51330ea6cc124cc91fed987c88c20ce7",
+      "bytes": 162
+    },
+    {
+      "source": "claim-meaning-20261001.inputs.json",
+      "target": "iris-claim-meaning-20261001.inputs.json",
+      "sha256": "fde24baf2e8d115e804ba727bfd50d26149a39e27f3beb02deead89d3552816c",
+      "bytes": 2072
+    },
+    {
+      "source": "claim-meaning-20261001.preflight.json",
+      "target": "iris-claim-meaning-20261001.preflight.json",
+      "sha256": "c1dcfd9725e8fa97e761ce45727c1746c6bfdc6e91670b15d7b0adeb7f8d6e9c",
+      "bytes": 28705
+    },
+    {
+      "source": "claim-meaning-20261001.oracle.md",
+      "target": "iris-claim-meaning-20261001.oracle.md",
+      "sha256": "332f2dc911415be3ccb62bda62b9515e23868b4958fd2bfa2d8966b737f3110a",
+      "bytes": 3820
+    },
+    {
+      "source": "claim-meaning-20261001.semantic-bad-risk.json",
+      "target": "iris-claim-meaning-20261001.semantic-bad-risk.json",
+      "sha256": "78594445451c9e044499fae8e53e088c022ca65f1fa4800223b6e83ee104d758",
+      "bytes": 466
+    },
+    {
+      "source": "claim-meaning-20261001.quota-1.json",
+      "target": "iris-claim-meaning-20261001.quota-1.json",
+      "sha256": "70047706ebc1f3f5c8d5bacf0682b7de9f3ca5209182312409e4f0a2d6bd3876",
+      "bytes": 329
+    },
+    {
+      "source": "claim-meaning-20261001.pending-1.json",
+      "target": "iris-claim-meaning-20261001.pending-1.json",
+      "sha256": "dd2b032803965ad16b2bd47117834d4dba39ab33244d1875d89a13cc1647d63f",
+      "bytes": 175
+    },
+    {
+      "source": "claim-meaning-20261001.independent-review.json",
+      "target": "iris-claim-meaning-20261001.independent-review.json",
+      "sha256": "85abf83aed6e5334945312f27796e728ecb81255cfb5a7c966937d227681b846",
+      "bytes": 631
+    },
+    {
+      "source": "claim-meaning-20261001.quota-end.json",
+      "target": "iris-claim-meaning-20261001.quota-end.json",
+      "sha256": "e1eb7474e92f753f64f2d9b79b596c314ada8893f7c76a3006f155d0e65c3324",
+      "bytes": 440
+    },
+    {
+      "source": "claim-meaning-20261001.mts",
+      "target": "iris-claim-meaning-20261001-runner.txt",
+      "sha256": "aad2dcf5ff0b2ecd379c07ce7a576ad9e44f72e08e0e702759bc0f9a57e810f4",
+      "bytes": 12194
+    },
+    {
+      "source": "run-claim-meaning.ps1",
+      "target": "iris-claim-meaning-20261001-launcher.txt",
+      "sha256": "99171047c950f86e08d3add60cd922be00a383909f3d89a2125cce3f2c3763e7",
+      "bytes": 1952
+    },
+    {
+      "source": "claim-meaning-validation.mts",
+      "target": "iris-claim-meaning-20261001-validator.txt",
+      "sha256": "23a6db0550d22057418ffb68f2bf6de99740447319ecd3559c185b4119da3343",
+      "bytes": 11539
+    },
+    {
+      "source": "claim-meaning-validation.test.mts",
+      "target": "iris-claim-meaning-20261001-validator-tests.txt",
+      "sha256": "560fb93bcf39d0ab5f196ec45380bf2044ebfbcf60bcc808b7cd660f60975f74",
+      "bytes": 4072
+    },
+    {
+      "source": "archive-claim-meaning-20261001.py",
+      "target": "iris-claim-meaning-20261001-archive.txt",
+      "sha256": "10490935cc8809606987a21193dca3df7d6edab7e83b93474c53db4f1bb7dc89",
+      "bytes": 3122
+    }
+  ]
+}
