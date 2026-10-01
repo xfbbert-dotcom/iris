@@ -4,7 +4,7 @@
 
 ## 当前正在推进
 
-2026-10-01已实现[独立反例检查候选](iris-counterexample-review-20261001.md)：完整候选
+2026-10-01候选提交`33f994ec`已实现[独立反例检查候选](iris-counterexample-review-20261001.md)：完整候选
 原句绑定→最多一次修正→再次反例检查及原终审。显式选项默认false，runtime未启用。
 Core4860通过/469条件跳过，type/build/CLI7通过；补充3项后定向17及typecheck通过。
 当前实模HTTP0：百炼页面未登录，常规登录尝试及刷新未恢复，已请用户恢复会话。
