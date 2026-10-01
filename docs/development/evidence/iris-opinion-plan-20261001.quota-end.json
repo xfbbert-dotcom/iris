@@ -1,0 +1,11 @@
+{
+  "model": "qwen3.7-plus",
+  "postWindowObserved": false,
+  "lastPreRequest": 3,
+  "lastPreRequestObservedAt": "2026-10-01T15:15:35.887Z",
+  "lastPreRequestDisplayedRemainingTokens": 538530,
+  "lastPreRequestStopOnExhaustion": true,
+  "expiresAt": "2026-12-18T00:00:00+08:00",
+  "reportedWindowTokens": 8011,
+  "note": "UI quota may lag usage. Last pre-request observation only, not current balance or billing audit."
+}

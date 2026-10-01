@@ -1,0 +1,17 @@
+{
+  "kind": "root-window-decision",
+  "candidate": "5b48ad12",
+  "accepted": false,
+  "actualRequests": 3,
+  "http200": 3,
+  "reportedUsageTokens": 8011,
+  "halt": "before pending request 4; no quota-4 or HTTP for generation",
+  "failedGate": "hypothesis initial necessity judgment",
+  "abortAttributionClarification": "Abort text saying invented project/resource commitments is shorthand for imagined conditional scenarios; raw response does not claim those activities occurred. Preserve original abort unchanged.",
+  "independentReviewSha256": "172366c8e38ebf7d7816ee9e17aef8660ed207863ee4520b0cbd71779845a11a",
+  "noResampling": true,
+  "noChangedExpectations": true,
+  "productionVerified": false,
+  "deployed": false,
+  "feishuSent": false
+}

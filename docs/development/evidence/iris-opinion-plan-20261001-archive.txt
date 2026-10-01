@@ -1,0 +1,286 @@
+"""Archive only the terminated 5b48ad12 hypothesis-aborted opinion-plan window.
+
+No HTTP, credential access, original edits, or application execution. --prepare
+validates all final evidence and writes a PRIVATE proposed manifest. --archive
+requires that identical manifest and then copies evidence without overwriting.
+Both modes refuse to proceed before independent/root verdict records exist.
+"""
+from datetime import datetime
+from pathlib import Path
+import hashlib
+import json
+import re
+import subprocess
+import sys
+
+SRC = Path('C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918')
+ROOT = Path('D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86')
+DST = ROOT / 'docs/development/evidence'
+BASE = 'opinion-plan-20261001'
+COMMIT = '5b48ad1259133a3900a3a4d4e1572171fe37b724'
+MODEL = 'qwen3.7-plus'
+CASES = ['paraphrase', 'handled', 'hypothesis', 'qualified-risk', 'inference',
+         'arithmetic', 'material-update', 'separate-next']
+CONTROLS = ['negative-role-swap', 'negative-time-swap']
+ASSESS = 'iris_proactive_discussion_assessment'
+PLAN = 'iris_proactive_discussion_opinion_plan'
+
+
+def need(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def compact(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
+
+def read(name):
+    return json.loads((SRC / name).read_text(encoding='utf-8-sig'))
+
+
+def moment(value):
+    need(isinstance(value, str), 'timestamp missing')
+    result = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    need(result.tzinfo is not None, 'timestamp timezone missing')
+    return result
+
+
+def wire_matches_client(wire_text, entry):
+    wire = json.loads(wire_text)
+    need(set(wire) == {'model', 'messages', 'response_format', 'enable_thinking', 'max_tokens'},
+         'unexpected wire field')
+    need(wire['model'] == MODEL and wire['max_tokens'] == 4096
+         and wire['enable_thinking'] is False and wire['response_format'] == {'type': 'json_object'},
+         'wire parameters differ')
+    fmt = entry['responseFormat']
+    need(fmt['type'] == 'json_schema' and fmt['json_schema']['strict'] is True
+         and fmt['json_schema']['name'] == entry['stage'], 'recorded schema differs')
+    appended = '\n'.join([
+        'Return only a JSON object that satisfies the following JSON Schema, not the schema itself.',
+        'Do not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.',
+        compact(fmt['json_schema']['schema'])])
+    expected = [dict(message) for message in entry['messages']]
+    need(len(expected) == 2 and [item['role'] for item in expected] == ['system', 'user'],
+         'unexpected client message roles')
+    expected[0]['content'] += '\n\n' + appended
+    need(wire['messages'] == expected, 'actual wire differs from complete recorded client input/schema')
+
+
+def main(mode):
+    need(mode in ['--prepare', '--archive'], 'only --prepare or --archive is allowed')
+    report_bytes = (SRC / (BASE + '.json')).read_bytes()
+    r = json.loads(report_bytes.decode('utf-8-sig'))
+    need(r.get('kind') == BASE and r.get('syntheticOnly') is True and r.get('commit') == COMMIT,
+         'wrong report/commit')
+    need(r.get('executionPassed') is False and r.get('halted') is True,
+         'only this terminated failed window can be archived')
+    start, end = moment(r.get('startedAt')), moment(r.get('finishedAt'))
+    need(start <= end, 'window chronology invalid')
+    stop, abort = read(BASE + '.halted.json'), read(BASE + '.abort.json')
+    need(stop == {'at': r['finishedAt'], 'halted': True, 'executionPassed': False,
+                  'caseId': 'hypothesis', 'stage': PLAN, 'reason': r['haltReason']},
+         'halted/report mismatch')
+    need(r.get('haltCase') == 'hypothesis' and r.get('haltStage') == PLAN
+         and abort.get('caseId') == 'hypothesis' and abort.get('abortReason') == r['haltReason'],
+         'abort/report mismatch')
+    need(start <= moment(abort.get('observedAt')) <= end, 'abort timestamp outside window')
+    pre, initial = read(BASE + '.preflight.json'), read(BASE + '.started.json')
+    need(pre.get('kind') == 'opinion-plan-offline-preflight' and pre.get('networkRequests') == 0
+         and pre.get('credentialRead') is False and pre.get('commit') == COMMIT,
+         'invalid offline preflight')
+    profile = {'model': MODEL, 'maxRequests': 40, 'tokenStopBeforeNextRequest': 180000,
+               'maxTokens': 4096, 'enableThinking': False, 'requestTimeoutMs': 60000,
+               'windowMs': 2700000, 'minimumFreeTokens': 200000, 'quotaMaxAgeMs': 60000,
+               'applicationOptions': {'canonicalOpinion': True, 'sourceBoundIdentity': True, 'opinionPlan': True},
+               'plannedControlPlanInjections': 2, 'freshSeededGenerations': 0, 'freshSeededReviews': 0}
+    for key, value in profile.items():
+        need(r.get(key) == value and initial.get(key) == value and pre['profile'].get(key) == value,
+             'frozen profile differs: ' + key)
+    for key in pre['profile']:
+        need(r.get(key) == pre['profile'][key] and initial.get(key) == pre['profile'][key],
+             'preflight profile differs: ' + key)
+    for key in ['commit', 'sourceHashes', 'selected', 'controls', 'stageCaps']:
+        need(r.get(key) == initial.get(key) == pre.get(key), 'preflight/start/report mismatch: ' + key)
+    need(r['selected'] == CASES and [item['caseId'] for item in r['controls']] == CONTROLS,
+         'case/control order differs')
+    need([item['caseId'] for item in pre['caseHashes']] == CASES, 'case hash order differs')
+    need(all(re.fullmatch(r'[0-9a-f]{64}', item['sha256']) for item in pre['caseHashes']), 'invalid frozen case hash')
+    need(initial['startedAt'] == r['startedAt'] and all(initial.get(key) == [] for key in
+         ['requests', 'completions', 'results', 'controlOrigins']), 'invalid initial record')
+    need(r.get('controlPlanInjections') == 0 and r.get('controlOrigins') == [], 'unexpected control injection')
+    need(set(r['sourceHashes']['probe']) == {BASE + '.mts', 'run-opinion-plan.ps1'}, 'wrong private source set')
+    for name, expected in r['sourceHashes']['probe'].items():
+        need(digest((SRC / name).read_bytes()) == expected, 'private source changed: ' + name)
+    for name, expected in r['sourceHashes']['application'].items():
+        need(not Path(name).is_absolute() and '..' not in Path(name).parts, 'unsafe application source path')
+        need(digest((ROOT / name).read_bytes()) == expected, 'application source changed: ' + name)
+
+    requests, completions, results = r['requests'], r['completions'], r['results']
+    need(len(requests) == 3 and len(completions) == 4 and len(results) == 2,
+         'this archive requires exactly 3 actual assessments, 1 unissued plan and 2 completed results')
+    need([item['caseId'] for item in requests] == CASES[:3]
+         and [item['caseId'] for item in completions] == CASES[:3] + ['hypothesis']
+         and [item['caseId'] for item in results] == CASES[:2], 'request/completion/result order differs')
+    need([item['stage'] for item in completions] == [ASSESS] * 3 + [PLAN]
+         and all(item.get('origin') == 'model' for item in completions), 'stage/origin differs')
+    need(not (SRC / (BASE + '.quota-4.json')).exists(), 'unissued fourth request unexpectedly has quota gate')
+    files = [(BASE + suffix, 'iris-' + BASE + suffix) for suffix in [
+        '.json', '.started.json', '.halted.json', '.abort.json', '.preflight.json',
+        '.independent-review.json', '.root-decision.json', '.quota-end.json']]
+    usage = 0
+    for index, entry in enumerate(completions, 1):
+        need(entry['index'] == index, 'completion index differs')
+        pending = read(f'{BASE}.pending-{index}.json')
+        need(pending.get('index') == index and pending.get('completionIndex') == index
+             and pending.get('caseId') == entry['caseId'] and pending.get('stage') == entry['stage']
+             and pending.get('model') == MODEL, 'pending/client identity differs')
+        need(digest(pending['wire'].encode('utf-8')) == pending.get('requestHash'), 'pending wire hash differs')
+        wire_matches_client(pending['wire'], entry)
+        files.append((f'{BASE}.pending-{index}.json', f'iris-{BASE}.pending-{index}.json'))
+        if index == 4:
+            need(all(key not in entry for key in ['content', 'contentSha256', 'requestIndex']),
+                 'unissued completion contains actual-response metadata')
+            continue
+        req = requests[index - 1]
+        need(entry.get('requestIndex') == index and all(req.get(key) == value for key, value in pending.items()),
+             'actual request differs from pending/client')
+        need(req.get('status') == 200, 'unexpected actual HTTP status')
+        quota = read(f'{BASE}.quota-{index}.json')
+        need(req.get('quota') == quota and quota.get('requestHash') == req['requestHash']
+             and quota.get('model') == MODEL and quota.get('freeExhaustionStop') is True
+             and type(quota.get('remainingTokens')) in [int, float] and quota['remainingTokens'] >= 200000,
+             'quota identity/stop/free balance differs')
+        req_start, req_end = moment(req['startedAt']), moment(req['finishedAt'])
+        need(start <= req_start <= req_end <= end and (req_start-start).total_seconds() < 2700
+             and (req_end-req_start).total_seconds() <= 60, 'actual request time bound violated')
+        need(0 <= (req_start-moment(quota.get('observedAt'))).total_seconds() < 60
+             and moment(quota.get('expiresAt')) > req_start, 'quota stale/expired')
+        need(usage < 180000, 'request followed exhausted token stop')
+        need(digest(req['rawResponse'].encode('utf-8')) == req.get('responseSha256'), 'raw response hash differs')
+        raw = json.loads(req['rawResponse'])
+        need(raw.get('model') == MODEL and len(raw.get('choices', [])) == 1, 'raw model/choices differ')
+        choice = raw['choices'][0]
+        need(choice.get('finish_reason') == 'stop' and choice['message']['content'] == entry.get('content')
+             and digest(entry['content'].encode('utf-8')) == entry.get('contentSha256'), 'raw/client content differs')
+        tokens = raw.get('usage', {}).get('total_tokens')
+        need(type(tokens) is int and tokens > 0 and req.get('reportedUsageTokens') == tokens, 'usage differs')
+        usage += tokens
+        files.append((f'{BASE}.quota-{index}.json', f'iris-{BASE}.quota-{index}.json'))
+    need(usage == r['reportedUsageTokens'] == 8011, 'actual reported token sum differs')
+    need(moment(requests[-1]['finishedAt']) <= moment(abort['observedAt']), 'abort preceded third response')
+    for index, result in enumerate(results):
+        case_id = result['caseId']
+        assessment = json.loads(completions[index]['content'])['assessment']
+        need(result.get('kind') == 'fresh' and result.get('expectedDecision') == 'skip'
+             and result.get('draft') is None and result.get('initialAssessment') == assessment
+             and result.get('assessment') == assessment and assessment.get('decision') == 'skip'
+             and assessment.get('reason') == ['duplicate', 'already_handled'][index], 'completed skip differs')
+        gate_name = f'{BASE}.semantic-{case_id}.json'
+        gate = read(gate_name)
+        body = {key: value for key, value in result.items() if key != 'semantic'}
+        need(gate.get('caseId') == case_id and gate.get('pass') is True and result.get('semantic') == gate
+             and gate.get('resultSha256') == digest(compact(body).encode('utf-8'))
+             and isinstance(gate.get('reason'), str) and bool(gate['reason']), 'consumed semantic gate differs')
+        files.append((gate_name, 'iris-' + gate_name))
+    failed = json.loads(completions[2]['content'])['assessment']
+    need(failed.get('decision') == 'intervene' and failed.get('reason') == 'material_issue', 'failed initial decision differs')
+    fourth_input = json.loads(completions[3]['messages'][1]['content'])
+    need(fourth_input['target']['decision'] == 'intervene'
+         and fourth_input['target']['issueRef']['sourceFocus']['sourceQuote'] == failed['issueRef']['description'],
+         'unissued plan input does not derive from failed assessment')
+    need(not (SRC / (BASE + '.semantic-hypothesis.json')).exists(),
+         'no result existed to consume a hypothesis case gate; retain post-run judgment in independent review')
+    for category, expected_indexes in [('pending', [1, 2, 3, 4]), ('quota', [1, 2, 3])]:
+        actual_indexes = sorted(int(re.fullmatch(re.escape(BASE) + r'\.' + category + r'-(\d+)\.json', path.name)[1])
+                                for path in SRC.glob(f'{BASE}.{category}-[0-9]*.json'))
+        need(actual_indexes == expected_indexes, 'unexpected additional numeric gate')
+
+    # These post-run records are mandatory. They preserve the external judgment;
+    # this script verifies provenance/termination, not natural-language truth.
+    independent = read(BASE + '.independent-review.json')
+    decision = read(BASE + '.root-decision.json')
+    need(independent.get('pass') is False and independent.get('commit') == COMMIT,
+         'independent window verdict/commit differs')
+    need(independent.get('uncalledFresh') == CASES[3:]
+         and independent.get('uncalledControls') == CONTROLS, 'independent uncalled list differs')
+    judged = independent.get('cases', [])
+    need([item.get('caseId') for item in judged] == CASES[:3]
+         and [item.get('pass') for item in judged] == [True, True, False]
+         and judged[2].get('completionContentSha256') == completions[2]['contentSha256'],
+         'independent case judgment/content binding differs')
+    need(decision.get('accepted') is False and decision.get('candidate') == COMMIT[:8]
+         and decision.get('actualRequests') == 3 and decision.get('http200') == 3
+         and decision.get('reportedUsageTokens') == 8011
+         and decision.get('independentReviewSha256') == digest((SRC / (BASE + '.independent-review.json')).read_bytes()),
+         'root decision differs from actual window/independent evidence')
+    quota_end = read(BASE + '.quota-end.json')
+    last_quota = requests[-1]['quota']
+    need(quota_end.get('model') == MODEL and quota_end.get('postWindowObserved') is False
+         and quota_end.get('lastPreRequest') == 3
+         and quota_end.get('lastPreRequestObservedAt') == last_quota['observedAt']
+         and quota_end.get('lastPreRequestDisplayedRemainingTokens') == last_quota['remainingTokens']
+         and quota_end.get('lastPreRequestStopOnExhaustion') is True
+         and quota_end.get('expiresAt') == last_quota['expiresAt']
+         and quota_end.get('reportedWindowTokens') == 8011, 'last pre-request quota-end statement differs')
+    files += [(BASE + '.mts', 'iris-' + BASE + '-runner.txt'),
+              ('run-opinion-plan.ps1', 'iris-' + BASE + '-launcher.txt'),
+              ('archive-' + BASE + '.py', 'iris-' + BASE + '-archive.txt')]
+    staged = [(source, target, (SRC / source).read_bytes()) for source, target in files]
+    for relative, target in [
+        ('docs/development/iris-opinion-plan-20261001.md', 'iris-' + BASE + '-frozen-design.txt'),
+        ('scripts/pilot/proactive-discussion-eval.ts', 'iris-' + BASE + '-frozen-eval-source.txt')]:
+        data = subprocess.check_output(['git', 'show', COMMIT + ':' + relative], cwd=ROOT)
+        staged.append(('git:' + COMMIT + ':' + relative, target, data))
+    need(len({target for _, target, _ in staged}) == len(staged), 'duplicate archive target')
+    for _, target, data in staged:
+        need(re.search(rb'Bearer\s+sk-|sk-[A-Za-z0-9]{20,}', data) is None, 'credential-shaped content detected')
+        if (DST / target).exists():
+            need((DST / target).read_bytes() == data, 'refusing to overwrite different archived evidence')
+    manifest = {'kind': BASE, 'applicationCommit': COMMIT, 'requestRecords': 3, 'http200': 3,
+                'reportedTokens': usage, 'executionPassed': False, 'independentSemanticPassed': False,
+                'completedPassedCases': CASES[:2], 'failedCase': 'hypothesis',
+                'failedPhase': 'initial assessment decision', 'controlPlanInjections': 0,
+                'freshSeededGenerations': 0, 'freshSeededReviews': 0,
+                'uncalled': CASES[3:] + CONTROLS,
+                'unissuedPendingRequests': [{'index': 4, 'caseId': 'hypothesis', 'stage': PLAN,
+                    'requestHash': read(BASE + '.pending-4.json')['requestHash']}],
+                'unreachedPhases': ['opinion plan generation', 'compiled opinion', 'scope review', 'plan repair', 'final review'],
+                'runnerFinding': 'Expected initial decision is checked after render. External abort at pending request 4 prevented extra generation HTTP after the frozen hypothesis decision had failed; this is not an application-side decision guard.',
+                'interpretationLimit': 'The complete window failed at the unchanged initial assessment. Two correct skip cases are limited positive evidence. The controlled generation/calculation/review path and both role/time negative controls received zero HTTP and remain untested by this window.',
+                'files': [{'source': source, 'target': target, 'sha256': digest(data), 'bytes': len(data)}
+                          for source, target, data in staged]}
+    manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    proposed = SRC / (BASE + '.archive-manifest.json')
+    destination = DST / ('iris-' + BASE + '-manifest.json')
+    if mode == '--prepare':
+        if proposed.exists():
+            need(proposed.read_bytes() == manifest_data, 'refusing to replace a different prepared manifest')
+        else:
+            with proposed.open('xb') as output:
+                output.write(manifest_data)
+        print(json.dumps({'prepared': True, 'repositoryWrites': 0, 'files': len(staged), 'manifest': str(proposed)}))
+        return
+    need(proposed.read_bytes() == manifest_data, 'reviewed private manifest differs from final evidence')
+    if destination.exists():
+        need(destination.read_bytes() == manifest_data, 'refusing to overwrite a different archived manifest')
+    # Only this explicit mode copies, after every read/validation has succeeded.
+    for _, target, data in staged:
+        path = DST / target
+        if not path.exists():
+            with path.open('xb') as output:
+                output.write(data)
+        need(digest(path.read_bytes()) == digest(data), 'archived byte hash differs')
+    if not destination.exists():
+        with destination.open('xb') as output:
+            output.write(manifest_data)
+    print(json.dumps({'archived': len(staged), 'requests': 3, 'http200': 3, 'tokens': usage, 'passed': False}))
+
+
+if __name__ == '__main__':
+    need(len(sys.argv) == 2, 'select --prepare or --archive explicitly')
+    main(sys.argv[1])

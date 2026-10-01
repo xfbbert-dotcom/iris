@@ -1,0 +1,42 @@
+{
+  "kind": "independent-semantic-review",
+  "commit": "5b48ad1259133a3900a3a4d4e1572171fe37b724",
+  "pass": false,
+  "cases": [
+    {
+      "caseId": "paraphrase",
+      "pass": true,
+      "reason": "Same budget facts already surfaced; actual skip/duplicate and no draft."
+    },
+    {
+      "caseId": "handled",
+      "pass": true,
+      "reason": "Member already found gap, paused hiring and is checking finance; actual skip/already_handled and no draft."
+    },
+    {
+      "caseId": "hypothesis",
+      "pass": false,
+      "completionContentSha256": "94e4b4c886e2e00382f125a3e5246137d2c4360f75d3ed4625a0a68b8cccc22c",
+      "reason": "Observation correctly reads explicit assumption and planned paid experiment. Reasoning uses imagined possible product design/resource/roadmap activity to justify intervention now, despite no unhandled decision or commitment in supplied text; suggestions repeat the planned experiment and add unsupported high-risk escalation.",
+      "attribution": "The additional work scenarios are conditional, not assertions that actions already occurred. Failure is necessity judgment based on imagined activity, not proof of fabricated completed actions."
+    }
+  ],
+  "uncalledFresh": [
+    "qualified-risk",
+    "inference",
+    "arithmetic",
+    "material-update",
+    "separate-next"
+  ],
+  "uncalledControls": [
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "unverified": [
+    "opinion-plan generation",
+    "compiled pair semantic review",
+    "repair",
+    "negative role/time recognition"
+  ],
+  "externalDelivery": false
+}

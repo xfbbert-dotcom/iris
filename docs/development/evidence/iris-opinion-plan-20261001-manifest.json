@@ -1,0 +1,178 @@
+{
+  "kind": "opinion-plan-20261001",
+  "applicationCommit": "5b48ad1259133a3900a3a4d4e1572171fe37b724",
+  "requestRecords": 3,
+  "http200": 3,
+  "reportedTokens": 8011,
+  "executionPassed": false,
+  "independentSemanticPassed": false,
+  "completedPassedCases": [
+    "paraphrase",
+    "handled"
+  ],
+  "failedCase": "hypothesis",
+  "failedPhase": "initial assessment decision",
+  "controlPlanInjections": 0,
+  "freshSeededGenerations": 0,
+  "freshSeededReviews": 0,
+  "uncalled": [
+    "qualified-risk",
+    "inference",
+    "arithmetic",
+    "material-update",
+    "separate-next",
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "unissuedPendingRequests": [
+    {
+      "index": 4,
+      "caseId": "hypothesis",
+      "stage": "iris_proactive_discussion_opinion_plan",
+      "requestHash": "900415ccc25fbedf3ddafb11be1426fb09853923cb73aba93fdfcb08d5f638eb"
+    }
+  ],
+  "unreachedPhases": [
+    "opinion plan generation",
+    "compiled opinion",
+    "scope review",
+    "plan repair",
+    "final review"
+  ],
+  "runnerFinding": "Expected initial decision is checked after render. External abort at pending request 4 prevented extra generation HTTP after the frozen hypothesis decision had failed; this is not an application-side decision guard.",
+  "interpretationLimit": "The complete window failed at the unchanged initial assessment. Two correct skip cases are limited positive evidence. The controlled generation/calculation/review path and both role/time negative controls received zero HTTP and remain untested by this window.",
+  "files": [
+    {
+      "source": "opinion-plan-20261001.json",
+      "target": "iris-opinion-plan-20261001.json",
+      "sha256": "0918a155aa93c022e6f2cf5e3350dbfaa3c48c33b05452463ed69e3625e29475",
+      "bytes": 113074
+    },
+    {
+      "source": "opinion-plan-20261001.started.json",
+      "target": "iris-opinion-plan-20261001.started.json",
+      "sha256": "d911e49cdba7d3239acb2281bddf0b8f362ca08df8c19c51968e02b1e7ac0ffd",
+      "bytes": 3625
+    },
+    {
+      "source": "opinion-plan-20261001.halted.json",
+      "target": "iris-opinion-plan-20261001.halted.json",
+      "sha256": "7972ead72506030f33dd77aec8cea580a23155357fd93c6a7a8b5d8cb4deec77",
+      "bytes": 407
+    },
+    {
+      "source": "opinion-plan-20261001.abort.json",
+      "target": "iris-opinion-plan-20261001.abort.json",
+      "sha256": "eb3d03643b6fc49abdbe97e58a9ef26c6abe9e586ba1ce896571ca06aebaa193",
+      "bytes": 356
+    },
+    {
+      "source": "opinion-plan-20261001.preflight.json",
+      "target": "iris-opinion-plan-20261001.preflight.json",
+      "sha256": "145dfa306ca776d2747f3908f3ba5b1f84f8a371931a1c9c2e0bf50065440355",
+      "bytes": 4551
+    },
+    {
+      "source": "opinion-plan-20261001.independent-review.json",
+      "target": "iris-opinion-plan-20261001.independent-review.json",
+      "sha256": "172366c8e38ebf7d7816ee9e17aef8660ed207863ee4520b0cbd71779845a11a",
+      "bytes": 1576
+    },
+    {
+      "source": "opinion-plan-20261001.root-decision.json",
+      "target": "iris-opinion-plan-20261001.root-decision.json",
+      "sha256": "9f90033954e6ff90d6c39d6a0657f20e755baf44c52ea68fa05c5aa9266c5ae6",
+      "bytes": 747
+    },
+    {
+      "source": "opinion-plan-20261001.quota-end.json",
+      "target": "iris-opinion-plan-20261001.quota-end.json",
+      "sha256": "8b12e9ebb00ba3b52ac6d231e24d616a76d5ecc2ab5d59676b94a077f503ff2a",
+      "bytes": 422
+    },
+    {
+      "source": "opinion-plan-20261001.pending-1.json",
+      "target": "iris-opinion-plan-20261001.pending-1.json",
+      "sha256": "6aaf35584cae5d127ddf5f10c894461671f1f3ba4dc60171019eb2e7c8f69e00",
+      "bytes": 13002
+    },
+    {
+      "source": "opinion-plan-20261001.quota-1.json",
+      "target": "iris-opinion-plan-20261001.quota-1.json",
+      "sha256": "9a7717d4447468c6bcc39969795a0b842a78d751ae3953b174e0615d6b6fad70",
+      "bytes": 362
+    },
+    {
+      "source": "opinion-plan-20261001.pending-2.json",
+      "target": "iris-opinion-plan-20261001.pending-2.json",
+      "sha256": "7a3cebc2a42af09130553b1749458be380dd3f820853107bf80f86ad4f677125",
+      "bytes": 10358
+    },
+    {
+      "source": "opinion-plan-20261001.quota-2.json",
+      "target": "iris-opinion-plan-20261001.quota-2.json",
+      "sha256": "98b8194b543a0da465ec28c4a02902e6c0fa01db63b4928ebc331233d921cc00",
+      "bytes": 362
+    },
+    {
+      "source": "opinion-plan-20261001.pending-3.json",
+      "target": "iris-opinion-plan-20261001.pending-3.json",
+      "sha256": "aafdb3ffa9353bedf5cefeb41e16f1e926314d68d13f94dc548cfc14b3000938",
+      "bytes": 9514
+    },
+    {
+      "source": "opinion-plan-20261001.quota-3.json",
+      "target": "iris-opinion-plan-20261001.quota-3.json",
+      "sha256": "67841e6f26557c4fc5ad2b55545ce959013ac94f6818a0078b8b0f2e0ae29a7f",
+      "bytes": 362
+    },
+    {
+      "source": "opinion-plan-20261001.pending-4.json",
+      "target": "iris-opinion-plan-20261001.pending-4.json",
+      "sha256": "c6c73a68fa99bbef4122a4adb8f22974491c2c72282979af5721094096188644",
+      "bytes": 10187
+    },
+    {
+      "source": "opinion-plan-20261001.semantic-paraphrase.json",
+      "target": "iris-opinion-plan-20261001.semantic-paraphrase.json",
+      "sha256": "10cf441c45ea02fd3e56a53af7bbd4caafc2bf6d9fb4ab9f43f27e5d084f2aa3",
+      "bytes": 359
+    },
+    {
+      "source": "opinion-plan-20261001.semantic-handled.json",
+      "target": "iris-opinion-plan-20261001.semantic-handled.json",
+      "sha256": "0207590a867543ba24650e6df5fbab5959207f566013cd82a38708bbbf88da07",
+      "bytes": 352
+    },
+    {
+      "source": "opinion-plan-20261001.mts",
+      "target": "iris-opinion-plan-20261001-runner.txt",
+      "sha256": "170e2ee2e9ffff04da4d002d5e80d1583a766e57bb8bb891e9cf582ce97d5000",
+      "bytes": 20597
+    },
+    {
+      "source": "run-opinion-plan.ps1",
+      "target": "iris-opinion-plan-20261001-launcher.txt",
+      "sha256": "6fada2e8172521d79e55ac5dd22b51ca8f502c7a4787f41b30206fa6c6bed81b",
+      "bytes": 1948
+    },
+    {
+      "source": "archive-opinion-plan-20261001.py",
+      "target": "iris-opinion-plan-20261001-archive.txt",
+      "sha256": "bdd6c3076d81cbda80e04b13023fa6d9b5e4367e0a676bc2e61bb240b778ff9a",
+      "bytes": 19055
+    },
+    {
+      "source": "git:5b48ad1259133a3900a3a4d4e1572171fe37b724:docs/development/iris-opinion-plan-20261001.md",
+      "target": "iris-opinion-plan-20261001-frozen-design.txt",
+      "sha256": "dda57bc50ac31e68482da379cf2776fe2420aa4691219ab586e4fd2802885d13",
+      "bytes": 12669
+    },
+    {
+      "source": "git:5b48ad1259133a3900a3a4d4e1572171fe37b724:scripts/pilot/proactive-discussion-eval.ts",
+      "target": "iris-opinion-plan-20261001-frozen-eval-source.txt",
+      "sha256": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6",
+      "bytes": 45905
+    }
+  ]
+}

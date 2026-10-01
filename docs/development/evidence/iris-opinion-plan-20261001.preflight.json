@@ -1,0 +1,112 @@
+{
+  "kind": "opinion-plan-offline-preflight",
+  "networkRequests": 0,
+  "credentialRead": false,
+  "commit": "5b48ad1259133a3900a3a4d4e1572171fe37b724",
+  "profile": {
+    "model": "qwen3.7-plus",
+    "maxRequests": 40,
+    "tokenStopBeforeNextRequest": 180000,
+    "maxTokens": 4096,
+    "enableThinking": false,
+    "requestTimeoutMs": 60000,
+    "windowMs": 2700000,
+    "minimumFreeTokens": 200000,
+    "quotaMaxAgeMs": 60000,
+    "applicationOptions": {
+      "canonicalOpinion": true,
+      "sourceBoundIdentity": true,
+      "opinionPlan": true
+    },
+    "controlOriginRule": "first model-produced calculation plan in original generation or sole plan repair, in completion order",
+    "controlMutationRule": "swap the two complete existing quantities bindings; leave count and all other plan content unchanged",
+    "plannedControlPlanInjections": 2,
+    "freshSeededGenerations": 0,
+    "freshSeededReviews": 0
+  },
+  "selected": [
+    "paraphrase",
+    "handled",
+    "hypothesis",
+    "qualified-risk",
+    "inference",
+    "arithmetic",
+    "material-update",
+    "separate-next"
+  ],
+  "controls": [
+    {
+      "caseId": "negative-role-swap",
+      "originalCaseId": "arithmetic",
+      "left": "unitCost",
+      "right": "budget",
+      "targetError": "unitCost and budget source roles exchanged"
+    },
+    {
+      "caseId": "negative-time-swap",
+      "originalCaseId": "material-update",
+      "left": "unitCost",
+      "right": "priorUnitCost",
+      "targetError": "current and prior unitCost source roles exchanged"
+    }
+  ],
+  "stageCaps": {
+    "iris_proactive_discussion_assessment": 2,
+    "iris_proactive_discussion_opinion_plan": 1,
+    "iris_proactive_discussion_scope_review": 2,
+    "iris_proactive_discussion_opinion_plan_repair": 1
+  },
+  "sourceHashes": {
+    "application": {
+      "apps/core/src/proactive-discussion/model.ts": "ba39a227a4e12f67c0db4eeb6d0c556b8ec49f202586e58bffecf1c9e4268af7",
+      "apps/core/src/proactive-discussion/contracts.ts": "3b5ebe81a551b1658150d3ed83f81ce3cb2203505f2b970a310a1eb3882ca365",
+      "apps/core/src/proactive-discussion/review-receipts.ts": "d31e4aea1f4d4d2803c31f00db729b584f3be8befa78bb32fafbc7491cb600db",
+      "apps/core/src/proactive-discussion/source-focus.ts": "5bf1170d6acb4b03621e16573120a90a5a9271ac6e9bf357695f3a5bb09b24ae",
+      "apps/core/src/proactive-discussion/canonical-opinion.ts": "957c3d6df90bdc7dd080a9121071278a7e2a66c7f21b54e76cd0adc2b7a51cbd",
+      "apps/core/src/proactive-discussion/arithmetic.ts": "4ff2e85c5f473a2d36c9ebc1c95a91a1e9e268428bff6abe2cc9db8b7440c2ca",
+      "apps/core/src/proactive-discussion/source-calculation.ts": "559d955988f60739cae28b1baf3eb9a5ea49a7c44c411b0979f23c51d545309b",
+      "apps/core/src/proactive-discussion/opinion-plan.ts": "4eadb10aece67eb8cf3dfa4646c3680b0e7a3bf1f89b7ebc385bf6d18bf0e1cd",
+      "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+      "scripts/pilot/proactive-discussion-eval.ts": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6"
+    },
+    "probe": {
+      "opinion-plan-20261001.mts": "170e2ee2e9ffff04da4d002d5e80d1583a766e57bb8bb891e9cf582ce97d5000",
+      "run-opinion-plan.ps1": "6fada2e8172521d79e55ac5dd22b51ca8f502c7a4787f41b30206fa6c6bed81b"
+    }
+  },
+  "caseHashes": [
+    {
+      "caseId": "paraphrase",
+      "sha256": "1b72bd63f8ff77cf608a80e8215e50d07199ab2c52be72d440de004df712d909"
+    },
+    {
+      "caseId": "handled",
+      "sha256": "d55396ba581bb939afa3ead56e546ff431d877c44313c89cbcba232c3051c3cc"
+    },
+    {
+      "caseId": "hypothesis",
+      "sha256": "5094637630629499ae38a83929c92008e0999afd4bfd1463fcb3749a7c96b2c6"
+    },
+    {
+      "caseId": "qualified-risk",
+      "sha256": "1bf6ea86ec4244ed8d3d8dec941c1656913b009e92cc3c255224ac08045e3857"
+    },
+    {
+      "caseId": "inference",
+      "sha256": "3c2bed0a2d3e6387635eccbd1791b50d0ae3d2d6af7d101155c7a0a07ac79ba8"
+    },
+    {
+      "caseId": "arithmetic",
+      "sha256": "1cdc243e1dcd902739f9a15a4297ea4191a0ff52d17318b8fa86787984a9a8a2"
+    },
+    {
+      "caseId": "material-update",
+      "sha256": "0e37fbf8fe279689b3293deab07fa2f99bbcdd2230c98fff281bf2e7821976a4"
+    },
+    {
+      "caseId": "separate-next",
+      "sha256": "7d034e625218f6821a4b824068baee2751e1c9cae61213fdbb90d97b2fbc1824"
+    }
+  ],
+  "wireNote": "Later prompts depend on real earlier responses. Only source/configuration hashes are frozen offline; each actual wire is retained and hashed before its quota gate."
+}
