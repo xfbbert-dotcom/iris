@@ -84,3 +84,41 @@ v2私有runner按原三句/同语义oracle/同qwen3.7-plus/non-thinking/4096运�
 24Kreported tokens/15分钟，逐请求免费与逐例语义门槛完全保留。预检0HTTP通过，
 实际wire只含claim及通用合同；三个人工图、case ID、来源、oracle均不发送。首执行或
 语义失败立即停该候选，不重采。此仍是转换诊断，不是应用能力通过或部署。
+
+## 关系合同v2结果：完整转换仍未通过
+
+冻结记录提交`f1cf924e`，应用仍为`707eddc2`。v2实际2HTTP200/6988reported tokens后
+正常停止，第三例供应商预设未调用；[18份原始证据与哈希](evidence/iris-claim-meaning-v2-20261001-manifest.json)
+及[独立完整审查](evidence/iris-claim-meaning-v2-20261001.independent-review.json)均保留。
+这是私有转换诊断，不是新的应用修复、部署或真实群验收。
+
+第一例坏风险含义转换有限PASS：OR条件、条件成立后的确定无法交付、因果方向、违约
+仍为风险及信任损害均保留。`无法`没有另列operatorAnchor，但仍在完整原句锚点内，
+negative/certain与父条件保留了实际含义；该凭据缺项公开记录，不冒充已修复，也不将
+重复定位的缺失当成新的业务含义丢失。此PASS只允许进入原冻结的下一例。
+
+第二例健康建议有两个独立失败：重复引文未给occurrence，被程序正确拒绝，因此没有
+创建result；独立审查未改写的raw/client content仍判语义FAIL。模型把“应明确说明交付
+时间取决于联调结果”整体标为proposal/not_asserted，却没有表示其中“交付时间取决于
+联调结果”的内嵌断言。保留原文字面并不能使该事实前提进入后续审核。动作先后、今天
+必须回复的条件及避免绝对措辞大体保留，但只修引文次序不足以通过原完整含义标准。
+不能将这次语义缺漏全部归因于格式问题，首例PASS也不改变窗口整体FAIL。
+
+最后实际请求前页面观察为精确qwen3.7-plus剩余545.28K/1M、2026-12-18到期、用完
+即停开启；[额度记录](evidence/iris-claim-meaning-v2-20261001.quota-end.json)明确没有窗口
+后观察，不是账单审计。raw、client content、预检wire、原句、用量及已有PASS gate哈希
+经归档检查一致；原始停止记录未回写成语义通过。
+
+停止含义图候选，不追加NLP图v3、重试或同类prompt补丁。下一项是独立的
+[受控意见计划](iris-opinion-plan-20261001.md)：限制新增自由事实的生成入口，直接验证
+是否能形成有用的主动意见；不是宣称建议前提提取已经解决。原用户目标仍开放。
+
+本地v2合同13项测试通过仅证明有限可表达性和结构边界；未新增应用接入，未重跑或借用
+旧Core统计作为本次应用证据。无push、生产访问、部署、生产模型切换、主动群发启用或
+飞书外发，生产SHA未重新核验。
+
+四处闭环：白皮书 **reviewed-unchanged**，上表所链§6仍要求事实/推断/建议区分，转换
+候选未改变稳定架构；工程台账 **updated**，记录proposal标签不能隐藏内嵌断言；核心
+覆盖基线 **reviewed-unchanged**，IRIS-CORE-005仍partial且完整实模未通过；README/
+AGENTS **reviewed-unchanged**，上表链接的未完整验收与授权边界仍有效；current-handoff
+**updated**，指向实际失败与新的有界计划，保留所有旧失败。

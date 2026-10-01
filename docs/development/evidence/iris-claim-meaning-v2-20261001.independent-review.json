@@ -1,0 +1,28 @@
+{
+  "kind": "independent-full-meaning-review",
+  "reviewers": [
+    "root",
+    "arithmetic_review",
+    "acceptance_audit (first case)"
+  ],
+  "cases": [
+    {
+      "caseId": "bad-risk",
+      "pass": true,
+      "resultSha256": "0d7ece0f915ebd75c9bf66e46fa1f585cf4b898c285d4070fe7a3c6f491e1d99",
+      "reason": "Independent semantic PASS by two reviewers and root: original OR condition, definite inability to deliver under that condition, breach risk (not actual breach), and trust damage preserved; causes uses nonoverlapping event endpoints. U2 omits explicit 无法 in operatorAnchors despite the prompt requirement; retained as an unresolved anchor-completeness defect, not concealed. Literal U2 anchor plus negative/certain and parent condition preserve substantive meaning under the frozen oracle. This permits only the next frozen extraction case, not product acceptance."
+    },
+    {
+      "caseId": "healthy-advice",
+      "pass": false,
+      "contentSha256": "1a7e42d706a0207481e7cff8568af08dbef339cdf4de0b42e5965b32a69418de",
+      "execution": "Rejected ambiguous repeated anchors without occurrence; no result created.",
+      "semantic": "Independent review of unchanged raw content also fails: U2a labels the whole instruction to explain delivery dependence as proposal/not_asserted, without representing the embedded assertion that delivery timing depends on integration results. Keeping its words in a quote does not expose the factual premise for later audit. Sequence, today-response condition and avoiding absolute language largely retained. Fixing quote occurrence alone cannot meet the frozen full-meaning oracle."
+    }
+  ],
+  "uncalled": [
+    "supplier-presupposition"
+  ],
+  "disposition": "Stop this meaning-graph candidate. No retry, no third request, no v3 prompt patch, no application enablement.",
+  "pass": false
+}

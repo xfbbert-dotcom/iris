@@ -1,0 +1,294 @@
+"""Archive a TERMINATED v2 window only. No HTTP, credentials, or original edits.
+
+Prepare/review this script first; running it validates every retained request and
+gate, then writes byte-identical evidence copies plus a new manifest. A live or
+incomplete window is rejected. A terminated execution failure may have a raw
+response/client content without a validated result; that evidence is preserved.
+"""
+from datetime import datetime
+from pathlib import Path
+import hashlib
+import json
+import re
+
+SRC = Path('C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918')
+ROOT = Path('D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86')
+DST = ROOT / 'docs/development/evidence'
+BASE = 'claim-meaning-v2-20261001'
+MODEL = 'qwen3.7-plus'
+STAGE = 'iris_claim_meaning_extraction_v2'
+CASES = ['bad-risk', 'healthy-advice', 'supplier-presupposition']
+
+
+def need(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def compact(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
+
+def read(name):
+    return json.loads((SRC / name).read_text(encoding='utf-8-sig'))
+
+
+def moment(value):
+    need(isinstance(value, str), 'timestamp is missing')
+    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    need(parsed.tzinfo is not None, 'timestamp lacks timezone')
+    return parsed
+
+
+def main():
+    r = read(BASE + '.json')
+    # This is a final archive, never a snapshot passed off as a finished window.
+    need(r.get('kind') == BASE and r.get('syntheticOnly') is True, 'wrong report')
+    need(type(r.get('executionPassed')) is bool and type(r.get('halted')) is bool,
+         'window is incomplete: no final verdict')
+    ended = moment(r.get('finishedAt'))
+    started_at = moment(r.get('startedAt'))
+    need(ended >= started_at, 'invalid window chronology')
+    stop = read(BASE + '.halted.json')
+    need(stop.get('at') == r['finishedAt'] and stop.get('halted') == r['halted']
+         and stop.get('executionPassed') == r['executionPassed'], 'stop/report mismatch')
+    if r['executionPassed']:
+        need(r['halted'] is False, 'passed window marked halted')
+    else:
+        need(r['halted'] is True and isinstance(r.get('haltReason'), str)
+             and bool(r['haltReason']) and stop.get('reason') == r['haltReason'],
+             'failed window lacks matching termination reason')
+
+    pre = read(BASE + '.preflight.json')
+    initial = read(BASE + '.started.json')
+    inputs = read(BASE + '.inputs.json')
+    need(pre.get('networkRequests') == 0 and pre.get('credentialRead') is False,
+         'not an offline preflight')
+    need(r.get('selected') == CASES and inputs.get('kind') == 'claim-meaning-frozen-originals'
+         and [v['caseId'] for v in inputs['cases']] == CASES, 'frozen cases differ')
+    profile = {'model': MODEL, 'maxRequests': 3, 'tokenStopBeforeNextRequest': 24000,
+               'maxTokens': 4096, 'enableThinking': False, 'requestTimeoutMs': 60000,
+               'windowMs': 900000, 'seededGenerations': 0, 'seededReviews': 0}
+    for key, expected in profile.items():
+        need(r.get(key) == expected and initial.get(key) == expected,
+             'frozen profile differs: ' + key)
+    need(pre.get('model') == MODEL and pre.get('maxTokens') == 4096, 'preflight profile differs')
+    for key in ['commit', 'sourceHashes', 'inputOrigins', 'startedAt', 'selected']:
+        need(initial.get(key) == r.get(key), 'initial record differs: ' + key)
+    need(initial.get('requests') == [] and initial.get('completions') == []
+         and initial.get('results') == [], 'started record is not initial')
+    need(pre['sourceHashes'] == r['sourceHashes'], 'preflight source hashes differ')
+    expected_private = {BASE + '.mts', 'claim-meaning-validation-v2.mts',
+                        'claim-meaning-validation-v2.test.mts', BASE + '.inputs.json',
+                        'run-claim-meaning-v2.ps1'}
+    need(set(r['sourceHashes']['probe']) == expected_private, 'wrong v2 probe files')
+    for name, expected in r['sourceHashes']['probe'].items():
+        need(digest((SRC / name).read_bytes()) == expected, 'private source changed: ' + name)
+    need(set(r['sourceHashes']['application']) == {
+        'apps/core/src/model/openai-compatible-chat-completions-client.ts'}, 'wrong adapter source set')
+    for name, expected in r['sourceHashes']['application'].items():
+        need(digest((ROOT / name).read_bytes()) == expected, 'application adapter changed')
+
+    by_case = {item['caseId']: item for item in inputs['cases']}
+    for index, item in enumerate(inputs['cases']):
+        need(digest(item['claim'].encode('utf-8')) == item['claimSha256'], 'claim hash differs')
+        source_name = ('iris-claim-sentence-transfer-20261001.json' if index < 2
+                       else 'iris-source-focus-continuation-20261001.json')
+        expected_path = ROOT / 'docs/development/evidence' / source_name
+        need(Path(item['source']['path']).resolve() == expected_path.resolve(), 'unexpected original source path')
+        original_bytes = expected_path.read_bytes()
+        need(digest(original_bytes) == item['source']['sha256'], 'original source hash differs')
+        original = json.loads(original_bytes.decode('utf-8-sig'))
+        actual_claim = (json.loads(original['completions'][2 if index == 0 else 5]['messages'][1]['content'])['claim']
+                        if index < 2 else next(v for v in original['results']
+                                              if v['caseId'] == 'material-update')['assessment']['suggestion'])
+        need(actual_claim == item['claim'], 'claim was not mechanically preserved')
+    need(r['inputOrigins'] == [{k: item[k] for k in ['caseId', 'claimSha256', 'source']}
+                              for item in inputs['cases']], 'report origins differ')
+    need([item['caseId'] for item in pre['previews']] == CASES, 'preview case order differs')
+    previews = {item['caseId']: item for item in pre['previews']}
+    for case_id, preview in previews.items():
+        need(digest(preview['wire'].encode('utf-8')) == preview['requestHash'], 'preview hash differs')
+        wire = json.loads(preview['wire'])
+        need(set(wire) == {'model', 'messages', 'response_format', 'enable_thinking', 'max_tokens'}, 'unexpected wire fields')
+        need(wire['model'] == MODEL and wire['max_tokens'] == 4096
+             and wire['enable_thinking'] is False and wire['response_format'] == {'type': 'json_object'}, 'wire profile differs')
+        need(len(wire['messages']) == 2 and wire['messages'][0]['role'] == 'system'
+             and wire['messages'][1] == {'role': 'user', 'content': compact({'claim': by_case[case_id]['claim']})},
+             'wire contains more than the original claim and generic contract')
+    need(len({json.loads(v['wire'])['messages'][0]['content'] for v in previews.values()}) == 1,
+         'generic system contract varies by case')
+
+    requests, completions, results = r['requests'], r['completions'], r['results']
+    need(1 <= len(requests) <= 3, 'expected one to three actual request records')
+    need([v['caseId'] for v in requests] == CASES[:len(requests)], 'request order or count differs')
+    need(len(requests) <= len(completions) <= min(3, len(requests) + 1), 'completion/request count mismatch')
+    need([v['caseId'] for v in completions] == CASES[:len(completions)], 'completion order differs')
+    need([v['caseId'] for v in results] == CASES[:len(results)] and len(results) <= len(requests), 'result order/count differs')
+    result_by_case = {v['caseId']: v for v in results}
+    usage, http200, missing_raw = 0, 0, []
+    files = [(BASE + suffix, 'iris-' + BASE + suffix) for suffix in [
+        '.json', '.started.json', '.halted.json', '.inputs.json', '.preflight.json', '.oracle.md',
+        '.independent-review.json', '.quota-end.json']]
+    for index, req in enumerate(requests, 1):
+        case_id = req['caseId']
+        need(req['index'] == index and req.get('stage') == STAGE and req.get('model') == MODEL, 'request identity differs')
+        need(req['wire'] == previews[case_id]['wire'] and req['requestHash'] == previews[case_id]['requestHash'], 'actual wire differs from frozen preview')
+        need(digest(req['wire'].encode('utf-8')) == req['requestHash'], 'actual wire hash differs')
+        pending = read(f'{BASE}.pending-{index}.json')
+        need(pending == {key: req[key] for key in ['index', 'caseId', 'stage', 'requestHash', 'model']}, 'pending record differs')
+        quota = read(f'{BASE}.quota-{index}.json')
+        need(quota == req['quota'] and quota.get('requestHash') == req['requestHash']
+             and quota.get('model') == MODEL and quota.get('freeExhaustionStop') is True
+             and type(quota.get('remainingTokens')) in [int, float] and quota['remainingTokens'] >= 150000,
+             'request free quota differs or is insufficient')
+        request_at = moment(req['startedAt'])
+        age = (request_at - moment(quota['observedAt'])).total_seconds()
+        need(0 <= age < 60 and moment(quota['expiresAt']) > request_at, 'quota freshness/expiry invalid')
+        need(0 <= (request_at - started_at).total_seconds() < 900 and request_at <= ended,
+             'request outside frozen time window')
+        need(usage < 24000, 'request started after reported token budget exhausted')
+        entry = completions[index - 1]
+        need(entry.get('stage') == STAGE and entry['messages'][1] == {
+            'role': 'user', 'content': compact({'claim': by_case[case_id]['claim']})}, 'client input differs')
+        fmt = entry['responseFormat']
+        need(fmt['type'] == 'json_schema' and fmt['json_schema']['name'] == STAGE
+             and fmt['json_schema']['strict'] is True, 'client format differs')
+        appended = '\n'.join([
+            'Return only a JSON object that satisfies the following JSON Schema, not the schema itself.',
+            'Do not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.',
+            compact(fmt['json_schema']['schema'])])
+        need(json.loads(req['wire'])['messages'][0]['content'] == entry['messages'][0]['content'] + '\n\n' + appended,
+             'wire system does not match the recorded client contract')
+        if 'rawResponse' in req:
+            need(digest(req['rawResponse'].encode('utf-8')) == req.get('responseSha256'), 'raw response hash differs')
+            need(moment(req['finishedAt']) >= request_at and moment(req['finishedAt']) <= ended,
+                 'response chronology invalid')
+            raw = json.loads(req['rawResponse'])
+            if req.get('status') == 200:
+                http200 += 1
+            if isinstance(req.get('status'), int) and 200 <= req['status'] < 300:
+                need(raw.get('model') == MODEL and len(raw.get('choices', [])) == 1, 'raw model/choice differs')
+                tokens = raw.get('usage', {}).get('total_tokens')
+                need(type(tokens) is int and tokens > 0, 'raw reported usage missing')
+                usage += tokens
+                if 'content' in entry:
+                    content = raw['choices'][0]['message']['content']
+                    need(raw['choices'][0].get('finish_reason') == 'stop', 'client content came from unfinished response')
+                    need(content == entry['content'] and digest(content.encode('utf-8')) == entry.get('contentSha256'), 'raw/client content hash differs')
+                else:
+                    need(not r['executionPassed'] and index == len(requests), 'nonterminal raw response has no client content')
+            else:
+                need(not r['executionPassed'] and index == len(requests) and 'content' not in entry,
+                     'non-success HTTP was accepted or followed by another request')
+        else:
+            # Preserve an actually terminated transport/read failure, never fabricate
+            # a response or token count. This cannot pass the extraction window.
+            need(not r['executionPassed'] and index == len(requests)
+                 and 'content' not in entry and case_id not in result_by_case,
+                 'missing response without terminal execution failure')
+            missing_raw.append(index)
+        if case_id in result_by_case:
+            result = result_by_case[case_id]
+            need('content' in entry and result['claim'] == by_case[case_id]['claim']
+                 and result['claimSha256'] == by_case[case_id]['claimSha256']
+                 and result['meaning'] == json.loads(entry['content']), 'result differs from raw extraction')
+    need(usage == r['reportedUsageTokens'], 'reported token sum differs')
+
+    unreviewed = []
+    for case_id in CASES:
+        gate_name = f'{BASE}.semantic-{case_id}.json'
+        result = result_by_case.get(case_id)
+        if (SRC / gate_name).exists():
+            need(result is not None, 'semantic gate has no extraction result')
+            gate = read(gate_name)
+            body = {key: value for key, value in result.items() if key != 'semantic'}
+            need(gate.get('caseId') == case_id and type(gate.get('pass')) is bool
+                 and gate.get('resultSha256') == digest(compact(body).encode('utf-8')),
+                 'semantic gate hash/verdict differs')
+            need(isinstance(gate.get('reason'), str) and bool(gate['reason']), 'semantic gate has no reason')
+            need(result.get('semantic') == gate, 'report did not consume the retained semantic gate')
+            files.append((gate_name, 'iris-' + gate_name))
+        elif result is not None:
+            need(not r['executionPassed'] and case_id == requests[-1]['caseId'] and 'semantic' not in result,
+                 'completed result lacks semantic gate')
+            unreviewed.append(case_id)
+    for req in requests[1:]:
+        preceding = result_by_case.get(CASES[req['index'] - 2])
+        need(preceding is not None and preceding.get('semantic', {}).get('pass') is True,
+             'request continued without previous semantic PASS')
+    if r['executionPassed']:
+        need(len(requests) == len(results) == len(completions) == 3 and http200 == 3
+             and not missing_raw and not unreviewed
+             and all(v.get('semantic', {}).get('pass') is True for v in results), 'incomplete success claim')
+
+    # Retain an unissued pending request/quota or explicit abort as well; these are
+    # not counted as HTTP. Reject arbitrary extra files outside this bounded run.
+    for suffix in ['pending', 'quota']:
+        for path in sorted(SRC.glob(f'{BASE}.{suffix}-[0-9]*.json')):
+            match = re.fullmatch(re.escape(BASE) + r'\.' + suffix + r'-(\d+)\.json', path.name)
+            need(match is not None, 'unexpected gate filename')
+            index = int(match[1])
+            need(1 <= index <= min(3, len(requests) + (0 if r['executionPassed'] else 1)), 'extra gate exceeds window')
+            if suffix == 'pending':
+                pending = read(path.name)
+                need(pending.get('index') == index and pending.get('caseId') == CASES[index - 1]
+                     and pending.get('model') == MODEL and pending.get('stage') == STAGE
+                     and pending.get('requestHash') == previews[CASES[index - 1]]['requestHash'], 'pending gate differs')
+            files.append((path.name, 'iris-' + path.name))
+    if (SRC / (BASE + '.abort.json')).exists():
+        need(not r['executionPassed'], 'passed run has an abort file')
+        files.append((BASE + '.abort.json', 'iris-' + BASE + '.abort.json'))
+    review = read(BASE + '.independent-review.json')
+    need(type(review.get('pass')) is bool and review['pass'] == r['executionPassed'], 'independent window verdict differs')
+    if 'uncalled' in review:
+        need(review['uncalled'] == CASES[len(requests):], 'independent uncalled list differs')
+    quota_end = read(BASE + '.quota-end.json')
+    need(type(quota_end.get('postWindowObserved')) is bool and quota_end.get('billingAudit') is False,
+         'quota end must distinguish UI observation from billing audit')
+    if quota_end['postWindowObserved'] is False:
+        need(quota_end.get('lastPreRequestObservation') == requests[-1]['quota'], 'last quota observation differs')
+
+    files += [(BASE + '.mts', 'iris-' + BASE + '-runner.txt'),
+              ('run-claim-meaning-v2.ps1', 'iris-' + BASE + '-launcher.txt'),
+              ('claim-meaning-validation-v2.mts', 'iris-' + BASE + '-validator.txt'),
+              ('claim-meaning-validation-v2.test.mts', 'iris-' + BASE + '-validator-tests.txt'),
+              ('archive-' + BASE + '.py', 'iris-' + BASE + '-archive.txt')]
+    need(len({target for _, target in files}) == len(files), 'duplicate archive target')
+    staged = []
+    for source, target in files:
+        data = (SRC / source).read_bytes()
+        need(re.search(rb'Bearer\s+sk-|sk-[A-Za-z0-9]{20,}', data) is None, 'credential-shaped content detected')
+        if (DST / target).exists():
+            need((DST / target).read_bytes() == data, 'refusing to overwrite different archive evidence')
+        staged.append((source, target, data))
+    manifest = {'kind': BASE, 'requestRecords': len(requests), 'http200': http200,
+                'reportedTokens': usage, 'executionPassed': r['executionPassed'],
+                'missingRawResponseIndexes': missing_raw, 'unreviewedCases': unreviewed,
+                'uncalled': CASES[len(requests):], 'files': [
+                    {'source': source, 'target': target, 'sha256': digest(data), 'bytes': len(data)}
+                    for source, target, data in staged]}
+    manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    manifest_path = DST / ('iris-' + BASE + '-manifest.json')
+    if manifest_path.exists():
+        need(manifest_path.read_bytes() == manifest_data, 'refusing to overwrite a different manifest')
+    # No writes happen until all original evidence and final-state checks succeed.
+    for _, target, data in staged:
+        path = DST / target
+        if not path.exists():
+            with path.open('xb') as output:
+                output.write(data)
+        need(digest(path.read_bytes()) == digest(data), 'archive copy hash differs')
+    if not manifest_path.exists():
+        with manifest_path.open('xb') as output:
+            output.write(manifest_data)
+    print(json.dumps({'archived': len(files), 'requests': len(requests), 'http200': http200,
+                      'tokens': usage, 'passed': r['executionPassed']}))
+
+
+if __name__ == '__main__':
+    main()

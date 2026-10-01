@@ -1,0 +1,68 @@
+{
+  "kind": "claim-meaning-v2-20261001",
+  "syntheticOnly": true,
+  "task": "original meaning extraction only; not source support or product acceptance",
+  "commit": "f1cf924e01bfd18d058aef9e49e5aa5de21a5f72",
+  "sourceHashes": {
+    "application": {
+      "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007"
+    },
+    "probe": {
+      "claim-meaning-v2-20261001.mts": "b0a97e7523b041cc438de4b7379ad51a5d505dc2857837ae72ed3b8f92a60dbc",
+      "claim-meaning-validation-v2.mts": "5092207dd8d8fc05aa320c96502c0f1aeb104ff3cb36e109af899d2f33c434bd",
+      "claim-meaning-validation-v2.test.mts": "55a4d0020a3c795db4d4c175b51f713693a8425b4153ef9a26c01075cbb0cc07",
+      "claim-meaning-v2-20261001.inputs.json": "fde24baf2e8d115e804ba727bfd50d26149a39e27f3beb02deead89d3552816c",
+      "run-claim-meaning-v2.ps1": "1a93d8b3e4cae1e970d154929f925e6c3fa2f32e333b55718fa97bb8c0f93244"
+    }
+  },
+  "inputOrigins": [
+    {
+      "caseId": "bad-risk",
+      "claimSha256": "c769f257bd6cca1a9e50ea0536107cfa23b1223951b2ef72da1138b5a20fb656",
+      "source": {
+        "path": "D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence/iris-claim-sentence-transfer-20261001.json",
+        "sha256": "e9e66d3f190ba99355abb0f81c58ba3c711f10f814c6d6f085a8afb312efc8a2",
+        "selector": "completions[2].messages[1].content(JSON).claim"
+      }
+    },
+    {
+      "caseId": "healthy-advice",
+      "claimSha256": "99a237fcebcac2753ff66a6bfc348142730d76782d893107594987c53ff517fb",
+      "source": {
+        "path": "D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence/iris-claim-sentence-transfer-20261001.json",
+        "sha256": "e9e66d3f190ba99355abb0f81c58ba3c711f10f814c6d6f085a8afb312efc8a2",
+        "selector": "completions[5].messages[1].content(JSON).claim"
+      }
+    },
+    {
+      "caseId": "supplier-presupposition",
+      "claimSha256": "f3676b8afe3c2c66439dfd70dec9265768e85e7360af70ee592cf2ed82496ff0",
+      "source": {
+        "path": "D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence/iris-source-focus-continuation-20261001.json",
+        "sha256": "5d1b1f2490e35320f8f1d85803c7a374b4be163ff80d6721b1e33861dd85cba5",
+        "selector": "results[caseId=material-update].assessment.suggestion"
+      }
+    }
+  ],
+  "startedAt": "2026-10-01T14:34:03.496Z",
+  "model": "qwen3.7-plus",
+  "maxRequests": 3,
+  "tokenStopBeforeNextRequest": 24000,
+  "maxTokens": 4096,
+  "enableThinking": false,
+  "requestTimeoutMs": 60000,
+  "windowMs": 900000,
+  "selected": [
+    "bad-risk",
+    "healthy-advice",
+    "supplier-presupposition"
+  ],
+  "requests": [],
+  "completions": [],
+  "results": [],
+  "reportedUsageTokens": 0,
+  "seededGenerations": 0,
+  "seededReviews": 0,
+  "independentSemanticReview": "per-case external gate; oracle never read by runner or sent to model",
+  "halted": false
+}

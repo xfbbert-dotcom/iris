@@ -1,0 +1,6 @@
+{
+  "caseId": "bad-risk",
+  "resultSha256": "0d7ece0f915ebd75c9bf66e46fa1f585cf4b898c285d4070fe7a3c6f491e1d99",
+  "pass": true,
+  "reason": "Independent semantic PASS by two reviewers and root: original OR condition, definite inability to deliver under that condition, breach risk (not actual breach), and trust damage preserved; causes uses nonoverlapping event endpoints. U2 omits explicit 无法 in operatorAnchors despite the prompt requirement; retained as an unresolved anchor-completeness defect, not concealed. Literal U2 anchor plus negative/certain and parent condition preserve substantive meaning under the frozen oracle. This permits only the next frozen extraction case, not product acceptance."
+}

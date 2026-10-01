@@ -1,5 +1,14 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-01：行动建议标签不能隐藏内嵌断言
+
+[含义转换v2](../development/iris-claim-meaning-20261001.md#关系合同v2结果完整转换仍未通过)
+2HTTP200/6988tokens：坏风险含义有限通过；健康建议既有重复锚点执行拒绝，也把“说明
+交付时间取决于联调结果”整体归为proposal/not_asserted，遗漏其中仍需依据的依赖断言。
+原文字面完整、建议标签或格式修好，都不能证明事实前提已被忠实暴露。窗口FAIL，
+供应商例未调用；不扩建NLP图v3。下一[受控意见计划](../development/iris-opinion-plan-20261001.md)
+从生成约束验证端到端价值，正例必须有用，仍不可把结构合法当作关系真实。
+
 ## 2026-10-01：含义转换不能把因果压成时间先后
 
 [原句转换诊断](../development/iris-claim-meaning-20261001.md)1HTTP200/2863tokens，模态

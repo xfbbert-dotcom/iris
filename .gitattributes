@@ -41,3 +41,5 @@ docs/development/evidence/iris-claim-support-transfer-20261001* -text whitespace
 docs/development/evidence/iris-claim-sentence-transfer-20261001* -text
 
 docs/development/evidence/iris-claim-meaning-20261001* -text
+
+docs/development/evidence/iris-claim-meaning-v2-20261001* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

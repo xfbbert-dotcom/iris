@@ -1,0 +1,142 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { validateMeaning, resolveAnchor } from './claim-meaning-validation-v2.mts';
+import { readFileSync } from 'node:fs';
+const anchor = (quote: string, occurrence: number | null = null) => ({ quote, occurrence });
+const example = () => ({
+  coverage: ['Check whether the ', 'plan is approved.'],
+  units: [
+    { id: 'u1', anchor: anchor('Check whether the plan is approved.'), speechAct: 'proposal',
+      epistemicStrength: 'not_asserted', normativeForce: 'recommended', polarity: 'positive',
+      operatorAnchors: [anchor('Check')], parentId: null,
+      condition: { connective: 'none', operatorAnchor: null, clauses: [] } },
+    { id: 'u2', anchor: anchor('whether the plan is approved'), speechAct: 'question',
+      epistemicStrength: 'not_asserted', normativeForce: 'none', polarity: 'positive',
+      operatorAnchors: [anchor('whether')], parentId: 'u1',
+      condition: { connective: 'none', operatorAnchor: null, clauses: [] } },
+  ],
+  relations: [],
+  referents: [{ ownerId: 'u1', mention: anchor('the plan'), stance: 'assumed_existing', relationAnchor: anchor('Check whether the plan is approved.') }],
+});
+const claim = 'Check whether the plan is approved.';
+test('accepts an exact complete graph, separating a proposal from an embedded unanswered question', () => {
+  assert.deepEqual(validateMeaning(example(), claim), example());
+});
+test('requires unique quotes unless an explicit occurrence resolves repetition', () => {
+  assert.deepEqual(resolveAnchor(anchor('a', 2), 'a a'), { start: 2, end: 3 });
+  assert.throws(() => resolveAnchor(anchor('a'), 'a a'), /ambiguous/);
+  assert.throws(() => resolveAnchor(anchor('a', 3), 'a a'), /occurrence/);
+  assert.throws(() => resolveAnchor(anchor('b'), 'a a'), /absent/);
+});
+test('requires literal contiguous coverage and all graph keys, including no added verdict', () => {
+  const omitted = example(); omitted.coverage = ['Check whether the plan approved.'];
+  assert.throws(() => validateMeaning(omitted, claim), /coverage/);
+  assert.throws(() => validateMeaning({ ...example(), supported: true }, claim), /keys/);
+});
+test('checks graph references and rejects parent cycles or out-of-parent anchors', () => {
+  const missing = example(); missing.units[1]!.parentId = 'not-provided';
+  assert.throws(() => validateMeaning(missing, claim), /parent/);
+  const cycle = example(); cycle.units[0]!.parentId = 'u2';
+  assert.throws(() => validateMeaning(cycle, claim), /cycle|parent/);
+  const relation = example(); relation.relations.push({ kind: 'precedes', from: { ownerId: 'u1', eventAnchor: anchor('Check') }, to: { ownerId: 'missing', eventAnchor: anchor('the plan') }, operatorAnchor: anchor('whether') } as never);
+  assert.throws(() => validateMeaning(relation, claim), /reference/);
+});
+test('represents OR conditions without treating them as all conditions', () => {
+  const text = 'If A or B, C will fail.';
+  const value = { coverage: [text], units: [{ id:'u1', anchor:anchor(text), speechAct:'assertion', epistemicStrength:'certain', normativeForce:'none', polarity:'negative', operatorAnchors:[anchor('will')], parentId:null, condition:{connective:'any',operatorAnchor:anchor('or'),clauses:[anchor('A'),anchor('B')]}}], relations:[], referents:[] };
+  assert.deepEqual(validateMeaning(value, text), value);
+  value.units[0]!.condition.clauses = [anchor('A')];
+  assert.throws(() => validateMeaning(value, text), /condition/);
+});
+test('rejects an asserted epistemic force on a proposal or question', () => {
+  const value = example(); value.units[0]!.epistemicStrength = 'certain';
+  assert.throws(() => validateMeaning(value, claim), /speech act/);
+});
+test('requires a referent and relation anchor to belong to its owner scope', () => {
+  const value = example(); value.referents[0]!.ownerId = 'u2';
+  assert.throws(() => validateMeaning(value, claim), /referent/);
+});
+test('rejects graphs whose root units do not cover substantive original text', () => {
+  const value = example(); value.units = [value.units[1]!]; value.units[0]!.parentId = null; value.referents = [];
+  assert.throws(() => validateMeaning(value, claim), /unit coverage/);
+});
+
+// These hand-constructed graphs only test contract expressiveness. They are never
+// imported by a model runner or sent as examples, answer choices, or oracle data.
+const frozen = JSON.parse(readFileSync(new URL('./claim-meaning-20261001.inputs.json', import.meta.url), 'utf8'));
+const original = (id: string): string => frozen.cases.find((item: any) => item.caseId === id).claim;
+const unit = (id: string, text: string, options: Record<string, unknown> = {}) => ({
+  id, anchor:anchor(text), speechAct:'assertion', epistemicStrength:'certain', normativeForce:'none',
+  polarity:'positive', operatorAnchors:[], parentId:null,
+  condition:{connective:'none',operatorAnchor:null,clauses:[]}, ...options,
+});
+const proposal = (id: string, text: string, options: Record<string, unknown> = {}) => unit(id,text,{
+  speechAct:'proposal',epistemicStrength:'not_asserted',normativeForce:'recommended',...options,
+});
+const endpoint = (ownerId: string, text: string) => ({ownerId,eventAnchor:anchor(text)});
+const relation = (kind: string, from: ReturnType<typeof endpoint>, to: ReturnType<typeof endpoint>, word: string) => ({kind,from,to,operatorAnchor:anchor(word)});
+function causalGraph() {
+  const text=original('bad-risk');
+  return {coverage:[text],units:[
+    unit('u1',text,{operatorAnchors:[anchor('若')],condition:{connective:'any',operatorAnchor:anchor('或'),clauses:[anchor('联调发现问题'),anchor('供应商侧延迟')]}}),
+    unit('u2','将直接导致无法按期交付',{parentId:'u1',polarity:'negative',operatorAnchors:[anchor('将'),anchor('无法')]}),
+    unit('u3','造成对客户的违约风险',{parentId:'u1'}),
+    unit('u4','损害信任',{parentId:'u1'}),
+  ],relations:[
+    relation('causes',endpoint('u1','联调发现问题或供应商侧延迟'),endpoint('u2','无法按期交付'),'直接导致'),
+    relation('causes',endpoint('u2','无法按期交付'),endpoint('u3','对客户的违约风险'),'造成'),
+    relation('and',endpoint('u3','对客户的违约风险'),endpoint('u4','损害信任'),'并'),
+  ],referents:[
+    {ownerId:'u1',mention:anchor('供应商侧'),stance:'assumed_existing',relationAnchor:anchor('供应商侧延迟')},
+    {ownerId:'u3',mention:anchor('客户'),stance:'assumed_existing',relationAnchor:anchor('对客户的违约风险')},
+  ]};
+}
+function sequentialAdviceGraph() {
+  const text=original('healthy-advice'); const [first,last]=text.split('；');
+  return {coverage:[first,'；',last],units:[
+    proposal('u1',first),
+    proposal('u2','先推动完成供应商接口的联调验证',{parentId:'u1'}),
+    proposal('u3','评估实际进度和风险',{parentId:'u1'}),
+    proposal('u4','再与客户沟通一个有条件或留有缓冲的交付计划',{parentId:'u1'}),
+    proposal('u5',last,{normativeForce:'required',operatorAnchors:[anchor('应明确说明')],condition:{connective:'single',operatorAnchor:anchor('如'),clauses:[anchor('必须今天回复客户')]}}),
+    unit('u6','交付时间取决于联调结果',{parentId:'u5'}),
+    proposal('u7',"避免使用'肯定'等绝对措辞",{parentId:'u5'}),
+  ],relations:[
+    relation('precedes',endpoint('u2','完成供应商接口的联调验证'),endpoint('u3','评估实际进度和风险'),'先'),
+    relation('precedes',endpoint('u3','评估实际进度和风险'),endpoint('u4','与客户沟通一个有条件或留有缓冲的交付计划'),'再'),
+  ],referents:[
+    {ownerId:'u2',mention:anchor('供应商接口'),stance:'assumed_existing',relationAnchor:anchor('完成供应商接口的联调验证')},
+    {ownerId:'u4',mention:anchor('一个有条件或留有缓冲的交付计划'),stance:'proposed_new',relationAnchor:anchor('与客户沟通一个有条件或留有缓冲的交付计划')},
+  ]};
+}
+function presuppositionGraph() {
+  const text=original('supplier-presupposition');
+  return {coverage:[text],units:[
+    proposal('u1',text,{operatorAnchors:[anchor('建议'),anchor('请')]}),
+    unit('u2','是否仍有协商空间',{speechAct:'question',epistemicStrength:'not_asserted',parentId:'u1',operatorAnchors:[anchor('是否',1)]}),
+    unit('u3','是否批准追加预算、缩减招聘人数或调整岗位方案',{speechAct:'question',epistemicStrength:'not_asserted',parentId:'u1',operatorAnchors:[anchor('是否',2)]}),
+  ],relations:[],referents:[
+    {ownerId:'u1',mention:anchor('供应商'),stance:'assumed_existing',relationAnchor:anchor('与供应商核实12万元的新报价口径')},
+    {ownerId:'u1',mention:anchor('管理层'),stance:'assumed_existing',relationAnchor:anchor('请管理层确认是否批准追加预算、缩减招聘人数或调整岗位方案')},
+    {ownerId:'u3',mention:anchor('批准追加预算'),stance:'questioned',relationAnchor:anchor('是否批准追加预算')},
+  ]};
+}
+test('manual graph can express conditional causation separately from temporal ordering', () => {
+  assert.deepEqual(validateMeaning(causalGraph(),original('bad-risk')),causalGraph());
+});
+test('manual graph can express recommended action sequence and a conditional reply branch', () => {
+  assert.deepEqual(validateMeaning(sequentialAdviceGraph(),original('healthy-advice')),sequentialAdviceGraph());
+});
+test('manual graph can retain an existing counterparty premise and unanswered approval questions', () => {
+  assert.deepEqual(validateMeaning(presuppositionGraph(),original('supplier-presupposition')),presuppositionGraph());
+});
+test('rejects the observed whole-sentence container to its own child as an event order', () => {
+  const graph=causalGraph(); graph.relations=[relation('precedes',endpoint('u1',original('bad-risk')),endpoint('u2','无法按期交付'),'直接导致')];
+  assert.throws(()=>validateMeaning(graph,original('bad-risk')),/overlap|container/);
+});
+test('rejects event endpoints outside their owner or identical endpoints', () => {
+  const graph=causalGraph(); graph.relations[0]!.from=endpoint('u2','供应商侧延迟');
+  assert.throws(()=>validateMeaning(graph,original('bad-risk')),/endpoint.*owner/);
+  const same=causalGraph(); same.relations[0]!.from=endpoint('u2','无法按期交付');
+  assert.throws(()=>validateMeaning(same,original('bad-risk')),/overlap|container/);
+});
