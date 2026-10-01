@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { reviewPdCounterexamples, type PdCounterexampleRejection } from "./counterexamples.js";
 import { canonicalOpinionProse, canonicalOpinionFormat, canonicalOpinionSystem, canonicalRepairSystem } from "./canonical-opinion.js";
+import { pdSourceFocus, pdSourceFocusCandidates, sourceFocusAssessmentSystem, sourceFocusReviewSystem } from "./source-focus.js";
 
 import type {
   OpenAICompatibleChatCompletionsClient,
@@ -184,25 +185,36 @@ export function createPdModel({
   client,
   counterexampleReview = false,
   canonicalOpinion = false,
+  sourceBoundIdentity = false,
 }: {
   client: OpenAICompatibleChatCompletionsClient;
   /** Local candidate only; runtime does not enable this until semantic acceptance. */
   counterexampleReview?: boolean;
   /** Local candidate: derive stored prose from one canonical opinion, pending semantic acceptance. */
   canonicalOpinion?: boolean;
+  /** Local source-quotation identity candidate; no runtime enablement. */
+  sourceBoundIdentity?: boolean;
 }): PdModel {
   if (canonicalOpinion && counterexampleReview) throw new Error("review candidates cannot be combined");
+  if (sourceBoundIdentity && !canonicalOpinion) throw new Error("source focus candidate requires canonical opinion");
   return {
     async assess(context, assertActive) {
       const input = modelContext(context);
-      const responseFormat = assessmentResponseFormat(context);
+      const responseFormat = assessmentResponseFormat(context, sourceBoundIdentity);
       let messages = assessmentMessages(input);
 
       for (let attempt = 0; attempt < MAX_INVALID_ASSESSMENT_ATTEMPTS; attempt += 1) {
         await assertActive?.();
-        const content = await client.complete(messages, { responseFormat });
+        const content = await client.complete(sourceBoundIdentity
+          ? messages.map(message => message.role === "system" ? { ...message, content: `${message.content}\n${sourceFocusAssessmentSystem}` } : message)
+          : messages, { responseFormat });
         try {
-          return closeIssueBasisEvidence(parseAssessmentContent(content, context), context);
+          const assessment = closeIssueBasisEvidence(parseAssessmentContent(content, context), context);
+          if (sourceBoundIdentity) {
+            try { pdSourceFocus(assessment, context); }
+            catch { throw assessmentInvalid("new issue source focus must be a sentence from selected evidence"); }
+          }
+          return assessment;
         } catch (error) {
           if (!(error instanceof PdAssessmentValidationError)) throw error;
           if (attempt + 1 >= MAX_INVALID_ASSESSMENT_ATTEMPTS) {
@@ -218,10 +230,10 @@ export function createPdModel({
     async render({ context, assessment }, assertActive) {
       const validated = closeIssueBasisEvidence(validatePdAssessment(assessment, context), context);
       if (validated.decision === "skip") return null;
-      const identityTarget = projectIdentityTarget(validated);
+      const identityTarget = projectIdentityTarget(validated, sourceBoundIdentity ? context : undefined);
 
       await assertActive?.();
-      const generation = generationInput(context, validated);
+      const generation = generationInput(context, validated, sourceBoundIdentity);
       const generatedContent = await client.complete(canonicalOpinion ? [
         { role: "system", content: [canonicalOpinionSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
         { role: "user", content: JSON.stringify(generation) },
@@ -616,24 +628,25 @@ function closeIssueBasisEvidence(assessment: PdAssessment, context: PdContext): 
   return { ...assessment, evidenceRefs: refs };
 }
 
-function projectIdentityTarget(assessment: PdAssessment) {
+function projectIdentityTarget(assessment: PdAssessment, focusContext?: PdContext) {
+  const focus = focusContext ? pdSourceFocus(assessment, focusContext) : null;
   return {
     decision: assessment.decision,
     reason: assessment.reason,
-    issueRef: assessment.issueRef,
+    issueRef: focus ? { kind: "new" as const, sourceFocus: focus } : assessment.issueRef,
     evidenceRefs: assessment.evidenceRefs,
     materialChange: { kind: assessment.materialChange.kind, evidenceRefs: assessment.materialChange.evidenceRefs },
   };
 }
 
-function generationInput(context: PdContext, assessment: PdAssessment) {
+function generationInput(context: PdContext, assessment: PdAssessment, sourceBoundIdentity = false) {
   const issueRef = assessment.issueRef;
   const existingIssue = issueRef?.kind === "existing"
     ? context.issues.find(issue => issue.id === issueRef.id)
     : undefined;
   // Carry the selected issue and authority, not unverified prose to be copied as a template.
   return {
-    target: projectIdentityTarget(assessment),
+    target: projectIdentityTarget(assessment, sourceBoundIdentity ? context : undefined),
     evidence: renderInput(context, assessment).evidence,
     ...(existingIssue ? { existingIssueDescription: existingIssue.description } : {}),
   };
@@ -670,7 +683,7 @@ function scopeReviewMessages(
   input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget },
 ): OpenAICompatibleChatMessage[] {
   return [
-    { role: "system", content: scopeReviewSystem },
+    { role: "system", content: scopeReviewSystem + sourceFocusReviewSuffix(input.identityTarget) },
     { role: "user", content: JSON.stringify(input) },
   ];
 }
@@ -679,7 +692,7 @@ function repairedPairScopeReviewMessages(
   input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget; previousReview: PdScopeReview | PdCounterexampleRejection },
 ): OpenAICompatibleChatMessage[] {
   return [
-    { role: "system", content: repairedPairScopeReviewSystem },
+    { role: "system", content: repairedPairScopeReviewSystem + sourceFocusReviewSuffix(input.identityTarget) },
     { role: "user", content: JSON.stringify(input) },
   ];
 }
@@ -693,7 +706,11 @@ function pairRepairMessages(
   ];
 }
 
-function assessmentResponseFormat(context: PdContext): OpenAICompatibleJsonSchemaResponseFormat {
+function sourceFocusReviewSuffix(target: PdIdentityTarget) {
+  return target.issueRef && "sourceFocus" in target.issueRef ? `\n${sourceFocusReviewSystem}` : "";
+}
+
+function assessmentResponseFormat(context: PdContext, sourceBoundIdentity = false): OpenAICompatibleJsonSchemaResponseFormat {
   const body = flatAssessmentResponseFormat(context).json_schema.schema;
   const properties = body.properties as Record<string, unknown>;
   const change = properties.materialChange as Record<string, unknown>;
@@ -753,12 +770,14 @@ function assessmentResponseFormat(context: PdContext): OpenAICompatibleJsonSchem
       } },
     },
   };
+  const focusQuotes = [...new Set(pdSourceFocusCandidates(context).map(candidate => candidate.sourceQuote))];
   const branches = [
     skip,
-    intervention({
+    ...(!sourceBoundIdentity || focusQuotes.length ? [intervention({
       type: "object", additionalProperties: false, required: ["kind", "description"],
-      properties: { kind: { type: "string", enum: ["new"] }, description: boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS) },
-    }, "new_issue"),
+      properties: { kind: { type: "string", enum: ["new"] }, description: sourceBoundIdentity
+        ? { type: "string", enum: focusQuotes } : boundedStringSchema(MAX_ASSESSMENT_TEXT_CHARS) },
+    }, "new_issue")] : []),
     ...(eligible.length ? [intervention(existingRef(eligible.map(issue => issue.id)), "new_evidence")] : []),
     ...(unattemptedIds.length ? [intervention(existingRef(unattemptedIds), "unattempted_first")] : []),
   ];
