@@ -1,0 +1,71 @@
+{
+  "kind": "minimal-claim-20261001",
+  "files": [
+    {
+      "source": "minimal-claim-20261001.json",
+      "target": "iris-minimal-claim-20261001.json",
+      "sha256": "e9ffacd3c29ca2c88217f61851c0e3b1dbd71b98189fc0781edef915a1e3e2c9",
+      "bytes": 6962
+    },
+    {
+      "source": "minimal-claim-20261001.started.json",
+      "target": "iris-minimal-claim-20261001.started.json",
+      "sha256": "740192e826d274714adce6124b33f1b584bc5acc754a087438b80258015f6793",
+      "bytes": 1391
+    },
+    {
+      "source": "minimal-claim-20261001.halted.json",
+      "target": "iris-minimal-claim-20261001.halted.json",
+      "sha256": "a3eb7ec8297dfd33e7e2ba9e35dcf2c98501464af120dd1b98bfe2ad63f09dfc",
+      "bytes": 140
+    },
+    {
+      "source": "minimal-claim-20261001.independent-review.json",
+      "target": "iris-minimal-claim-20261001.independent-review.json",
+      "sha256": "08d6f403c99d6d3bbc42e6635e02bcdf6fd29735481eb57f6bd2672351844e0a",
+      "bytes": 359
+    },
+    {
+      "source": "minimal-claim-20261001.quota-end.json",
+      "target": "iris-minimal-claim-20261001.quota-end.json",
+      "sha256": "15a476296295f9262885b16a827b4c2b40fe8bc7596b56b5c93c712f9d6b31b2",
+      "bytes": 367
+    },
+    {
+      "source": "minimal-claim-20261001.audit.json",
+      "target": "iris-minimal-claim-20261001.audit.json",
+      "sha256": "2615125cab95d8822b6b9033f45ff414816514b0e15c4b06f66010b84a637263",
+      "bytes": 358
+    },
+    {
+      "source": "minimal-claim-20261001.pending-1.json",
+      "target": "iris-minimal-claim-20261001.pending-1.json",
+      "sha256": "270296768c2d30a6d2e962c0d94441da3c9b2952264c14e4990d51f7e0fb05b2",
+      "bytes": 163
+    },
+    {
+      "source": "minimal-claim-20261001.quota-1.json",
+      "target": "iris-minimal-claim-20261001.quota-1.json",
+      "sha256": "43993c5a63e04f374d1fba1349bce8fa4899499a128cdaf7a4c8bd036c779ddb",
+      "bytes": 323
+    },
+    {
+      "source": "minimal-claim-20261001.mts",
+      "target": "iris-minimal-claim-20261001-runner.txt",
+      "sha256": "b896ab7da4302f94e7d4c6c091ed884e04d529e22abba07a39e0de0601db1cf0",
+      "bytes": 10368
+    },
+    {
+      "source": "run-minimal-claim.ps1",
+      "target": "iris-minimal-claim-20261001-launcher.txt",
+      "sha256": "85d540de59061902fe34ffa210a9bb68f4a90a5c0006a845512a03a0c68c5553",
+      "bytes": 1834
+    },
+    {
+      "source": "archive-minimal-claim-20261001.mjs",
+      "target": "iris-minimal-claim-20261001-archive.txt",
+      "sha256": "3c7c4d1191373b8a6e8c04b0f8cc90f339ffb247fed04770cc5c6d49220f3261",
+      "bytes": 3617
+    }
+  ]
+}

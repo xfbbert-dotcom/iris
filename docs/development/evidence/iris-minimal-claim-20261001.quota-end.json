@@ -1,0 +1,11 @@
+{
+  "postWindowObserved": false,
+  "lastPreRequestObservation": {
+    "model": "qwen3.8-max",
+    "remainingTokens": 729580,
+    "observedAt": "2026-10-01T13:34:24.822Z",
+    "freeExhaustionStop": true,
+    "expiresAt": "2026-12-18T00:00:00+08:00"
+  },
+  "note": "No post-window balance audit; next comparison uses separately observed qwen3.7-plus row."
+}

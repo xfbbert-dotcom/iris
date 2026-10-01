@@ -1,5 +1,11 @@
 # Iris Engineering Failure Ledger
 
+[The isolated-claim control](../development/iris-minimal-claim-20261001.md) still approved the
+necessary consequence with only two source texts and one complete claim (1HTTP/298tokens).
+Long context is not required for this observed failure. Do not generalize this single result
+into universal model incapacity; preserve inputs when comparing the model factor.
+
+
 Removing the second author did not prevent the original conditional-consequence error:
 the direct initial opinion asserted inevitable non-delivery and full review approved it.
 Keep that failed semantic window; a source-only single-claim diagnostic is a bounded attribution
