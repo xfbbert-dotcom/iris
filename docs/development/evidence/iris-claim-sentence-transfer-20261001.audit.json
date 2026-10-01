@@ -1,0 +1,49 @@
+{
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 311,
+      "quotaAgeMs": 8943
+    },
+    {
+      "index": 2,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 328,
+      "quotaAgeMs": 9068
+    },
+    {
+      "index": 3,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 346,
+      "quotaAgeMs": 9993
+    },
+    {
+      "index": 4,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 313,
+      "quotaAgeMs": 11304
+    },
+    {
+      "index": 5,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 309,
+      "quotaAgeMs": 8440
+    },
+    {
+      "index": 6,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 366,
+      "quotaAgeMs": 9297
+    }
+  ],
+  "http200": 6,
+  "totalTokens": 1973,
+  "seededGenerations": 0,
+  "executionPassed": false,
+  "remainingCasesUncalled": [
+    "good"
+  ],
+  "rawContentMatches": true,
+  "wireAndResponseHashesVerified": true
+}

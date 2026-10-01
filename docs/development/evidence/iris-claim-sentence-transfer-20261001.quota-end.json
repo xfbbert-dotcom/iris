@@ -1,0 +1,13 @@
+{
+  "postWindowObserved": false,
+  "lastPreRequestObservation": {
+    "requestHash": "354b2b9d3898a4e2b6da59d40e2888308804a040b3a10c3a7c5d50f618dad054",
+    "model": "qwen3.7-plus",
+    "freeExhaustionStop": true,
+    "remainingTokens": 553470,
+    "expiresAt": "2026-12-18T00:00:00+08:00",
+    "observedAt": "2026-10-01T14:00:44.752Z",
+    "source": "exact model UI row refreshed, enabled"
+  },
+  "billingAudit": false
+}

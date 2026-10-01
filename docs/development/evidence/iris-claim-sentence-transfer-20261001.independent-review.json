@@ -1,0 +1,5 @@
+{
+  "passed": false,
+  "reviewer": "independent arithmetic_review agent and primary",
+  "reason": "Target necessary consequence refused correctly; reasonable suggestion falsely requires pre-existing source instructions. Verdict on fifth sentence supported but reason adds unsupported extreme likelihood. Full migration fails; good uncalled."
+}

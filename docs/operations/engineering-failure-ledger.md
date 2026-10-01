@@ -1,5 +1,15 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-01：完整句来源支持检查误拒合理建议（未关闭）
+
+[记录及四处闭环](../development/iris-claim-support-20261001.md#完整句迁移结果失败候选停止)。
+639ab1c2候选6HTTP200/1973tokens，必要后果识别通过但建议被要求在来源中预先出现，
+导致实际许可误拒；第五句理由仍无依据夸大概率。完整迁移FAIL，good未调用，helper
+未接入。已确认本次拒绝理由混淆建议与既成事实；模型能力/提示职责等整体因果归因
+仍未完成。统一支持门禁候选停止，不降验收标准、不按suggestion角色免检、不把人工
+逐条审批当自动主动讨论修复。下一自动方案所需的自然语言事实预设识别忠实性仍未证明。
+
+
 The complete-field transfer also failed: correct core facts were used to approve an entire
 paragraph containing an unsupported necessary consequence. An isolated successful sentence
 must not be promoted to a successful paragraph. The next mechanical sentence boundary preserves

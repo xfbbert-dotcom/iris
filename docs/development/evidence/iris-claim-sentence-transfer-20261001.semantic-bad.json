@@ -1,0 +1,6 @@
+{
+  "caseId": "bad",
+  "resultSha256": "56e61c2ebe39fe9dae118a65f3fc8972edb613a7fecdebf015cd4bc0e82b1fb8",
+  "pass": false,
+  "reason": "Necessary-consequence sentence correctly withheld, but reasonable verification and conditional-commitment advice falsely refused because sources did not already prescribe it. Independent reviewer agrees full migration FAIL; good not called."
+}

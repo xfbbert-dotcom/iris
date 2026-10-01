@@ -1,0 +1,137 @@
+{
+  "kind": "claim-sentence-transfer-20261001",
+  "files": [
+    {
+      "source": "claim-sentence-transfer-20261001.json",
+      "target": "iris-claim-sentence-transfer-20261001.json",
+      "sha256": "e9e66d3f190ba99355abb0f81c58ba3c711f10f814c6d6f085a8afb312efc8a2",
+      "bytes": 36952
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.started.json",
+      "target": "iris-claim-sentence-transfer-20261001.started.json",
+      "sha256": "c16419e47f81b8f14d2e7930dbdf0943b1941e3db7938d93c0967c5dc82bf0ce",
+      "bytes": 1527
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.halted.json",
+      "target": "iris-claim-sentence-transfer-20261001.halted.json",
+      "sha256": "ce2577ec43b1ee9075ced21c9c33ba2461582655da97d89b2a420d4bdefeed7d",
+      "bytes": 130
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.independent-review.json",
+      "target": "iris-claim-sentence-transfer-20261001.independent-review.json",
+      "sha256": "4c147bf409cf5689a42d0e9f4bf1e7a21a4c4b107a3dec0ae823f9b1752f8615",
+      "bytes": 349
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.quota-end.json",
+      "target": "iris-claim-sentence-transfer-20261001.quota-end.json",
+      "sha256": "338e07369a39e5f464732080dd57c037ad4a570886dc98caacb8a855ef542965",
+      "bytes": 435
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.audit.json",
+      "target": "iris-claim-sentence-transfer-20261001.audit.json",
+      "sha256": "492b61e886e0b14122fe776606b23794cdc9cf2c8fb2b30faf6eecc31eb5d784",
+      "bytes": 959
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.semantic-bad.json",
+      "target": "iris-claim-sentence-transfer-20261001.semantic-bad.json",
+      "sha256": "9504a121a5a0177243f7ec444a1ed95e3d1054b7822821d995ce4b519ea5444d",
+      "bytes": 387
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.pending-1.json",
+      "target": "iris-claim-sentence-transfer-20261001.pending-1.json",
+      "sha256": "170fbd09d9982d7dbeb7471c24e56383fc9f0cee5e4094fa582a361518a482c1",
+      "bytes": 166
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.pending-2.json",
+      "target": "iris-claim-sentence-transfer-20261001.pending-2.json",
+      "sha256": "ab5bd451dbe5fcc83ac0fb63b9a797d442806f20fc67e3aea4e2c0770f5b128e",
+      "bytes": 166
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.pending-3.json",
+      "target": "iris-claim-sentence-transfer-20261001.pending-3.json",
+      "sha256": "4173aa8e4bcbe45dfea157417fabf666dbdd7e7d2214309ba83cdccd36b9312b",
+      "bytes": 166
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.pending-4.json",
+      "target": "iris-claim-sentence-transfer-20261001.pending-4.json",
+      "sha256": "62b62b94bdf513d2958130bd96dd1c9ce04017b0c30ff0dd5528350c9b8042f5",
+      "bytes": 166
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.pending-5.json",
+      "target": "iris-claim-sentence-transfer-20261001.pending-5.json",
+      "sha256": "2a7bb3eec26ec9ef1dd77e08abada74e8952882e500decd32da8c37f38c697dd",
+      "bytes": 166
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.pending-6.json",
+      "target": "iris-claim-sentence-transfer-20261001.pending-6.json",
+      "sha256": "c57898ae9fc534d09e21e9dffe50a18d4843540b8b840df08928da2283cfa0b7",
+      "bytes": 166
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.quota-1.json",
+      "target": "iris-claim-sentence-transfer-20261001.quota-1.json",
+      "sha256": "7448ff4df79719405e14e701a648d65dfd608ace4aacf95201e1e9508ef8f0c4",
+      "bytes": 324
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.quota-2.json",
+      "target": "iris-claim-sentence-transfer-20261001.quota-2.json",
+      "sha256": "7bb0968521eac665094457d353e178ea2eae22bd86a73243679219fd035c5a8b",
+      "bytes": 324
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.quota-3.json",
+      "target": "iris-claim-sentence-transfer-20261001.quota-3.json",
+      "sha256": "5a8794bdea8b190ce50893230582cdf395d5896f05d83730c120e4a8644d9b9a",
+      "bytes": 324
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.quota-4.json",
+      "target": "iris-claim-sentence-transfer-20261001.quota-4.json",
+      "sha256": "00da4304abf47b868a85ca453b77a45a37e35e9724b4c91ff47ec569ace7ef49",
+      "bytes": 324
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.quota-5.json",
+      "target": "iris-claim-sentence-transfer-20261001.quota-5.json",
+      "sha256": "5547e13192bcdb3b3aee9976446793f4dd26f9382db2283e2f2af359ab53310d",
+      "bytes": 324
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.quota-6.json",
+      "target": "iris-claim-sentence-transfer-20261001.quota-6.json",
+      "sha256": "169ef15e0ab03a08eeaf63a22f7c1c85549d6068df4626792206c3978e5f81f4",
+      "bytes": 324
+    },
+    {
+      "source": "claim-sentence-transfer-20261001.mts",
+      "target": "iris-claim-sentence-transfer-20261001-runner.txt",
+      "sha256": "f491f82a4d91a1eb7ef2f323d13899221a8e43a924fc3b3184c2aa054f87114a",
+      "bytes": 10413
+    },
+    {
+      "source": "run-claim-sentence-transfer.ps1",
+      "target": "iris-claim-sentence-transfer-20261001-launcher.txt",
+      "sha256": "b9f96532afca3b910d955dc9bad2c893538d1ebf8a380f937a84d3f0bd456106",
+      "bytes": 1854
+    },
+    {
+      "source": "archive-claim-sentence-transfer-20261001.mjs",
+      "target": "iris-claim-sentence-transfer-20261001-archive.txt",
+      "sha256": "ff0a2d2de08a176ee30932b134a5dfc5bc34944e7e2bd7a7b2aea12ba1f9343f",
+      "bytes": 3771
+    }
+  ]
+}
