@@ -1,0 +1,6 @@
+{
+  "caseId": "hypothesis",
+  "resultSha256": "a878fb8eb1ebfeeaf60788e5331d22669c638db26f322341d8ff4e2fde287494",
+  "pass": true,
+  "reason": "Independent source review: explicit assumption is not asserted as confirmed and a real paid experiment is already planned. Retained assessment accurately identifies absence of a supplied dependent commitment/decision. skip/no_work_value and no draft avoid duplicate advice; no invalid plan was relabeled silence."
+}

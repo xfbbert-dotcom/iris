@@ -1,5 +1,14 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-01：来源引文正确不等于核实对象正确
+
+Q3.8受控计划9HTTP200/26891tokens：模型把访谈依据选为验证对象，程序将其称为假设，
+完整审核仍批准。前三沉默例/风险最终pair有限通过不能抵消推断建议无效。失败与34份
+证据见[记录](../development/iris-opinion-plan-20261001.md)。[限定修复](../development/iris-opinion-conclusion-20261001.md)
+移除inference冗余目标并复用所选decision，不证明decision角色本身或审核语义正确；
+本地Core4975/469跳过、type/build/CLI7通过，默认关闭、新实模待验，原bug开放。
+
+
 ## 2026-10-01：合理假设被设想活动升级为必须介入
 
 [受控计划记录](../development/iris-opinion-plan-20261001.md)应用5b48ad12的Q3.7窗口

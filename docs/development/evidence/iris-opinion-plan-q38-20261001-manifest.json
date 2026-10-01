@@ -1,0 +1,229 @@
+{
+  "kind": "opinion-plan-q38-20261001",
+  "applicationCommit": "5b48ad1259133a3900a3a4d4e1572171fe37b724",
+  "runHead": "ce4e8b00e7145bb47cef9c7025e119a30c5b699f",
+  "requests": 9,
+  "http200": 9,
+  "reportedTokens": 26891,
+  "pass": false,
+  "passedCases": [
+    "paraphrase",
+    "handled",
+    "hypothesis",
+    "qualified-risk"
+  ],
+  "failedCase": "inference",
+  "unreached": [
+    "arithmetic",
+    "material-update",
+    "separate-next",
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "files": [
+    {
+      "source": "opinion-plan-q38-20261001.halted.json",
+      "target": "iris-opinion-plan-q38-20261001.halted.json",
+      "sha256": "5becc175e91ec393af8411bdfa050e1adcf25209ef7fd81751f4d3e633a13e01",
+      "bytes": 229
+    },
+    {
+      "source": "opinion-plan-q38-20261001.independent-review.json",
+      "target": "iris-opinion-plan-q38-20261001.independent-review.json",
+      "sha256": "b116b582ff7a550abc156d29879a8f77d8aee7b26f4941e664c4ec2394028e2c",
+      "bytes": 1421
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-1.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-1.json",
+      "sha256": "e1e18a78e500ebf099515dddeee1de4130932269856d2318488ec868b716caad",
+      "bytes": 13000
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-2.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-2.json",
+      "sha256": "7ef0e5375fa5e046abe678840e8aaa61d81c8926c0c108da6839b64ea63124f4",
+      "bytes": 10356
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-3.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-3.json",
+      "sha256": "d041db91e2ddb92c5ac6c09b892b2979ffeb3f77d068cb814628b692ba85191e",
+      "bytes": 9512
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-4.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-4.json",
+      "sha256": "5d78a8561ecfb57b1942b14dcb64799d678c99d79d92a2b3cc397ac71cf6fbfe",
+      "bytes": 9788
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-5.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-5.json",
+      "sha256": "bc8be6e7c08dd881b1309dc2be34f2b203d851db322a59efddbd45aa577469a6",
+      "bytes": 10542
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-6.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-6.json",
+      "sha256": "35714da2d32fb07e99421dc821bfc2ed810db2d965bc8778a6ba91d2b6e75394",
+      "bytes": 18198
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-7.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-7.json",
+      "sha256": "164e2b8c720de36c3e5389adf8f5119728a0c5fa59f76a920fe9b9bb18fb7ae9",
+      "bytes": 9856
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-8.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-8.json",
+      "sha256": "ebe492a940654b7ba0671d23664d2dc537789f895b35c62ab60f4487dd30e80c",
+      "bytes": 10645
+    },
+    {
+      "source": "opinion-plan-q38-20261001.pending-9.json",
+      "target": "iris-opinion-plan-q38-20261001.pending-9.json",
+      "sha256": "db59c774ef00001a5120df917388ff5dd6881a0c26bdbe27acf9cea7d7fcc55b",
+      "bytes": 18470
+    },
+    {
+      "source": "opinion-plan-q38-20261001.preflight.json",
+      "target": "iris-opinion-plan-q38-20261001.preflight.json",
+      "sha256": "d43bdbf711805fbe546c99cf09c172461fa9043194011fcaa1f648bd02a99e1d",
+      "bytes": 4558
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-1.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-1.json",
+      "sha256": "b72c94c65fe739f243c23366304b9f116152d6a5c49545430a4fc0907fc70d77",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-2.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-2.json",
+      "sha256": "0f7ad5f602784020c7936fa6ffac6c1d79e54a04d07373719c21c1de1b4893ff",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-3.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-3.json",
+      "sha256": "cf23e76eee853c61277eddf5d28eaf78808304ee59be8cb07a22502d3781b304",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-4.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-4.json",
+      "sha256": "15a4821fdce49dcefaccdbcb6a1b0ace052912b60c32804e334a11a71efd2ac1",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-5.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-5.json",
+      "sha256": "7071d6728eac5e3c8d73a7564c2dde3194d116f3afa65a9f779475cdfd4d723f",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-6.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-6.json",
+      "sha256": "41fdd558a260358c891f051b6d3b4b0f0ea02e1b24ad0354e932396edee55aed",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-7.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-7.json",
+      "sha256": "ad794e382964aebf141803b55da658d574535c964f68f8742750d0e4701958cd",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-8.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-8.json",
+      "sha256": "c18f1e09a17303211b4d3f0449c07f791443597be5bfa926422c7c1d22917c53",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-9.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-9.json",
+      "sha256": "7e4e11becf8a409f8285a12974fc5f61ce0b8c957daaf23d50d8b04b7ec5470b",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-q38-20261001.quota-end.json",
+      "target": "iris-opinion-plan-q38-20261001.quota-end.json",
+      "sha256": "1eb183cad3ffac429addb8f326bb07797980ea2b455b31e182dc0accd3352192",
+      "bytes": 592
+    },
+    {
+      "source": "opinion-plan-q38-20261001.semantic-handled.json",
+      "target": "iris-opinion-plan-q38-20261001.semantic-handled.json",
+      "sha256": "a7656ed730fff06438aea08c045a823347ba922ea700b65e625599918f7b56b4",
+      "bytes": 434
+    },
+    {
+      "source": "opinion-plan-q38-20261001.semantic-hypothesis.json",
+      "target": "iris-opinion-plan-q38-20261001.semantic-hypothesis.json",
+      "sha256": "dbc3f7f34634f646121837507b6f50b1a387db48b6f6328bec5107aaf1134213",
+      "bytes": 459
+    },
+    {
+      "source": "opinion-plan-q38-20261001.semantic-inference.json",
+      "target": "iris-opinion-plan-q38-20261001.semantic-inference.json",
+      "sha256": "4caec9f875a1864ab0f6234c19c907c4a941b757b39c85e17cb4d43f5248f3a1",
+      "bytes": 682
+    },
+    {
+      "source": "opinion-plan-q38-20261001.semantic-paraphrase.json",
+      "target": "iris-opinion-plan-q38-20261001.semantic-paraphrase.json",
+      "sha256": "1f196eff1ad4cea48a5721b65b6ec941f5953ce21286a17d88096467d186bf39",
+      "bytes": 394
+    },
+    {
+      "source": "opinion-plan-q38-20261001.semantic-qualified-risk.json",
+      "target": "iris-opinion-plan-q38-20261001.semantic-qualified-risk.json",
+      "sha256": "6c9024f70469236bd8a280b7c2a9120b096b18bf338b895b1486e331904f1ca7",
+      "bytes": 768
+    },
+    {
+      "source": "opinion-plan-q38-20261001.started.json",
+      "target": "iris-opinion-plan-q38-20261001.started.json",
+      "sha256": "4c61fea4ece91c5d4a6bc292ece71166374740e848810e062171e419a66eeaf2",
+      "bytes": 3636
+    },
+    {
+      "source": "opinion-plan-q38-20261001.wire-comparison.json",
+      "target": "iris-opinion-plan-q38-20261001.wire-comparison.json",
+      "sha256": "a6061070376988a8150de207849e9ee81f9a5890b9825b056b495d23e72c466f",
+      "bytes": 1059
+    },
+    {
+      "source": "opinion-plan-q38-20261001.json",
+      "target": "iris-opinion-plan-q38-20261001.json",
+      "sha256": "60c15c2f504e3c2b430794ffcdd2700094dd92a986edcc5b3b13de65d5e48980",
+      "bytes": 315442
+    },
+    {
+      "source": "opinion-plan-q38-20261001.mts",
+      "target": "iris-opinion-plan-q38-20261001-runner.txt",
+      "sha256": "380e2e049b8cf68f844069f7231e364f85846d12437d8724692be97ff47cc19f",
+      "bytes": 20903
+    },
+    {
+      "source": "run-opinion-plan-q38.ps1",
+      "target": "iris-opinion-plan-q38-20261001-launcher.txt",
+      "sha256": "48ffefa2e95bba3c4c7ff6b0b39bc57591e9a9af745673735f060c5b8fd16018",
+      "bytes": 1960
+    },
+    {
+      "source": "git:ce4e8b00e7145bb47cef9c7025e119a30c5b699f:docs/development/iris-opinion-plan-20261001.md",
+      "target": "iris-opinion-plan-q38-20261001-frozen-design.txt",
+      "sha256": "dfbcb5815848be128a95480d26c3eccfa7cc0596e8fbe9bd263a3126524d5642",
+      "bytes": 15250
+    },
+    {
+      "source": "git:ce4e8b00e7145bb47cef9c7025e119a30c5b699f:scripts/pilot/proactive-discussion-eval.ts",
+      "target": "iris-opinion-plan-q38-20261001-frozen-eval-source.txt",
+      "sha256": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6",
+      "bytes": 45905
+    }
+  ]
+}

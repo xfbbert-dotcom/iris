@@ -1,0 +1,6 @@
+{
+  "caseId": "handled",
+  "resultSha256": "5b5a80c77cde3d09f443a8afffdbf068e1fae0a16cffbbe0c7cebd159591dd71",
+  "pass": true,
+  "reason": "Independent source review: retained observation/reasoning correctly state total16, budget10, gap6 and member pause/finance check. Handled is grounded in measures already underway, not a claim that funding is approved. Actual skip/already_handled has no draft and adds no duplicate reminder."
+}

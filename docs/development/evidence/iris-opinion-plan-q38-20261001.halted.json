@@ -1,0 +1,1 @@
+{"at":"2026-10-01T15:35:21.250Z","halted":true,"executionPassed":false,"caseId":"inference","stage":"iris_proactive_discussion_scope_review","reason":"independent case semantic failure; stop before next case\n\nfalse !== true\n"}

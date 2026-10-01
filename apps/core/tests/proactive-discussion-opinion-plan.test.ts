@@ -52,18 +52,28 @@ test("a target elsewhere in selected evidence cannot bypass its chosen premise a
   expect(() => compilePdOpinionPlan(value, true, evidence)).toThrow();
 });
 
-test("inference plan identifies a distinct hypothesis to verify without inventing a payment result", () => {
+test("inference advice refers to the selected conclusion, not a separately selected known premise", () => {
   const sources = [{ ref: "likes", text: "我们访谈了5个人，他们都说喜欢。" },
     { ref: "revenue", text: "因此认定全部用户都会付费，直接按全量付费用户定收入。" }];
   const { prose } = compilePdOpinionPlan({ kind: "inference", premise: { sourceRef: "likes", quote: sources[0]!.text },
     decision: { sourceRef: "revenue", quote: sources[1]!.text },
-    verificationTarget: { sourceRef: "revenue", quote: "全部用户都会付费" },
     changeExplanation: "喜欢与付费之间仍缺乏验证。" }, false, sources);
   expect(prose.issueDescription).toBeNull();
   expect(prose.observation).toContain(sources[0]!.text);
   expect(prose.reasoning).toContain("不足以证明");
-  expect(prose.suggestion).toContain("“全部用户都会付费”单独作为待验证假设");
+  expect(prose.observation).toContain(sources[1]!.text);
+  expect(prose.suggestion).toBe("建议围绕上述结论开展小范围验证并收集证据，根据结果修订判断和推进条件。");
+  expect(prose.suggestion).not.toContain(sources[0]!.text);
   expect(prose.draftText).not.toMatch(/没有人会买|已经付款|供应商|严重样本偏差/u);
+});
+
+test("inference refuses the old redundant verification target instead of relabeling interview facts as a hypothesis", () => {
+  const sources = [{ ref: "likes", text: "我们访谈了5个人，他们都说喜欢。" },
+    { ref: "revenue", text: "因此认定全部用户都会付费，直接按全量付费用户定收入。" }];
+  expect(() => compilePdOpinionPlan({ kind: "inference", premise: { sourceRef: "likes", quote: sources[0]!.text },
+    decision: { sourceRef: "revenue", quote: sources[1]!.text },
+    verificationTarget: { sourceRef: "likes", quote: sources[0]!.text },
+    changeExplanation: "喜欢不等于愿意付费。" }, true, sources)).toThrow();
 });
 
 test("a dependency can concern a planned action without inventing a promise or proven violation", () => {
@@ -82,6 +92,10 @@ test("a dependency can concern a planned action without inventing a promise or p
 test.each([false, true])("plan wire format accepts only the bounded branch for generation or repair: %s", repair => {
   const validate = new Ajv().compile(pdOpinionPlanFormat(repair).json_schema.schema);
   expect(validate(plan)).toBe(true);
+  const { verificationTarget, ...withoutTarget } = plan;
+  expect(validate(withoutTarget)).toBe(false);
+  expect(validate({ ...withoutTarget, kind: "inference" })).toBe(true);
+  expect(validate({ ...withoutTarget, kind: "inference", verificationTarget })).toBe(false);
   expect(validate({ ...plan, draftText: "unreviewed free prose" })).toBe(false);
   expect(validate({ kind: "calculation", quantities, changeExplanation: "成本更新需要重新核算。" })).toBe(true);
   expect(validate({ kind: "calculation", quantities, changeExplanation: "成本更新需要重新核算。", total: 999 })).toBe(false);

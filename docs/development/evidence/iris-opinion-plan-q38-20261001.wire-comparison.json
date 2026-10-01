@@ -1,0 +1,27 @@
+{
+  "kind": "model-only-first-three-assessment-comparison",
+  "checks": [
+    {
+      "caseId": "paraphrase",
+      "index": 1,
+      "q37WireSha256": "9aab102cb71aa512e9611e9a2661bddf3a1dd9e082bea5232041dae6e1bf9b8f",
+      "q38WireSha256": "9df0c064da51696903090d6b08485b0df41b3a16b7dbc5d8a12ddedc2852c71b",
+      "identicalExceptModel": true
+    },
+    {
+      "caseId": "handled",
+      "index": 2,
+      "q37WireSha256": "29de1e852f0a245ca257f9937c4ec79de533262ebdfd0d9e70e919c1938acd4d",
+      "q38WireSha256": "8ddfa2bcb039e64a415a00d8d0489a0607702f429eb204eb6fa14d9564f4ea11",
+      "identicalExceptModel": true
+    },
+    {
+      "caseId": "hypothesis",
+      "index": 3,
+      "q37WireSha256": "2bf9e67d65902868233b7ed5156572051a3ed0ea627a0cc44c944d86eeb87332",
+      "q38WireSha256": "1f8b847d3474c8041c2e80cf1b02381a36ae33653ec9265c8fdba65557d68d4a",
+      "identicalExceptModel": true
+    }
+  ],
+  "limit": "single responses do not establish general model reliability or causal attribution to prompt duty complexity"
+}

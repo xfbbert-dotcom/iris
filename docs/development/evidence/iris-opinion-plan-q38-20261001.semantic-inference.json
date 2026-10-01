@@ -1,0 +1,6 @@
+{
+  "caseId": "inference",
+  "resultSha256": "778f2145d26d79e85c72ffe7781a500e9907b118bf062a2c1cbf6d4a31cf7f3f",
+  "pass": false,
+  "reason": "Independent final-pair review: observation and insufficiency reasoning are grounded, but verificationTarget selects the already reported five-person liking interview. Final suggestion recasts that supplied fact as a pending hypothesis and asks to test it, rather than testing willingness to pay. This does not meet the frozen useful-advice requirement. Full scope review nevertheless approves all fields and rationalizes testing existing evidence as a hypothesis; no correction occurs. Stop without resampling or changing expectations."
+}

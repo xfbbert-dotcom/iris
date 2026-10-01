@@ -1,0 +1,26 @@
+{
+  "kind": "independent-final-pair-review",
+  "pass": false,
+  "applicationCommit": "5b48ad1259133a3900a3a4d4e1572171fe37b724",
+  "runHead": "ce4e8b00e7145bb47cef9c7025e119a30c5b699f",
+  "reportSha256": "60c15c2f504e3c2b430794ffcdd2700094dd92a986edcc5b3b13de65d5e48980",
+  "passedCases": [
+    "paraphrase",
+    "handled",
+    "hypothesis",
+    "qualified-risk"
+  ],
+  "failedCase": "inference",
+  "reason": "Plan chose reported five-person liking evidence as verificationTarget; compiled advice relabeled that evidence a hypothesis instead of testing payment willingness. Scope review explicitly approved the wrong target, so correction was not triggered. Literal binding and final supported=true did not prove usefulness or role fidelity.",
+  "attribution": "Actual plan-target selection plus review miss. Original evidence was present; no initial-prose transfer caused this. Underlying model choice cause unresolved.",
+  "unreached": [
+    "arithmetic",
+    "material-update",
+    "separate-next",
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "rawInitialResiduals": "qualified-risk initial reasoning still asserts a necessary failure consequence; inference initial reasoning asserts selection bias and certain overestimated revenue. Neither initial prose is transferred to subsequent plan input or retained as accepted pair.",
+  "externalDelivery": false,
+  "deployed": false
+}

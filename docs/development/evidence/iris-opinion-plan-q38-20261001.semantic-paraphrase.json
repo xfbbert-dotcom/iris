@@ -1,0 +1,6 @@
+{
+  "caseId": "paraphrase",
+  "resultSha256": "fd09d17ca502223811d666f447f0966d716c5de1b2146e36e8280be3327f5b8f",
+  "pass": true,
+  "reason": "Independent source/history review: unchanged two-person 8-per-person cost and 10 budget were already surfaced as total16/gap6. Skip/duplicate, existing identity and no draft are appropriate; retained explanation accurately identifies no new basis."
+}
