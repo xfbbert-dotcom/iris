@@ -1,0 +1,8 @@
+{
+  "note": "page may lag, not billing reconciliation",
+  "freeExhaustionStop": true,
+  "model": "qwen3.8-max",
+  "expiresAt": "2026-12-18",
+  "observedAt": "2026-10-01T09:51:32.609Z",
+  "remainingTokens": 849650
+}

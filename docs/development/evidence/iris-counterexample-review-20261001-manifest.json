@@ -1,0 +1,113 @@
+{
+  "kind": "counterexample-review-20261001",
+  "files": [
+    {
+      "source": "counterexample-review-20261001.json",
+      "target": "iris-counterexample-review-20261001.json",
+      "sha256": "004a8af75f52865858f41b13d27bca9c97b968b152a2e7d4c2b0615ec1ecbe46",
+      "bytes": 121949
+    },
+    {
+      "source": "counterexample-review-20261001.started.json",
+      "target": "iris-counterexample-review-20261001.started.json",
+      "sha256": "d2739b21dd71d72d10f6145798715945adacd21ba9c9adea6c4e336dd0390f29",
+      "bytes": 1456
+    },
+    {
+      "source": "counterexample-review-20261001.halted.json",
+      "target": "iris-counterexample-review-20261001.halted.json",
+      "sha256": "c48eaf4857e64472abfe5f81768a555c2e28f9c5ffa518a5a3bd3ae0f06fc0a1",
+      "bytes": 130
+    },
+    {
+      "source": "counterexample-review-20261001.semantic-frozen-risk.json",
+      "target": "iris-counterexample-review-20261001.semantic-frozen-risk.json",
+      "sha256": "945b80a52f2b7123f43bf577f977eec51f475339c73d10c8db1154d778e6e7b8",
+      "bytes": 569
+    },
+    {
+      "source": "counterexample-review-20261001.independent-review.json",
+      "target": "iris-counterexample-review-20261001.independent-review.json",
+      "sha256": "7c4a0e68f2b3996f0e661a64a0b6d36c5e297ac094109f52f6846a18558b3d2b",
+      "bytes": 391
+    },
+    {
+      "source": "counterexample-review-20261001.quota-end.json",
+      "target": "iris-counterexample-review-20261001.quota-end.json",
+      "sha256": "48fc72911a5483fefd8ed13d6532e9b31627ddc4f78ad58bc22da04847bf9adf",
+      "bytes": 221
+    },
+    {
+      "source": "counterexample-review-20261001.audit.json",
+      "target": "iris-counterexample-review-20261001.audit.json",
+      "sha256": "a68ce7515b8ebbbb8403a418bcd9e12d29b1d1c28251c0372a9b23fee4fc943e",
+      "bytes": 760
+    },
+    {
+      "source": "counterexample-review-20261001.pending-1.json",
+      "target": "iris-counterexample-review-20261001.pending-1.json",
+      "sha256": "7d0cc4b0b9d78e94112b0ecdcdb0484c8e2befa5c9f71b578fc52f3044d7bb50",
+      "bytes": 189
+    },
+    {
+      "source": "counterexample-review-20261001.pending-2.json",
+      "target": "iris-counterexample-review-20261001.pending-2.json",
+      "sha256": "0c366657c75c01f3ff759f39b4869080c2c2d093742d5963b1b42adfe85ead0a",
+      "bytes": 185
+    },
+    {
+      "source": "counterexample-review-20261001.pending-3.json",
+      "target": "iris-counterexample-review-20261001.pending-3.json",
+      "sha256": "d7811665702c2de125c7fe68da1f036ea839a302804a9b738a3392f7bb0381eb",
+      "bytes": 189
+    },
+    {
+      "source": "counterexample-review-20261001.pending-4.json",
+      "target": "iris-counterexample-review-20261001.pending-4.json",
+      "sha256": "1f29cae54f7bb768985273cb7508e41e1fe521791680380decb5622616951995",
+      "bytes": 186
+    },
+    {
+      "source": "counterexample-review-20261001.quota-1.json",
+      "target": "iris-counterexample-review-20261001.quota-1.json",
+      "sha256": "62a2c96180829b32faa5737b4fe12cf0afa4642aa5380ab77503586f84e9aa1f",
+      "bytes": 252
+    },
+    {
+      "source": "counterexample-review-20261001.quota-2.json",
+      "target": "iris-counterexample-review-20261001.quota-2.json",
+      "sha256": "1c20bf68a177a9ada0f9b7a339d53ed678238c59d8ed89b8afbfa933480c7e0b",
+      "bytes": 252
+    },
+    {
+      "source": "counterexample-review-20261001.quota-3.json",
+      "target": "iris-counterexample-review-20261001.quota-3.json",
+      "sha256": "2b9e05c7166604d141f1b709b68286e04c0685630a3864aac803b86fc0cdff22",
+      "bytes": 252
+    },
+    {
+      "source": "counterexample-review-20261001.quota-4.json",
+      "target": "iris-counterexample-review-20261001.quota-4.json",
+      "sha256": "dd7be15fbab8c6c1bcc1cace448777c9d23adc2bfd9703816ecae3ef605febb0",
+      "bytes": 252
+    },
+    {
+      "source": "counterexample-review-20261001.mts",
+      "target": "iris-counterexample-review-20261001-runner.txt",
+      "sha256": "4351d902a925a3b67dbaa03891698eed838ae9661004e6cf3257c13d0711d648",
+      "bytes": 10530
+    },
+    {
+      "source": "run-counterexample-review.ps1",
+      "target": "iris-counterexample-review-20261001-launcher.txt",
+      "sha256": "ae1a759e8dea895bea2530d8161a2700833c77010af299ca5c795127f9d13aee",
+      "bytes": 1807
+    },
+    {
+      "source": "archive-counterexample-review-20261001.mjs",
+      "target": "iris-counterexample-review-20261001-archive.txt",
+      "sha256": "f0412eef43d15947afed920620c073b7106b4fcd0c82ecaa661f79ba08c54dbe",
+      "bytes": 3598
+    }
+  ]
+}

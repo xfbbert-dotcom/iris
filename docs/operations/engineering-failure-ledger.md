@@ -49,6 +49,10 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   and retain full review after the sole correction. An empty counterexample list is not approval.
   The [local candidate](../development/iris-counterexample-review-20261001.md) is default off and
   not semantically accepted; literal binding does not prove hypothetical compatibility.
+  Its frozen end-to-end window (4HTTP/11011 tokens) removed invented numbers but retained an
+  unsupported necessary consequence. The second counterexample list was empty and final scope
+  review approved the pair. Two model checks are not independent proof of truth; preserve the
+  failed complete pair and keep the candidate off instead of counting numeric repair as acceptance.
 
 - **Receipt-duty ablation boundary (2026-09-29):** Removing numeric/advice receipt tasks while
   retaining the complete candidate and semantic requirements identified unsupported quantities,

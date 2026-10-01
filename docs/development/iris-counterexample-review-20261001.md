@@ -1,4 +1,4 @@
-# 独立反例检查与唯一修正（本地候选，实模待验证）
+# 独立反例检查与唯一修正（实模首例失败，候选停止）
 
 本地候选提交`33f994ec`；应用基线a2b3c449，仓库基线422ff85c；2026-10-01。用户授权继续本地修复及免费合成测试。
 保留此前[职责消融失败](iris-review-duty-ablation-20260929.md)，不改判其验收结果。
@@ -45,12 +45,12 @@ counterexample_rejection携带原句与假设，不伪造六字段true或数字�
 独立审查重跑新测试10项通过，未发现阻止既定实模窗口的重要问题。模拟响应只能
 证明程序控制流，不证明模型能生成有效反例。
 
-本轮尚未启动真实模型窗口，**HTTP0、tokens0**。2026-10-01百炼现有标签页显示
+登录恢复前真实模型窗口尚未启动，**当时HTTP0、tokens0**。2026-10-01百炼现有标签页显示
 “您当前处于未登录状态，登录后可使用完整服务”；刷新、点击常规登录入口未恢复。
 已请用户恢复登录。缺失的是实时精确免费额度/用完即停核对条件，不是合成key权限，
 不是429，也未证实额度耗尽。不可借用9月29日页面读数发起调用。
 私有运行器及启动器已准备、preflight通过；登录恢复后重新核对即可启动原冻结窗口，
-无需重新设计或重申请同模型合成权限。尚无.started文件，不属于失败窗口重跑。
+无需重新设计或重申请同模型合成权限。当时尚无.started文件，不属于失败窗口重跑。
 
 [待运行脚本](evidence/iris-counterexample-review-20261001-runner.txt)、
 [启动器](evidence/iris-counterexample-review-20261001-launcher.txt)、
@@ -60,8 +60,40 @@ counterexample_rejection携带原句与假设，不伪造六字段true或数字�
 |---|---|
 | 白皮书 | **reviewed-unchanged**：[第6节](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md#6-permission-safety-and-proactive-behavior)的完整审核、一次修正和默认调用边界未变；额外检查仅显式本地候选，启用默认前需实模验收并同步稳定架构。 |
 | 工程故障台账 | **updated**：[主动讨论条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)记录反例是假设、不能充当公司事实或批准证据的边界，链接本候选而不声称有效。 |
-| 核心需求覆盖基线 | **updated**：[本轮候选](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-10-01-counterexample-review-candidate)区分默认关闭、本地通过、实模未运行，IRIS-CORE-005不提升覆盖等级。 |
-| README / AGENTS / current-handoff | **updated**：[README](../../README.md#current-product-state)与[交接](current-handoff.md#当前正在推进)定位候选及当前登录前置条件；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)已有定位、授权与闭环要求有效。 |
+| 核心需求覆盖基线 | **updated**：[本轮候选](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-10-01-counterexample-review-candidate)区分默认关闭、本地通过和实模首败，IRIS-CORE-005不提升覆盖等级。 |
+| README / AGENTS / current-handoff | **updated**：[README](../../README.md#current-product-state)与[交接](current-handoff.md#当前正在推进)定位停止的候选、实模失败及已恢复登录；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)已有定位、授权与闭环要求有效。 |
 
-代码已改但未默认启用／本地测试通过／实模未验证／真实飞书未验收／未部署。
+## 登录恢复后的实际窗口：执行成功，语义失败
+
+用户恢复登录后，在同一候选`33f994ec`（运行HEAD`15853b63`）执行冻结窗口。
+实际 **4次HTTP200 / 11011 reported tokens**，仅frozen-risk，首败停止。没有重采、
+新增修正或追加提示词变体；positive-risk、新鲜风险、重复、算术、更新五例未调用。
+
+1. 第一反例检查给出2项，识别无依据0/100%/全部工作量，未指出必然后果。
+2. 唯一updates修正去掉伪数量，保留有效建议，没有把假设准备工作写成公司事实。
+   但reasoning仍写“一旦后续联调发现问题或供应商侧出现延迟，将直接导致无法按期履约”。
+3. 修正后的反例检查返回findings=[]。
+4. 原完整终审六字段及整体均true，实际返回该pair。其理由把修正数量后的评估当成
+   已恰当限定，没有忠实核对存续的必然后果。不是schema失败或只是整体false。
+
+主代理和独立审查均判失败：来源没有说明问题无法及时解决或延迟必越过交付期限。
+draft中的“可能”与qualified_inference标签不能使内部reasoning的必然断言成立。
+本轮目标是正确最终pair，而不只是一条有效反例或成功调用，故不提升为语义通过。
+
+[完整请求响应](evidence/iris-counterexample-review-20261001.json)、
+[独立语义审查](evidence/iris-counterexample-review-20261001.independent-review.json)、
+[执行审计](evidence/iris-counterexample-review-20261001.audit.json)、
+[停止记录](evidence/iris-counterexample-review-20261001.halted.json)、
+[18份证据清单](evidence/iris-counterexample-review-20261001-manifest.json)。
+已核对全部wire/response哈希、raw与client内容、用量、冻结来源哈希与逐请求quota。
+四次调用前精确qwen3.8-max页面均849.65K/1M、2026-12-18到期、用完即停开启；
+结束页面同值，可能滞后，不作账单审计。本轮没有新代码修改，未重复跑Core测试。
+
+四处处置沿用上表：README、交接、台账和基线已同步本次失败；白皮书仍
+reviewed-unchanged，失败且默认关闭的候选没有修改稳定运行流程。
+登录阻塞已解除，当前不等待权限或额度；真正未解决的是必然后果漏检。
+这个反例检查候选已经停止，不启用默认、不重跑碰运气，也不从一次失败断言模型
+能力是唯一原因。候选实现保留默认false及本地提交历史，不属于已接受产品能力。
+
+代码候选已改但未默认启用／本地通过／实模语义失败／真实飞书未验收／未部署。
 原语义缺陷未关闭。没有push、生产访问、模型切换或飞书消息。

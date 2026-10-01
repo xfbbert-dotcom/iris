@@ -1,0 +1,8 @@
+{
+  "remainingCasesUncalled": 5,
+  "http200": 4,
+  "pass": false,
+  "tokens": 11011,
+  "reason": "Final reasoning retains unsupported necessary delivery consequence; second counterexample check empty and final scope all true. Numbers corrected, hypotheses not turned into observed facts, advice retained, but joint pair semantic acceptance fails.",
+  "reviewer": "arithmetic_review"
+}

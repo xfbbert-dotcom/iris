@@ -31,9 +31,10 @@ The internal MVP acceptance checklist lives at:
 
 The [counterexample review candidate](docs/development/iris-counterexample-review-20261001.md)
 is implemented behind an explicit local option, default off. Core4860 passed/469 conditional
-skips, type/build/CLI7 passed; three added cases passed in the final focused17. No real-model
-requests ran: the quota console is logged out, preventing the required fresh free-only check.
-The semantic defect remains open; no runtime enablement, deployment or Feishu acceptance.
+skips, type/build/CLI7 passed; three added cases passed in the final focused17. After login recovery,
+four HTTP200/11011 tokens removed invented quantities but left a necessary delivery consequence
+that both final checks missed. The first case failed; five controls were uncalled. The candidate
+is stopped and remains off; no runtime enablement, deployment or Feishu acceptance.
 
 The latest [review receipt-duty ablation](docs/development/iris-review-duty-ablation-20260929.md)
 made no application change. One HTTP200/3240-token diagnostic identified unsupported quantities

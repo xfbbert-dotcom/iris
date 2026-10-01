@@ -1,0 +1,10 @@
+{
+  "hypotheticalFacts": "preparatory-work counterexample was not inserted as company fact",
+  "quantities": "0/100/all-workload claims removed",
+  "pass": false,
+  "certainConsequence": "reasoning still says 一旦后续联调发现问题或供应商侧出现延迟，将直接导致无法按期履约",
+  "reason": "Final pair still contains unsupported necessary consequence; second counterexample check returned empty and final scope review wrongly approved it.",
+  "caseId": "frozen-risk",
+  "advice": "specific advice retained",
+  "reviewer": "primary"
+}

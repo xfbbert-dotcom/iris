@@ -5,8 +5,10 @@
 [Explicit local candidate](../../development/iris-counterexample-review-20261001.md) binds
 hypothetical counterexamples to current candidate quotes and preserves one correction plus full
 final review. Default false; runtime not enabled. Core4860 passed/469 skipped, type/build/CLI7
-passed; final focused17 includes three added cases. Real-model window has not started because
-the quota console is logged out. IRIS-CORE-005 remains partial; no semantic or Feishu acceptance.
+passed; final focused17 includes three added cases. After login recovery, four HTTP200/11011 tokens
+returned a pair still containing an unsupported necessary consequence: the second challenge was
+empty and final scope review approved it. First-case semantic failure, five controls uncalled;
+candidate stopped, default off. IRIS-CORE-005 remains partial; no semantic or Feishu acceptance.
 
 ## 2026-09-29: Program-bound proactive prose
 
