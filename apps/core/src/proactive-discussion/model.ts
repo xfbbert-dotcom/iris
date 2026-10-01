@@ -2,6 +2,7 @@ import { z } from "zod";
 import { reviewPdCounterexamples, type PdCounterexampleRejection } from "./counterexamples.js";
 import { canonicalOpinionProse, canonicalOpinionFormat, canonicalOpinionSystem, canonicalRepairSystem, separateValueOpinionSystem } from "./canonical-opinion.js";
 import { pdSourceFocus, pdSourceFocusCandidates, sourceFocusAssessmentSystem, sourceFocusReviewSystem } from "./source-focus.js";
+import { compilePdOpinionPlan, pdOpinionPlanFormat, pdOpinionPlanSystem, pdOpinionPlanRepairSystem } from "./opinion-plan.js";
 
 import type {
   OpenAICompatibleChatCompletionsClient,
@@ -197,6 +198,7 @@ export function createPdModel({
   sourceBoundIdentity = false,
   assessmentOpinion = false,
   separateInterventionValue = false,
+  opinionPlan = false,
 }: {
   client: OpenAICompatibleChatCompletionsClient;
   /** Local candidate only; runtime does not enable this until semantic acceptance. */
@@ -209,12 +211,17 @@ export function createPdModel({
   assessmentOpinion?: boolean;
   /** Local candidate: internal novelty is reviewed separately from public prose. */
   separateInterventionValue?: boolean;
+  /** Local bounded candidate: source-bound plans compile all outward prose. */
+  opinionPlan?: boolean;
 }): PdModel {
   if (canonicalOpinion && counterexampleReview) throw new Error("review candidates cannot be combined");
   if (sourceBoundIdentity && !canonicalOpinion) throw new Error("source focus candidate requires canonical opinion");
   if (assessmentOpinion && !sourceBoundIdentity) throw new Error("assessment opinion requires source focus");
   if (separateInterventionValue && (!sourceBoundIdentity || assessmentOpinion)) {
     throw new Error("separate intervention value requires source-bound canonical generation");
+  }
+  if (opinionPlan && (!sourceBoundIdentity || assessmentOpinion || separateInterventionValue)) {
+    throw new Error("opinion plan requires source-bound generation without competing prose modes");
   }
   return {
     async assess(context, assertActive) {
@@ -259,20 +266,27 @@ export function createPdModel({
 
       await assertActive?.();
       let generated: PdReviewedIntervention;
+      let currentPlan: unknown;
       if (assessmentOpinion) {
         try { generated = projectAssessmentOpinion(validated, context); }
         catch { throw new Error("proactive discussion draft was invalid"); }
       } else {
-        const generation = generationInput(context, validated, sourceBoundIdentity, separateInterventionValue);
-        const generatedContent = await client.complete(canonicalOpinion ? [
+        const generation = generationInput(context, validated, sourceBoundIdentity, separateInterventionValue || opinionPlan);
+        const generatedContent = await client.complete(opinionPlan ? [
+          { role: "system", content: pdOpinionPlanSystem },
+          { role: "user", content: JSON.stringify(generation) },
+        ] : canonicalOpinion ? [
           { role: "system", content: [separateInterventionValue ? separateValueOpinionSystem : canonicalOpinionSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
           { role: "user", content: JSON.stringify(generation) },
         ] : renderMessages(generation), {
-          responseFormat: canonicalOpinion ? canonicalOpinionFormat(false, separateInterventionValue) : proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
+          responseFormat: opinionPlan ? pdOpinionPlanFormat() : canonicalOpinion ? canonicalOpinionFormat(false, separateInterventionValue) : proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
         });
         try {
           const value: unknown = JSON.parse(generatedContent);
-          generated = validatePdProseIntervention(canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue) : value, context, validated);
+          if (opinionPlan) currentPlan = value;
+          generated = validatePdProseIntervention(opinionPlan
+            ? compilePdOpinionPlan(value, validated.issueRef?.kind === "new", generation.evidence)
+            : canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue) : value, context, validated);
         }
         catch { throw new Error("proactive discussion draft was invalid"); }
       }
@@ -282,28 +296,35 @@ export function createPdModel({
       const challenge = counterexampleReview ? await reviewPdCounterexamples(client, { ...input, draft }) : null;
       if (counterexampleReview) await assertActive?.();
       const review = challenge ?? parseScopeReviewContent(await client.complete(
-        scopeReviewMessages({ ...input, draft, identityTarget }),
+        scopeReviewMessages({ ...input, draft, identityTarget, ...(opinionPlan ? { sourcePlan: currentPlan } : {}) }),
         { responseFormat: scopeReviewResponseFormat(draft.text) },
       ), draft.text, undefined, generated.assessment);
       await assertActive?.();
       if (review.supported) return generated;
 
-      const repairInput = { ...input, draft, review, identityTarget };
+      const repairInput = { ...input, draft, review, identityTarget, ...(opinionPlan ? { currentPlan } : {}) };
       const repairedContent = await client.complete(
-        canonicalOpinion ? [
+        opinionPlan ? [
+          { role: "system", content: [pdOpinionPlanSystem, pdOpinionPlanRepairSystem, evaluationContextSystem].join("\n") },
+          { role: "user", content: JSON.stringify(repairInput) },
+        ] : canonicalOpinion ? [
           { role: "system", content: [separateInterventionValue ? separateValueOpinionSystem : canonicalOpinionSystem, canonicalRepairSystem, evaluationContextSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
           { role: "user", content: JSON.stringify(repairInput) },
         ] : pairRepairMessages(repairInput),
-        { responseFormat: canonicalOpinion ? canonicalOpinionFormat(true, separateInterventionValue) : repairUpdatesResponseFormat(validated) },
+        { responseFormat: opinionPlan ? pdOpinionPlanFormat(true) : canonicalOpinion ? canonicalOpinionFormat(true, separateInterventionValue) : repairUpdatesResponseFormat(validated) },
       );
       await assertActive?.();
       let repaired: PdReviewedIntervention;
       try {
         const value: unknown = JSON.parse(repairedContent);
-        repaired = canonicalOpinion
+        repaired = opinionPlan
+          ? validatePdProseIntervention(compilePdOpinionPlan(value, validated.issueRef?.kind === "new", input.evidence), context, validated)
+          : canonicalOpinion
           ? validatePdProseIntervention(canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue), context, validated)
           : validatePdRepairUpdates(value, context, validated, generated);
+        if (opinionPlan) currentPlan = value;
       } catch {
+        if (opinionPlan) throw new Error("proactive discussion draft was invalid");
         return null;
       }
 
@@ -323,6 +344,7 @@ export function createPdModel({
           draft: repaired.draft,
           identityTarget,
           previousReview: review,
+          ...(opinionPlan ? { sourcePlan: currentPlan } : {}),
         }),
         { responseFormat: scopeReviewResponseFormat(repaired.draft.text, reviewHistory) },
       );
@@ -712,19 +734,19 @@ function renderMessages(input: ReturnType<typeof generationInput>): OpenAICompat
 }
 
 function scopeReviewMessages(
-  input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget },
+  input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget; sourcePlan?: unknown },
 ): OpenAICompatibleChatMessage[] {
   return [
-    { role: "system", content: scopeReviewSystem + sourceFocusReviewSuffix(input.identityTarget) },
+    { role: "system", content: scopeReviewSystem + sourceFocusReviewSuffix(input.identityTarget) + opinionPlanReviewSuffix(input.sourcePlan) },
     { role: "user", content: JSON.stringify(input) },
   ];
 }
 
 function repairedPairScopeReviewMessages(
-  input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget; previousReview: PdScopeReview | PdCounterexampleRejection },
+  input: ReturnType<typeof renderInput> & { draft: PdDraft; identityTarget: PdIdentityTarget; previousReview: PdScopeReview | PdCounterexampleRejection; sourcePlan?: unknown },
 ): OpenAICompatibleChatMessage[] {
   return [
-    { role: "system", content: repairedPairScopeReviewSystem + sourceFocusReviewSuffix(input.identityTarget) },
+    { role: "system", content: repairedPairScopeReviewSystem + sourceFocusReviewSuffix(input.identityTarget) + opinionPlanReviewSuffix(input.sourcePlan) },
     { role: "user", content: JSON.stringify(input) },
   ];
 }
@@ -740,6 +762,10 @@ function pairRepairMessages(
 
 function sourceFocusReviewSuffix(target: PdIdentityTarget) {
   return target.issueRef && "sourceFocus" in target.issueRef ? `\n${sourceFocusReviewSystem}` : "";
+}
+
+function opinionPlanReviewSuffix(sourcePlan: unknown) {
+  return sourcePlan === undefined ? "" : "\nsourcePlan是生成当前候选的本轮计划，不是事实权威或历史。程序只保证引文字面绑定和选定数值的运算，不证明依据关系或数值角色正确。仍须对照完整evidence核对：前提是否未验证、依据是否确实不足、建议对象是否合适；计算中的数量/单价/预算及新旧值、单位和口径是否忠实，计算增量时原方案与当前方案的数量是否相同，不能因为算式正确就批准角色互换或旧值冒充新值。当前完整候选的所有字段和新增价值继续独立审核。";
 }
 
 function assessmentResponseFormat(context: PdContext, sourceBoundIdentity = false): OpenAICompatibleJsonSchemaResponseFormat {
