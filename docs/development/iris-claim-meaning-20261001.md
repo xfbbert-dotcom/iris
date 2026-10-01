@@ -30,7 +30,7 @@
 
 ## 调用边界
 
-精确qwen3.7-plus、non-thinking、max_tokens2048、单次60秒；最多3HTTP/24000reported
+精确qwen3.7-plus、non-thinking、max_tokens4096、单次60秒；最多3HTTP/24000reported
  tokens下次请求前停/15分钟；零自动重试、零格式恢复。每次发送前独立核对精确型号免费
 余额>=150K、有效期未来、用完即停开启，观察60秒以内且绑定wire哈希；禁止付费回退。
 只调用已授权脱敏合成文本，不使用真实群内容。实际runner/schema和oracle在启动前冻结。
@@ -45,3 +45,5 @@
 | README/AGENTS/handoff | **updated**：[交接](current-handoff.md)指向本轮有界诊断；**reviewed-unchanged**：[README](../../README.md)未完整交付仍有效，[AGENTS](../../AGENTS.md)授权与闭环规则不变。 |
 
 未push、生产访问/部署、生产模型切换、启用主动群发或飞书外发；生产SHA未核验。
+
+启动前审查调整：嵌套含义图需要更多输出空间，首个真实请求之前将输出上限由2048设为4096；3请求/24K累计预算不变。尚未观察任何本轮模型响应，不存在截断后重采。
