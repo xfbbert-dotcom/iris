@@ -43,6 +43,11 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
 
 ### Proactive collaboration is not a deadline reminder
 
+- **Independent prose can drift (2026-10-01 candidate):** A qualified public draft can coexist
+  with an unjustified necessary consequence in separately generated internal reasoning. The
+  [canonical opinion candidate](../development/iris-canonical-opinion-20261001.md) projects both
+  from one body; this removes independent expansion, not the need for semantic validation.
+  Default off, first-failure stop in a bounded fresh end-to-end window; bug remains open.
 - **Counterexamples are hypotheses (2026-10-01 candidate):** A compatible alternative can expose
   an unsupported necessary consequence, but is not an observed company fact. Bind diagnostics
   to current original quotes, never invent positive field verdicts when scope review was skipped,

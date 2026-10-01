@@ -1,5 +1,12 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-01: Canonical opinion candidate
+
+[Single-body projection](../../development/iris-canonical-opinion-20261001.md) removes separate
+internal prose generation, with complete original review and one correction retained. Explicit
+local option defaults off. Core4872 passed/469 skipped; later focused11 includes two added tests.
+Real-model acceptance pending; IRIS-CORE-005 remains partial, no deployment or Feishu acceptance.
+
 ## 2026-10-01: Counterexample review candidate
 
 [Explicit local candidate](../../development/iris-counterexample-review-20261001.md) binds

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { reviewPdCounterexamples, type PdCounterexampleRejection } from "./counterexamples.js";
+import { canonicalOpinionProse, canonicalOpinionFormat, canonicalOpinionSystem, canonicalRepairSystem } from "./canonical-opinion.js";
 
 import type {
   OpenAICompatibleChatCompletionsClient,
@@ -182,11 +183,15 @@ export interface PdModel {
 export function createPdModel({
   client,
   counterexampleReview = false,
+  canonicalOpinion = false,
 }: {
   client: OpenAICompatibleChatCompletionsClient;
   /** Local candidate only; runtime does not enable this until semantic acceptance. */
   counterexampleReview?: boolean;
+  /** Local candidate: derive stored prose from one canonical opinion, pending semantic acceptance. */
+  canonicalOpinion?: boolean;
 }): PdModel {
+  if (canonicalOpinion && counterexampleReview) throw new Error("review candidates cannot be combined");
   return {
     async assess(context, assertActive) {
       const input = modelContext(context);
@@ -216,11 +221,18 @@ export function createPdModel({
       const identityTarget = projectIdentityTarget(validated);
 
       await assertActive?.();
-      const generatedContent = await client.complete(renderMessages(generationInput(context, validated)), {
-        responseFormat: proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
+      const generation = generationInput(context, validated);
+      const generatedContent = await client.complete(canonicalOpinion ? [
+        { role: "system", content: [canonicalOpinionSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
+        { role: "user", content: JSON.stringify(generation) },
+      ] : renderMessages(generation), {
+        responseFormat: canonicalOpinion ? canonicalOpinionFormat() : proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
       });
       let generated: PdReviewedIntervention;
-      try { generated = validatePdProseIntervention(JSON.parse(generatedContent), context, validated); }
+      try {
+        const value: unknown = JSON.parse(generatedContent);
+        generated = validatePdProseIntervention(canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new") : value, context, validated);
+      }
       catch { throw new Error("proactive discussion draft was invalid"); }
       const input = renderInput(context, generated.assessment);
       const { draft } = generated;
@@ -234,14 +246,21 @@ export function createPdModel({
       await assertActive?.();
       if (review.supported) return generated;
 
+      const repairInput = { ...input, draft, review, identityTarget };
       const repairedContent = await client.complete(
-        pairRepairMessages({ ...input, draft, review, identityTarget }),
-        { responseFormat: repairUpdatesResponseFormat(validated) },
+        canonicalOpinion ? [
+          { role: "system", content: [canonicalOpinionSystem, canonicalRepairSystem, evaluationContextSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
+          { role: "user", content: JSON.stringify(repairInput) },
+        ] : pairRepairMessages(repairInput),
+        { responseFormat: canonicalOpinion ? canonicalOpinionFormat(true) : repairUpdatesResponseFormat(validated) },
       );
       await assertActive?.();
       let repaired: PdReviewedIntervention;
       try {
-        repaired = validatePdRepairUpdates(JSON.parse(repairedContent), context, validated, generated);
+        const value: unknown = JSON.parse(repairedContent);
+        repaired = canonicalOpinion
+          ? validatePdProseIntervention(canonicalOpinionProse(value, validated.issueRef?.kind === "new"), context, validated)
+          : validatePdRepairUpdates(value, context, validated, generated);
       } catch {
         return null;
       }

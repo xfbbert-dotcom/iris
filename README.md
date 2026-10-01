@@ -29,6 +29,11 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+A new [canonical opinion candidate](docs/development/iris-canonical-opinion-20261001.md)
+derives stored prose from one message instead of expanding a separate internal rationale.
+Default off, original review retained; local checks passed, real-model acceptance pending.
+The previous failed counterexample candidate remains off. No deployment or Feishu acceptance.
+
 The [counterexample review candidate](docs/development/iris-counterexample-review-20261001.md)
 is implemented behind an explicit local option, default off. Core4860 passed/469 conditional
 skips, type/build/CLI7 passed; three added cases passed in the final focused17. After login recovery,
