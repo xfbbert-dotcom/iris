@@ -1,5 +1,10 @@
 # Iris 核心需求覆盖基线
 
+Direct-opinion continuation failed: 6HTTP200/23814tokens, arithmetic passed narrowly but
+qualified risk retained an unsupported necessary consequence approved by scope review. Three
+cases uncalled; candidate off. No increase to complete IRIS-CORE-005 coverage.
+
+
 Direct-opinion follow-up: 4HTTP200/20416tokens, final cost-update semantics passed but original
 execution failed on a clause-comma count receipt. Corrected deterministic four-response replay
 passed; five fresh cases remain. No whole-window or production acceptance claimed.

@@ -1,5 +1,11 @@
 # Iris Engineering Failure Ledger
 
+Removing the second author did not prevent the original conditional-consequence error:
+the direct initial opinion asserted inevitable non-delivery and full review approved it.
+Keep that failed semantic window; a source-only single-claim diagnostic is a bounded attribution
+control, not evidence that full-context review is now reliable.
+
+
 The first direct-opinion window ended in a lexical false negative: a Chinese count tokenizer
 consumed a normal clause comma in “12万，两人”. Token hardening needs ordinary punctuation
 positive controls as well as malformed numeric negatives. Preserve the failed run and replay

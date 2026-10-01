@@ -1,0 +1,8 @@
+{
+  "caseId": "arithmetic",
+  "resultSha256": "c97fe4bb8929610bd70cdab890ea804b955710e44730f167b2ca553f92e696bb",
+  "pass": true,
+  "reviewer": "/root/arithmetic_review and primary",
+  "reason": "16 and positive 6 correct; consequences possible; options 1 person at 8, additional 6, or 5 per person valid. No approval invented.",
+  "nonBlocking": "Self-referential first-intervention/value wording and repeated arithmetic are unnatural but do not change facts."
+}

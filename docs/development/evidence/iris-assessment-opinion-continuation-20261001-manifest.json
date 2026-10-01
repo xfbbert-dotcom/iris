@@ -1,0 +1,143 @@
+{
+  "kind": "assessment-opinion-continuation-20261001",
+  "files": [
+    {
+      "source": "assessment-opinion-continuation-20261001.json",
+      "target": "iris-assessment-opinion-continuation-20261001.json",
+      "sha256": "919492b2b8ef04f6a4cf4a867799eea3926297c17f3b427380726bf886a49d9b",
+      "bytes": 249683
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.started.json",
+      "target": "iris-assessment-opinion-continuation-20261001.started.json",
+      "sha256": "38a40b4c3cadb65ae016f3e6b23336314a628510c4be05bdb2bfa28224e15f14",
+      "bytes": 1475
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.halted.json",
+      "target": "iris-assessment-opinion-continuation-20261001.halted.json",
+      "sha256": "f9b44ea4f97a80df11bf7144272ba748bde69ec1d7250b988738565d530f7380",
+      "bytes": 130
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.independent-review.json",
+      "target": "iris-assessment-opinion-continuation-20261001.independent-review.json",
+      "sha256": "17cffbe3d438883b2b5f0b8cf22841d8cdae3aa482bdb105d257b2417986e5c9",
+      "bytes": 465
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.quota-end.json",
+      "target": "iris-assessment-opinion-continuation-20261001.quota-end.json",
+      "sha256": "2c2eeac4960267818cddd191a8bdc7da0953056e2bd7e8ba478e05bf415a5637",
+      "bytes": 223
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.audit.json",
+      "target": "iris-assessment-opinion-continuation-20261001.audit.json",
+      "sha256": "f3a7d7ceb4bf874b5aaeec9bb19d8ff1bbbf9b87118b66812cbd8c1d6ccadcd3",
+      "bytes": 1088
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.semantic-arithmetic.json",
+      "target": "iris-assessment-opinion-continuation-20261001.semantic-arithmetic.json",
+      "sha256": "bdf3c7620f027eeab81760484db609ee0ad7478a48ae282e8c6910c67f6d878f",
+      "bytes": 472
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.semantic-qualified-risk.json",
+      "target": "iris-assessment-opinion-continuation-20261001.semantic-qualified-risk.json",
+      "sha256": "3ff1e5f275eaf66338ab1c1f089e7f68f8393f8171c04094fcf2f0b3bd963d79",
+      "bytes": 516
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.pending-1.json",
+      "target": "iris-assessment-opinion-continuation-20261001.pending-1.json",
+      "sha256": "0937f5a7683a1bfe44918fa678418bebf0517acf87a075724f6c26a4a3b185a3",
+      "bytes": 183
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.pending-2.json",
+      "target": "iris-assessment-opinion-continuation-20261001.pending-2.json",
+      "sha256": "39c8e7b9a58f8d917bff044fe3d90bffbebc8a2a5578537c225e207279f57bfe",
+      "bytes": 185
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.pending-3.json",
+      "target": "iris-assessment-opinion-continuation-20261001.pending-3.json",
+      "sha256": "58ff472e2ba5cbe461c53d78a5cfc688a4eede697ae5c5e8ce99025c818288a0",
+      "bytes": 194
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.pending-4.json",
+      "target": "iris-assessment-opinion-continuation-20261001.pending-4.json",
+      "sha256": "d67bc2c28d515ff556b8e72c0c8e07c436095536ab6679bca57664285fa68dd3",
+      "bytes": 185
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.pending-5.json",
+      "target": "iris-assessment-opinion-continuation-20261001.pending-5.json",
+      "sha256": "0fec9d4e1d7e7f950f95efc50e681d455c7c3dbdcd61c48e8dc043ccf4e81b8f",
+      "bytes": 187
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.pending-6.json",
+      "target": "iris-assessment-opinion-continuation-20261001.pending-6.json",
+      "sha256": "0927a56b3537b7055129a4cd9c9068e1b33ab587038948fd7f7e484b2fa7a5be",
+      "bytes": 189
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.quota-1.json",
+      "target": "iris-assessment-opinion-continuation-20261001.quota-1.json",
+      "sha256": "74b6368772a3d4202b9d528246e9669da43e858946c16b1597e9946fc3923764",
+      "bytes": 323
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.quota-2.json",
+      "target": "iris-assessment-opinion-continuation-20261001.quota-2.json",
+      "sha256": "0ea88522332e4093dc9b2ce58efd5b73371b229b894a0e8c866c640bf3fca997",
+      "bytes": 323
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.quota-3.json",
+      "target": "iris-assessment-opinion-continuation-20261001.quota-3.json",
+      "sha256": "74347da3fd24e72dc90ffbf1e6a3287dc2755cea93d4c383fa7df98db2764d7c",
+      "bytes": 323
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.quota-4.json",
+      "target": "iris-assessment-opinion-continuation-20261001.quota-4.json",
+      "sha256": "5dfaf6e132f07e0e8eb454b459e32d1d6ddc1d29700db339260215d4c41d32be",
+      "bytes": 323
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.quota-5.json",
+      "target": "iris-assessment-opinion-continuation-20261001.quota-5.json",
+      "sha256": "78c86f9a09a51c07b174f6ade9b19c9a0999e9fb964f05a9b1c5cf7a0eb31da5",
+      "bytes": 323
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.quota-6.json",
+      "target": "iris-assessment-opinion-continuation-20261001.quota-6.json",
+      "sha256": "645870bcd926342d4df5035af5be1c3b740421ecf611308d292e743d01bf247c",
+      "bytes": 323
+    },
+    {
+      "source": "assessment-opinion-continuation-20261001.mts",
+      "target": "iris-assessment-opinion-continuation-20261001-runner.txt",
+      "sha256": "981c69b65d206bc8a39168d35631d56c67f49a8aa37c492b5830b2719cdd80d5",
+      "bytes": 9201
+    },
+    {
+      "source": "run-assessment-opinion-continuation.ps1",
+      "target": "iris-assessment-opinion-continuation-20261001-launcher.txt",
+      "sha256": "d160170a708d40fefca8d8ca2c7974786c87b7803f4a6504d0080ca148730560",
+      "bytes": 1870
+    },
+    {
+      "source": "archive-assessment-opinion-continuation-20261001.mjs",
+      "target": "iris-assessment-opinion-continuation-20261001-archive.txt",
+      "sha256": "681954af30fec36ea523554252302db811f98d8d273c7bf86b19d6b85ed08148",
+      "bytes": 3653
+    }
+  ]
+}

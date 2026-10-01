@@ -1,0 +1,6 @@
+{
+  "caseId": "qualified-risk",
+  "resultSha256": "22cfa8cf6f35c7e8b942f9d9454a619486ad66542d422a814966022e79fd131b",
+  "pass": false,
+  "reason": "The unchanged reasoning asserts 若联调发现问题或供应商侧延迟，将直接导致无法按期交付. Source establishes untested dependency, not inevitability after any issue/delay. Conditional antecedent and qualified_inference label do not qualify its necessary consequence. Scope all true rationalizes the original sentence; no repair occurred."
+}

@@ -1,0 +1,14 @@
+{
+  "executionPassed": false,
+  "http200": 6,
+  "tokens": 23814,
+  "reviewer": "/root/arithmetic_review",
+  "arithmetic": "PASS with nonblocking self-referential wording",
+  "qualified-risk": "FAIL: conditional antecedent still asserts necessary inability to deliver; labels do not qualify sentence. Scope all true, no repair.",
+  "uncalled": [
+    "inference",
+    "paraphrase",
+    "handled"
+  ],
+  "candidate": "not enabled; rejection preserved"
+}
