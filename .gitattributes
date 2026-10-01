@@ -32,3 +32,4 @@ docs/development/evidence/iris-counterexample-review-20261001* -text whitespace=
 docs/development/evidence/iris-canonical-opinion-20261001* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-source-focus-20261001* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-source-focus-continuation-20261001* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-assessment-opinion-20261001* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

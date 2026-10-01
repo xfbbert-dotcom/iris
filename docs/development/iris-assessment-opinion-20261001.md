@@ -50,3 +50,23 @@ skip无review；不受支持稿仅修一次且终审拒绝保持null；过长稿
 保持FAIL；本候选代码提交即本记录所在提交。没有push、生产访问或飞书外发。
 materialChange.explanation投影为reasoning，新增价值需在实际reasoning中成立，
 不能因字段一致视为语义通过。全部已有数值/建议核对仍执行。
+
+## 1265af02实际窗口及逗号边界修复
+
+4HTTP200/20416tokens，首例material-update初审拒uncertainty，修正后最终完整pair
+独立语义PASS；程序仍返回null，原因是861aa6f4新增中文词元边界把正常“12万，两人”
+中的逗号吞入词元/当成数值前缀。属程序误拒，原执行FAIL保留；其余5例未调用。
+[17份证据](evidence/iris-assessment-opinion-20261001-manifest.json)、
+[独立判定](evidence/iris-assessment-opinion-20261001.independent-review.json)。
+
+修复将正常分句逗号与数值边界分开；混合小数、分数、符号负例仍拒。新增2正例
+RED后凭据55通过，原4响应零HTTP完整回放通过且输出与原终审输入逐字相同。
+不修改原窗口判定、不把回放当新实模通过。修复提交即本补充所在提交。
+
+下一续测仅arithmetic→qualified-risk→inference→paraphrase→handled，精确模型、
+24HTTP/100000tokens/30分钟及逐HTTP免费/逐case语义门槛不变，不重采成本更新。
+四处处置沿用上表：台账/基线/交接同步误拒修复及剩余范围，白皮书/README/AGENTS
+仍reviewed-unchanged，候选仍默认off、未部署未飞书验收。
+
+逗号修复：独立复核55凭据+两次固定回放共57通过，typecheck/build通过；未将
+1265af02的Core4906结果冒充本次新增3项后的完整Core统计。

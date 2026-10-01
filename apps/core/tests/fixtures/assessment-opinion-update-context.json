@@ -1,0 +1,110 @@
+{
+  "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+  "triggerMessageId": "synthetic-material-update-0",
+  "policy": {
+    "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+    "version": 1,
+    "enabled": true,
+    "operatorId": "synthetic-evaluator"
+  },
+  "contextVersion": 1,
+  "catalogVersion": 1,
+  "sources": [
+    {
+      "kind": "message",
+      "binding": {
+        "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+        "messageId": "synthetic-prior-budget-0",
+        "contentHash": "75d7021c059727966bdd923adbe736bb15b632216cbce2864cadce04b45b6442"
+      },
+      "ref": "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370"
+    },
+    {
+      "kind": "message",
+      "binding": {
+        "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+        "messageId": "synthetic-prior-budget-1",
+        "contentHash": "b600c601f24f119c832e725cf39e3354fc5f7a8b330c8550d8e59a81e64222a3"
+      },
+      "ref": "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c"
+    },
+    {
+      "kind": "message",
+      "binding": {
+        "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+        "messageId": "synthetic-material-update-0",
+        "contentHash": "46c4465567d5dd336f7a9ab17ec9780557f59f40578e451fee26d8a9529c74c1"
+      },
+      "ref": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624"
+    }
+  ],
+  "items": [
+    {
+      "ref": "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370",
+      "text": "本季度招聘预算 10 万元。"
+    },
+    {
+      "ref": "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c",
+      "text": "招聘两个人，每人要 8 万元；我们认为这些预算足够。"
+    },
+    {
+      "ref": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+      "text": "新的可读报价确认每人的招聘成本从 8 万变为 12 万，两个人仍计划招。"
+    }
+  ],
+  "issues": [
+    {
+      "id": "synthetic-budget-issue",
+      "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+      "description": "两人招聘成本超过 10 万元预算",
+      "state": "surfaced",
+      "version": 2,
+      "basisVersion": 1,
+      "lastObservation": "两人每人 8 万共 16 万，超出 10 万预算 6 万。",
+      "lastReasoning": "按现有数字，预算不足。",
+      "lastSuggestion": "先确认追加预算或调整人数。",
+      "basisSources": [
+        {
+          "kind": "message",
+          "binding": {
+            "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+            "messageId": "synthetic-prior-budget-0",
+            "contentHash": "75d7021c059727966bdd923adbe736bb15b632216cbce2864cadce04b45b6442"
+          },
+          "ref": "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370"
+        },
+        {
+          "kind": "message",
+          "binding": {
+            "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+            "messageId": "synthetic-prior-budget-1",
+            "contentHash": "b600c601f24f119c832e725cf39e3354fc5f7a8b330c8550d8e59a81e64222a3"
+          },
+          "ref": "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c"
+        }
+      ],
+      "proseSources": [
+        {
+          "kind": "message",
+          "binding": {
+            "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+            "messageId": "synthetic-prior-budget-0",
+            "contentHash": "75d7021c059727966bdd923adbe736bb15b632216cbce2864cadce04b45b6442"
+          },
+          "ref": "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370"
+        },
+        {
+          "kind": "message",
+          "binding": {
+            "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+            "messageId": "synthetic-prior-budget-1",
+            "contentHash": "b600c601f24f119c832e725cf39e3354fc5f7a8b330c8550d8e59a81e64222a3"
+          },
+          "ref": "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c"
+        }
+      ],
+      "canReassessUnattempted": false,
+      "hasUnknownDelivery": false
+    }
+  ]
+}

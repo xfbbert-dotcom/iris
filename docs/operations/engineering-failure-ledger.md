@@ -1,5 +1,11 @@
 # Iris Engineering Failure Ledger
 
+The first direct-opinion window ended in a lexical false negative: a Chinese count tokenizer
+consumed a normal clause comma in “12万，两人”. Token hardening needs ordinary punctuation
+positive controls as well as malformed numeric negatives. Preserve the failed run and replay
+its unchanged four responses after the boundary correction; do not resample the cost update.
+
+
 ## 2026-10-01: Advice can hide an unsupported premise
 
 A cost-update opinion had correct 24/+8/14 calculations but invented a supplier relationship

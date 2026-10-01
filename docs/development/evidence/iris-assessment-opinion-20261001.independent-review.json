@@ -1,0 +1,16 @@
+{
+  "executionPassed": false,
+  "http200": 4,
+  "tokens": 20416,
+  "reviewer": "/root/arithmetic_review",
+  "finalPairSemantics": "PASS: 24,+8,14 preserved, no supplier premise; reasonable proposals and qualified risk",
+  "executionFailure": "Chinese receipt tokenizer consumed 万，两 across clause comma; prefix filter also rejected punctuation. Deterministic false negative.",
+  "uncalled": [
+    "arithmetic",
+    "qualified-risk",
+    "inference",
+    "paraphrase",
+    "handled"
+  ],
+  "next": "Fix lexical boundary; replay original four responses without HTTP, preserve original execution FAIL."
+}

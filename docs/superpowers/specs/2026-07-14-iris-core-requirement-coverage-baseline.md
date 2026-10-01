@@ -1,5 +1,10 @@
 # Iris 核心需求覆盖基线
 
+Direct-opinion follow-up: 4HTTP200/20416tokens, final cost-update semantics passed but original
+execution failed on a clause-comma count receipt. Corrected deterministic four-response replay
+passed; five fresh cases remain. No whole-window or production acceptance claimed.
+
+
 ## 2026-10-01: Direct initial-opinion candidate
 
 [Assessment projection](../../development/iris-assessment-opinion-20261001.md) removes the second

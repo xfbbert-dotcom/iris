@@ -1,0 +1,41 @@
+{
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_proactive_discussion_assessment",
+      "tokens": 3489,
+      "quotaAgeMs": 8941
+    },
+    {
+      "index": 2,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 5562,
+      "quotaAgeMs": 10170
+    },
+    {
+      "index": 3,
+      "stage": "iris_proactive_discussion_canonical_pair_repair",
+      "tokens": 3929,
+      "quotaAgeMs": 10224
+    },
+    {
+      "index": 4,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 7436,
+      "quotaAgeMs": 10516
+    }
+  ],
+  "http200": 4,
+  "totalTokens": 20416,
+  "seededGenerations": 0,
+  "executionPassed": false,
+  "remainingCasesUncalled": [
+    "arithmetic",
+    "qualified-risk",
+    "inference",
+    "paraphrase",
+    "handled"
+  ],
+  "rawContentMatches": true,
+  "wireAndResponseHashesVerified": true
+}
