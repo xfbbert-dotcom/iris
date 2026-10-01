@@ -1,5 +1,15 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-01: Separate receipt false negatives from semantic failures
+
+[Source-focus window and count-word correction](../development/iris-source-focus-20261001.md)
+produced a correct repaired arithmetic pair, but its literal receipt rejected 两人 as 2 人.
+Preserve the original execution failure; repair the bounded lexical check and replay unchanged
+responses before continuing uncalled cases. A successful replay is not a new live-model sample.
+Count aliases must retain complete-token, sign, quote and unit boundaries; do not match a decimal
+or fraction tail. Initial inferred issue descriptions also must not become evidence downstream.
+
+
 ## 2026-09-29: Do not ask generation to recopy locked references
 
 A valid source hash was shortened by the model during proactive generation even though the

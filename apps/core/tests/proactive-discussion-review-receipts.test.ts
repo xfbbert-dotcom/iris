@@ -68,6 +68,30 @@ test("allows a declared empty number list without pretending it proves numeric c
 });
 
 test.each([
+  ["招聘两人", "2", "招聘两人", true],
+  ["招聘二人", "2", "二人", true],
+  ["招聘一人", "1", "一人", true],
+  ["招聘十人", "10", "十人", true],
+  ["招聘两 人", "2", "两 人", true],
+  ["招聘十二人", "2", "二人", false],
+  ["招聘两百人", "2", "两百人", false],
+  ["招聘两三人", "2", "两三人", false],
+  ["招聘负 两人", "2", "两人", false],
+  ["招聘-两人", "2", "两人", false],
+  ["招聘二点五人", "5", "五人", false],
+  ["招聘二.五人", "5", "五人", false],
+  ["招聘二分之一人", "1", "一人", false],
+  ["招聘12两人", "2", "两人", false],
+  ["招聘1.五人", "5", "五人", false],
+  ["招聘二/三人", "3", "三人", false],
+  ["招聘＋两人", "2", "两人", false],
+  ["招聘两人", "2", "招聘二人", false],
+  ["招聘两人", "2", "两", false],
+] as const)("binds a whole Chinese count word without consuming part of another number: %s", (draft, value, quote, supported) => {
+  expect(validate(positive(quote, value, "人"), `${draft}，建议核对预算。`).supported).toBe(supported);
+});
+
+test.each([
   ["legacy affirmative result", { supported: true, reason: "受支持。" }],
   ["unknown fields", { ...positive("6万元"), privateExtra: "secret" }],
   ["nondecimal expected value", positive("6万元", "8+8")],

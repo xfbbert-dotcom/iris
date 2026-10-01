@@ -1,0 +1,38 @@
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import assert from 'node:assert/strict';
+const folder='C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918';
+const dest='D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/docs/development/evidence';
+const base='source-focus-20261001';
+const hash=b=>createHash('sha256').update(b).digest('hex');
+const report=JSON.parse(readFileSync(`${folder}/${base}.json`,'utf8'));
+assert(report.requests.length>0 && report.requests.length<=24);
+assert.equal(report.seededGenerations,0);assert.equal(report.seededReviews,0);
+assert(report.finishedAt && typeof report.executionPassed==='boolean');
+let total=0;const requests=[];
+for(const r of report.requests){
+  assert.equal(r.status,200);assert.equal(hash(r.wire),r.requestHash);assert.equal(hash(r.rawResponse),r.responseSha256);
+  const raw=JSON.parse(r.rawResponse),wire=JSON.parse(r.wire);
+  assert.equal(wire.model,'qwen3.8-max');assert.equal(wire.enable_thinking,false);assert.equal(wire.max_tokens,2048);
+  assert.equal(raw.model,wire.model);assert.equal(raw.choices[0].finish_reason,'stop');
+  const completion=report.completions[r.index-1];assert.equal(raw.choices[0].message.content,completion.content);
+  assert.equal(completion.stage,r.stage);assert.equal(completion.caseId,r.caseId);
+  assert.equal(r.quota.requestHash,r.requestHash);assert.equal(r.quota.model,wire.model);assert.equal(r.quota.freeExhaustionStop,true);assert(r.quota.remainingTokens>=150000);
+  const age=Date.parse(r.startedAt)-Date.parse(r.quota.observedAt);assert(age>=0&&age<60000);assert(Date.parse(r.quota.expiresAt)>Date.parse(r.startedAt));
+  total+=raw.usage.total_tokens;requests.push({index:r.index,stage:r.stage,tokens:raw.usage.total_tokens,quotaAgeMs:age});
+}
+assert.equal(total,report.reportedUsageTokens);
+for(const result of report.results){if(result.semantic){const {semantic,...body}=result;assert.equal(semantic.resultSha256,hash(JSON.stringify(body)));}}
+const audit={requests,http200:report.requests.length,totalTokens:total,seededGenerations:0,executionPassed:report.executionPassed,
+ remainingCasesUncalled:report.selected.filter(id=>!report.completions.some(c=>c.caseId===id)),rawContentMatches:true,wireAndResponseHashesVerified:true};
+writeFileSync(`${folder}/${base}.audit.json`,JSON.stringify(audit,null,2)+'\n');
+const suffixes=['.json','.started.json','.halted.json','.independent-review.json','.quota-end.json','.audit.json',
+ ...report.results.filter(r=>r.semantic).map(r=>`.semantic-${r.caseId}.json`),
+ ...Array.from({length:report.requests.length},(_,i)=>`.pending-${i+1}.json`),
+ ...Array.from({length:report.requests.length},(_,i)=>`.quota-${i+1}.json`)];
+const files=suffixes.map(s=>({source:base+s,target:'iris-'+base+s}));
+files.push({source:base+'.mts',target:'iris-'+base+'-runner.txt'},{source:'run-source-focus.ps1',target:'iris-'+base+'-launcher.txt'},{source:'archive-'+base+'.mjs',target:'iris-'+base+'-archive.txt'});
+const manifest={kind:base,files:[]};
+for(const f of files){const bytes=readFileSync(`${folder}/${f.source}`);assert(!/Bearer\s+sk-|sk-[A-Za-z0-9]{20,}/u.test(bytes.toString()));writeFileSync(`${dest}/${f.target}`,bytes);assert.equal(hash(readFileSync(`${dest}/${f.target}`)),hash(bytes));manifest.files.push({...f,sha256:hash(bytes),bytes:bytes.length});}
+writeFileSync(`${dest}/iris-${base}-manifest.json`,JSON.stringify(manifest,null,2)+'\n');
+console.log(JSON.stringify({archived:manifest.files.length,http200:report.requests.length,totalTokens:total,executionPassed:report.executionPassed}));

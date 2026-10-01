@@ -1,0 +1,43 @@
+{
+  "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+  "triggerMessageId": "synthetic-arithmetic-1",
+  "policy": {
+    "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+    "version": 1,
+    "enabled": true,
+    "operatorId": "synthetic-evaluator"
+  },
+  "contextVersion": 1,
+  "catalogVersion": 1,
+  "sources": [
+    {
+      "kind": "message",
+      "binding": {
+        "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+        "messageId": "synthetic-arithmetic-0",
+        "contentHash": "75d7021c059727966bdd923adbe736bb15b632216cbce2864cadce04b45b6442"
+      },
+      "ref": "message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2"
+    },
+    {
+      "kind": "message",
+      "binding": {
+        "chatId": "oc_637a9aca45f01943477f4e17f1fc5b9a",
+        "messageId": "synthetic-arithmetic-1",
+        "contentHash": "b600c601f24f119c832e725cf39e3354fc5f7a8b330c8550d8e59a81e64222a3"
+      },
+      "ref": "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba"
+    }
+  ],
+  "items": [
+    {
+      "ref": "message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2",
+      "text": "本季度招聘预算 10 万元。"
+    },
+    {
+      "ref": "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba",
+      "text": "招聘两个人，每人要 8 万元；我们认为这些预算足够。"
+    }
+  ],
+  "issues": []
+}

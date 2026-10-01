@@ -1,0 +1,9 @@
+{
+  "requestHash": "7210d9bf8e5281bc951a27d69928f4a766845fed1f3c67e6aa9af2210a94cb90",
+  "model": "qwen3.8-max",
+  "freeExhaustionStop": true,
+  "remainingTokens": 838640,
+  "expiresAt": "2026-12-18T00:00:00+08:00",
+  "observedAt": "2026-10-01T12:51:21.896Z",
+  "source": "exact model free-quota UI, reload button; remaining 838.64K/1M, 已开启"
+}

@@ -1,0 +1,81 @@
+{
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_proactive_discussion_assessment",
+      "tokens": 2626,
+      "quotaAgeMs": 16049
+    },
+    {
+      "index": 2,
+      "stage": "iris_proactive_discussion_canonical_generated_pair",
+      "tokens": 1488,
+      "quotaAgeMs": 10025
+    },
+    {
+      "index": 3,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 5213,
+      "quotaAgeMs": 8377
+    },
+    {
+      "index": 4,
+      "stage": "iris_proactive_discussion_assessment",
+      "tokens": 2575,
+      "quotaAgeMs": 8789
+    },
+    {
+      "index": 5,
+      "stage": "iris_proactive_discussion_canonical_generated_pair",
+      "tokens": 1541,
+      "quotaAgeMs": 9429
+    },
+    {
+      "index": 6,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 5414,
+      "quotaAgeMs": 9513
+    },
+    {
+      "index": 7,
+      "stage": "iris_proactive_discussion_assessment",
+      "tokens": 2600,
+      "quotaAgeMs": 10953
+    },
+    {
+      "index": 8,
+      "stage": "iris_proactive_discussion_canonical_generated_pair",
+      "tokens": 1388,
+      "quotaAgeMs": 10144
+    },
+    {
+      "index": 9,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 4719,
+      "quotaAgeMs": 11113
+    },
+    {
+      "index": 10,
+      "stage": "iris_proactive_discussion_canonical_pair_repair",
+      "tokens": 3245,
+      "quotaAgeMs": 8864
+    },
+    {
+      "index": 11,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 5823,
+      "quotaAgeMs": 9458
+    }
+  ],
+  "http200": 11,
+  "totalTokens": 36632,
+  "seededGenerations": 0,
+  "executionPassed": false,
+  "remainingCasesUncalled": [
+    "material-update",
+    "paraphrase",
+    "handled"
+  ],
+  "rawContentMatches": true,
+  "wireAndResponseHashesVerified": true
+}

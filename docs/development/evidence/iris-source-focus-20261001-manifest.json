@@ -1,0 +1,203 @@
+{
+  "kind": "source-focus-20261001",
+  "files": [
+    {
+      "source": "source-focus-20261001.json",
+      "target": "iris-source-focus-20261001.json",
+      "sha256": "784cd89bab3b8bace6a5dbeb0eb1c5add5c9be9b8c69613a92c1a44bb77a7936",
+      "bytes": 390741
+    },
+    {
+      "source": "source-focus-20261001.started.json",
+      "target": "iris-source-focus-20261001.started.json",
+      "sha256": "3b6b98792d52f2f4086bc1cdd5dc95600227e6293e803b8b58147bac00253faf",
+      "bytes": 1479
+    },
+    {
+      "source": "source-focus-20261001.halted.json",
+      "target": "iris-source-focus-20261001.halted.json",
+      "sha256": "71a096785a1514cf9c131171cbf43857e575086b16e5603c98fd464817d0fa18",
+      "bytes": 86
+    },
+    {
+      "source": "source-focus-20261001.independent-review.json",
+      "target": "iris-source-focus-20261001.independent-review.json",
+      "sha256": "012dc890aa31ef41e16153654eadc13c1477451692ebd71802d283ecb97d0378",
+      "bytes": 628
+    },
+    {
+      "source": "source-focus-20261001.quota-end.json",
+      "target": "iris-source-focus-20261001.quota-end.json",
+      "sha256": "73f9cc1add8c4416eb026f9b33c05c0138190bed70baa7ede296a2ec45e2b88e",
+      "bytes": 253
+    },
+    {
+      "source": "source-focus-20261001.audit.json",
+      "target": "iris-source-focus-20261001.audit.json",
+      "sha256": "5b7416fc2b02852bf707744a798f3e2c209102516004ed35d3633ac97ae9694b",
+      "bytes": 1809
+    },
+    {
+      "source": "source-focus-20261001.semantic-inference.json",
+      "target": "iris-source-focus-20261001.semantic-inference.json",
+      "sha256": "4fcd85105554bc5def90030d6933fa4a317db89f95155d461fb4ea0c299316c7",
+      "bytes": 500
+    },
+    {
+      "source": "source-focus-20261001.semantic-qualified-risk.json",
+      "target": "iris-source-focus-20261001.semantic-qualified-risk.json",
+      "sha256": "961689bcfeb595b2a047500b90e77fcc17c987c943ca8822bc078080baa7c702",
+      "bytes": 512
+    },
+    {
+      "source": "source-focus-20261001.pending-1.json",
+      "target": "iris-source-focus-20261001.pending-1.json",
+      "sha256": "406b10e44ec22aa3efc1f2c37ece824d81bf97155a7d8ba61c121920169db30d",
+      "bytes": 182
+    },
+    {
+      "source": "source-focus-20261001.pending-2.json",
+      "target": "iris-source-focus-20261001.pending-2.json",
+      "sha256": "5056ef2bb29fec134447d746c3a8bb2f365196ef746c44d66146efbba00498a2",
+      "bytes": 196
+    },
+    {
+      "source": "source-focus-20261001.pending-3.json",
+      "target": "iris-source-focus-20261001.pending-3.json",
+      "sha256": "e3d71c9163a0927962e623a465c83de898675c7997e0f1d06f3e605aa1e184ef",
+      "bytes": 184
+    },
+    {
+      "source": "source-focus-20261001.pending-4.json",
+      "target": "iris-source-focus-20261001.pending-4.json",
+      "sha256": "5d0e07bf48995213eb099eaebcf4910606a6693ea833319dd481e3c4d1625cb4",
+      "bytes": 187
+    },
+    {
+      "source": "source-focus-20261001.pending-5.json",
+      "target": "iris-source-focus-20261001.pending-5.json",
+      "sha256": "3b399d94a7d3883220c34b403e6bcc1271bc3f85ed630418e9924578f7a1d7f2",
+      "bytes": 201
+    },
+    {
+      "source": "source-focus-20261001.pending-6.json",
+      "target": "iris-source-focus-20261001.pending-6.json",
+      "sha256": "88fc0d96aba358af8a941fafcfbf492ec8c4681659bc1bc270cbe086c37fcf38",
+      "bytes": 189
+    },
+    {
+      "source": "source-focus-20261001.pending-7.json",
+      "target": "iris-source-focus-20261001.pending-7.json",
+      "sha256": "0063ccacfab25ec0559562c81bb50da0b0753977a05f139def73a19d56646b5c",
+      "bytes": 183
+    },
+    {
+      "source": "source-focus-20261001.pending-8.json",
+      "target": "iris-source-focus-20261001.pending-8.json",
+      "sha256": "3dc4ea8225a4ba3c4562f7a1088c36cc9d72c02d7c2f7771fa88728910ef0bf9",
+      "bytes": 197
+    },
+    {
+      "source": "source-focus-20261001.pending-9.json",
+      "target": "iris-source-focus-20261001.pending-9.json",
+      "sha256": "01497c4083ec034c427ff8c4516941a7daae0f779bc61aef107a3ea761012828",
+      "bytes": 185
+    },
+    {
+      "source": "source-focus-20261001.pending-10.json",
+      "target": "iris-source-focus-20261001.pending-10.json",
+      "sha256": "ae4cb8839124566565cbf62396302bef1311b7454a3158565fc500acd3a4ad26",
+      "bytes": 195
+    },
+    {
+      "source": "source-focus-20261001.pending-11.json",
+      "target": "iris-source-focus-20261001.pending-11.json",
+      "sha256": "2ee37df1ca763ddbb309a981e1af5cd833105ef5c62058f4f06177b9a150aa97",
+      "bytes": 186
+    },
+    {
+      "source": "source-focus-20261001.quota-1.json",
+      "target": "iris-source-focus-20261001.quota-1.json",
+      "sha256": "a4c9cc173fd46d028d4d31c00ac931fe41c977e6968f58933db9005a30ba48da",
+      "bytes": 359
+    },
+    {
+      "source": "source-focus-20261001.quota-2.json",
+      "target": "iris-source-focus-20261001.quota-2.json",
+      "sha256": "ff8267ba95b028b5f185cb69e6ef0158c86264e2a05f418c2491b42ebd0a2947",
+      "bytes": 357
+    },
+    {
+      "source": "source-focus-20261001.quota-3.json",
+      "target": "iris-source-focus-20261001.quota-3.json",
+      "sha256": "40211872a793976d6ce26b4be41761ee3582f6837f1a05c026c66eba6475bebb",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-4.json",
+      "target": "iris-source-focus-20261001.quota-4.json",
+      "sha256": "a738b546a9810d1e00cc5bf8871466e21fa724bf5cfb870493e6cfca6bf47e09",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-5.json",
+      "target": "iris-source-focus-20261001.quota-5.json",
+      "sha256": "b69bc32f44818c6ffdf1739ee245f3180657720e395c69bc2526ec5783fc324f",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-6.json",
+      "target": "iris-source-focus-20261001.quota-6.json",
+      "sha256": "748cceee606580bfcf85ed5c8111062149ba6fd07ab2978ff70e1f7a0c260663",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-7.json",
+      "target": "iris-source-focus-20261001.quota-7.json",
+      "sha256": "82b0bf11fd16077d04f95f794a154dae597b4c9fe95781c33a1f463e91335f8c",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-8.json",
+      "target": "iris-source-focus-20261001.quota-8.json",
+      "sha256": "aac651f032eb6cbb16bdc90c3ee4fd9b86109afe79cf06d63f5799c2f7cd6f01",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-9.json",
+      "target": "iris-source-focus-20261001.quota-9.json",
+      "sha256": "00e857cce0d7a3d9cf7b4aa5c2232f79b829cffd5620a5c131e30405b9cb9131",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-10.json",
+      "target": "iris-source-focus-20261001.quota-10.json",
+      "sha256": "afaa037a381877ef36e2d2192ec147b191bb9035f59de41e5f8244b391f68327",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.quota-11.json",
+      "target": "iris-source-focus-20261001.quota-11.json",
+      "sha256": "dc5a78230fcab54f1b4d4e3caca17c8fc2bdb801cf299769d15b4f9c93df17fd",
+      "bytes": 354
+    },
+    {
+      "source": "source-focus-20261001.mts",
+      "target": "iris-source-focus-20261001-runner.txt",
+      "sha256": "312d92d005b97f39cf503d50d41e1d7f01683e5ce0ef66d294363580d1bb8ef7",
+      "bytes": 9137
+    },
+    {
+      "source": "run-source-focus.ps1",
+      "target": "iris-source-focus-20261001-launcher.txt",
+      "sha256": "837971b75b87bcc6553257f843ec902df20100271e8a4d34f46f666655285f9e",
+      "bytes": 1829
+    },
+    {
+      "source": "archive-source-focus-20261001.mjs",
+      "target": "iris-source-focus-20261001-archive.txt",
+      "sha256": "72873ce82f33a1149991ba1adb1ab881ab1190613c16bee573eea935b1820673",
+      "bytes": 3615
+    }
+  ]
+}

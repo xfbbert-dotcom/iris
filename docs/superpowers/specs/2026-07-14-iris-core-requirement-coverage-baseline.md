@@ -1,5 +1,13 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-01: Source focus and Chinese count receipt
+
+[Bounded continuation](../../development/iris-source-focus-20261001.md): source-bound candidate
+11HTTP200/36632 tokens passed inference and risk semantics; arithmetic final semantics passed
+but original execution failed on 两人/2人 receipt. Fixed unchanged-response replay passed; three
+cases remain uncalled. IRIS-CORE-005 remains partial, candidate off, no deployment/Feishu claim.
+
+
 ## 2026-10-01: Canonical opinion candidate
 
 [Single-body projection](../../development/iris-canonical-opinion-20261001.md) removes separate

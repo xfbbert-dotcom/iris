@@ -1,0 +1,10 @@
+{
+  "caseId": "qualified-risk",
+  "pass": true,
+  "resultSha256": "82dc0882440f2f614d60c025cd21429c0cdfad155b2a8fe1632f3cec78d5f051",
+  "reviewers": [
+    "primary",
+    "independent arithmetic_review"
+  ],
+  "reason": "条件下将可能无法交付，不是必然失败。时间窗口为定性判断，无虚构工期，后续延期明确可能；核实联调和调整承诺建议有效。sourceFocus边界未传初判reasoning。正文稍冗长但本例达到最低可用标准，无伪数量。"
+}

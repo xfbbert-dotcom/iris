@@ -1,0 +1,10 @@
+{
+  "caseId": "inference",
+  "pass": true,
+  "resultSha256": "53516f2cbeb907b1d10e745fc41704650e27a343c7bf97a8b87ffe67aca88dd0",
+  "reviewers": [
+    "primary",
+    "independent arithmetic_review"
+  ],
+  "reason": "最终意见否定5人喜欢反馈对全量付费结论的证明力，未断言已测得严重样本偏差；收入影响明确可能，建议补充付费数据并区分口径。下游仅sourceFocus，无初判描述/分析；本例有限通过，不证明唯一因果。"
+}

@@ -142,9 +142,17 @@ function numberQuoteMatches(draftText: string, number: z.infer<typeof computable
   if (number.draftQuote === null) return false;
   // Scan full-draft tokens before quote spans: '6万元' is also a substring of
   // '16万元'. Signed, decimal, grouped and exponential tokens are not converted.
-  const tokens = draftText.matchAll(/(?:[+\-−－负]\s*)?\p{Nd}+(?:[.,，．]\p{Nd}+)*(?:[eE][+\-]?\p{Nd}+)?/gu);
+  const digits = [...draftText.matchAll(/(?:[+\-−－负]\s*)?\p{Nd}+(?:[.,，．]\p{Nd}+)*(?:[eE][+\-]?\p{Nd}+)?/gu)];
+  // Ordinary count words (not a general Chinese-number parser). Consume larger
+  // numeral runs first so 二 in 十二, 五 in 二点五 and approximate 两三 never match.
+  const countValues: Record<string, string> = { 零: "0", 〇: "0", 一: "1", 二: "2", 两: "2", 三: "3", 四: "4", 五: "5", 六: "6", 七: "7", 八: "8", 九: "9", 十: "10" };
+  const counts = [...draftText.matchAll(/(?:[+\-−－负正]\s*)?[零〇一二两三四五六七八九十百千万亿点壹贰叁肆伍陆柒捌玖拾佰仟]+(?:[.,，．][\p{Nd}零〇一二两三四五六七八九十百千万亿点]+)*/gu)]
+    .filter(token => countValues[token[0]] !== undefined
+      && !/[\p{Nd}.,，．/／+＋\-−－]\s*$/u.test(draftText.slice(0, token.index))
+      && !/分之\s*$/u.test(draftText.slice(0, token.index)));
+  const tokens = [...digits, ...counts];
   for (const token of tokens) {
-    if (token[0] !== number.expectedValue) continue;
+    if ((countValues[token[0]] ?? token[0]) !== number.expectedValue) continue;
     const start = token.index!;
     const numberEnd = start + token[0].length;
     const gap = /^[ \t]*/u.exec(draftText.slice(numberEnd))![0].length;
