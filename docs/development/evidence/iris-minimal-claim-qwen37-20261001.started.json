@@ -1,0 +1,34 @@
+{
+  "kind": "minimal-claim-qwen37-20261001",
+  "syntheticOnly": true,
+  "commit": "b875a8ec9a3759e37e0b1446a947cafd386e1e90",
+  "sourceHashes": {
+    "apps/core/src/proactive-discussion/source-focus.ts": "5bf1170d6acb4b03621e16573120a90a5a9271ac6e9bf357695f3a5bb09b24ae",
+    "apps/core/src/proactive-discussion/canonical-opinion.ts": "50b2568677227066b4ba90b9d23477064c32f31b44da2b1f7dc81c4621acd1e6",
+    "apps/core/src/proactive-discussion/arithmetic.ts": "4ff2e85c5f473a2d36c9ebc1c95a91a1e9e268428bff6abe2cc9db8b7440c2ca",
+    "apps/core/src/proactive-discussion/model.ts": "1f6a56d0a36074b7d0cb917f8fdd4063741a77a71511aec9de85e4a13494fd5c",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "d31e4aea1f4d4d2803c31f00db729b584f3be8befa78bb32fafbc7491cb600db",
+    "scripts/pilot/proactive-discussion-eval.ts": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6"
+  },
+  "startedAt": "2026-10-01T13:37:50.560Z",
+  "model": "qwen3.7-plus",
+  "maxRequests": 3,
+  "tokenStopBeforeNextRequest": 12000,
+  "maxTokens": 2048,
+  "enableThinking": false,
+  "requestTimeoutMs": 60000,
+  "windowMs": 600000,
+  "selected": [
+    "a",
+    "b",
+    "c"
+  ],
+  "requests": [],
+  "completions": [],
+  "results": [],
+  "reportedUsageTokens": 0,
+  "seededGenerations": 0,
+  "seededReviews": 0,
+  "independentSemanticReview": "per-case external gate; verdicts retained",
+  "halted": false
+}

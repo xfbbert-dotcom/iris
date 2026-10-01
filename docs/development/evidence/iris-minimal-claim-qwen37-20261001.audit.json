@@ -1,0 +1,25 @@
+{
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 334,
+      "quotaAgeMs": 9891
+    },
+    {
+      "index": 2,
+      "stage": "iris_minimal_claim_review",
+      "tokens": 327,
+      "quotaAgeMs": 9544
+    }
+  ],
+  "http200": 2,
+  "totalTokens": 661,
+  "seededGenerations": 0,
+  "executionPassed": false,
+  "remainingCasesUncalled": [
+    "c"
+  ],
+  "rawContentMatches": true,
+  "wireAndResponseHashesVerified": true
+}

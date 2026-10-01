@@ -1,0 +1,89 @@
+{
+  "kind": "minimal-claim-qwen37-20261001",
+  "files": [
+    {
+      "source": "minimal-claim-qwen37-20261001.json",
+      "target": "iris-minimal-claim-qwen37-20261001.json",
+      "sha256": "52da4bc1c302889a3685d3f722b47a8e9d1760ae8b2f28bb44cb021c0ec77c05",
+      "bytes": 13666
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.started.json",
+      "target": "iris-minimal-claim-qwen37-20261001.started.json",
+      "sha256": "e99dcf1d6a4c74a537a35a4d23b79c777d95f6fc3b8388ad4a065787a911e394",
+      "bytes": 1399
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.halted.json",
+      "target": "iris-minimal-claim-qwen37-20261001.halted.json",
+      "sha256": "1afa281f4121147db44b7201ec58f8f64ad82ac351beea2b679f7c883accd60e",
+      "bytes": 143
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.independent-review.json",
+      "target": "iris-minimal-claim-qwen37-20261001.independent-review.json",
+      "sha256": "dc1fbaca7056e65f2fdd330cd97cb2309f137bb8949952672f91058c080ff819",
+      "bytes": 395
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.quota-end.json",
+      "target": "iris-minimal-claim-qwen37-20261001.quota-end.json",
+      "sha256": "83a251e0863daab878194b235ac3d11bb677a895acada2aa39fb74d095eab485",
+      "bytes": 265
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.audit.json",
+      "target": "iris-minimal-claim-qwen37-20261001.audit.json",
+      "sha256": "1b328bb4bbf2705cc62c73247a59205885ed59ab746f204b39f54b0b7c786c75",
+      "bytes": 470
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.semantic-a.json",
+      "target": "iris-minimal-claim-qwen37-20261001.semantic-a.json",
+      "sha256": "832e495ccecbf5dd52fdc46f77f1600cf09d8876758b5c7ba4e7c66e874ef655",
+      "bytes": 340
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.pending-1.json",
+      "target": "iris-minimal-claim-qwen37-20261001.pending-1.json",
+      "sha256": "aaf29e7eef9acc47fe46bcf65a3e04d350680a88aa0e05d21f04560084cc2723",
+      "bytes": 164
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.pending-2.json",
+      "target": "iris-minimal-claim-qwen37-20261001.pending-2.json",
+      "sha256": "dd3136bb07c119e373b4d632daced314f7e9ad1d2dcf9603f7e8a7c9ff674688",
+      "bytes": 164
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.quota-1.json",
+      "target": "iris-minimal-claim-qwen37-20261001.quota-1.json",
+      "sha256": "51ca0c9117b25eff2d2b9b7ae835f2b8a4fed66079d3b72bc0333487f87ccde5",
+      "bytes": 324
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.quota-2.json",
+      "target": "iris-minimal-claim-qwen37-20261001.quota-2.json",
+      "sha256": "f7ffa1bf71baa276cfa3e7f6b43dac74f632503be640fba70025be7dfcf8cd58",
+      "bytes": 324
+    },
+    {
+      "source": "minimal-claim-qwen37-20261001.mts",
+      "target": "iris-minimal-claim-qwen37-20261001-runner.txt",
+      "sha256": "50170dcc203a6fe49632bd4f60653b57f62001b44bfaf1ea331ad1bbbe2c8384",
+      "bytes": 10383
+    },
+    {
+      "source": "run-minimal-claim-qwen37.ps1",
+      "target": "iris-minimal-claim-qwen37-20261001-launcher.txt",
+      "sha256": "0df4c2723d73aafaa8e404d5b22a5eb00c42d31a2b1512bd2c00f784ea24d1e3",
+      "bytes": 1848
+    },
+    {
+      "source": "archive-minimal-claim-qwen37-20261001.mjs",
+      "target": "iris-minimal-claim-qwen37-20261001-archive.txt",
+      "sha256": "0cad67255dbbb8a690904035cabf8320139406f622df4e978bf552113012f3c0",
+      "bytes": 3632
+    }
+  ]
+}

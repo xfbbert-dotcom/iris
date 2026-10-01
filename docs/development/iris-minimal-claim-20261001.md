@@ -31,3 +31,8 @@ a必要失败insufficient；b必要成功insufficient；c合理可能影响suppo
 | README / AGENTS / handoff | **updated**：[交接](current-handoff.md)指向诊断；**reviewed-unchanged**：[README](../../README.md)未完整交付状态及[AGENTS](../../AGENTS.md)授权/定位/闭环不变。 |
 
 未push、未访问生产、未切生产模型或启用群发、未飞书外发，原bug未关闭。
+
+Qwen3.7实际2HTTP200/661tokens：a正确insufficient；b错误contradicted，c未调用。
+实际wire除model外逐字结构一致；[14份证据](evidence/iris-minimal-claim-qwen37-20261001-manifest.json)
+保留FAIL。后续[支持许可门禁](iris-claim-support-20261001.md)是新的程序消费职责，
+不把本次三分类失败重新命名为成功。

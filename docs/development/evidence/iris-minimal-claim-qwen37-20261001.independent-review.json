@@ -1,0 +1,12 @@
+{
+  "executionPassed": false,
+  "http200": 2,
+  "tokens": 661,
+  "a": "PASS: identifies unsupported necessary consequence",
+  "b": "FAIL: uncertainty incorrectly treated as proof of contradiction",
+  "uncalled": [
+    "c"
+  ],
+  "wireModelOnlyChanged": true,
+  "note": "Original three-category test failed; any later conservative permission contract does not change this verdict."
+}

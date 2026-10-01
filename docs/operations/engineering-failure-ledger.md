@@ -1,5 +1,12 @@
 # Iris Engineering Failure Ledger
 
+[A conservative support-permission candidate](../development/iris-claim-support-20261001.md)
+does not promote a provider's contradicted verdict into a company fact or opposite conclusion.
+Both rejection categories only withhold permission. This changes the consumer obligation, not
+the failed three-way classification verdict; positive controls and full-candidate transfer remain
+mandatory before any runtime integration.
+
+
 [The isolated-claim control](../development/iris-minimal-claim-20261001.md) still approved the
 necessary consequence with only two source texts and one complete claim (1HTTP/298tokens).
 Long context is not required for this observed failure. Do not generalize this single result

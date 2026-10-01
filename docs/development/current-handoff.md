@@ -1,5 +1,11 @@
 # Iris 当前接手入口
 
+当前[支持许可helper](iris-claim-support-20261001.md)尚未接入model/runtime。
+Qwen3.7相同最小对照2HTTP200/661tokens在b误判contradicted，原FAIL保留；新程序
+不消费事实否定/理由，只接受supported作为额外许可，需先正控及完整三字段迁移。
+4本地测试/type/build通过，不代表语义或产品已通过。
+
+
 最新[单句最小对照](iris-minimal-claim-20261001.md)：Qwen3.8-Max仅一条原句+
 两条来源仍错批必然后果，1HTTP200/298tokens后停止。非仅长上下文因素，不能
 泛化模型整体无能力。下一同输入仅改已授权精确qwen3.7-plus有界比较，不改prompt。

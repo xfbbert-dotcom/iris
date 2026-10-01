@@ -1,0 +1,7 @@
+{
+  "caseId": "a",
+  "resultSha256": "8d8be30869a59e44427a1b5347cf6ae876ee0d55a43a94160dae85c89bc7cf4a",
+  "pass": true,
+  "reviewer": "primary and /root/arithmetic_review",
+  "reason": "Explicitly distinguishes potential risk from unsupported direct inability to deliver; b/c still required to rule out indiscriminate rejection."
+}
