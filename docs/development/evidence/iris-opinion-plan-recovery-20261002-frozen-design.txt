@@ -88,18 +88,3 @@ prompt补丁。初判与预期失配在render前停，保留完整初判结果�
 当前验收层级：旧窗口失败且归档；新代码本地验证与独立审查通过，新窗口尚未启动。没有接入
 正式runtime/eval、push、生产访问、部署、生产模型切换或飞书外发，生产SHA未核验。
 真实群验收未完成，原能力缺陷保持开放。
-
-## 2026-10-02 实际结果：正确沉默带错误历史，完整语义失败
-
-应用`515f81044e592e80ad16b4c572629e08d63bff8d`窗口实际7HTTP200/22941reported tokens。
-separate-next和inference最终pair有限通过，都是首次计划直接编译成功，未触发新增
-绑定恢复。paraphrase第三例正确skip/duplicate、无draft，但reasoning说发送结果未知，
-与输入hasUnknownDelivery=false、state=surfaced矛盾；独立完整assessment门槛FAIL，
-窗口立即停止。handled、hypothesis、qualified-risk、arithmetic、material-update及
-两个负控未调用，不能把未触达的恢复路径写成已通过。
-
-[25份证据及manifest](evidence/iris-opinion-plan-recovery-20261002-manifest.json)已核对
-wire、响应、语义gate及文件哈希，原失败和私有原件保留。正确行动不使错误解释免责；
-上文“尚未启动”为冻结时状态，此段是实际结果。后续
-[结构化skip候选](iris-opinion-decision-only-20261002.md)明确缩减未使用自由正文的职责，
-不重采旧合同或修饰旧错误；没有接入正式runtime/eval或部署。

@@ -1,0 +1,6 @@
+{
+  "caseId": "separate-next",
+  "resultSha256": "e130517673467f58ed8e10621c1fb856809b790351fb5118ca1bb4e22008e1d7",
+  "pass": true,
+  "reason": "Independent source/history/final-pair review: the new permission issue is distinct from the already surfaced budget issue; final prose quotes the unconfirmed permission and planned partner disclosure separately, asks to verify customer-data permissions and constrain the allowed scope, and asserts no proven legal violation, execution or extra policy. The initial free prose is not the accepted pair. This fresh plan did not exercise local binding recovery."
+}

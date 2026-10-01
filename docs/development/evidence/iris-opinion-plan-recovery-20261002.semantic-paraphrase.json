@@ -1,0 +1,6 @@
+{
+  "caseId": "paraphrase",
+  "resultSha256": "3dd2f9440f215ecf4bfb6729e08da9435380486d6468b177cb5161f04d6ab1d9",
+  "pass": false,
+  "reason": "Root and independent reviewer agree: skip/duplicate and absence of draft are correct, but retained reasoning says delivery status is unknown despite suppliedIssues.hasUnknownDelivery=false and state=surfaced. This unsupported historical state is used as a reason for silence. Full-assessment semantic gate fails; correct decision cannot excuse false history. Preserve the output and stop; remaining five fresh cases and both controls are uncalled."
+}

@@ -1,5 +1,20 @@
 # Iris 当前接手入口
 
+## 2026-10-02 最新：正确沉默夹带错误历史，收缩skip为结构化决定
+
+应用`515f8104`的[恢复窗口](iris-opinion-plan-recovery-20261002.md)7HTTP200/22941tokens，
+权限与推断两例最终pair有限通过，未触发绑定恢复。paraphrase虽skip/duplicate正确，
+reasoning却把明确非未知的发送状态说成未知，完整语义FAIL；剩五例和两负控未调用。
+[26份归档含清单](evidence/iris-opinion-plan-recovery-20261002-manifest.json)保留旧失败。
+
+[新skip合同](iris-opinion-decision-only-20261002.md)仅要求opinionPlan的三个自由正文
+为空，schema与本地校验均执行，非空仍走原有界格式恢复，不静默删除。保留结构化
+reason/身份/引用及resolved的实际状态作用，代价是没有自由文本沉默解释。
+新增回归已见RED后通过，定向66、Core4991/469条件跳过、独立128项通过无阻断；
+仅修正新增测试索引类型后type/build/CLI7均通过，默认关闭、不接runtime/eval。
+下一同Q3.8八例以三沉默例开头，再五正例和原两负控，全部原业务标准不变。无生产
+或飞书操作，原能力缺陷开放。以下保留历史。
+
 ## 2026-10-02 最新：七例有限通过，权限计划同引文编译失败；复用唯一修正预算
 
 应用`a0e411c5`的[结论角色窗口](iris-opinion-conclusion-20261001.md)实际18HTTP200/

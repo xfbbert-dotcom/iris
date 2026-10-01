@@ -1,0 +1,188 @@
+{
+  "kind": "opinion-plan-recovery-20261002",
+  "applicationCommit": "515f81044e592e80ad16b4c572629e08d63bff8d",
+  "runHead": "515f81044e592e80ad16b4c572629e08d63bff8d",
+  "requests": 7,
+  "http200": 7,
+  "reportedTokens": 22941,
+  "pass": false,
+  "passedCases": [
+    "separate-next",
+    "inference"
+  ],
+  "failedCase": "paraphrase",
+  "unreached": [
+    "handled",
+    "hypothesis",
+    "qualified-risk",
+    "arithmetic",
+    "material-update",
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "windowHalted": true,
+  "controlPlanInjections": 0,
+  "confirmedFailure": "Paraphrase correctly returned skip/duplicate with no draft, but retained reasoning claimed delivery status was unknown while suppliedIssues.hasUnknownDelivery=false and state=surfaced. The full-assessment semantic gate failed and stopped the window.",
+  "unresolvedAttribution": "Why the model asserted an unsupported delivery state is unproven. Two successful fresh cases did not exercise local binding recovery, do not validate the recovery branch, and do not establish whole-window acceptance.",
+  "verification": {
+    "requestWireHashes": 7,
+    "responseHashes": 7,
+    "rawClientContentMatches": 7,
+    "semanticGateHashes": 3,
+    "probeSourceHashes": true,
+    "secretPatternScan": "No credential-shaped values, Bearer tokens or private-key headers found; key file was not read.",
+    "privateRawUnmodified": true
+  },
+  "files": [
+    {
+      "source": "opinion-plan-recovery-20261002.halted.json",
+      "target": "iris-opinion-plan-recovery-20261002.halted.json",
+      "sha256": "2e765f5da3eb8650a10b41467371af0f6bb55cd89fafefb843718a2df1c2ff82",
+      "bytes": 228
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.json",
+      "target": "iris-opinion-plan-recovery-20261002.json",
+      "sha256": "4a659cb0858c7ca8b1f06c02626df490ea30b17f27a3a71378bb9cfda893fcc6",
+      "bytes": 262699
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.pending-1.json",
+      "target": "iris-opinion-plan-recovery-20261002.pending-1.json",
+      "sha256": "17b104bff446c41f18c085e55d8e304a30aa5c0e9ac062a17ebbd0fc20363319",
+      "bytes": 13096
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.pending-2.json",
+      "target": "iris-opinion-plan-recovery-20261002.pending-2.json",
+      "sha256": "e65177b0c17468b9e6e0992958c9c0cc18c3ae48f4c39aed77891c2ac5a6d3cb",
+      "bytes": 11009
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.pending-3.json",
+      "target": "iris-opinion-plan-recovery-20261002.pending-3.json",
+      "sha256": "6a8919bfd8384e72becc45d00e7f924e81a9f25426893373d0663a0aa8c17d8d",
+      "bytes": 17959
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.pending-4.json",
+      "target": "iris-opinion-plan-recovery-20261002.pending-4.json",
+      "sha256": "f1a4966fb7281485d818550286c20f153d9789ffd4890a2d4c0a3bfd0a663453",
+      "bytes": 9856
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.pending-5.json",
+      "target": "iris-opinion-plan-recovery-20261002.pending-5.json",
+      "sha256": "3fbffb90b5ad328760c92a9d3f5ec2f171a975b9f26beb53a960840a7004a2dc",
+      "bytes": 10334
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.pending-6.json",
+      "target": "iris-opinion-plan-recovery-20261002.pending-6.json",
+      "sha256": "73b5465d07a93d8658b8ceebd8b0de985332245959b5dea9572b0b48b4284d5c",
+      "bytes": 17947
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.pending-7.json",
+      "target": "iris-opinion-plan-recovery-20261002.pending-7.json",
+      "sha256": "d82df0c806ee858ab57265d3d66f6ee8cc3a0427b4196870eaddf8fdaa8f2dd0",
+      "bytes": 13000
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.preflight.json",
+      "target": "iris-opinion-plan-recovery-20261002.preflight.json",
+      "sha256": "4cbe98562a2fb661471ea65540a7630e4e5477fb95f9fd43c33cdb72d0a3aa93",
+      "bytes": 4568
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.quota-1.json",
+      "target": "iris-opinion-plan-recovery-20261002.quota-1.json",
+      "sha256": "86a4ba1c884ee7ca6b65680a5a2189a0522a29bc7deda318b1e4e8005050492e",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.quota-2.json",
+      "target": "iris-opinion-plan-recovery-20261002.quota-2.json",
+      "sha256": "c1114e7bcc598ba4d6a2501212d4333ef35fd19ce170b0ba44ab09a53e452935",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.quota-3.json",
+      "target": "iris-opinion-plan-recovery-20261002.quota-3.json",
+      "sha256": "84c6292ed06486c0c01a6fce19e83a518153c7aa3399fda94992c46ae4f7974a",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.quota-4.json",
+      "target": "iris-opinion-plan-recovery-20261002.quota-4.json",
+      "sha256": "436efc06b08891b5779edfa33711b2fc035c47cac8951d19ad89667023e74012",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.quota-5.json",
+      "target": "iris-opinion-plan-recovery-20261002.quota-5.json",
+      "sha256": "224fb343c0b997f21d10f6d72ece6d8521a13e024bd7112e93d6356c7b435f61",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.quota-6.json",
+      "target": "iris-opinion-plan-recovery-20261002.quota-6.json",
+      "sha256": "832efb442bebf6aad87f6441cff7801c45327b525614ee5abc597afc382871aa",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.quota-7.json",
+      "target": "iris-opinion-plan-recovery-20261002.quota-7.json",
+      "sha256": "e852c94ba40ff551627e9681a871cafdd6848a8c931cb6b856e661f3c5cd8737",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.semantic-inference.json",
+      "target": "iris-opinion-plan-recovery-20261002.semantic-inference.json",
+      "sha256": "a04ce4c1c515e52e4924ad629825bb532ee8994f2b97b5434b03037cb0072ba9",
+      "bytes": 675
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.semantic-paraphrase.json",
+      "target": "iris-opinion-plan-recovery-20261002.semantic-paraphrase.json",
+      "sha256": "4ea8e36049c857751a00b9f8ae74ad82e7888fa85ef8ae07839dee11658e4d30",
+      "bytes": 595
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.semantic-separate-next.json",
+      "target": "iris-opinion-plan-recovery-20261002.semantic-separate-next.json",
+      "sha256": "86f52b649e91a1bb5a28c721b93c74940fd81eaae6bda2f50e03ffe40e692e90",
+      "bytes": 607
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.started.json",
+      "target": "iris-opinion-plan-recovery-20261002.started.json",
+      "sha256": "ab63a6fe12a36acf1f201f6d6ec19947e6d1f5666781c4dcf7065939b9394456",
+      "bytes": 3651
+    },
+    {
+      "source": "opinion-plan-recovery-20261002.mts",
+      "target": "iris-opinion-plan-recovery-20261002-runner.txt",
+      "sha256": "44cfee1a47cb48315d665f01efeaf4fb4b3949af791c2db0e0dc87f0d43f620e",
+      "bytes": 22269
+    },
+    {
+      "source": "run-opinion-plan-recovery.ps1",
+      "target": "iris-opinion-plan-recovery-20261002-launcher.txt",
+      "sha256": "cee69119f447130def2dfd5fd77b81b02651deb97c31b29581aa6b81b70e6ee8",
+      "bytes": 1975
+    },
+    {
+      "source": "git:515f81044e592e80ad16b4c572629e08d63bff8d:docs/development/iris-opinion-plan-recovery-20261002.md",
+      "target": "iris-opinion-plan-recovery-20261002-frozen-design.txt",
+      "sha256": "9f9ef4a3da9ed7b33d562ff5a3991cfa3292b28f81f16466c3079d4947857521",
+      "bytes": 7084
+    },
+    {
+      "source": "git:515f81044e592e80ad16b4c572629e08d63bff8d:scripts/pilot/proactive-discussion-eval.ts",
+      "target": "iris-opinion-plan-recovery-20261002-frozen-eval-source.txt",
+      "sha256": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6",
+      "bytes": 45905
+    }
+  ]
+}

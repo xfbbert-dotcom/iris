@@ -1,5 +1,20 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-02：正确skip决定不能抵消自由解释中的错误历史
+
+应用`515f8104`的[恢复窗口](../development/iris-opinion-plan-recovery-20261002.md)
+7HTTP200/22941tokens。权限与推断两例有限通过、绑定恢复未触发；paraphrase虽正确
+skip/duplicate，却在reasoning声称发送未知，与hasUnknownDelivery=false、surfaced
+矛盾。全assessment语义FAIL；剩五新鲜例和两负控未调用，原件见
+[清单](../development/evidence/iris-opinion-plan-recovery-20261002-manifest.json)。
+
+[本次候选](../development/iris-opinion-decision-only-20261002.md)移除opinionPlan沉默
+分支的三段自由正文，非空由schema/本地拒绝并使用原格式恢复上限，不静默剥离或
+改判旧输出。保留结构化决定及resolved状态作用，明确失去自然语言解释的代价；
+intervene和legacy不变。定向66、Core4991/469条件跳过、独立128项通过无阻断，新增
+测试类型修正后type/build/CLI7均通过；错误skip正文影响审计记录，未发现进入后续
+上下文或群输出。默认关闭，原语义缺陷未关闭。
+
 ## 2026-10-02：相同来源引文承担两个角色，计划编译失败且没有用到修正预算
 
 应用`a0e411c5`的[窗口](../development/iris-opinion-conclusion-20261001.md)18HTTP200/

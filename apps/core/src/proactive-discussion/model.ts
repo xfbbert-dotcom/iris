@@ -226,7 +226,7 @@ export function createPdModel({
   return {
     async assess(context, assertActive) {
       const input = modelContext(context);
-      const responseFormat = assessmentResponseFormat(context, sourceBoundIdentity);
+      const responseFormat = assessmentResponseFormat(context, sourceBoundIdentity, opinionPlan);
       let messages = assessmentMessages(input);
 
       for (let attempt = 0; attempt < MAX_INVALID_ASSESSMENT_ATTEMPTS; attempt += 1) {
@@ -234,10 +234,15 @@ export function createPdModel({
         const content = await client.complete(sourceBoundIdentity
           ? messages.map(message => message.role === "system" ? { ...message, content: [message.content, sourceFocusAssessmentSystem,
             ...(assessmentOpinion ? ["observation、reasoning、suggestion将依次原样连接成待审发言，不会再由另一个调用改写。请写自然、简短的中文工作意见，三字段合计不超过1200字；reasoning同时说明当前新增价值或首次发言价值。"] : []),
+            ...(opinionPlan ? ['此计划流程的skip只返回判断分类、问题身份和引用；observation、reasoning、suggestion必须均为""。这些未审核正文不参与沉默处理，不在其中另写事实或状态解释。intervene仍按完整分支提供字段。'] : []),
           ].join("\n") } : message)
           : messages, { responseFormat });
         try {
           const assessment = closeIssueBasisEvidence(parseAssessmentContent(content, context), context);
+          if (opinionPlan && assessment.decision === "skip"
+            && [assessment.observation, assessment.reasoning, assessment.suggestion].some(text => text.length > 0)) {
+            throw assessmentInvalid("skip must not contain unreviewed prose");
+          }
           if (sourceBoundIdentity) {
             try { pdSourceFocus(assessment, context); }
             catch { throw assessmentInvalid("new issue source focus must be a sentence from selected evidence"); }
@@ -789,7 +794,7 @@ function opinionPlanReviewSuffix(sourcePlan: unknown) {
   return sourcePlan === undefined ? "" : "\nsourcePlan是生成当前候选的本轮计划，不是事实权威或历史。程序只保证引文字面绑定和选定数值的运算，不证明依据关系或数值角色正确。仍须对照完整evidence核对：前提是否未验证、依据是否确实不足、建议对象是否合适；计算中的数量/单价/预算及新旧值、单位和口径是否忠实，计算增量时原方案与当前方案的数量是否相同，不能因为算式正确就批准角色互换或旧值冒充新值。当前完整候选的所有字段和新增价值继续独立审核。";
 }
 
-function assessmentResponseFormat(context: PdContext, sourceBoundIdentity = false): OpenAICompatibleJsonSchemaResponseFormat {
+function assessmentResponseFormat(context: PdContext, sourceBoundIdentity = false, decisionOnlySkip = false): OpenAICompatibleJsonSchemaResponseFormat {
   const body = flatAssessmentResponseFormat(context).json_schema.schema;
   const properties = body.properties as Record<string, unknown>;
   const change = properties.materialChange as Record<string, unknown>;
@@ -842,6 +847,11 @@ function assessmentResponseFormat(context: PdContext, sourceBoundIdentity = fals
       reason: { type: "string", enum: ["no_work_value", "insufficient_basis", "already_handled", "duplicate", "resolved"] },
       issueRef: { anyOf: [{ type: "null" }, ...(allIds.length ? [existingRef(allIds)] : [])] },
       evidenceRefs,
+      ...(decisionOnlySkip ? {
+        observation: { type: "string", enum: [""] },
+        reasoning: { type: "string", enum: [""] },
+        suggestion: { type: "string", enum: [""] },
+      } : {}),
       materialChange: { ...change, properties: {
         kind: { type: "string", enum: ["none"] },
         explanation: { type: "string", enum: [""] },

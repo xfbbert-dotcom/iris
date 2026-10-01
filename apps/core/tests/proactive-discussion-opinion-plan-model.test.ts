@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { createPdModel } from "../src/proactive-discussion/model.js";
-import { pdAssessment, pdContext, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
+import { pdAssessment, pdContext, pdContextWithIssue, pdReviewFieldChecks } from "./fixtures/proactive-discussion.js";
 import type { OpenAICompatibleChatCompletionsClient } from "../src/model/openai-compatible-chat-completions-client.js";
 
 function setup(verdicts = [true], repairExtra: Record<string, unknown> = {}) {
@@ -140,4 +140,71 @@ test("controlled plan requires the source-bound workflow and rejects competing p
   expect(() => createPdModel({ client, opinionPlan: true })).toThrow();
   expect(() => createPdModel({ client, canonicalOpinion: true, sourceBoundIdentity: true,
     assessmentOpinion: true, opinionPlan: true })).toThrow();
+});
+
+function silentAssessment() {
+  return { ...pdAssessment(), decision: "skip", reason: "duplicate", issueRef: null,
+    evidenceRefs: [], observation: "", reasoning: "", suggestion: "", uncertainty: "fact",
+    materialChange: { kind: "none", explanation: "", evidenceRefs: [] } };
+}
+
+test("plan-mode silence requests and returns a decision without unaudited prose", async () => {
+  const { context, client, model } = setup();
+  const silent = silentAssessment();
+  client.complete.mockResolvedValueOnce(JSON.stringify({ assessment: silent }));
+  expect(await model.assess(context)).toEqual(silent);
+  const schema = client.complete.mock.calls[0]![1]!.responseFormat!.json_schema.schema as any;
+  const branch = schema.properties.assessment.anyOf.find((value: any) => value.properties.decision.enum[0] === "skip");
+  for (const field of ["observation", "reasoning", "suggestion"]) {
+    expect(branch.properties[field]).toEqual({ type: "string", enum: [""] });
+  }
+  expect(client.complete).toHaveBeenCalledTimes(1);
+});
+
+test.each(["observation", "reasoning", "suggestion"] as const)("plan-mode skip rejects %s instead of silently erasing it", async field => {
+  const { context, client, model } = setup();
+  const silent = silentAssessment();
+  const invalid = { ...silent, [field]: "发送结果未知。" };
+  client.complete.mockResolvedValueOnce(JSON.stringify({ assessment: invalid }))
+    .mockResolvedValueOnce(JSON.stringify({ assessment: silent }));
+  expect(await model.assess(context)).toEqual(silent);
+  expect(client.complete).toHaveBeenCalledTimes(2);
+  expect(client.complete.mock.calls[1]![0][0]!.content).toContain("skip must not contain unreviewed prose");
+  expect(client.complete.mock.calls[1]![1]!.responseFormat).toEqual(client.complete.mock.calls[0]![1]!.responseFormat);
+  expect(invalid[field]).toBe("发送结果未知。");
+});
+
+test("plan-mode skip recovery is bounded and cannot turn a rejected response into a valid decision", async () => {
+  const { context, client, model } = setup();
+  client.complete.mockResolvedValue(JSON.stringify({ assessment: { ...silentAssessment(), reasoning: "发送结果未知。" } }));
+  await expect(model.assess(context)).rejects.toThrow("proactive discussion assessment was invalid");
+  expect(client.complete).toHaveBeenCalledTimes(2);
+});
+
+test("legacy assessment keeps its existing skip prose contract", async () => {
+  const { context, client } = setup();
+  const silent = { ...silentAssessment(), reasoning: "已有相同问题。" };
+  client.complete.mockResolvedValueOnce(JSON.stringify({ assessment: silent }));
+  expect(await createPdModel({ client }).assess(context)).toEqual(silent);
+  expect(client.complete).toHaveBeenCalledTimes(1);
+});
+
+test.each(["duplicate", "resolved"])("decision-only skip preserves typed %s, identity and evidence", async reason => {
+  const { client, model } = setup();
+  const context = pdContextWithIssue();
+  const silent = { ...silentAssessment(), reason, issueRef: { kind: "existing", id: "issue-1" },
+    evidenceRefs: [context.items[1]!.ref] };
+  client.complete.mockResolvedValueOnce(JSON.stringify({ assessment: silent }));
+  expect(await model.assess(context)).toEqual(silent);
+  expect(client.complete).toHaveBeenCalledTimes(1);
+});
+
+test("plan-mode intervening assessment retains its full validation contract", async () => {
+  const { context, assessment, client, model } = setup();
+  client.complete.mockResolvedValueOnce(JSON.stringify({ assessment }));
+  expect(await model.assess(context)).toEqual(assessment);
+  const schema = client.complete.mock.calls[0]![1]!.responseFormat!.json_schema.schema as any;
+  const branch = schema.properties.assessment.anyOf.find((value: any) => value.properties.decision.enum[0] === "intervene");
+  expect(branch.properties.reasoning.minLength).toBe(1);
+  expect(branch.properties.reasoning.enum).toBeUndefined();
 });
