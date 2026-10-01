@@ -1,5 +1,14 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-01：内部介入价值被强制变成群聊业务正文
+
+[修复记录](../development/iris-intervention-value-20261001.md)。canonical候选把reasoning
+同时作为业务论证、why-now和materialChange.explanation，程序又将它拼入draft，导致
+“首次介入/工作价值”内部说明外露。显式新合同独立必填说明并保留完整审核，生成收到
+只读真实discussion。旧合同保留用于历史回放，新合同缺字段拒绝，不偷偷回填旧评估。
+本地4925通过/469跳过，实模未验证；这个边界修复不等于条件下必然后果错批已解决。
+
+
 ## 2026-10-01：完整句来源支持检查误拒合理建议（未关闭）
 
 [记录及四处闭环](../development/iris-claim-support-20261001.md#完整句迁移结果失败候选停止)。

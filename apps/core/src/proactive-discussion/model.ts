@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { reviewPdCounterexamples, type PdCounterexampleRejection } from "./counterexamples.js";
-import { canonicalOpinionProse, canonicalOpinionFormat, canonicalOpinionSystem, canonicalRepairSystem } from "./canonical-opinion.js";
+import { canonicalOpinionProse, canonicalOpinionFormat, canonicalOpinionSystem, canonicalRepairSystem, separateValueOpinionSystem } from "./canonical-opinion.js";
 import { pdSourceFocus, pdSourceFocusCandidates, sourceFocusAssessmentSystem, sourceFocusReviewSystem } from "./source-focus.js";
 
 import type {
@@ -196,6 +196,7 @@ export function createPdModel({
   canonicalOpinion = false,
   sourceBoundIdentity = false,
   assessmentOpinion = false,
+  separateInterventionValue = false,
 }: {
   client: OpenAICompatibleChatCompletionsClient;
   /** Local candidate only; runtime does not enable this until semantic acceptance. */
@@ -206,10 +207,15 @@ export function createPdModel({
   sourceBoundIdentity?: boolean;
   /** Local candidate: review the initial opinion without a second author call. */
   assessmentOpinion?: boolean;
+  /** Local candidate: internal novelty is reviewed separately from public prose. */
+  separateInterventionValue?: boolean;
 }): PdModel {
   if (canonicalOpinion && counterexampleReview) throw new Error("review candidates cannot be combined");
   if (sourceBoundIdentity && !canonicalOpinion) throw new Error("source focus candidate requires canonical opinion");
   if (assessmentOpinion && !sourceBoundIdentity) throw new Error("assessment opinion requires source focus");
+  if (separateInterventionValue && (!sourceBoundIdentity || assessmentOpinion)) {
+    throw new Error("separate intervention value requires source-bound canonical generation");
+  }
   return {
     async assess(context, assertActive) {
       const input = modelContext(context);
@@ -257,16 +263,16 @@ export function createPdModel({
         try { generated = projectAssessmentOpinion(validated, context); }
         catch { throw new Error("proactive discussion draft was invalid"); }
       } else {
-        const generation = generationInput(context, validated, sourceBoundIdentity);
+        const generation = generationInput(context, validated, sourceBoundIdentity, separateInterventionValue);
         const generatedContent = await client.complete(canonicalOpinion ? [
-          { role: "system", content: [canonicalOpinionSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
+          { role: "system", content: [separateInterventionValue ? separateValueOpinionSystem : canonicalOpinionSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
           { role: "user", content: JSON.stringify(generation) },
         ] : renderMessages(generation), {
-          responseFormat: canonicalOpinion ? canonicalOpinionFormat() : proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
+          responseFormat: canonicalOpinion ? canonicalOpinionFormat(false, separateInterventionValue) : proseResponseFormat(validated, "iris_proactive_discussion_generated_pair"),
         });
         try {
           const value: unknown = JSON.parse(generatedContent);
-          generated = validatePdProseIntervention(canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new") : value, context, validated);
+          generated = validatePdProseIntervention(canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue) : value, context, validated);
         }
         catch { throw new Error("proactive discussion draft was invalid"); }
       }
@@ -285,17 +291,17 @@ export function createPdModel({
       const repairInput = { ...input, draft, review, identityTarget };
       const repairedContent = await client.complete(
         canonicalOpinion ? [
-          { role: "system", content: [canonicalOpinionSystem, canonicalRepairSystem, evaluationContextSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
+          { role: "system", content: [separateInterventionValue ? separateValueOpinionSystem : canonicalOpinionSystem, canonicalRepairSystem, evaluationContextSystem, arithmeticSupportSystem, uncertaintySystem].join("\n") },
           { role: "user", content: JSON.stringify(repairInput) },
         ] : pairRepairMessages(repairInput),
-        { responseFormat: canonicalOpinion ? canonicalOpinionFormat(true) : repairUpdatesResponseFormat(validated) },
+        { responseFormat: canonicalOpinion ? canonicalOpinionFormat(true, separateInterventionValue) : repairUpdatesResponseFormat(validated) },
       );
       await assertActive?.();
       let repaired: PdReviewedIntervention;
       try {
         const value: unknown = JSON.parse(repairedContent);
         repaired = canonicalOpinion
-          ? validatePdProseIntervention(canonicalOpinionProse(value, validated.issueRef?.kind === "new"), context, validated)
+          ? validatePdProseIntervention(canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue), context, validated)
           : validatePdRepairUpdates(value, context, validated, generated);
       } catch {
         return null;
@@ -663,15 +669,17 @@ function projectIdentityTarget(assessment: PdAssessment, focusContext?: PdContex
   };
 }
 
-function generationInput(context: PdContext, assessment: PdAssessment, sourceBoundIdentity = false) {
+function generationInput(context: PdContext, assessment: PdAssessment, sourceBoundIdentity = false, separateInterventionValue = false) {
   const issueRef = assessment.issueRef;
   const existingIssue = issueRef?.kind === "existing"
     ? context.issues.find(issue => issue.id === issueRef.id)
     : undefined;
+  const { evidence, discussion, evaluationContext } = renderInput(context, assessment);
   // Carry the selected issue and authority, not unverified prose to be copied as a template.
   return {
     target: projectIdentityTarget(assessment, sourceBoundIdentity ? context : undefined),
-    evidence: renderInput(context, assessment).evidence,
+    evidence,
+    ...(separateInterventionValue ? { discussion, evaluationContext } : {}),
     ...(existingIssue ? { existingIssueDescription: existingIssue.description } : {}),
   };
 }
