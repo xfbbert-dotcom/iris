@@ -1,0 +1,344 @@
+{
+  "kind": "opinion-conclusion-20261001",
+  "applicationCommit": "a0e411c52fca40ef5c61d7a12433921361178074",
+  "runHead": "a0e411c52fca40ef5c61d7a12433921361178074",
+  "requests": 18,
+  "http200": 18,
+  "reportedTokens": 56423,
+  "pass": false,
+  "passedCases": [
+    "inference",
+    "paraphrase",
+    "handled",
+    "hypothesis",
+    "qualified-risk",
+    "arithmetic",
+    "material-update"
+  ],
+  "failedCase": "separate-next",
+  "unreached": [
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "windowHalted": true,
+  "controlPlanInjections": 0,
+  "confirmedFailure": "The separate-next dependency plan bound premise and decision to the same complete source quote. compilePdOpinionPlan rejects equal quotes before scope review; no repair or final review for this case.",
+  "unresolvedAttribution": "Why the model chose identical spans and whether distinct spans would pass full semantic review are unproven. Earlier seven final case passes do not establish whole-window acceptance.",
+  "verification": {
+    "requestWireHashes": 18,
+    "responseHashes": 18,
+    "rawClientContentMatches": 18,
+    "semanticGateHashes": 7,
+    "probeSourceHashes": true,
+    "secretPatternScan": "No credential-shaped values, Bearer tokens or private-key headers found; key file was not read.",
+    "privateRawUnmodified": true
+  },
+  "files": [
+    {
+      "source": "opinion-conclusion-20261001.halted.json",
+      "target": "iris-opinion-conclusion-20261001.halted.json",
+      "sha256": "a97c9eeb2fc7b384e2dafab364dc069078a07a6c38beaa86d7a536325a688894",
+      "bytes": 195
+    },
+    {
+      "source": "opinion-conclusion-20261001.json",
+      "target": "iris-opinion-conclusion-20261001.json",
+      "sha256": "d15b01cc8cc889c02834f1c1efaeff0f794ee6a453d882c41f5e5d2bdbd83435",
+      "bytes": 637793
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-1.json",
+      "target": "iris-opinion-conclusion-20261001.pending-1.json",
+      "sha256": "a20892152a0ca3412e55077a7d5d13bcaef40c7bc5f3ec9ff387ea344e9b031e",
+      "bytes": 9856
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-10.json",
+      "target": "iris-opinion-conclusion-20261001.pending-10.json",
+      "sha256": "df6b02bad3f4a2bed1c8b5052913e42136f5a777e07b0a253b33131d68628dfd",
+      "bytes": 17816
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-11.json",
+      "target": "iris-opinion-conclusion-20261001.pending-11.json",
+      "sha256": "2ade15b120ac229d3835355316d445be6ba5b3381bf3e669a72663ef99fb9c29",
+      "bytes": 9823
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-12.json",
+      "target": "iris-opinion-conclusion-20261001.pending-12.json",
+      "sha256": "c74f02f13da465d775685b6c60861c472f02b5dca9645681d68b79567da7819d",
+      "bytes": 10252
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-13.json",
+      "target": "iris-opinion-conclusion-20261001.pending-13.json",
+      "sha256": "096a0a7025b7c9a319e96b7ac1f2759a1e577fd71f251ead47426b20aa503558",
+      "bytes": 17251
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-14.json",
+      "target": "iris-opinion-conclusion-20261001.pending-14.json",
+      "sha256": "698fe509912fecfd75c6ec26b6add5f80b7c77e7dca61a28e5028e427b7583ec",
+      "bytes": 13123
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-15.json",
+      "target": "iris-opinion-conclusion-20261001.pending-15.json",
+      "sha256": "285481e2c653daaa6c8e51337956435c90b811d38aed3dfddde9989669c19dd3",
+      "bytes": 11489
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-16.json",
+      "target": "iris-opinion-conclusion-20261001.pending-16.json",
+      "sha256": "94e3e567ff61bacd7ce3b3434c3320fe9130fc4772b5165f5b2a1d8e0b2e1816",
+      "bytes": 18802
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-17.json",
+      "target": "iris-opinion-conclusion-20261001.pending-17.json",
+      "sha256": "dec99b1de224ab43323c5f261a1e504230ce34c42d64110590f7a6022d5566f3",
+      "bytes": 13098
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-18.json",
+      "target": "iris-opinion-conclusion-20261001.pending-18.json",
+      "sha256": "ab9774c82111bc73ea68e430323070a0300e85121f3a4e15b381b904504c98b9",
+      "bytes": 11011
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-2.json",
+      "target": "iris-opinion-conclusion-20261001.pending-2.json",
+      "sha256": "e08a89034eba916495e273510c8e31a38665b0acf31e51c3d216987ade47b161",
+      "bytes": 9986
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-3.json",
+      "target": "iris-opinion-conclusion-20261001.pending-3.json",
+      "sha256": "dde6c4a1f9da8cde9f9f4faf5eb36cbcda8dbd2f08cec0268eb6a062c1cf1ac9",
+      "bytes": 10334
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-4.json",
+      "target": "iris-opinion-conclusion-20261001.pending-4.json",
+      "sha256": "cea7c9cfd98ddce257d21d71048bf16a2e4a67dce40044a47a831211a6553b5c",
+      "bytes": 17971
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-5.json",
+      "target": "iris-opinion-conclusion-20261001.pending-5.json",
+      "sha256": "8ffb2481ef7c458640f017b020383a8266c4d6b1ab1c79dcecc0c074c99d0715",
+      "bytes": 13000
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-6.json",
+      "target": "iris-opinion-conclusion-20261001.pending-6.json",
+      "sha256": "f5690292ff87391414db3654c1a1383310a820ea64fbf4ec24a439e6d161ef07",
+      "bytes": 10356
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-7.json",
+      "target": "iris-opinion-conclusion-20261001.pending-7.json",
+      "sha256": "e57a3155cc347183a7b63b850105bbf7338c8884cb59d06966927353d3f624b1",
+      "bytes": 9512
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-8.json",
+      "target": "iris-opinion-conclusion-20261001.pending-8.json",
+      "sha256": "7644789483e5aaaac322d24724a662efc4f7560f7a186ca7ad481ccf54dc1e04",
+      "bytes": 9788
+    },
+    {
+      "source": "opinion-conclusion-20261001.pending-9.json",
+      "target": "iris-opinion-conclusion-20261001.pending-9.json",
+      "sha256": "3ec2382128d86cfcc8bf838937f2d47777a1cdc3df9f917d11622e913646ec9b",
+      "bytes": 10231
+    },
+    {
+      "source": "opinion-conclusion-20261001.preflight.json",
+      "target": "iris-opinion-conclusion-20261001.preflight.json",
+      "sha256": "ff3ce33d655623dd928abaf953ef95cccfae99600c60c8947e3637a377685249",
+      "bytes": 4562
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-1.json",
+      "target": "iris-opinion-conclusion-20261001.quota-1.json",
+      "sha256": "294b77d66631a7d36c5d018fc7140a497a4a2b30101acb475a231fd2de7c9504",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-10.json",
+      "target": "iris-opinion-conclusion-20261001.quota-10.json",
+      "sha256": "debf31b516ff980729bb12f18f3a4918fdd4ef3c4f2a56e48a2acc157925f3f4",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-11.json",
+      "target": "iris-opinion-conclusion-20261001.quota-11.json",
+      "sha256": "ff843a798d080c4bd20fa5d9915e16ca99ca1bc080562d56a24d93d8fea533cf",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-12.json",
+      "target": "iris-opinion-conclusion-20261001.quota-12.json",
+      "sha256": "750e5bacb2916911bcf4e02c229213cb9eb4fa06c0d1ad57b4b6c66bc5d76b04",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-13.json",
+      "target": "iris-opinion-conclusion-20261001.quota-13.json",
+      "sha256": "7508d3c9dbe1d3051c54d336280341d4d1554c88b687ed61fe4e9259ab08283a",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-14.json",
+      "target": "iris-opinion-conclusion-20261001.quota-14.json",
+      "sha256": "9b2280ae8ab6ca469843c6c985747c2571b430c5649d0ab11975e4491a887509",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-15.json",
+      "target": "iris-opinion-conclusion-20261001.quota-15.json",
+      "sha256": "51d9b70d8ac9dbaa5462436e66bf9cb8a5d124d89466a721c5ae7eb40763f55b",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-16.json",
+      "target": "iris-opinion-conclusion-20261001.quota-16.json",
+      "sha256": "5abc3dd7c6f0552575b9d4d2c5141415538ba204b2ff6e1dd261351d18cf8d70",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-17.json",
+      "target": "iris-opinion-conclusion-20261001.quota-17.json",
+      "sha256": "a0130870094df5f715f4490e10cf2c28193e5c43b514ca8e90eb4a069365addf",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-18.json",
+      "target": "iris-opinion-conclusion-20261001.quota-18.json",
+      "sha256": "983e9547dd56ab9063efd1ec9c5845a1cb501eb7e06d835e13bb1890941e81cc",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-2.json",
+      "target": "iris-opinion-conclusion-20261001.quota-2.json",
+      "sha256": "009b7e0f682ca73aa8cd49572993cfb5e4f10cdc400021080434d2ac99347140",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-3.json",
+      "target": "iris-opinion-conclusion-20261001.quota-3.json",
+      "sha256": "0fb066b0c0358406919172bed2826c6600f12b4bf35926a47282be122997ffbf",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-4.json",
+      "target": "iris-opinion-conclusion-20261001.quota-4.json",
+      "sha256": "994ef82447f08c02bc3edb5db61e88a369268d1b754eea6195e3fd04e3bdccb6",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-5.json",
+      "target": "iris-opinion-conclusion-20261001.quota-5.json",
+      "sha256": "7866373de8adc7359f824da76ac02910e4bf72644054d4e4c8a5a10fde5bc535",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-6.json",
+      "target": "iris-opinion-conclusion-20261001.quota-6.json",
+      "sha256": "4dd6ddda9662aa868f43b5b5f3bf09950baee6aeb4016e9e46c474c68661c147",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-7.json",
+      "target": "iris-opinion-conclusion-20261001.quota-7.json",
+      "sha256": "4302f831e9c8584dc4c3c42b1e86bd534454bd3cdefc0a3e32735fa7d0bc2358",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-8.json",
+      "target": "iris-opinion-conclusion-20261001.quota-8.json",
+      "sha256": "008daaa302f2ddfbb4f74b0e4cb746f61a8ae5f8ec41e3cfb74727885ed84a09",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.quota-9.json",
+      "target": "iris-opinion-conclusion-20261001.quota-9.json",
+      "sha256": "da68ded410c5d780b03546f637586adfa7cb8de33f9725c3abb7f72a1b452b3d",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-conclusion-20261001.semantic-arithmetic.json",
+      "target": "iris-opinion-conclusion-20261001.semantic-arithmetic.json",
+      "sha256": "2d6035109d35091d3c5e08df820b4b32adb64383fa4ac6a479c72b8b3290f49b",
+      "bytes": 585
+    },
+    {
+      "source": "opinion-conclusion-20261001.semantic-handled.json",
+      "target": "iris-opinion-conclusion-20261001.semantic-handled.json",
+      "sha256": "b988df38fcb2328bc4ed3a32d9b8a06ad635e23db9dbd5f9a5021888576bd348",
+      "bytes": 404
+    },
+    {
+      "source": "opinion-conclusion-20261001.semantic-hypothesis.json",
+      "target": "iris-opinion-conclusion-20261001.semantic-hypothesis.json",
+      "sha256": "2d6290c35bb47b2e44ba87eb7921f93640b2d2a651a6a7a8656958fa40290208",
+      "bytes": 441
+    },
+    {
+      "source": "opinion-conclusion-20261001.semantic-inference.json",
+      "target": "iris-opinion-conclusion-20261001.semantic-inference.json",
+      "sha256": "8122054d12717f94957e46d1785290b03539987a02ccfb39b2cfb8062fa89b71",
+      "bytes": 705
+    },
+    {
+      "source": "opinion-conclusion-20261001.semantic-material-update.json",
+      "target": "iris-opinion-conclusion-20261001.semantic-material-update.json",
+      "sha256": "d527843727422f24abbe155752b9495037d543f4151c26d66cba77c17eba39c8",
+      "bytes": 686
+    },
+    {
+      "source": "opinion-conclusion-20261001.semantic-paraphrase.json",
+      "target": "iris-opinion-conclusion-20261001.semantic-paraphrase.json",
+      "sha256": "50bdff37bcaab12b7caf96b92893433adda934129df7acd0edf6e4c1ba123044",
+      "bytes": 404
+    },
+    {
+      "source": "opinion-conclusion-20261001.semantic-qualified-risk.json",
+      "target": "iris-opinion-conclusion-20261001.semantic-qualified-risk.json",
+      "sha256": "c210a498b1430036b3f656674b1be633a4282e42577366b76def4813ec141b40",
+      "bytes": 696
+    },
+    {
+      "source": "opinion-conclusion-20261001.started.json",
+      "target": "iris-opinion-conclusion-20261001.started.json",
+      "sha256": "6917f87957287c00a4924431557fc74fd119b61835af020e2b0d6e7aac2dc598",
+      "bytes": 3642
+    },
+    {
+      "source": "opinion-conclusion-20261001.mts",
+      "target": "iris-opinion-conclusion-20261001-runner.txt",
+      "sha256": "41c27f436de0ddb5fda0927245f40779a6cc25f7dbe7fa451627fa5dc3836440",
+      "bytes": 20911
+    },
+    {
+      "source": "run-opinion-conclusion.ps1",
+      "target": "iris-opinion-conclusion-20261001-launcher.txt",
+      "sha256": "713221bd9e7b7283ac64e39561d08ac1b41df4ecea4c4d02bc4583234457e886",
+      "bytes": 1966
+    },
+    {
+      "source": "git:a0e411c52fca40ef5c61d7a12433921361178074:docs/development/iris-opinion-plan-20261001.md",
+      "target": "iris-opinion-conclusion-20261001-frozen-design.txt",
+      "sha256": "e692825ee6ae4797d85d4bdaf5990be3a81068409449b1f59576eba448f3ad70",
+      "bytes": 16573
+    },
+    {
+      "source": "git:a0e411c52fca40ef5c61d7a12433921361178074:scripts/pilot/proactive-discussion-eval.ts",
+      "target": "iris-opinion-conclusion-20261001-frozen-eval-source.txt",
+      "sha256": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6",
+      "bytes": 45905
+    }
+  ]
+}

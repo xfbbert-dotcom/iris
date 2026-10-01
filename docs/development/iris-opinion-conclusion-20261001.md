@@ -53,3 +53,19 @@ prompt。本轮全部通过才推进同代码本地runtime/eval接入；真实�
 
 当前：代码已改、本地通过；新合同实模未调用，真实飞书未验收，未部署。无push、生产
 访问、生产模型切换、主动群发启用或飞书外发；生产SHA未核验。原能力缺陷仍开放。
+
+## 2026-10-02 实际窗口结果：七例有限通过，权限例执行失败
+
+应用`a0e411c52fca40ef5c61d7a12433921361178074`实际18HTTP200/56423reported tokens。
+inference、paraphrase、handled、hypothesis、qualified-risk、arithmetic、material-update
+七例最终结果有限通过，其中三例是正确沉默。第八separate-next生成的dependency计划
+把premise与decision都绑定为同一句完整来源，本地编译拒绝，窗口首败停止。
+该例未进入scope、未修正、无最终pair；两个数值角色/时间错配负控均未调用。
+
+完整窗口为执行FAIL，不接正式runtime/eval。已确认同引文触发校验，模型选取原因和
+改成不同跨度后的语义结果未知；不把未发生的审核归为错批，也不以七例通过关闭问题。
+[51份证据及manifest](evidence/iris-opinion-conclusion-20261001-manifest.json)已核对
+请求/响应与文件哈希并保留私有原件。上文“尚未调用”是调用前冻结状态，此段是实际结果。
+
+后续[复用唯一修正预算的本地候选](iris-opinion-plan-recovery-20261002.md)只处理显式
+绑定失败；旧窗口不重采或改判，最新本地及新窗口验收独立记录。

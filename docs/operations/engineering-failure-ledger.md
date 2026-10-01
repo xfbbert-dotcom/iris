@@ -1,5 +1,20 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-02：相同来源引文承担两个角色，计划编译失败且没有用到修正预算
+
+应用`a0e411c5`的[窗口](../development/iris-opinion-conclusion-20261001.md)18HTTP200/
+56423tokens后执行FAIL。七例最终结果有限通过，第八权限例的premise和decision选中
+同一句完整来源，编译器明确拒绝；没有该例scope审核、修正或最终pair，两项负控均未
+调用。[证据清单](../development/evidence/iris-opinion-conclusion-20261001-manifest.json)
+保留全部原件。确认的是绑定错误与控制流中止，选择同跨度的模型原因仍未知。
+
+[有限修复](../development/iris-opinion-plan-recovery-20261002.md)为已解析计划的显式
+绑定错误复用唯一修正预算，不扩大总修正次数，不伪造draft或模型review。恢复后必须
+完整审核，拒绝即结束；非法JSON/未知kind仍失败。本轮Core4982通过/469条件跳过，
+type/build/CLI7通过；独立新旧路径115项通过，无阻断。新鲜窗口尚未启动；默认关闭，
+不接runtime/eval。应用为同次提交、实际HEAD由preflight冻结。不能把恢复执行当语义
+正确，原问题和真实群验收缺口保持开放；历史失败不改判。
+
 ## 2026-10-01：来源引文正确不等于核实对象正确
 
 Q3.8受控计划9HTTP200/26891tokens：模型把访谈依据选为验证对象，程序将其称为假设，

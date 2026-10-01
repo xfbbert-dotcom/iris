@@ -84,6 +84,57 @@ test("real skip does not generate any plan", async () => {
   expect(client.complete).not.toHaveBeenCalled();
 });
 
+test.each([true, false])("a locally invalid binding consumes the only correction before full review: %s", async supported => {
+  const { context, assessment, plan, client, model } = setup([supported]);
+  const invalid = { ...plan, decision: plan.premise };
+  client.complete.mockResolvedValueOnce(JSON.stringify(invalid));
+  const pair = await model.render({ context, assessment });
+  expect(pair !== null).toBe(supported);
+  expect(client.complete).toHaveBeenCalledTimes(3);
+  const correction = JSON.parse(client.complete.mock.calls[1]![0][1]!.content);
+  expect(correction.currentPlan).toEqual(invalid);
+  expect(correction.localValidation.reason).toContain("premise and decision must differ");
+  expect(correction.evidence).toEqual(context.items.map(item => ({ ...item, kind: "message" })));
+  expect(correction.discussion.materials).toEqual(context.items);
+  expect(correction).not.toHaveProperty("draft");
+  expect(correction).not.toHaveProperty("review");
+  expect(correction).not.toHaveProperty("assessment");
+  expect(JSON.stringify(correction)).not.toContain("UNVERIFIED_INITIAL");
+  const reviewed = JSON.parse(client.complete.mock.calls[2]![0][1]!.content);
+  expect(reviewed.sourcePlan).toEqual(plan);
+  expect(reviewed.draft.text).toContain(plan.decision.quote);
+  expect(reviewed).not.toHaveProperty("previousReview");
+});
+
+test.each(["same", "missing", "unsupported"])("failed local correction stays an execution failure: %s", async kind => {
+  const { context, assessment, plan, client, model } = setup();
+  const invalid = { ...plan, decision: plan.premise };
+  const correction = kind === "same" ? invalid : kind === "unsupported" ? { kind: "unsupported" }
+    : { ...plan, decision: { sourceRef: "missing", quote: "missing" } };
+  client.complete.mockResolvedValueOnce(JSON.stringify(invalid)).mockResolvedValueOnce(JSON.stringify(correction));
+  await expect(model.render({ context, assessment })).rejects.toThrow("proactive discussion draft was invalid");
+  expect(client.complete).toHaveBeenCalledTimes(2);
+  expect(assessment.decision).toBe("intervene");
+});
+
+test("local binding recovery respects cancellation before another model request", async () => {
+  const { context, assessment, plan, client, model } = setup();
+  client.complete.mockResolvedValueOnce(JSON.stringify({ ...plan, decision: plan.premise }));
+  const active = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error("cancelled"));
+  await expect(model.render({ context, assessment }, active)).rejects.toThrow("cancelled");
+  expect(client.complete).toHaveBeenCalledTimes(1);
+});
+
+test("unparseable JSON has no binding correction and transport errors are not retried", async () => {
+  const { context, assessment, client, model } = setup();
+  client.complete.mockResolvedValueOnce("{");
+  await expect(model.render({ context, assessment })).rejects.toThrow("proactive discussion draft was invalid");
+  expect(client.complete).toHaveBeenCalledTimes(1);
+  client.complete.mockRejectedValueOnce(new Error("transport"));
+  await expect(model.render({ context, assessment })).rejects.toThrow("transport");
+  expect(client.complete).toHaveBeenCalledTimes(2);
+});
+
 test("controlled plan requires the source-bound workflow and rejects competing prose modes", () => {
   const client = { complete: vi.fn() };
   expect(() => createPdModel({ client, opinionPlan: true })).toThrow();

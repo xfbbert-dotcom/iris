@@ -1,0 +1,6 @@
+{
+  "caseId": "arithmetic",
+  "resultSha256": "0cc36a148aa42f0828a3acdf73f9bb16b6d96eaf0923391f3e49c354bfdf520a",
+  "pass": true,
+  "reason": "Independent original-source and final-pair review: count two persons, unit cost8 and budget10 are correctly assigned; total16 and positive gap6 are exact and present in final observation/draft/internal explanation. Advice asks how to cover the gap and whether to adjust budget or quantity, without invented approval or execution. No future consequence is asserted. Positive arithmetic case only; swapped-role recognition remains untested."
+}

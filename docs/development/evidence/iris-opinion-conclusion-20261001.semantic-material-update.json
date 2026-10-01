@@ -1,0 +1,6 @@
+{
+  "caseId": "material-update",
+  "resultSha256": "122a6c3bb156b5a7f9db92e0501538e483de339206f4e8ca35775a3a2265b8e2",
+  "pass": true,
+  "reason": "Independent full-source/history and final-pair review: same two-person plan, old8 and new12 per person correctly bound; current total24, previous total16, increase8 and gap14 against budget10 are explicit and correct. Existing issue/new-evidence identity is justified by changed price, not elapsed time or repeated phrasing. Advice to cover the revised gap and reconsider budget/quantity is useful; no supplier relationship, approval or execution is asserted in final pair. Old/new swapped-control recognition remains a separate gate."
+}

@@ -17,10 +17,13 @@ const planSchema = z.discriminatedUnion("kind", [
 type Binding = z.infer<typeof bindingSchema>;
 type Evidence = readonly { ref: string; text: string }[];
 
+/** Only explicit binding failures may use the workflow's single correction. */
+export class PdOpinionPlanBindingError extends Error {}
+
 function requireBinding(binding: Binding, evidence: Evidence): void {
   const matches = evidence.filter(source => source.ref === binding.sourceRef);
   if (matches.length !== 1 || !matches[0]!.text.includes(binding.quote)) {
-    throw new Error("opinion plan quote is not bound to selected evidence");
+    throw new PdOpinionPlanBindingError("opinion plan quote is not bound to selected evidence");
   }
 }
 
@@ -32,7 +35,7 @@ export function compilePdOpinionPlan(value: unknown, newIssue: boolean, evidence
   let uncertainty: "fact" | "qualified_inference";
   if (plan.kind === "calculation") {
     const calculation = compilePdSourceCalculation(evidence, plan.quantities);
-    if (!calculation) throw new Error("opinion plan calculation is unavailable for selected evidence");
+    if (!calculation) throw new PdOpinionPlanBindingError("opinion plan calculation is unavailable for selected evidence");
     observation = calculation.text;
     reasoning = "当前方案应以这组费用与预算的比较结果为依据。";
     suggestion = calculation.values.difference !== "0" && !calculation.values.difference.startsWith("-")
@@ -41,12 +44,12 @@ export function compilePdOpinionPlan(value: unknown, newIssue: boolean, evidence
     uncertainty = "fact";
   } else {
     for (const binding of [plan.premise, plan.decision]) requireBinding(binding, evidence);
-    if (plan.premise.quote === plan.decision.quote) throw new Error("opinion plan premise and decision must differ");
+    if (plan.premise.quote === plan.decision.quote) throw new PdOpinionPlanBindingError("opinion plan premise and decision must differ");
     if (plan.kind === "dependency") {
       requireBinding(plan.verificationTarget, evidence);
       if (![plan.premise, plan.decision].some(binding => binding.sourceRef === plan.verificationTarget.sourceRef
         && binding.quote.includes(plan.verificationTarget.quote))) {
-        throw new Error("opinion plan verification target is outside the selected gap");
+        throw new PdOpinionPlanBindingError("opinion plan verification target is outside the selected gap");
       }
       observation = `材料里一方面说“${plan.premise.quote}”，另一方面提出“${plan.decision.quote}”。`;
       reasoning = "这个前提尚未核实，直接推进当前决定还缺少关键验证。";
@@ -108,6 +111,6 @@ export const pdOpinionPlanSystem = [
 ].join("\n");
 
 export const pdOpinionPlanRepairSystem = [
-  "根据授权原文与review核对当前计划，只修正一次并返回完整的新计划。不要返回正文、字段补丁、替代算式或新增来源。",
+  "根据授权原文与review或localValidation核对当前计划，只修正一次并返回完整的新计划。localValidation只表示程序发现的绑定缺陷，不是模型审核或事实判断。不要返回正文、字段补丁、替代算式或新增来源。",
   "复核意见不是事实权威；独立核对缺陷，保留有依据的当前问题与必要验证对象。程序编译后的完整评估和发言仍须最终审核。",
 ].join("\n");

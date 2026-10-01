@@ -1,0 +1,6 @@
+{
+  "caseId": "hypothesis",
+  "resultSha256": "abcfc6b1dabe1eff7e175378da76a29ab33db909d6972ed83a44a96bbf1ca384",
+  "pass": true,
+  "reason": "Independent source review: explicit unconfirmed assumption already includes a real paid experiment; no dependent commitment is supplied. Retained observation/reasoning preserve that distinction and introduce no imagined resource investment. Actual skip/no_work_value with no draft is warranted."
+}

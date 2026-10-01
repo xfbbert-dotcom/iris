@@ -2,7 +2,7 @@ import { z } from "zod";
 import { reviewPdCounterexamples, type PdCounterexampleRejection } from "./counterexamples.js";
 import { canonicalOpinionProse, canonicalOpinionFormat, canonicalOpinionSystem, canonicalRepairSystem, separateValueOpinionSystem } from "./canonical-opinion.js";
 import { pdSourceFocus, pdSourceFocusCandidates, sourceFocusAssessmentSystem, sourceFocusReviewSystem } from "./source-focus.js";
-import { compilePdOpinionPlan, pdOpinionPlanFormat, pdOpinionPlanSystem, pdOpinionPlanRepairSystem } from "./opinion-plan.js";
+import { compilePdOpinionPlan, pdOpinionPlanFormat, pdOpinionPlanSystem, pdOpinionPlanRepairSystem, PdOpinionPlanBindingError } from "./opinion-plan.js";
 
 import type {
   OpenAICompatibleChatCompletionsClient,
@@ -267,6 +267,7 @@ export function createPdModel({
       await assertActive?.();
       let generated: PdReviewedIntervention;
       let currentPlan: unknown;
+      let planWasCorrected = false;
       if (assessmentOpinion) {
         try { generated = projectAssessmentOpinion(validated, context); }
         catch { throw new Error("proactive discussion draft was invalid"); }
@@ -288,7 +289,26 @@ export function createPdModel({
             ? compilePdOpinionPlan(value, validated.issueRef?.kind === "new", generation.evidence)
             : canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue) : value, context, validated);
         }
-        catch { throw new Error("proactive discussion draft was invalid"); }
+        catch (error) {
+          if (!opinionPlan || !(error instanceof PdOpinionPlanBindingError)) {
+            throw new Error("proactive discussion draft was invalid");
+          }
+          // No valid pair exists yet. Reuse the one correction budget without
+          // supplying unreviewed assessment prose or inventing a model review.
+          await assertActive?.();
+          const correctedContent = await client.complete([
+            { role: "system", content: [pdOpinionPlanSystem, pdOpinionPlanRepairSystem, evaluationContextSystem].join("\n") },
+            { role: "user", content: JSON.stringify({ ...generation, currentPlan,
+              localValidation: { kind: "opinion_plan_binding", reason: error.message } }) },
+          ], { responseFormat: pdOpinionPlanFormat(true) });
+          await assertActive?.();
+          try {
+            currentPlan = JSON.parse(correctedContent);
+            generated = validatePdProseIntervention(
+              compilePdOpinionPlan(currentPlan, validated.issueRef?.kind === "new", generation.evidence), context, validated);
+          } catch { throw new Error("proactive discussion draft was invalid"); }
+          planWasCorrected = true;
+        }
       }
       const input = renderInput(context, generated.assessment);
       const { draft } = generated;
@@ -301,6 +321,7 @@ export function createPdModel({
       ), draft.text, undefined, generated.assessment);
       await assertActive?.();
       if (review.supported) return generated;
+      if (planWasCorrected) return null;
 
       const repairInput = { ...input, draft, review, identityTarget, ...(opinionPlan ? { currentPlan } : {}) };
       const repairedContent = await client.complete(

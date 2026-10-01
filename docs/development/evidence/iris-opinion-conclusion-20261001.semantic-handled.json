@@ -1,0 +1,6 @@
+{
+  "caseId": "handled",
+  "resultSha256": "5c7d3f1086f69766d9f88bd604610da2bae833ce5db8af98c4862b056fd14bfc",
+  "pass": true,
+  "reason": "Independent source review: member calculated total16/gap6 and paused hiring while checking finance. Retained text accurately says risk is being handled, not resolved or approved. Actual skip/already_handled and null draft avoid repeating the existing measures."
+}
