@@ -1,0 +1,23 @@
+{
+  "reviewer": "independent arithmetic_review",
+  "cases": [
+    {
+      "caseId": "qualified-risk",
+      "pass": true,
+      "reason": "条件下难以兑现指履约困难，不等于必然无法交付；争议为可能。事实忠实、无伪数量、建议具体。措辞偏强，限本例通过。"
+    },
+    {
+      "caseId": "inference",
+      "pass": false,
+      "quote": "存在严重的样本偏差",
+      "reason": "来源未给抽样方法、总体分布或比较数据，无法确认已存在偏差及其严重程度；后文承认代表性待核实。整体推断标签和可能后果不能限定这句确定判断。建议有效不能抵消错误。"
+    }
+  ],
+  "windowPass": false,
+  "uncalled": [
+    "arithmetic",
+    "material-update",
+    "paraphrase",
+    "handled"
+  ]
+}

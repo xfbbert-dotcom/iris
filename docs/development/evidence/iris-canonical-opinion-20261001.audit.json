@@ -1,0 +1,52 @@
+{
+  "requests": [
+    {
+      "index": 1,
+      "stage": "iris_proactive_discussion_assessment",
+      "tokens": 2498,
+      "quotaAgeMs": 9662
+    },
+    {
+      "index": 2,
+      "stage": "iris_proactive_discussion_canonical_generated_pair",
+      "tokens": 1342,
+      "quotaAgeMs": 13062
+    },
+    {
+      "index": 3,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 4528,
+      "quotaAgeMs": 12952
+    },
+    {
+      "index": 4,
+      "stage": "iris_proactive_discussion_assessment",
+      "tokens": 2720,
+      "quotaAgeMs": 15038
+    },
+    {
+      "index": 5,
+      "stage": "iris_proactive_discussion_canonical_generated_pair",
+      "tokens": 1490,
+      "quotaAgeMs": 12100
+    },
+    {
+      "index": 6,
+      "stage": "iris_proactive_discussion_scope_review",
+      "tokens": 5346,
+      "quotaAgeMs": 14524
+    }
+  ],
+  "http200": 6,
+  "totalTokens": 17924,
+  "seededGenerations": 0,
+  "executionPassed": false,
+  "remainingCasesUncalled": [
+    "arithmetic",
+    "material-update",
+    "paraphrase",
+    "handled"
+  ],
+  "rawContentMatches": true,
+  "wireAndResponseHashesVerified": true
+}

@@ -1,0 +1,10 @@
+{
+  "caseId": "qualified-risk",
+  "pass": true,
+  "resultSha256": "823b1faf00818c251ce179d4672aea8230532c014666a2504e0ece409305e1a4",
+  "reviewers": [
+    "primary",
+    "independent arithmetic_review"
+  ],
+  "reason": "条件下难以兑现表示履约困难，不断言必然无法交付；争议为可能。事实忠实，无伪数量，建议核实联调与限定承诺。措辞偏强但不等于此前确定无法履约。仅本例有限通过，历史失败保持。"
+}

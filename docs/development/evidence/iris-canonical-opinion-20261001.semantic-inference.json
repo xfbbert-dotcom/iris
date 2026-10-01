@@ -1,0 +1,10 @@
+{
+  "caseId": "inference",
+  "pass": false,
+  "resultSha256": "ae93f639157e05e16bc0c8b30aa19396930b4589bc53ede07d3b5d42c7c8f320",
+  "reviewers": [
+    "primary",
+    "independent arithmetic_review"
+  ],
+  "reason": "原句存在严重的样本偏差是无依据的确定断言。5人访谈只支持不足以证明全量付费，来源无抽样方式/总体分布可证明已存在严重偏差。后文可能与整体推断标签不限定该句。建议有效不能抵消错误，按首败停止。"
+}

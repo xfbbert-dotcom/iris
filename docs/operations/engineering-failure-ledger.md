@@ -47,7 +47,9 @@ in the fix record when no new reusable rule is needed. Latest evidence and workt
   with an unjustified necessary consequence in separately generated internal reasoning. The
   [canonical opinion candidate](../development/iris-canonical-opinion-20261001.md) projects both
   from one body; this removes independent expansion, not the need for semantic validation.
-  Default off, first-failure stop in a bounded fresh end-to-end window; bug remains open.
+  Six HTTP200/17924 tokens passed risk narrowly, then failed on an unsupported severe sample
+  bias assertion copied into all projections and approved by review. Four controls uncalled;
+  candidate stopped and default off. Consistency is not truth; bug remains open.
 - **Counterexamples are hypotheses (2026-10-01 candidate):** A compatible alternative can expose
   an unsupported necessary consequence, but is not an observed company fact. Bind diagnostics
   to current original quotes, never invent positive field verdicts when scope review was skipped,

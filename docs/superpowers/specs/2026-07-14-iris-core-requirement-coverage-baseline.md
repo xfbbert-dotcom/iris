@@ -5,7 +5,9 @@
 [Single-body projection](../../development/iris-canonical-opinion-20261001.md) removes separate
 internal prose generation, with complete original review and one correction retained. Explicit
 local option defaults off. Core4872 passed/469 skipped; later focused11 includes two added tests.
-Real-model acceptance pending; IRIS-CORE-005 remains partial, no deployment or Feishu acceptance.
+Six HTTP200/17924 tokens: risk passed narrowly, inference failed on an unsupported severe sample
+bias assertion that original review approved. Four cases uncalled; candidate stopped and off.
+IRIS-CORE-005 remains partial, no full semantic, deployment or Feishu acceptance.
 
 ## 2026-10-01: Counterexample review candidate
 

@@ -1,6 +1,6 @@
-# 单份意见与程序投影候选
+# 单份意见与程序投影候选（第二例语义失败，停止）
 
-日期2026-10-01，仓库基线178cd7b8；前一个[反例候选](iris-counterexample-review-20261001.md)
+日期2026-10-01，候选应用提交`366516c`，仓库基线178cd7b8；前一个[反例候选](iris-counterexample-review-20261001.md)
 已失败并保持关闭。本轮不重跑该配置，不增加审核器或提示词变体。
 
 ## 原因与设计边界
@@ -45,7 +45,7 @@ max_tokens2048；逐请求UI免费额度≥150K、到期在未来、用完即停
 新测试在旧代码5失败/4通过，实现后相关26通过。Core4872通过/469条件跳过；
 类型检查、构建、CLI7通过。独立复核指出unattempted_first不应要求新变化，已改；
 再补数字历史及候选互斥后定向11通过，完整Core未重复计算新增2项。
-真实模型尚未运行，产品缺陷未关闭。
+以上为实模前本地验证；补充后类型检查和构建再通过。以下为实际实模结果，产品缺陷未关闭。
 
 | 核对项 | disposition与理由 |
 |---|---|
@@ -53,3 +53,40 @@ max_tokens2048；逐请求UI免费额度≥150K、到期在未来、用完即停
 | 工程故障台账 | **updated**：[主动讨论条目](../operations/engineering-failure-ledger.md#proactive-collaboration-is-not-a-deadline-reminder)记录独立扩写与投影的区别，不把投影当语义证明。 |
 | 核心需求覆盖基线 | **updated**：[本轮候选](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md#2026-10-01-canonical-opinion-candidate)保持IRIS-CORE-005部分实现，不提升为实模/真实飞书通过。 |
 | README / AGENTS / current-handoff | **updated**：[README](../../README.md#current-product-state)及[交接](current-handoff.md#当前正在推进)记录候选与验收状态；**reviewed-unchanged**：[AGENTS](../../AGENTS.md)定位、授权和四处闭环规则仍有效。 |
+
+## 实际窗口与有效范围
+
+运行应用`366516c`：**6HTTP200 / 17924 reported tokens**，两例从assess开始，
+没有注入旧assessment、generation或review。qualified-risk有限通过；inference失败，
+arithmetic/material-update/paraphrase/handled四例未调用。首败后退出，没有重试或
+补充修正；两例原审核均true，均未进入修正。不是格式/429/凭据/额度阻塞。
+
+- qualified-risk：来源事实及联调/限定承诺建议有效，没有伪数量。原句“一旦……
+  发现问题或……出现延迟，……承诺将难以兑现，可能……引发违约争议”措辞偏强，
+  独立及主审认为表达条件下困难，不等于此前的必然无法交付；仅本例通过，不改变
+  旧确定失败反例的判定，不能声称所有风险表述问题已解决。
+- inference：最终reasoning、变化说明与draft均写“存在严重的样本偏差”。来源只说
+  5人喜欢及据此认定全量付费，没有抽样方法、总体分布或比较数据，不能确定偏差
+  已存在及其严重程度。后文承认代表性待核实；其他“可能”与推断标签不能限定
+  这一句。原审核将其称为合理专业推断并alltrue。主审与独立复核均失败。建议确实
+  触及付费意愿验证，但不能抵消存续的错误断言。
+
+可确认的程序效果是没有再额外生成另一份内部理由；不能确认降低了错误率，更不能
+把同步存在于所有字段的错误当作语义通过。assess的新问题描述已经出现严重样本
+偏差措辞，后续生成复用；这属于可追踪的上下文事实，尚未因果分离到底是身份描述
+诱导、模型自身统计概念混淆或其他因素。不要直接归因模型无能力，也不要立即追加
+去描述/改提示词变体碰碰运气。本候选停止，默认false，runtime及正式eval未启用。
+
+[完整原始请求响应](evidence/iris-canonical-opinion-20261001.json)、
+[逐例独立语义判断](evidence/iris-canonical-opinion-20261001.independent-review.json)、
+[执行审计](evidence/iris-canonical-opinion-20261001.audit.json)、
+[停止记录](evidence/iris-canonical-opinion-20261001.halted.json)、
+[23份证据清单](evidence/iris-canonical-opinion-20261001-manifest.json)。
+每次请求前精确qwen3.8-max免费额度838.64K/1M、2026-12-18到期、用完即停开启，
+均≤60秒且绑定该wire哈希。结束页面同值，可能滞后，不作为账单审计。原始响应、
+实际wire、客户端content、用量及全部文件哈希已核对；保护密钥未进入归档。
+
+四处处置沿用上表：台账/基线/README/交接同步本次失败，白皮书仍reviewed-unchanged，
+失败且关闭的候选未改稳定架构。代码候选已改／本地通过／窗口实模语义失败／真实
+飞书未验收／未部署。没有push、生产访问、生产模型切换或飞书外发。原bug仍开放；
+目前缺的是能可靠区分依据不足和已证实错误的语义生成及核对路径，不是用户许可。

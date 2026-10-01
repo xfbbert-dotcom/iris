@@ -1,0 +1,143 @@
+{
+  "kind": "canonical-opinion-20261001",
+  "files": [
+    {
+      "source": "canonical-opinion-20261001.json",
+      "target": "iris-canonical-opinion-20261001.json",
+      "sha256": "42c1c40f642697f1595222d798e3485c691de479ea4332e56075ef6414c15b1a",
+      "bytes": 202007
+    },
+    {
+      "source": "canonical-opinion-20261001.started.json",
+      "target": "iris-canonical-opinion-20261001.started.json",
+      "sha256": "5e6f7ff64af217fcc80cc8ea2bc876ebb6cb8ec77b261dc5cc4c4716a645b69c",
+      "bytes": 1358
+    },
+    {
+      "source": "canonical-opinion-20261001.halted.json",
+      "target": "iris-canonical-opinion-20261001.halted.json",
+      "sha256": "f2c36f7b4482989424da7f1bf8557ff4eea3095abd9d596c551dbc9bbdd2feb2",
+      "bytes": 130
+    },
+    {
+      "source": "canonical-opinion-20261001.independent-review.json",
+      "target": "iris-canonical-opinion-20261001.independent-review.json",
+      "sha256": "56efd67b2a141e66181a5e50d4ea9ae4ef730860bcfa9d3cebcd7c3d44f81320",
+      "bytes": 823
+    },
+    {
+      "source": "canonical-opinion-20261001.quota-end.json",
+      "target": "iris-canonical-opinion-20261001.quota-end.json",
+      "sha256": "34eb7c296e6f9c1da54e14ccb284d7a36d701a5ec319682c1f93181bb6d25cf0",
+      "bytes": 300
+    },
+    {
+      "source": "canonical-opinion-20261001.audit.json",
+      "target": "iris-canonical-opinion-20261001.audit.json",
+      "sha256": "f8a8f78b4ff3b8e798f9c9041098f8ab70c60350fee35ee8113f8ccd24548048",
+      "bytes": 1130
+    },
+    {
+      "source": "canonical-opinion-20261001.semantic-qualified-risk.json",
+      "target": "iris-canonical-opinion-20261001.semantic-qualified-risk.json",
+      "sha256": "776f6c28bdc89cf2b3bef29a01213d6bdf91013920094f9eff5de80e95c55f9a",
+      "bytes": 486
+    },
+    {
+      "source": "canonical-opinion-20261001.semantic-inference.json",
+      "target": "iris-canonical-opinion-20261001.semantic-inference.json",
+      "sha256": "5b07c356368ac7b42a1d5f52b72b2a41a8d8566d13d2df5c87d11a680f2e3dfc",
+      "bytes": 511
+    },
+    {
+      "source": "canonical-opinion-20261001.pending-1.json",
+      "target": "iris-canonical-opinion-20261001.pending-1.json",
+      "sha256": "1fdf154f9c5f30c3074a889a42c479a92e201f7cf5808b7fa162a18cff289548",
+      "bytes": 187
+    },
+    {
+      "source": "canonical-opinion-20261001.pending-2.json",
+      "target": "iris-canonical-opinion-20261001.pending-2.json",
+      "sha256": "600d8e076b063fa4e4f226e6119cd42ec38be0f4d62aeffc2787e94c4fbc5357",
+      "bytes": 201
+    },
+    {
+      "source": "canonical-opinion-20261001.pending-3.json",
+      "target": "iris-canonical-opinion-20261001.pending-3.json",
+      "sha256": "26f42262db0d6d3ec8989fa63f9e4c783ff179a54914b31d3110e1b0b95eed2e",
+      "bytes": 189
+    },
+    {
+      "source": "canonical-opinion-20261001.pending-4.json",
+      "target": "iris-canonical-opinion-20261001.pending-4.json",
+      "sha256": "cdb42cabd1c5ae1387a166dccb2ce738338cfe903d938b2d9aa155c38992d82c",
+      "bytes": 182
+    },
+    {
+      "source": "canonical-opinion-20261001.pending-5.json",
+      "target": "iris-canonical-opinion-20261001.pending-5.json",
+      "sha256": "799d4fc208728cffc2b67bec241ac757f48c353186f1ccdaea608649a6c461a2",
+      "bytes": 196
+    },
+    {
+      "source": "canonical-opinion-20261001.pending-6.json",
+      "target": "iris-canonical-opinion-20261001.pending-6.json",
+      "sha256": "81b284d1d967fb1276471b1ea9020751038a0c0380d1487c0d5fe36788a157cf",
+      "bytes": 184
+    },
+    {
+      "source": "canonical-opinion-20261001.quota-1.json",
+      "target": "iris-canonical-opinion-20261001.quota-1.json",
+      "sha256": "6b656dc5d82b3f6760ade0b818e60e4315036645df10fdeed07a82c7f6b505ba",
+      "bytes": 359
+    },
+    {
+      "source": "canonical-opinion-20261001.quota-2.json",
+      "target": "iris-canonical-opinion-20261001.quota-2.json",
+      "sha256": "8d2769d14cb906bc1041542d387e9d33882207487d697d5b88078b6073499c98",
+      "bytes": 359
+    },
+    {
+      "source": "canonical-opinion-20261001.quota-3.json",
+      "target": "iris-canonical-opinion-20261001.quota-3.json",
+      "sha256": "51cdc22c67fb5e753a5889e0436a46d7e6b73669fb0aad2ed6f827c8a2257e4a",
+      "bytes": 359
+    },
+    {
+      "source": "canonical-opinion-20261001.quota-4.json",
+      "target": "iris-canonical-opinion-20261001.quota-4.json",
+      "sha256": "a35b3dd90f451e1c9bc5112608af0dbff6d69c1dd9d3c65e97c3ebaae9e119e0",
+      "bytes": 359
+    },
+    {
+      "source": "canonical-opinion-20261001.quota-5.json",
+      "target": "iris-canonical-opinion-20261001.quota-5.json",
+      "sha256": "e997eaea7843abced74d39ba60c9f273378a95f883737daf58451334b784dc92",
+      "bytes": 359
+    },
+    {
+      "source": "canonical-opinion-20261001.quota-6.json",
+      "target": "iris-canonical-opinion-20261001.quota-6.json",
+      "sha256": "ea3b103c6d3ebf4d0160acb222beb9c8196dcc8c5a223807123ec44ae036d581",
+      "bytes": 359
+    },
+    {
+      "source": "canonical-opinion-20261001.mts",
+      "target": "iris-canonical-opinion-20261001-runner.txt",
+      "sha256": "ad13a450770d7a7c5335133ccb08f7aa0440ba58306cfd5b40a241786d27956f",
+      "bytes": 9069
+    },
+    {
+      "source": "run-canonical-opinion.ps1",
+      "target": "iris-canonical-opinion-20261001-launcher.txt",
+      "sha256": "6bf28b5fc633a4110f54eb10ee32545ee27819084dbb84689f2d2f9e4652c986",
+      "bytes": 1844
+    },
+    {
+      "source": "archive-canonical-opinion-20261001.mjs",
+      "target": "iris-canonical-opinion-20261001-archive.txt",
+      "sha256": "07eb7a8f3b48260fde43a53f8487a99a6867aa404fa4520e021595300b2eb2e2",
+      "bytes": 3625
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "model": "qwen3.8-max",
+  "remainingTokens": 838640,
+  "display": "剩838.64K / 共1M",
+  "freeExhaustionStop": true,
+  "expiresAt": "2026-12-18T00:00:00+08:00",
+  "observedAt": "2026-10-01T12:41:57.507Z",
+  "note": "精确型号UI reload后读取；可能滞后，不是账单审计"
+}
