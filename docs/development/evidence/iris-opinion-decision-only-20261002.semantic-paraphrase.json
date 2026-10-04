@@ -1,0 +1,6 @@
+{
+  "caseId": "paraphrase",
+  "resultSha256": "38fc80e570869f62f53e19bf9bf81576b879df82c2f7d026244efee3dec7f93a",
+  "pass": true,
+  "reason": "Independent full-source/history decision review: same 2 x 8 against budget10 repeats the already surfaced budget issue without a new material fact. skip/duplicate and the supplied existing issue ID are correct. New contract has empty prose and no material change or draft, with no false delivery-state assertion. This new result does not revise the previous window failure."
+}

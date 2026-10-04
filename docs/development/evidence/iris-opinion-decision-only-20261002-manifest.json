@@ -1,0 +1,121 @@
+{
+  "kind": "opinion-decision-only-20261002",
+  "applicationCommit": "397fedbf2f19c0950fdcd16c185c3011998d76ef",
+  "runHead": "397fedbf2f19c0950fdcd16c185c3011998d76ef",
+  "requests": 1,
+  "http200": 1,
+  "reportedTokens": 3104,
+  "executionPassed": false,
+  "wholeWindowAccepted": false,
+  "windowOutcome": "interrupted_external_gate_timeout",
+  "modelSemanticFailureObserved": false,
+  "startedAt": "2026-10-01T16:23:54.035Z",
+  "finishedAt": "2026-10-04T06:53:01.503Z",
+  "runnerAcceptedCases": [],
+  "independentlyPassedCases": [
+    "paraphrase"
+  ],
+  "unreached": [
+    "handled",
+    "hypothesis",
+    "separate-next",
+    "inference",
+    "qualified-risk",
+    "arithmetic",
+    "material-update",
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "semanticGate": {
+    "caseId": "paraphrase",
+    "pass": true,
+    "resultSha256": "38fc80e570869f62f53e19bf9bf81576b879df82c2f7d026244efee3dec7f93a",
+    "consumedByReport": false,
+    "fileSha256": "76b386386756b50de7baddc68b6c3086d76211ff5078c54371941fb30b01a3f2"
+  },
+  "timingAttribution": "The recorded execution spans 2026-10-01 to 2026-10-04. The runner halted with external gate timeout and did not consume the independently passing semantic gate. The specific cause of the cross-day interruption is unknown; neither a model semantic failure nor whole-window PASS is established.",
+  "verification": {
+    "requestWireHashes": 1,
+    "responseHashes": 1,
+    "rawClientContentMatches": 1,
+    "independentSemanticResultHashes": 1,
+    "probeSourceHashes": true,
+    "workingApplicationSourceHashes": true,
+    "frozenCommitSourceTextMatchesAfterLineEndingNormalization": true,
+    "gitLineEndingDifferences": [
+      "apps/core/src/proactive-discussion/model.ts",
+      "apps/core/src/proactive-discussion/review-receipts.ts",
+      "apps/core/src/model/openai-compatible-chat-completions-client.ts"
+    ],
+    "secretPatternScan": "No credential-shaped values, Bearer tokens or private-key headers found; key file was not read.",
+    "privateRawUnmodified": true
+  },
+  "files": [
+    {
+      "source": "opinion-decision-only-20261002.halted.json",
+      "target": "iris-opinion-decision-only-20261002.halted.json",
+      "sha256": "83a5179b24a82206a2d9196d2a307e31b881174577fb01fe9d90195aa496ab62",
+      "bytes": 173
+    },
+    {
+      "source": "opinion-decision-only-20261002.json",
+      "target": "iris-opinion-decision-only-20261002.json",
+      "sha256": "2dbd22a8426b80ecf0d6406e354ecc687739a33db6b2d79a0b711e780a916d5a",
+      "bytes": 40064
+    },
+    {
+      "source": "opinion-decision-only-20261002.pending-1.json",
+      "target": "iris-opinion-decision-only-20261002.pending-1.json",
+      "sha256": "1c74ea2cca9caf71a80f7d6660b1cb4f7ca6e50ff6b1d2376424a7b85fe290ee",
+      "bytes": 13264
+    },
+    {
+      "source": "opinion-decision-only-20261002.preflight.json",
+      "target": "iris-opinion-decision-only-20261002.preflight.json",
+      "sha256": "52376e4a783a436bf39e16b0dc32aca0eb310c5b204a8b16dbc021df96dc484f",
+      "bytes": 4568
+    },
+    {
+      "source": "opinion-decision-only-20261002.quota-1.json",
+      "target": "iris-opinion-decision-only-20261002.quota-1.json",
+      "sha256": "87caf1b692ed7cdbaddc7f5d3f251df26a2a05f81375d7e8888f1282b6dddbba",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-only-20261002.semantic-paraphrase.json",
+      "target": "iris-opinion-decision-only-20261002.semantic-paraphrase.json",
+      "sha256": "76b386386756b50de7baddc68b6c3086d76211ff5078c54371941fb30b01a3f2",
+      "bytes": 520
+    },
+    {
+      "source": "opinion-decision-only-20261002.started.json",
+      "target": "iris-opinion-decision-only-20261002.started.json",
+      "sha256": "ad6d427102ede044ad9563842e4fe1901f9d815bacfb2cd8892024c9cb87b913",
+      "bytes": 3651
+    },
+    {
+      "source": "opinion-decision-only-20261002.mts",
+      "target": "iris-opinion-decision-only-20261002-runner.txt",
+      "sha256": "4798e7270687985c02010d875ee50b00eb5cf19fa137a368bc5670f56e600a05",
+      "bytes": 22269
+    },
+    {
+      "source": "run-opinion-decision-only.ps1",
+      "target": "iris-opinion-decision-only-20261002-launcher.txt",
+      "sha256": "b145faa700a2a3170303e1b0c72465703a37b4c329851c535882143caeb9b73b",
+      "bytes": 1975
+    },
+    {
+      "source": "git:397fedbf2f19c0950fdcd16c185c3011998d76ef:docs/development/iris-opinion-decision-only-20261002.md",
+      "target": "iris-opinion-decision-only-20261002-frozen-design.txt",
+      "sha256": "a7f451d307e97d4745e058bfeec7351653805b0126b3ab89836277f2729a8507",
+      "bytes": 4739
+    },
+    {
+      "source": "git:397fedbf2f19c0950fdcd16c185c3011998d76ef:scripts/pilot/proactive-discussion-eval.ts",
+      "target": "iris-opinion-decision-only-20261002-frozen-eval-source.txt",
+      "sha256": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6",
+      "bytes": 45905
+    }
+  ]
+}

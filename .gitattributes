@@ -47,3 +47,4 @@ docs/development/evidence/iris-opinion-plan-20261001* -text whitespace=blank-at-
 docs/development/evidence/iris-opinion-plan-q38-20261001* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-opinion-conclusion-20261001* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/development/evidence/iris-opinion-plan-recovery-20261002* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+docs/development/evidence/iris-opinion-decision-only-20261002* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
