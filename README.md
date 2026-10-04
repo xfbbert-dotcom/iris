@@ -29,8 +29,8 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
-The [source-plan runtime record](docs/development/iris-opinion-runtime-20261004.md) is the latest
-proactive-discussion status. Application `397fedbf` passed the frozen eight synthetic business
+The [source-plan runtime record](docs/development/iris-opinion-runtime-20261004.md) records the
+latest bounded semantic acceptance. Application `397fedbf` passed the frozen eight synthetic business
 cases and both source-role/time controls on exact `qwen3.8-max`, across retained and resumed
 windows (24 HTTP200 / 89,408 reported tokens). This is bounded synthetic evidence, not real
 Feishu acceptance or deployment; initial free assessment and reviewer explanations still have
@@ -44,6 +44,10 @@ do not enable production speech or run paid evaluation from this example.
 Local integration commit `1ea3ae7e` passed Core 5012 tests (469 conditional skips), typecheck,
 build and 9 CLI tests. Offline replay preserved the eight accepted cases' exact model inputs and
 final pairs through this entry point with trace both on and off; it is not a new live-model run.
+The subsequent [PostgreSQL acceptance](docs/development/iris-opinion-postgres-20261004.md) replays
+archived responses through the actual source-plan model, database and fake delivery: one accepted
+opinion and one structured skip passed, with 6/6 e2e tests and typecheck passing. Application code
+remains `1ea3ae7e`; real Feishu delivery and deployment remain unaccepted.
 
 ### Retained prior candidate results
 
