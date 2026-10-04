@@ -1,5 +1,13 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-04：运行配置可用，但pilot容器遗漏意见合同变量
+
+实际Compose渲染证实，设置source-plan后Core环境仍缺少mode，导致应用默认legacy。
+[配置修复](../development/iris-opinion-pilot-config-20261004.md)补齐透传、保持缺省legacy
+和显式空值拒绝；新增真实渲染2例先失败，修复后完整Compose36项和Core相关10项通过。
+直接runtime装配和PG验收不代替部署入口验证。只关闭该本地配置遗漏，未部署、未改变
+线上模型/开关，原整体语义和真实群验收边界保留；本小修到门槛通过即结束。
+
 ## 2026-10-04：补齐来源计划到真实PG和模拟发送的跨模块证据
 
 模式装配测试与eval最终pair回放不能单独证明落库和投递链路；原PG e2e的模型为手写

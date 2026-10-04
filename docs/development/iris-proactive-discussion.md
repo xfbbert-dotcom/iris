@@ -111,7 +111,12 @@ run2 确认 HTTP429 后，CLI 增加可选 `--request-interval-ms 0..60000`（�
 
 本节是下一次单独获准发布时执行的步骤，本次未执行。文档确认、历史提醒成功或旧共享群聊脚本均不构成本次部署、外发或开关授权。
 
-1. 重新取得并记录当前部署和单群启用授权、操作者、精确目标群及预定应用 SHA；核对该 SHA 的远端 CI 和两轮实模人工审阅均通过。模型/CI 任一未完成则不启动部署。核对现场生产应用 SHA、镜像标签/摘要、迁移位置、备份和恢复验证、健康、队列/死信/未决回复/unknown 及原 Q&A 控制状态；保存时间戳，不沿用本页历史值。
+2026-10-04更新：source-plan的当前模型依据是[最新有界八例两负控](iris-opinion-runtime-20261004.md)，
+保留其模型/合同和泛化限制，不重跑旧两轮实验或改判旧失败。发布需包含
+[Compose变量修复](iris-opinion-pilot-config-20261004.md)，并现场核对运行容器的mode/model；
+disabled状态的零计数不证明数据库为空，须另读policy和实际队列。上述更新不是生产授权。
+
+1. 重新取得并记录当前部署和单群启用授权、操作者、精确目标群及预定应用 SHA；核对该 SHA 的远端 CI，以及实际模型/合同对应的最新实模人工审阅依据。模型不一致或CI未完成则不启动部署。核对现场生产应用 SHA、镜像标签/摘要、迁移位置、备份和恢复验证、健康、队列/死信/未决回复/unknown 及原 Q&A 控制状态；保存时间戳，不沿用本页历史值。
 2. 使用该版本的 [pilot Compose](../../deploy/pilot/docker-compose.yml) 和现有[发布运行手册](../operations/internal-rollout-runbook.md)，记录明确 env-file 路径、compose 文件和不可变镜像。先用 `config --quiet` 校验。生成成对数据库/队列备份并记录校验信息；旧共享群聊脚本不作为本功能部署器。依现场维护步骤控制入口和旧 worker 的切换，防止两个版本并发消费。
 3. 用 Compose 的 `migrate` 服务、迁移角色执行该精确镜像的迁移器，验证 `0059_proactive_discussion.sql` 及后续 `0060_proactive_discussion_prose_sources.sql` 仅应用一次，未改旧迁移、未清事实表。0060 不猜测旧目录文字来源；null 来源项的保守可用性限制见[修复记录](iris-proactive-discussion-final-fixes.md)。首次启动保持 `IRIS_PROACTIVE_DISCUSSION_ENABLED=false`、`IRIS_PROACTIVE_DISCUSSION_GROUP_IDS=`；确认新策略缺失/关闭，普通问答仍工作，PD status 为 disabled/不运行、无外发。
 4. 经本次授权后，配置新 runtime 开启且名单只含原群，设置服务端 `IRIS_INTERNAL_API_AUDIT_ACTOR` 凭据角色；保留现有认证。此时 policy 仍关闭，先确认受保护 `GET /internal/proactive-discussion/status` 健康、原群读取可用。核对旧 planner、旧主动 delivery、memory extraction、task/Wiki 写入开关未被打开，不把原三群 Q&A scope 当主动授权。

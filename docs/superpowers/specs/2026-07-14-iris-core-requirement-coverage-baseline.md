@@ -1,5 +1,11 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-04：补齐来源计划pilot环境配置
+
+[Compose修复](../../development/iris-opinion-pilot-config-20261004.md)解决显式source-plan
+未进入Core容器的问题；真实Compose36项、Core相关10项通过，默认legacy及关闭状态保留。
+这是部署配置本地验收；IRIS-CORE-005仍部分实现，生产版本/模型、真实群和部署未核验。
+
 ## 2026-10-04：来源计划真实PG到模拟发送通过
 
 [本地跨模块验收](../../development/iris-opinion-postgres-20261004.md)补齐实际source-plan

@@ -48,6 +48,9 @@ The subsequent [PostgreSQL acceptance](docs/development/iris-opinion-postgres-20
 archived responses through the actual source-plan model, database and fake delivery: one accepted
 opinion and one structured skip passed, with 6/6 e2e tests and typecheck passing. Application code
 remains `1ea3ae7e`; real Feishu delivery and deployment remain unaccepted.
+The subsequent [pilot configuration fix](docs/development/iris-opinion-pilot-config-20261004.md)
+forwards the mode into the shipped Core container; its default remains legacy. Actual Compose
+rendering and runtime-mode tests pass locally; no deployment or production model check is implied.
 
 ### Retained prior candidate results
 
