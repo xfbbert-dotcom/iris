@@ -1,0 +1,7 @@
+{
+  "caseId": "negative-time-swap",
+  "targetReviewSha256": "5f880ce055a3761482d7dd1788f5e41c5886008d19fec408bedc140d661094ac",
+  "pass": true,
+  "targetErrorRecognized": true,
+  "reason": "Raw supported=false explicitly identifies new12 versus old8, candidate reversed current16/prior24 and sourcePlan unitCost/priorUnitCost, with correct current24 and budget gap14. This targets temporal role reversal independently of uncertainty (true) or receipt validation. Calling the consequent error arithmetic is imprecise because computation is internally consistent, retained as diagnostic wording limitation."
+}

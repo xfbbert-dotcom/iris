@@ -1,0 +1,6 @@
+{
+  "caseId": "hypothesis",
+  "resultSha256": "bf7e27c3ef9857e7bc26818a436e98e1ee5d14e856c3cf78aac40233da6eb293",
+  "pass": true,
+  "reason": "The sole source explicitly labels willingness to pay as an unconfirmed hypothesis and plans a real payment experiment. skip/no_work_value is justified; no invented resource action or redundant advice, no draft."
+}

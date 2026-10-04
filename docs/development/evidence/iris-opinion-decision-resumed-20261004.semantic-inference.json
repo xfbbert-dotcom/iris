@@ -1,0 +1,6 @@
+{
+  "caseId": "inference",
+  "resultSha256": "e333089aabab600aa8d312dc5be79c8c55f2a5a7efdc191e607b0d5b5e15c547",
+  "pass": true,
+  "reason": "Final pair accurately contrasts five reported likes with all-users-pay revenue conclusion. It identifies insufficient evidence and directs validation at that conclusion, without claiming actual payment, proven bias, or inevitable overestimation. Initial assessment did assert extreme overestimation; retained as an initial-stage defect, absent from final compiled pair and later plan input."
+}

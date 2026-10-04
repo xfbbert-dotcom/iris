@@ -1,0 +1,6 @@
+{
+  "caseId": "arithmetic",
+  "resultSha256": "f7726fb092f155da5d42e07d89aa648c4410729a76edb4243211c90f50a12355",
+  "pass": true,
+  "reason": "Source roles faithfully yield 2 people times 8万元 =16万元 against budget10万元, positive excess6万元. Final pair states these values and recommends covering the difference or adjusting budget/count, without invented approvals or execution; new issue and fact tag valid."
+}

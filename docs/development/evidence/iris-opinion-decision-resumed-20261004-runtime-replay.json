@@ -1,0 +1,69 @@
+{
+  "kind": "offline-formal-opinion-entry-replay",
+  "at": "2026-10-04T07:58:38.807Z",
+  "networkRequests": 0,
+  "credentialRead": false,
+  "head": "8fa43544e47409499e2911049a97a6531fc1e5b5",
+  "meaning": "Offline replay of existing responses, not new model or untested-case semantic acceptance.",
+  "evidenceHashes": {
+    "opinion-decision-only-20261002.json": "2dbd22a8426b80ecf0d6406e354ecc687739a33db6b2d79a0b711e780a916d5a",
+    "opinion-decision-resumed-20261004.json": "ccf9dcd3d42d464e7f63d12ccf9073d0e9d662d51be4de49e64baa016082acb0"
+  },
+  "sourceHashes": {
+    "apps/core/src/proactive-discussion/opinion-mode.ts": "33debf4895dfad47ce2ea037c63d0cada73e5a8991219bd2325d9d63d46dcd94",
+    "apps/core/src/proactive-discussion/model.ts": "74acea717c3188ecbca91ce5e2892c83e3693ecc44ffe1d3cddf53c9befc1f29",
+    "scripts/pilot/proactive-discussion-eval.ts": "ec14b1364caf090363277040c9f681b4dc44bbea3635e1b417a714250b2d0696"
+  },
+  "runs": [
+    {
+      "includeTrace": false,
+      "replayedClientResponses": 18,
+      "exactMessagesAndSchemas": true,
+      "exactFinalPairCases": [
+        "paraphrase",
+        "handled",
+        "hypothesis",
+        "separate-next",
+        "inference",
+        "qualified-risk",
+        "arithmetic",
+        "material-update"
+      ],
+      "untestedCatalogCases": [
+        "unrelated-update",
+        "casual",
+        "corrected",
+        "source-loss",
+        "stopped",
+        "injection",
+        "followup"
+      ],
+      "tracePlanCount": 0
+    },
+    {
+      "includeTrace": true,
+      "replayedClientResponses": 18,
+      "exactMessagesAndSchemas": true,
+      "exactFinalPairCases": [
+        "paraphrase",
+        "handled",
+        "hypothesis",
+        "separate-next",
+        "inference",
+        "qualified-risk",
+        "arithmetic",
+        "material-update"
+      ],
+      "untestedCatalogCases": [
+        "unrelated-update",
+        "casual",
+        "corrected",
+        "source-loss",
+        "stopped",
+        "injection",
+        "followup"
+      ],
+      "tracePlanCount": 5
+    }
+  ]
+}

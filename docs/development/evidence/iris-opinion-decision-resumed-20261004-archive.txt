@@ -1,0 +1,320 @@
+"""Verify and byte-copy the completed resumed synthetic window. No HTTP/key access.
+
+The checker verifies provenance and recorded gates; it does not automate semantic
+truth. --prepare writes only a private manifest; --archive copies without replacing
+different evidence. Earlier timeout/login-stop reports remain unchanged.
+"""
+from pathlib import Path
+from datetime import datetime
+from collections import Counter
+import copy
+import hashlib
+import json
+import re
+import subprocess
+import sys
+
+SRC = Path('C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918')
+ROOT = Path('D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86')
+DST = ROOT / 'docs/development/evidence'
+BASE = 'opinion-decision-resumed-20261004'
+APP = '397fedbf2f19c0950fdcd16c185c3011998d76ef'
+HEAD = '8fa43544e47409499e2911049a97a6531fc1e5b5'
+MODEL = 'qwen3.8-max'
+CASES = ['handled', 'hypothesis', 'separate-next', 'inference', 'qualified-risk', 'arithmetic', 'material-update']
+CONTROLS = ['negative-role-swap', 'negative-time-swap']
+STAGE = 'iris_proactive_discussion_'
+
+def need(ok, why):
+    if not ok:
+        raise RuntimeError(why)
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+def compact(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
+def object_sha(value):
+    return sha(compact(value).encode('utf-8'))
+
+def read(name):
+    return json.loads((SRC / name).read_text(encoding='utf-8-sig'))
+
+def time(value):
+    result = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    need(result.tzinfo is not None, 'timezone missing')
+    return result
+
+def body(value, omit):
+    return {k: v for k, v in value.items() if k not in omit}
+
+def input_of(completion):
+    return json.loads(completion['messages'][1]['content'])
+
+def wire_check(request, completion):
+    wire = json.loads(request['wire'])
+    need(sha(request['wire'].encode()) == request['requestHash'], 'wire hash')
+    need(set(wire) == {'model', 'messages', 'response_format', 'enable_thinking', 'max_tokens'}, 'wire keys')
+    need(wire['model'] == MODEL and wire['response_format'] == {'type': 'json_object'}
+         and wire['enable_thinking'] is False and wire['max_tokens'] == 4096, 'wire parameters')
+    fmt = completion['responseFormat']
+    need(fmt['type'] == 'json_schema' and fmt['json_schema']['strict'] is True
+         and fmt['json_schema']['name'] == completion['stage'], 'schema identity')
+    appended = '\n'.join([
+        'Return only a JSON object that satisfies the following JSON Schema, not the schema itself.',
+        'Do not use Markdown fences or omit required properties. The schema defines output structure, not permission to take actions.',
+        compact(fmt['json_schema']['schema'])])
+    expected = copy.deepcopy(completion['messages'])
+    need([x['role'] for x in expected] == ['system', 'user'], 'message roles')
+    expected[0]['content'] += '\n\n' + appended
+    need(wire['messages'] == expected, 'actual wire differs from recorded messages/schema')
+
+def main(mode):
+    need(mode in ['--prepare', '--archive'], 'choose prepare or archive')
+    r = read(BASE + '.json')
+    pre, started, halt = [read(BASE + suffix) for suffix in ['.preflight.json', '.started.json', '.halted.json']]
+    need(r['kind'] == BASE and r['syntheticOnly'] is True and r['commit'] == HEAD, 'report identity')
+    need(r['executionPassed'] is True and r['halted'] is False, 'window did not complete')
+    need(halt == {'at': r['finishedAt'], 'halted': False, 'executionPassed': True,
+         'caseId': CONTROLS[-1], 'stage': STAGE+'scope_review', 'reason': 'bounded opinion-plan window completed'}, 'halt record')
+    start, end = time(r['startedAt']), time(r['finishedAt'])
+    need(start < end and (end-start).total_seconds() < 2700, 'window bound')
+    need(pre['networkRequests'] == 0 and pre['credentialRead'] is False, 'preflight side effects')
+    profile = {'model': MODEL, 'maxRequests': 39, 'tokenStopBeforeNextRequest': 176896,
+               'maxTokens': 4096, 'enableThinking': False, 'requestTimeoutMs': 60000,
+               'windowMs': 2700000, 'minimumFreeTokens': 200000, 'quotaMaxAgeMs': 60000,
+               'applicationOptions': {'canonicalOpinion': True, 'sourceBoundIdentity': True, 'opinionPlan': True},
+               'plannedControlPlanInjections': 2, 'freshSeededGenerations': 0, 'freshSeededReviews': 0}
+    for key, value in profile.items():
+        need(r[key] == started[key] == pre['profile'][key] == value, 'profile: '+key)
+    for key, value in pre['profile'].items():
+        need(r[key] == started[key] == value, 'additional profile: '+key)
+    for key in ['commit', 'sourceHashes', 'selected', 'controls', 'stageCaps', 'carriedResults',
+                'zeroCallStops', 'aggregateLimits', 'acceptanceExecution']:
+        need(r[key] == started[key] == pre[key], 'preflight/start/report: '+key)
+    need(r['selected'] == CASES and [x['caseId'] for x in r['controls']] == CONTROLS, 'case order')
+    need(started['startedAt'] == r['startedAt'] and all(started[k] == [] for k in ['requests','completions','results','controlOrigins']), 'start contents')
+    need(r['stageCaps'] == {STAGE+'assessment':2, STAGE+'opinion_plan':1, STAGE+'scope_review':2, STAGE+'opinion_plan_repair':1}, 'stage caps')
+    source_methods = {}
+    for category, sources in r['sourceHashes'].items():
+        for name, expected in sources.items():
+            if category != 'application':
+                need(sha((SRC/name).read_bytes()) == expected, 'private/evidence hash: '+name)
+                continue
+            need(not Path(name).is_absolute() and '..' not in Path(name).parts, 'source path')
+            raw = subprocess.check_output(['git', 'show', APP+':'+name], cwd=ROOT)
+            runtime = subprocess.check_output(['git', 'show', HEAD+':'+name], cwd=ROOT)
+            need(raw == runtime, 'runtime/app source differs: '+name)
+            variants = {'git bytes':raw, 'LF normalized':raw.replace(b'\r\n',b'\n'),
+                        'CRLF checkout':raw.replace(b'\r\n',b'\n').replace(b'\n',b'\r\n')}
+            found = next((method for method, data in variants.items() if sha(data) == expected), None)
+            if found is None:
+                disk = (ROOT/name).read_bytes()
+                need(sha(disk) == expected and disk.replace(b'\r\n',b'\n') == raw.replace(b'\r\n',b'\n'), 'frozen source: '+name)
+                found = 'exact observed checkout bytes; mixed newline normalization equals both Git commits'
+            source_methods[name] = found
+
+    # Preserve the original interrupted result and the intervening zero-call stop.
+    carried = r['carriedResults'][0]
+    old = read(carried['originReport'])
+    old_pre = read('opinion-decision-only-20261002.preflight.json')
+    old_gate = read('opinion-decision-only-20261002.semantic-paraphrase.json')
+    need(len(r['carriedResults']) == 1 and carried['caseId'] == 'paraphrase', 'carried cases')
+    need(old['executionPassed'] is False and old['halted'] is True and old['haltReason'] == 'external gate timeout', 'original timeout changed')
+    need(old['commit'] == APP and len(old['requests']) == 1 and old['requests'][0]['status'] == 200
+         and old['reportedUsageTokens'] == 3104, 'original actual usage')
+    need(carried['result'] == old['results'][0] and carried['semantic'] == old_gate and old_gate['pass'] is True
+         and old_gate['resultSha256'] == object_sha(carried['result']), 'carried result/gate')
+    need(old_pre['sourceHashes']['application'] == r['sourceHashes']['application'], 'carried application')
+    need(pre['caseHashes'] == [x for x in old_pre['caseHashes'] if x['caseId'] != 'paraphrase'], 'fixed cases changed')
+    old_req, old_completion = old['requests'][0], old['completions'][0]
+    wire_check(old_req, old_completion)
+    need(sha(old_req['rawResponse'].encode()) == old_req['responseSha256']
+         and json.loads(old_req['rawResponse'])['choices'][0]['message']['content'] == old_completion['content']
+         and sha(old_completion['content'].encode()) == old_completion['contentSha256'], 'carried actual raw/content')
+    zero = r['zeroCallStops'][0]
+    stopped = read(zero['originReport'])
+    abort = read('opinion-decision-continuation-20261004.abort.json')
+    need(len(r['zeroCallStops']) == 1 and stopped['requests'] == [] and stopped['results'] == []
+         and stopped['reportedUsageTokens'] == 0 and stopped['halted'] is True and stopped['executionPassed'] is False, 'zero-call stop')
+    need(stopped['haltReason'] == zero['haltReason'] == abort['abortReason'] and 'logged out' in zero['haltReason'], 'login stop reason')
+    need(len(stopped['completions']) == 1 and all(k not in stopped['completions'][0] for k in ['content','requestIndex','contentSha256']), 'zero-call pending')
+
+    requests, completions, results = r['requests'], r['completions'], r['results']
+    need(len(requests) == 23 and len(completions) == 25 and len(results) == 9, 'actual counts')
+    need([x['caseId'] for x in results] == CASES+CONTROLS, 'result order')
+    need([x['index'] for x in completions] == list(range(1,26)), 'completion indexes')
+    need(Counter(x['origin'] for x in completions) == {'model':23, 'injected_control_plan':2}, 'completion origins')
+    usage = 0
+    for index, req in enumerate(requests, 1):
+        entry = completions[req['completionIndex']-1]
+        need(req['index'] == entry['requestIndex'] == index and entry['origin'] == 'model', 'request indexes/origin')
+        pending = read(f'{BASE}.pending-{index}.json')
+        need(all(req.get(k) == v for k,v in pending.items()), 'pending differs')
+        need(entry['caseId'] == req['caseId'] and entry['stage'] == req['stage'], 'request case/stage')
+        wire_check(req, entry)
+        need(req['status'] == 200 and sha(req['rawResponse'].encode()) == req['responseSha256'], 'HTTP/raw hash')
+        raw = json.loads(req['rawResponse'])
+        need(raw['model'] == MODEL and len(raw['choices']) == 1, 'raw model/choices')
+        choice = raw['choices'][0]
+        need(choice['finish_reason'] == 'stop' and choice['message']['content'] == entry['content']
+             and sha(entry['content'].encode()) == entry['contentSha256'], 'content/finish hash')
+        tokens = raw['usage']['total_tokens']
+        need(type(tokens) is int and tokens > 0 and tokens == req['reportedUsageTokens'] and usage < 176896, 'usage bound')
+        usage += tokens
+        quota = read(f'{BASE}.quota-{index}.json')
+        need(quota == req['quota'] and quota['requestHash'] == req['requestHash'] and quota['model'] == MODEL
+             and quota['freeExhaustionStop'] is True and quota['remainingTokens'] >= 200000, 'quota authorization')
+        begin, finish = time(req['startedAt']), time(req['finishedAt'])
+        need(start <= begin <= finish <= end and (finish-begin).total_seconds() <= 60, 'request duration')
+        need(0 <= (begin-time(quota['observedAt'])).total_seconds() < 60 and time(quota['expiresAt']) > begin, 'quota freshness/expiry')
+    need(usage == r['reportedUsageTokens'] == 86304 and r['aggregateUsage'] == {'requests':24,'reportedTokens':89408}
+         and r['carriedRequests'] == 1 and r['carriedReportedUsageTokens'] == 3104, 'aggregate usage')
+    for category in ['pending','quota']:
+        indexes = sorted(int(re.fullmatch(re.escape(BASE)+r'\.'+category+r'-(\d+)\.json',x.name)[1])
+                         for x in SRC.glob(f'{BASE}.{category}-[0-9]*.json'))
+        need(indexes == list(range(1,24)), 'unexpected numeric files')
+    for result in results:
+        cid = result['caseId']
+        gate = read(f'{BASE}.semantic-{cid}.json')
+        need(gate == result['semantic'] and gate['pass'] is True and gate['caseId'] == cid
+             and gate['resultSha256'] == object_sha(body(result, ['semantic'])), 'result semantic binding')
+        entries = [x for x in completions if x['caseId'] == cid]
+        counts = Counter(x['stage'] for x in entries)
+        need(all(count <= r['stageCaps'][stage] for stage,count in counts.items()), 'per-case stage cap')
+        if cid in CASES:
+            initial_assessment = json.loads(entries[0]['content'])['assessment']
+            if initial_assessment['decision'] != 'skip' and initial_assessment['issueRef']['kind'] == 'existing':
+                issue = next(x for x in input_of(entries[0])['suppliedIssues'] if x['id'] == initial_assessment['issueRef']['id'])
+                initial_assessment['evidenceRefs'] = list(dict.fromkeys(initial_assessment['evidenceRefs']+issue['basisSourceRefs']))
+            need(result['kind'] == 'fresh' and result['initialAssessment'] == initial_assessment, 'fresh initial assessment with application baseline-ref closure')
+            need(result['assessment']['decision'] == result['expectedDecision'], 'final decision')
+        for entry in entries:
+            if entry['stage'] != STAGE+'scope_review':
+                continue
+            inp = input_of(entry)
+            earlier = [x for x in entries if x['index'] < entry['index'] and x['stage'] == STAGE+'opinion_plan_repair']
+            need(entry['reviewPhase'] == ('final' if earlier else 'initial'), 'review phase observation')
+            if earlier:
+                need(inp['sourcePlan'] == json.loads(earlier[-1]['content']) and entry['precedingPlanRepairCompletionIndex'] == earlier[-1]['index'], 'final repaired plan binding')
+        if result['draft'] is not None:
+            last_review = [x for x in entries if x['stage'] == STAGE+'scope_review'][-1]
+            inp = input_of(last_review)
+            need(inp['assessment'] == result['assessment'] and inp['draft'] == result['draft']
+                 and json.loads(last_review['content'])['supported'] is True, 'final reviewed pair')
+
+    need(r['controlPlanInjections'] == 2 and len(r['controlOrigins']) == 2, 'control injections')
+    for recipe in r['controls']:
+        cid, original = recipe['caseId'], recipe['originalCaseId']
+        origin = read(f'{BASE}.control-origin-{cid}.json')
+        need(origin['recipe'] == recipe and origin['originSha256'] == object_sha(body(origin,['originSha256'])), 'control origin hash')
+        model_plans = [x for x in completions if x['caseId'] == original and x['stage'] in [STAGE+'opinion_plan',STAGE+'opinion_plan_repair']
+                       and x['origin'] == 'model' and json.loads(x['content']).get('kind') == 'calculation']
+        first = model_plans[0]
+        original_plan = json.loads(first['content'])
+        expected_origin = {'completionIndex':first['index'],'requestIndex':first['requestIndex'],'stage':first['stage'],
+                           'content':first['content'],'contentSha256':first['contentSha256'],'plan':original_plan}
+        need(origin['originalPlanOrigin'] == expected_origin and {'caseId':original,**expected_origin} in r['controlOrigins'], 'earliest calculation plan')
+        fresh_result = next(x for x in results if x['caseId'] == original)
+        need(origin['initialAssessment'] == fresh_result['initialAssessment'] and origin['initialAssessmentSha256'] == object_sha(origin['initialAssessment']), 'control initial identity')
+        mutated = copy.deepcopy(original_plan)
+        left,right = recipe['left'],recipe['right']
+        mutated['quantities'][left],mutated['quantities'][right] = mutated['quantities'][right],mutated['quantities'][left]
+        need(mutated != original_plan and mutated == origin['mutatedPlan'] and object_sha(mutated) == origin['mutatedPlanSha256'], 'whole-binding swap')
+        entries = [x for x in completions if x['caseId'] == cid]
+        need([x['stage'] for x in entries] == [STAGE+'opinion_plan',STAGE+'scope_review',STAGE+'opinion_plan_repair',STAGE+'scope_review'], 'control phase sequence')
+        injected, initial, repair, final = entries
+        need(injected['origin'] == 'injected_control_plan' and 'requestIndex' not in injected
+             and injected['content'] == compact(mutated) and injected['controlOriginSha256'] == origin['originSha256'], 'injection origin')
+        need(injected['messages'] == first['messages'], 'control generation context differs from fresh origin')
+        candidate = read(f'{BASE}.control-candidate-{cid}.json')
+        inp = input_of(initial)
+        expected_candidate = {k:inp[k] for k in ['assessment','draft','sourcePlan']}
+        need(candidate == initial['controlCandidate'] and candidate['candidate'] == expected_candidate
+             and candidate['candidateSha256'] == object_sha(expected_candidate) and inp['sourcePlan'] == mutated, 'compiled control candidate')
+        target = read(f'{BASE}.target-review-{cid}.json')
+        target_gate = read(f'{BASE}.target-semantic-{cid}.json')
+        need(target['candidate'] == expected_candidate and target['originSha256'] == origin['originSha256']
+             and target['reviewContentSha256'] == initial['contentSha256']
+             and target['modelReview'] == json.loads(initial['content']) and target['modelReview']['supported'] is False
+             and target['review']['supported'] is False, 'actual first rejection')
+        need(target_gate == initial['targetSemantic'] and target_gate['targetReviewSha256'] == object_sha(target)
+             and target_gate['pass'] is True and target_gate['targetErrorRecognized'] is True, 'target semantic gate')
+        result = next(x for x in results if x['caseId'] == cid)
+        need(result['firstReview'] == target and result['contained'] is False and result['draft'] is not None
+             and result['initialAssessment'] == origin['initialAssessment'], 'control repaired result')
+        need(repair['repairTrigger'] == 'scope_review_rejection', 'control repair reason')
+
+    replay = read('opinion-runtime-replay-20261004.json')
+    need(replay['networkRequests'] == 0 and replay['credentialRead'] is False, 'offline replay side effects')
+    for name, expected in replay['evidenceHashes'].items():
+        need(sha((SRC/name).read_bytes()) == expected, 'replay evidence hash')
+    for name, expected in replay['sourceHashes'].items():
+        need(sha((ROOT/name).read_bytes()) == expected, 'replay source changed')
+    need([x['includeTrace'] for x in replay['runs']] == [False,True], 'replay trace options')
+    for run in replay['runs']:
+        need(run['replayedClientResponses'] == 18 and run['exactMessagesAndSchemas'] is True
+             and run['exactFinalPairCases'] == ['paraphrase']+CASES
+             and run['tracePlanCount'] == (5 if run['includeTrace'] else 0), 'offline replay results')
+        need(run['untestedCatalogCases'] == ['unrelated-update','casual','corrected','source-loss','stopped','injection','followup'], 'untested cases falsely included')
+
+    # Every resumed-prefix evidence file is copied as bytes; excluded only this
+    # generated manifest to avoid self-hashing. No credential source is accessed.
+    staged = []
+    for path in sorted(SRC.glob(BASE+'.*')):
+        if path.name == BASE+'.archive-manifest.json':
+            continue
+        need(path.suffix in ['.json','.mts'], 'unexpected prefix file')
+        target = 'iris-'+BASE+'-runner.txt' if path.suffix == '.mts' else 'iris-'+path.name
+        staged.append((path.name,target,path.read_bytes()))
+    for source,target in [('run-opinion-decision-resumed.ps1','iris-'+BASE+'-launcher.txt'),
+                          ('archive-'+BASE+'.py','iris-'+BASE+'-archive.txt'),
+                          ('opinion-runtime-replay-20261004.mts','iris-'+BASE+'-runtime-replay-runner.txt'),
+                          ('opinion-runtime-replay-20261004.json','iris-'+BASE+'-runtime-replay.json')]:
+        staged.append((source,target,(SRC/source).read_bytes()))
+    need(len({x[1] for x in staged}) == len(staged), 'duplicate target')
+    for source,target,data in staged:
+        need(re.search(rb'Bearer\s+sk-|sk-[A-Za-z0-9]{20,}',data) is None, 'credential-shaped bytes')
+        need(not (DST/target).exists() or (DST/target).read_bytes() == data, 'different archived bytes')
+    manifest = {'kind':BASE,'applicationCommit':APP,'executionHead':HEAD,
+                'requestRecords':23,'http200':23,'reportedTokens':86304,'carriedRequests':1,'carriedTokens':3104,
+                'aggregateRequests':24,'aggregateTokens':89408,'executionPassed':True,
+                'businessCases':['paraphrase']+CASES,'businessSemanticPasses':8,
+                'negativeTargetRecognitionPasses':2,'negativeRepairedPairPasses':2,
+                'controlPlanInjections':2,'freshSeededGenerations':0,'freshSeededReviews':0,
+                'acceptanceExecution':r['acceptanceExecution'],'sourceCommitVerification':source_methods,
+                'offlineReplay':{'networkRequests':0,'credentialRead':False,'replayedResponsesPerTraceMode':18,
+                    'exactFinalPairCases':8,'untestedCatalogCases':7,'sourceHashes':replay['sourceHashes']},
+                'carriedEvidence':r['sourceHashes']['carriedEvidence'],'zeroCallStopEvidence':r['sourceHashes']['zeroCallStopEvidence'],
+                'verificationScope':'Byte/hash/provenance/wire/usage/quota/phase/swap/gate verification; semantic truth separately reviewed by humans/agents. No live calls.',
+                'limits':['Two execution windows carry one existing result, not a single uninterrupted eight-case run.',
+                          'Negative plans retain original correct changeExplanation, which can provide cross clues.',
+                          'Initial-stage overstatements and reviewer wording defects remain in original evidence.',
+                          'No arbitrary-input generalization or complete causal separation established; no Feishu/production acceptance.'],
+                'files':[{'source':a,'target':b,'sha256':sha(c),'bytes':len(c)} for a,b,c in staged]}
+    data = (json.dumps(manifest,ensure_ascii=False,indent=2)+'\n').encode('utf-8')
+    prepared = SRC/(BASE+'.archive-manifest.json')
+    if mode == '--prepare':
+        need(not prepared.exists() or prepared.read_bytes() == data, 'prepared manifest changed')
+        if not prepared.exists():
+            prepared.write_bytes(data)
+        print(json.dumps({'prepared':True,'files':len(staged),'requests':23,'tokens':86304,'manifestSha256':sha(data)}))
+        return
+    need(prepared.read_bytes() == data,'prepared/final manifest differs')
+    for source,target,content in staged:
+        destination = DST/target
+        if not destination.exists():
+            with destination.open('xb') as output:
+                output.write(content)
+        need(destination.read_bytes() == content, 'copy mismatch')
+    destination = DST/('iris-'+BASE+'-manifest.json')
+    need(not destination.exists() or destination.read_bytes() == data,'different archived manifest')
+    if not destination.exists():
+        with destination.open('xb') as output:
+            output.write(data)
+    print(json.dumps({'archived':len(staged),'manifestSha256':sha(data),'originalBytesVerified':True}))
+
+if __name__ == '__main__':
+    need(len(sys.argv) == 2,'explicit mode required')
+    main(sys.argv[1])

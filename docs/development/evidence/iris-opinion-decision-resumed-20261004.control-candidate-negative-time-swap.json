@@ -1,0 +1,66 @@
+{
+  "caseId": "negative-time-swap",
+  "originSha256": "268acd4153d0b53215da2e2b62919ac52336f975193eefffa06d2d20a57e9ad3",
+  "candidate": {
+    "assessment": {
+      "decision": "intervene",
+      "reason": "material_issue",
+      "issueRef": {
+        "kind": "existing",
+        "id": "synthetic-budget-issue"
+      },
+      "evidenceRefs": [
+        "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+        "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370",
+        "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c"
+      ],
+      "observation": "按数量两个人、单价8万元计算，总成本16万元；按相同数量计算，原单价对应成本24万元，当前总成本比它减少8万元，比预算10万元多6万元。",
+      "reasoning": "当前方案应以这组费用与预算的比较结果为依据。",
+      "suggestion": "建议先确认差额如何覆盖，再决定是否调整预算或数量。",
+      "uncertainty": "fact",
+      "materialChange": {
+        "kind": "new_evidence",
+        "explanation": "新报价将每人招聘成本从8万更新为12万，两人合计24万，相对10万预算的缺口由原讨论中的6万扩大至14万，需重新核算超支幅度。",
+        "evidenceRefs": [
+          "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624"
+        ]
+      }
+    },
+    "draft": {
+      "text": "按数量两个人、单价8万元计算，总成本16万元；按相同数量计算，原单价对应成本24万元，当前总成本比它减少8万元，比预算10万元多6万元。当前方案应以这组费用与预算的比较结果为依据。建议先确认差额如何覆盖，再决定是否调整预算或数量。",
+      "evidenceRefs": [
+        "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+        "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370",
+        "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c"
+      ]
+    },
+    "sourcePlan": {
+      "kind": "calculation",
+      "quantities": {
+        "count": {
+          "sourceRef": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+          "contextQuote": "新的可读报价确认每人的招聘成本从 8 万变为 12 万，两个人仍计划招。",
+          "quantityQuote": "两个人"
+        },
+        "unitCost": {
+          "sourceRef": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+          "contextQuote": "新的可读报价确认每人的招聘成本从 8 万变为 12 万，两个人仍计划招。",
+          "quantityQuote": "8 万"
+        },
+        "budget": {
+          "sourceRef": "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370",
+          "contextQuote": "本季度招聘预算 10 万元。",
+          "quantityQuote": "10 万元"
+        },
+        "priorUnitCost": {
+          "sourceRef": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+          "contextQuote": "新的可读报价确认每人的招聘成本从 8 万变为 12 万，两个人仍计划招。",
+          "quantityQuote": "12 万"
+        }
+      },
+      "changeExplanation": "新报价将每人招聘成本从8万更新为12万，两人合计24万，相对10万预算的缺口由原讨论中的6万扩大至14万，需重新核算超支幅度。"
+    }
+  },
+  "candidateSha256": "fba10928cf4240a23dbddcffe206cc57ab1a7d7b76f9bc249cebc1735fa9c642",
+  "completionIndex": 23
+}

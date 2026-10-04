@@ -1,0 +1,6 @@
+{
+  "caseId": "negative-time-swap",
+  "resultSha256": "84e0e4493c631236249791e4198efcab38c733c184db50089ecf57136103cf24",
+  "pass": true,
+  "reason": "Sole repair restores current12 and prior8 from the unchanged quote. Final same existing issue states current24/prior16/increase8 and budget10 gap14, cites genuine new quote and useful adjustment advice. Full assessment and draft contain no temporal inversion or invented business facts; reviewer omission phrasing retained separately as diagnostic limitation."
+}

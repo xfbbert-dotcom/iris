@@ -1,0 +1,9 @@
+{
+  "requestHash": "00a9c114fe4d1d574883f0b9e9f89356627d977a813b52ab67610acbd5b4092e",
+  "model": "qwen3.8-max",
+  "freeExhaustionStop": true,
+  "remainingTokens": 599930,
+  "expiresAt": "2026-12-18T00:00:00+08:00",
+  "observedAt": "2026-10-04T07:26:43.573Z",
+  "source": "Exact unsuffixed model UI row after full reload; stop-on-exhaustion enabled"
+}

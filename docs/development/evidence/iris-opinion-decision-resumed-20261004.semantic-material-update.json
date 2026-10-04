@@ -1,0 +1,6 @@
+{
+  "caseId": "material-update",
+  "resultSha256": "f246f1348bc9f97eb3ca4db6ac1ff200f5182cd5d10a13f04ab5b9704cb6bfad",
+  "pass": true,
+  "reason": "The new quote changes per-person cost8 to12 while count2 and budget10 remain; final faithfully states24 versus16, increase8, total gap14. It retains synthetic-budget-issue, cites the new quote as material evidence and advises how to cover the enlarged gap/adjust plan, without invented supplier relationship, approval, or execution."
+}

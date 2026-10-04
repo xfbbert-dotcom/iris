@@ -1,0 +1,7 @@
+{
+  "caseId": "negative-role-swap",
+  "targetReviewSha256": "363aaa8c680f61b2803fa33d09881cc0b6f8bf23ca153d6f5a01de2801348656",
+  "pass": true,
+  "targetErrorRecognized": true,
+  "reason": "Raw model supported=false and issueRef/observation explicitly identify that per-person8 and budget10 were exchanged, giving true total16 and gap6; uncertainty remains true, so rejection is genuinely targeted. Overall reason loosely says sourcePlan has correct values despite swapped roles; preserved as review explanation defect, not the rejection basis. Original changeExplanation retained under frozen mutation rule."
+}

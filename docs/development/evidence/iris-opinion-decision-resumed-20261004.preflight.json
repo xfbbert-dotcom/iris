@@ -1,0 +1,195 @@
+{
+  "kind": "opinion-plan-offline-preflight",
+  "networkRequests": 0,
+  "credentialRead": false,
+  "commit": "8fa43544e47409499e2911049a97a6531fc1e5b5",
+  "profile": {
+    "model": "qwen3.8-max",
+    "maxRequests": 39,
+    "tokenStopBeforeNextRequest": 176896,
+    "maxTokens": 4096,
+    "enableThinking": false,
+    "requestTimeoutMs": 60000,
+    "windowMs": 2700000,
+    "minimumFreeTokens": 200000,
+    "quotaMaxAgeMs": 60000,
+    "applicationOptions": {
+      "canonicalOpinion": true,
+      "sourceBoundIdentity": true,
+      "opinionPlan": true
+    },
+    "controlOriginRule": "first model-produced calculation plan in original generation or sole plan repair, in completion order",
+    "controlMutationRule": "swap the two complete existing quantities bindings; leave count and all other plan content unchanged",
+    "plannedControlPlanInjections": 2,
+    "freshSeededGenerations": 0,
+    "freshSeededReviews": 0
+  },
+  "selected": [
+    "handled",
+    "hypothesis",
+    "separate-next",
+    "inference",
+    "qualified-risk",
+    "arithmetic",
+    "material-update"
+  ],
+  "controls": [
+    {
+      "caseId": "negative-role-swap",
+      "originalCaseId": "arithmetic",
+      "left": "unitCost",
+      "right": "budget",
+      "targetError": "unitCost and budget source roles exchanged"
+    },
+    {
+      "caseId": "negative-time-swap",
+      "originalCaseId": "material-update",
+      "left": "unitCost",
+      "right": "priorUnitCost",
+      "targetError": "current and prior unitCost source roles exchanged"
+    }
+  ],
+  "stageCaps": {
+    "iris_proactive_discussion_assessment": 2,
+    "iris_proactive_discussion_opinion_plan": 1,
+    "iris_proactive_discussion_scope_review": 2,
+    "iris_proactive_discussion_opinion_plan_repair": 1
+  },
+  "sourceHashes": {
+    "application": {
+      "apps/core/src/proactive-discussion/model.ts": "ad3394927b56cbbc29358a3d87ba8ed717283b4e33476b6b1e09dbb3b054c028",
+      "apps/core/src/proactive-discussion/contracts.ts": "3b5ebe81a551b1658150d3ed83f81ce3cb2203505f2b970a310a1eb3882ca365",
+      "apps/core/src/proactive-discussion/review-receipts.ts": "d31e4aea1f4d4d2803c31f00db729b584f3be8befa78bb32fafbc7491cb600db",
+      "apps/core/src/proactive-discussion/source-focus.ts": "5bf1170d6acb4b03621e16573120a90a5a9271ac6e9bf357695f3a5bb09b24ae",
+      "apps/core/src/proactive-discussion/canonical-opinion.ts": "957c3d6df90bdc7dd080a9121071278a7e2a66c7f21b54e76cd0adc2b7a51cbd",
+      "apps/core/src/proactive-discussion/arithmetic.ts": "4ff2e85c5f473a2d36c9ebc1c95a91a1e9e268428bff6abe2cc9db8b7440c2ca",
+      "apps/core/src/proactive-discussion/source-calculation.ts": "559d955988f60739cae28b1baf3eb9a5ea49a7c44c411b0979f23c51d545309b",
+      "apps/core/src/proactive-discussion/opinion-plan.ts": "32a6ce43e160a961497249f36f7fd5ece99218d40db1f5e7cb4e6e0f95a8bafc",
+      "apps/core/src/model/openai-compatible-chat-completions-client.ts": "f8a84ff1d91481668363dfcb6d8feb47f4d20eba9a22a31d385bf967b3585007",
+      "scripts/pilot/proactive-discussion-eval.ts": "a51ddfc61826c80c178639aae742af6d7793cd044d15b0d8a2a0ca99db31bfb6"
+    },
+    "probe": {
+      "opinion-decision-resumed-20261004.mts": "7eaffb13baf80f4fed258f89b0506cfb8bfbe8ef6b6d00267e819d5d3a46a19d",
+      "run-opinion-decision-resumed.ps1": "7526c37d9f691711ae8bb6d188f74da618b348beb5ec1f1a1d0c99f543c00a3d"
+    },
+    "carriedEvidence": {
+      "opinion-decision-only-20261002.json": "2dbd22a8426b80ecf0d6406e354ecc687739a33db6b2d79a0b711e780a916d5a",
+      "opinion-decision-only-20261002.preflight.json": "52376e4a783a436bf39e16b0dc32aca0eb310c5b204a8b16dbc021df96dc484f",
+      "opinion-decision-only-20261002.halted.json": "83a5179b24a82206a2d9196d2a307e31b881174577fb01fe9d90195aa496ab62",
+      "opinion-decision-only-20261002.semantic-paraphrase.json": "76b386386756b50de7baddc68b6c3086d76211ff5078c54371941fb30b01a3f2",
+      "opinion-decision-only-20261002.mts": "4798e7270687985c02010d875ee50b00eb5cf19fa137a368bc5670f56e600a05",
+      "run-opinion-decision-only.ps1": "b145faa700a2a3170303e1b0c72465703a37b4c329851c535882143caeb9b73b"
+    },
+    "zeroCallStopEvidence": {
+      "opinion-decision-continuation-20261004.json": "64e9c6f9df9e84f3cfc4be484766fb6c7def32c668857af62d50fb02dd3cc822",
+      "opinion-decision-continuation-20261004.abort.json": "29847315998e242d24d77696eba16efa8579c4f02bc59529103dc668e14e6475",
+      "opinion-decision-continuation-20261004.halted.json": "99d47e41f6e41e1fe38233eab1c13958ad0da103cd32182dd79b0b0513fef97e"
+    }
+  },
+  "carriedResults": [
+    {
+      "caseId": "paraphrase",
+      "originReport": "opinion-decision-only-20261002.json",
+      "originReportSha256": "2dbd22a8426b80ecf0d6406e354ecc687739a33db6b2d79a0b711e780a916d5a",
+      "originalCommit": "397fedbf2f19c0950fdcd16c185c3011998d76ef",
+      "originalExecutionPassed": false,
+      "originalHaltReason": "external gate timeout",
+      "semanticConsumedByOriginalWindow": false,
+      "result": {
+        "caseId": "paraphrase",
+        "kind": "fresh",
+        "initialAssessment": {
+          "decision": "skip",
+          "reason": "duplicate",
+          "issueRef": {
+            "kind": "existing",
+            "id": "synthetic-budget-issue"
+          },
+          "evidenceRefs": [],
+          "observation": "",
+          "reasoning": "",
+          "suggestion": "",
+          "uncertainty": "fact",
+          "materialChange": {
+            "kind": "none",
+            "explanation": "",
+            "evidenceRefs": []
+          }
+        },
+        "assessment": {
+          "decision": "skip",
+          "reason": "duplicate",
+          "issueRef": {
+            "kind": "existing",
+            "id": "synthetic-budget-issue"
+          },
+          "evidenceRefs": [],
+          "observation": "",
+          "reasoning": "",
+          "suggestion": "",
+          "uncertainty": "fact",
+          "materialChange": {
+            "kind": "none",
+            "explanation": "",
+            "evidenceRefs": []
+          }
+        },
+        "draft": null,
+        "expectedDecision": "skip"
+      },
+      "semantic": {
+        "caseId": "paraphrase",
+        "resultSha256": "38fc80e570869f62f53e19bf9bf81576b879df82c2f7d026244efee3dec7f93a",
+        "pass": true,
+        "reason": "Independent full-source/history decision review: same 2 x 8 against budget10 repeats the already surfaced budget issue without a new material fact. skip/duplicate and the supplied existing issue ID are correct. New contract has empty prose and no material change or draft, with no false delivery-state assertion. This new result does not revise the previous window failure."
+      },
+      "note": "Retained final case result only; never injected as a model response or request input."
+    }
+  ],
+  "zeroCallStops": [
+    {
+      "originReport": "opinion-decision-continuation-20261004.json",
+      "originReportSha256": "64e9c6f9df9e84f3cfc4be484766fb6c7def32c668857af62d50fb02dd3cc822",
+      "requests": 0,
+      "reportedTokens": 0,
+      "executionPassed": false,
+      "haltReason": "Stopped before first continuation HTTP: exact-model free quota cannot be freshly verified because the Bailian UI is logged out; prior quota observations are not authorization to call. No continuation request sent."
+    }
+  ],
+  "aggregateLimits": {
+    "maxRequests": 40,
+    "tokenStopBeforeNextRequest": 180000
+  },
+  "acceptanceExecution": "One retained case plus seven fresh remaining cases across execution windows, then the original two controls. The intervening continuation stopped with zero HTTP while logged out; both prior reports remain unchanged.",
+  "caseHashes": [
+    {
+      "caseId": "handled",
+      "sha256": "d55396ba581bb939afa3ead56e546ff431d877c44313c89cbcba232c3051c3cc"
+    },
+    {
+      "caseId": "hypothesis",
+      "sha256": "5094637630629499ae38a83929c92008e0999afd4bfd1463fcb3749a7c96b2c6"
+    },
+    {
+      "caseId": "separate-next",
+      "sha256": "7d034e625218f6821a4b824068baee2751e1c9cae61213fdbb90d97b2fbc1824"
+    },
+    {
+      "caseId": "inference",
+      "sha256": "3c2bed0a2d3e6387635eccbd1791b50d0ae3d2d6af7d101155c7a0a07ac79ba8"
+    },
+    {
+      "caseId": "qualified-risk",
+      "sha256": "1bf6ea86ec4244ed8d3d8dec941c1656913b009e92cc3c255224ac08045e3857"
+    },
+    {
+      "caseId": "arithmetic",
+      "sha256": "1cdc243e1dcd902739f9a15a4297ea4191a0ff52d17318b8fa86787984a9a8a2"
+    },
+    {
+      "caseId": "material-update",
+      "sha256": "0e37fbf8fe279689b3293deab07fa2f99bbcdd2230c98fff281bf2e7821976a4"
+    }
+  ],
+  "wireNote": "Later prompts depend on real earlier responses. Only source/configuration hashes are frozen offline; each actual wire is retained and hashed before its quota gate."
+}

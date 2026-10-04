@@ -1,0 +1,158 @@
+{
+  "caseId": "negative-time-swap",
+  "targetError": "current and prior unitCost source roles exchanged",
+  "originSha256": "268acd4153d0b53215da2e2b62919ac52336f975193eefffa06d2d20a57e9ad3",
+  "candidate": {
+    "assessment": {
+      "decision": "intervene",
+      "reason": "material_issue",
+      "issueRef": {
+        "kind": "existing",
+        "id": "synthetic-budget-issue"
+      },
+      "evidenceRefs": [
+        "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+        "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370",
+        "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c"
+      ],
+      "observation": "按数量两个人、单价8万元计算，总成本16万元；按相同数量计算，原单价对应成本24万元，当前总成本比它减少8万元，比预算10万元多6万元。",
+      "reasoning": "当前方案应以这组费用与预算的比较结果为依据。",
+      "suggestion": "建议先确认差额如何覆盖，再决定是否调整预算或数量。",
+      "uncertainty": "fact",
+      "materialChange": {
+        "kind": "new_evidence",
+        "explanation": "新报价将每人招聘成本从8万更新为12万，两人合计24万，相对10万预算的缺口由原讨论中的6万扩大至14万，需重新核算超支幅度。",
+        "evidenceRefs": [
+          "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624"
+        ]
+      }
+    },
+    "draft": {
+      "text": "按数量两个人、单价8万元计算，总成本16万元；按相同数量计算，原单价对应成本24万元，当前总成本比它减少8万元，比预算10万元多6万元。当前方案应以这组费用与预算的比较结果为依据。建议先确认差额如何覆盖，再决定是否调整预算或数量。",
+      "evidenceRefs": [
+        "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+        "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370",
+        "message:89d4555eafaaa13a9ca63ede63be9f67889c3196f6a828daa9d1998de58e018c"
+      ]
+    },
+    "sourcePlan": {
+      "kind": "calculation",
+      "quantities": {
+        "count": {
+          "sourceRef": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+          "contextQuote": "新的可读报价确认每人的招聘成本从 8 万变为 12 万，两个人仍计划招。",
+          "quantityQuote": "两个人"
+        },
+        "unitCost": {
+          "sourceRef": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+          "contextQuote": "新的可读报价确认每人的招聘成本从 8 万变为 12 万，两个人仍计划招。",
+          "quantityQuote": "8 万"
+        },
+        "budget": {
+          "sourceRef": "message:55af9470d37c8de25d4e6fb448a4c513ec4644ed2054244e800e17d008118370",
+          "contextQuote": "本季度招聘预算 10 万元。",
+          "quantityQuote": "10 万元"
+        },
+        "priorUnitCost": {
+          "sourceRef": "message:8df2a703e89b2d5fbd3c8179c0e4cde6ee080e8f00020fef823ec30088b3e624",
+          "contextQuote": "新的可读报价确认每人的招聘成本从 8 万变为 12 万，两个人仍计划招。",
+          "quantityQuote": "12 万"
+        }
+      },
+      "changeExplanation": "新报价将每人招聘成本从8万更新为12万，两人合计24万，相对10万预算的缺口由原讨论中的6万扩大至14万，需重新核算超支幅度。"
+    }
+  },
+  "candidateSha256": "fba10928cf4240a23dbddcffe206cc57ab1a7d7b76f9bc249cebc1735fa9c642",
+  "completionIndex": 23,
+  "reviewContentSha256": "540c3298415460bc7460994ee935c4188cb481cbe9e8c4ac7b4c01c7417b3e0b",
+  "modelReview": {
+    "fieldChecks": {
+      "issueRef": {
+        "supported": true,
+        "reason": "沿用已有问题synthetic-budget-issue，身份核对一致。"
+      },
+      "observation": {
+        "supported": false,
+        "reason": "单价角色颠倒且算术错误。新报价为每人12万、原报价8万；草稿写成'单价8万元…总成本16万元'后又称'原单价对应成本24万元'，将新旧值互换。按新单价计算应为2×12=24万元，比预算10万多14万元，而非多6万元。sourcePlan也将unitCost与priorUnitCost引用写反。"
+      },
+      "reasoning": {
+        "supported": false,
+        "reason": "基于observation中错误的数值和颠倒的单价角色得出比较结论，依据不成立。"
+      },
+      "suggestion": {
+        "supported": false,
+        "reason": "差额（应为14万元）核算错误，建议虽方向合理但建立在错误数据之上，不能作为有效输出。"
+      },
+      "uncertainty": {
+        "supported": true,
+        "reason": "observation仅陈述材料中的数量、单价及可核算算术，标记为fact恰当。但因算术本身有误，事实内容仍不正确。"
+      },
+      "materialChange": {
+        "supported": false,
+        "reason": "解释正确指出缺口扩大至14万，但observation与draft未同步更新，反而写出错误数字和颠倒角色，整体候选自相矛盾，变化说明未被草稿落实。"
+      }
+    },
+    "supported": false,
+    "reason": "observation将新旧单价颠倒且算术错误：当前应为2×12=24万元，超预算14万元，而非草稿所写的16万元和多6万元。sourcePlan亦交换了unitCost与priorUnitCost。因核心数值错误，整体不支持。",
+    "requiredNumbers": [
+      {
+        "label": "当前方案总成本",
+        "expectedValue": "24",
+        "unit": "万元",
+        "draftQuote": null
+      },
+      {
+        "label": "相对预算超支额",
+        "expectedValue": "14",
+        "unit": "万元",
+        "draftQuote": null
+      }
+    ],
+    "adviceQuote": null
+  },
+  "review": {
+    "fieldChecks": {
+      "issueRef": {
+        "supported": true,
+        "reason": "沿用已有问题synthetic-budget-issue，身份核对一致。"
+      },
+      "observation": {
+        "supported": false,
+        "reason": "单价角色颠倒且算术错误。新报价为每人12万、原报价8万；草稿写成'单价8万元…总成本16万元'后又称'原单价对应成本24万元'，将新旧值互换。按新单价计算应为2×12=24万元，比预算10万多14万元，而非多6万元。sourcePlan也将unitCost与priorUnitCost引用写反。"
+      },
+      "reasoning": {
+        "supported": false,
+        "reason": "基于observation中错误的数值和颠倒的单价角色得出比较结论，依据不成立。"
+      },
+      "suggestion": {
+        "supported": false,
+        "reason": "差额（应为14万元）核算错误，建议虽方向合理但建立在错误数据之上，不能作为有效输出。"
+      },
+      "uncertainty": {
+        "supported": true,
+        "reason": "observation仅陈述材料中的数量、单价及可核算算术，标记为fact恰当。但因算术本身有误，事实内容仍不正确。"
+      },
+      "materialChange": {
+        "supported": false,
+        "reason": "解释正确指出缺口扩大至14万，但observation与draft未同步更新，反而写出错误数字和颠倒角色，整体候选自相矛盾，变化说明未被草稿落实。"
+      }
+    },
+    "supported": false,
+    "reason": "判断字段复核未通过：observation、reasoning、suggestion、materialChange；请依据各项理由核对并修正同一问题。\n复核凭据未通过当前草稿原句核对；请核对必要数字和具体建议。\n数字凭据[0]“当前方案总成本”：当前草稿引文未同时支持 24 万元；核对数值、单位及原句，不得借用来源或改写引文。\n数字凭据[1]“相对预算超支额”：当前草稿引文未同时支持 14 万元；核对数值、单位及原句，不得借用来源或改写引文。\n建议凭据未对应当前草稿原句；核对 adviceQuote 或补齐实际建议。\n模型复核：observation将新旧单价颠倒且算术错误：当前应为2×12=24万元，超预算14万元，而非草稿所写的16万元和多6万元。sourcePlan亦交换了unitCost与priorUnitCost。因核心数值错误，整体不支持。",
+    "requiredNumbers": [
+      {
+        "label": "当前方案总成本",
+        "expectedValue": "24",
+        "unit": "万元",
+        "draftQuote": null
+      },
+      {
+        "label": "相对预算超支额",
+        "expectedValue": "14",
+        "unit": "万元",
+        "draftQuote": null
+      }
+    ],
+    "adviceQuote": null
+  }
+}

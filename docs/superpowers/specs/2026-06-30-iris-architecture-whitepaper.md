@@ -499,6 +499,24 @@ updates or delivery; context changes must not turn that semantic rejection into 
 Rejected candidates may remain explicitly marked in append-only audit, never as accepted evidence.
 Bounded technical-error recovery and fresh independently triggered work remain separate.
 
+The optional `source-plan` opinion mode binds the selected premise/conclusion or quantity roles to
+authorized source spans before compiling one assessment/draft pair. Deterministic arithmetic
+checks the selected quantities, units and calculation; the model must still judge whether source
+roles, time direction, inference and proposed intervention are faithful and useful. Generated
+plans and compiled pairs are candidates, not evidence of their own correctness. Full scope review
+and the existing single total correction remain required. An explicit source-binding failure may
+consume that same correction before review; it does not add a second repair allowance. Silence in
+this mode retains the structured decision, identity and references with empty observation,
+reasoning and suggestion, avoiding unreviewed free-text silence explanations.
+
+Runtime `IRIS_PROACTIVE_DISCUSSION_OPINION_MODE` and synthetic eval `--opinion-mode` share the
+`legacy | source-plan` selection; the default is `legacy`. This selection changes neither model
+provider nor source permissions, active-send switches or approval requirements. Evaluation traces
+must distinguish the actual compiled pair observed at the scope request from a final accepted
+pair; they must not recompute an imagined candidate after the fact. The
+[2026-10-04 integration record](../../development/iris-opinion-runtime-20261004.md) separates the
+bounded synthetic acceptance, local runtime wiring and still-required real Feishu acceptance.
+
 Model-facing contracts must state the decision, issue and evidence relationships required by
 runtime validation; a shape-only JSON Schema is not proof those relationships or semantics hold.
 The assessment adapter constrains generation to complete silence/new-issue/existing-new-evidence/

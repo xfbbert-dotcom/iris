@@ -1,0 +1,67 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createProactiveDiscussionEvalCases, runSyntheticProactiveDiscussionEval } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+
+const root='D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder='C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918';
+const hash=(x:string|Buffer)=>createHash('sha256').update(x).digest('hex');
+const original=JSON.parse(fs.readFileSync(`${folder}/opinion-decision-only-20261002.json`,'utf8'));
+const resumed=JSON.parse(fs.readFileSync(`${folder}/opinion-decision-resumed-20261004.json`,'utf8'));
+assert.equal(resumed.executionPassed,true);
+const selected=['paraphrase',...resumed.selected];
+const expected=new Map([original.results[0],...resumed.results.filter((x:any)=>x.kind==='fresh')].map(x=>[x.caseId,x]));
+const completions=[...original.completions,...resumed.completions].filter((x:any)=>selected.includes(x.caseId));
+assert.equal(expected.size,8);assert.equal(completions.length,18);
+const catalog=createProactiveDiscussionEvalCases();
+const byTrigger=new Map(catalog.map(x=>[x.context.triggerMessageId,x.id]));
+let networkAttempts=0;
+globalThis.fetch=async()=>{networkAttempts++;throw new Error('network forbidden in offline replay');};
+const runs=[];
+for(const includeTrace of [false,true]) {
+  const queues=new Map(selected.map(id=>[id,completions.filter((x:any)=>x.caseId===id)]));
+  let active:string|undefined;let replayed=0;
+  const execution=await runSyntheticProactiveDiscussionEval({opinionMode:'source-plan',rounds:1,includeTrace,client:{
+    async complete(messages,options) {
+      const stage=options?.responseFormat?.json_schema.name;
+      if(stage==='iris_proactive_discussion_assessment') active=byTrigger.get(JSON.parse(messages[1]!.content).triggerMessageId);
+      if(!active || !expected.has(active)) throw new Error('case has no archived model response; deliberately not simulated');
+      const response=queues.get(active)!.shift();
+      assert(response,`unexpected extra call ${active}/${stage}`);
+      assert.equal(stage,response.stage);
+      assert.deepEqual(messages,response.messages,'formal entry messages differ from the accepted candidate');
+      assert.deepEqual(options?.responseFormat,response.responseFormat,'formal entry schema differs');
+      replayed++;return response.content;
+    }
+  }});
+  assert.equal(execution.opinionMode,'source-plan');
+  for(const [caseId,prior] of expected) {
+    const result=execution.results.find(x=>x.caseId===caseId)!;
+    assert.equal(result.error,null);assert.deepEqual(result.assessment,prior.assessment);assert.deepEqual(result.draft,prior.draft);
+    assert.equal(queues.get(caseId)!.length,0);
+  }
+  const untested=execution.results.filter(x=>!expected.has(x.caseId));
+  assert(untested.every(x=>x.error==='assessment_failed' && x.assessment===null && x.draft===null));
+  assert.equal(replayed,18);assert.equal(networkAttempts,0);
+  if(includeTrace) {
+    assert(execution.syntheticTrace);
+    const plans=execution.syntheticTrace.records.filter(x=>x.stage==='plan_generation');
+    assert.equal(plans.length,5);
+    for(const plan of plans) {
+      assert.equal(plan.compiledObserved,true);assert.equal(plan.acceptedDraft,true);
+      assert.deepEqual(plan.boundCandidate?.assessment,expected.get(plan.caseId).assessment);
+      assert.deepEqual(plan.boundCandidate?.draft,expected.get(plan.caseId).draft);
+    }
+  }
+  runs.push({includeTrace,replayedClientResponses:replayed,exactMessagesAndSchemas:true,exactFinalPairCases:[...expected.keys()],
+    untestedCatalogCases:untested.map(x=>x.caseId),tracePlanCount:execution.syntheticTrace?.records.filter(x=>x.stage==='plan_generation').length??0});
+}
+const sourcePaths=['apps/core/src/proactive-discussion/opinion-mode.ts','apps/core/src/proactive-discussion/model.ts','scripts/pilot/proactive-discussion-eval.ts'];
+const report={kind:'offline-formal-opinion-entry-replay',at:new Date().toISOString(),networkRequests:networkAttempts,credentialRead:false,
+  head:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),
+  meaning:'Offline replay of existing responses, not new model or untested-case semantic acceptance.',
+  evidenceHashes:Object.fromEntries(['opinion-decision-only-20261002.json','opinion-decision-resumed-20261004.json'].map(n=>[n,hash(fs.readFileSync(`${folder}/${n}`))])),
+  sourceHashes:Object.fromEntries(sourcePaths.map(p=>[p,hash(fs.readFileSync(`${root}/${p}`))])),runs};
+fs.writeFileSync(`${folder}/opinion-runtime-replay-20261004.json`,JSON.stringify(report,null,2)+'\n');
+console.log(JSON.stringify(report,null,2));

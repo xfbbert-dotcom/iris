@@ -29,6 +29,24 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [source-plan runtime record](docs/development/iris-opinion-runtime-20261004.md) is the latest
+proactive-discussion status. Application `397fedbf` passed the frozen eight synthetic business
+cases and both source-role/time controls on exact `qwen3.8-max`, across retained and resumed
+windows (24 HTTP200 / 89,408 reported tokens). This is bounded synthetic evidence, not real
+Feishu acceptance or deployment; initial free assessment and reviewer explanations still have
+documented defects. Earlier failed candidates below remain historical evidence.
+
+The local runtime can select `IRIS_PROACTIVE_DISCUSSION_OPINION_MODE=source-plan`; synthetic
+evaluation uses `--opinion-mode source-plan`. Both default to `legacy` and use the existing model
+configuration. This selects the opinion contract only: existing source permissions and speech
+enablement still apply. Consult the record for current local verification and authorization;
+do not enable production speech or run paid evaluation from this example.
+Local integration commit `1ea3ae7e` passed Core 5012 tests (469 conditional skips), typecheck,
+build and 9 CLI tests. Offline replay preserved the eight accepted cases' exact model inputs and
+final pairs through this entry point with trace both on and off; it is not a new live-model run.
+
+### Retained prior candidate results
+
 A new [canonical opinion candidate](docs/development/iris-canonical-opinion-20261001.md)
 derives stored prose from one message instead of expanding a separate internal rationale.
 Default off, original review retained; local checks passed. Six HTTP200/17924 tokens gave one

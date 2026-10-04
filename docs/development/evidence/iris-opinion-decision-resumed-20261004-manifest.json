@@ -1,0 +1,508 @@
+{
+  "kind": "opinion-decision-resumed-20261004",
+  "applicationCommit": "397fedbf2f19c0950fdcd16c185c3011998d76ef",
+  "executionHead": "8fa43544e47409499e2911049a97a6531fc1e5b5",
+  "requestRecords": 23,
+  "http200": 23,
+  "reportedTokens": 86304,
+  "carriedRequests": 1,
+  "carriedTokens": 3104,
+  "aggregateRequests": 24,
+  "aggregateTokens": 89408,
+  "executionPassed": true,
+  "businessCases": [
+    "paraphrase",
+    "handled",
+    "hypothesis",
+    "separate-next",
+    "inference",
+    "qualified-risk",
+    "arithmetic",
+    "material-update"
+  ],
+  "businessSemanticPasses": 8,
+  "negativeTargetRecognitionPasses": 2,
+  "negativeRepairedPairPasses": 2,
+  "controlPlanInjections": 2,
+  "freshSeededGenerations": 0,
+  "freshSeededReviews": 0,
+  "acceptanceExecution": "One retained case plus seven fresh remaining cases across execution windows, then the original two controls. The intervening continuation stopped with zero HTTP while logged out; both prior reports remain unchanged.",
+  "sourceCommitVerification": {
+    "apps/core/src/proactive-discussion/model.ts": "CRLF checkout",
+    "apps/core/src/proactive-discussion/contracts.ts": "git bytes",
+    "apps/core/src/proactive-discussion/review-receipts.ts": "CRLF checkout",
+    "apps/core/src/proactive-discussion/source-focus.ts": "git bytes",
+    "apps/core/src/proactive-discussion/canonical-opinion.ts": "git bytes",
+    "apps/core/src/proactive-discussion/arithmetic.ts": "git bytes",
+    "apps/core/src/proactive-discussion/source-calculation.ts": "git bytes",
+    "apps/core/src/proactive-discussion/opinion-plan.ts": "git bytes",
+    "apps/core/src/model/openai-compatible-chat-completions-client.ts": "exact observed checkout bytes; mixed newline normalization equals both Git commits",
+    "scripts/pilot/proactive-discussion-eval.ts": "git bytes"
+  },
+  "offlineReplay": {
+    "networkRequests": 0,
+    "credentialRead": false,
+    "replayedResponsesPerTraceMode": 18,
+    "exactFinalPairCases": 8,
+    "untestedCatalogCases": 7,
+    "sourceHashes": {
+      "apps/core/src/proactive-discussion/opinion-mode.ts": "33debf4895dfad47ce2ea037c63d0cada73e5a8991219bd2325d9d63d46dcd94",
+      "apps/core/src/proactive-discussion/model.ts": "74acea717c3188ecbca91ce5e2892c83e3693ecc44ffe1d3cddf53c9befc1f29",
+      "scripts/pilot/proactive-discussion-eval.ts": "ec14b1364caf090363277040c9f681b4dc44bbea3635e1b417a714250b2d0696"
+    }
+  },
+  "carriedEvidence": {
+    "opinion-decision-only-20261002.json": "2dbd22a8426b80ecf0d6406e354ecc687739a33db6b2d79a0b711e780a916d5a",
+    "opinion-decision-only-20261002.preflight.json": "52376e4a783a436bf39e16b0dc32aca0eb310c5b204a8b16dbc021df96dc484f",
+    "opinion-decision-only-20261002.halted.json": "83a5179b24a82206a2d9196d2a307e31b881174577fb01fe9d90195aa496ab62",
+    "opinion-decision-only-20261002.semantic-paraphrase.json": "76b386386756b50de7baddc68b6c3086d76211ff5078c54371941fb30b01a3f2",
+    "opinion-decision-only-20261002.mts": "4798e7270687985c02010d875ee50b00eb5cf19fa137a368bc5670f56e600a05",
+    "run-opinion-decision-only.ps1": "b145faa700a2a3170303e1b0c72465703a37b4c329851c535882143caeb9b73b"
+  },
+  "zeroCallStopEvidence": {
+    "opinion-decision-continuation-20261004.json": "64e9c6f9df9e84f3cfc4be484766fb6c7def32c668857af62d50fb02dd3cc822",
+    "opinion-decision-continuation-20261004.abort.json": "29847315998e242d24d77696eba16efa8579c4f02bc59529103dc668e14e6475",
+    "opinion-decision-continuation-20261004.halted.json": "99d47e41f6e41e1fe38233eab1c13958ad0da103cd32182dd79b0b0513fef97e"
+  },
+  "verificationScope": "Byte/hash/provenance/wire/usage/quota/phase/swap/gate verification; semantic truth separately reviewed by humans/agents. No live calls.",
+  "limits": [
+    "Two execution windows carry one existing result, not a single uninterrupted eight-case run.",
+    "Negative plans retain original correct changeExplanation, which can provide cross clues.",
+    "Initial-stage overstatements and reviewer wording defects remain in original evidence.",
+    "No arbitrary-input generalization or complete causal separation established; no Feishu/production acceptance."
+  ],
+  "files": [
+    {
+      "source": "opinion-decision-resumed-20261004.control-candidate-negative-role-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.control-candidate-negative-role-swap.json",
+      "sha256": "dd2c3d7e4e84548c862a2d50bca9b16198f9c27598acc1e734de186d7e89ce84",
+      "bytes": 3169
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.control-candidate-negative-time-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.control-candidate-negative-time-swap.json",
+      "sha256": "40939024ae4b78ea08a75214c38cc7cdf546b2d32b6fd086206388673df55ced",
+      "bytes": 3589
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.control-origin-negative-role-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.control-origin-negative-role-swap.json",
+      "sha256": "e2f617647f0f1882488e55f1df69bb82e87978831b52bef9d7a0dd865a7e290c",
+      "bytes": 5720
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.control-origin-negative-time-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.control-origin-negative-time-swap.json",
+      "sha256": "5651ab828b61c3d9a18f7a546b1ab8f60e273523e878ec2f99a9393bda73d336",
+      "bytes": 6347
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.halted.json",
+      "target": "iris-opinion-decision-resumed-20261004.halted.json",
+      "sha256": "68d903a4835738b2e2f6e127c54b36fd6a1d1e6506e6a151789945851a331fba",
+      "bytes": 199
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.json",
+      "target": "iris-opinion-decision-resumed-20261004.json",
+      "sha256": "ccf9dcd3d42d464e7f63d12ccf9073d0e9d662d51be4de49e64baa016082acb0",
+      "bytes": 989061
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.mts",
+      "target": "iris-opinion-decision-resumed-20261004-runner.txt",
+      "sha256": "7eaffb13baf80f4fed258f89b0506cfb8bfbe8ef6b6d00267e819d5d3a46a19d",
+      "bytes": 29956
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-1.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-1.json",
+      "sha256": "7cb3bcfe4276403e081d062d345906a4a2ff5c3350f59fb74173e01b9171dff9",
+      "bytes": 10620
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-10.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-10.json",
+      "sha256": "ec4f569494701425b8eb5273fc6d60319d3c1ed8cbb8a04d3b3219bc63f262d6",
+      "bytes": 10233
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-11.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-11.json",
+      "sha256": "1a7e74fe60ee913af7d26617d74ab96292cd3a6068c9bfaefa05b7b62e389afc",
+      "bytes": 17840
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-12.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-12.json",
+      "sha256": "934d92e2b1e30f49bcdb8f0d6b3092a0c51112acaac80b95f8de766f6868b6b5",
+      "bytes": 10087
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-13.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-13.json",
+      "sha256": "f58e3e600bd0f00cc9dd7b106f1f2c886333d05f72dc351c5f1e3b90e14592af",
+      "bytes": 10252
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-14.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-14.json",
+      "sha256": "8254f130e1d02340647b642a7c530980e3a38f5a63619759cb2fd8210a9267df",
+      "bytes": 17205
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-15.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-15.json",
+      "sha256": "dee54036f88c3a3e6e3f6f9ef07ba27d61d47fc78636a74e24acc7f95d1feb6b",
+      "bytes": 13387
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-16.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-16.json",
+      "sha256": "8aa01763fa3174f05720b872356d2e8e559ca7885f9962a010fc6698023e427b",
+      "bytes": 11489
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-17.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-17.json",
+      "sha256": "041d543be56b0201c8766e9f3b54e2a076fd3ad40ae9e0d7a22e84519487e4ee",
+      "bytes": 18835
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-18.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-18.json",
+      "sha256": "7969fac4e7af8552cfb74e402ecf4c24fb8c10af60d855eca55428e77bbf45dc",
+      "bytes": 17220
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-19.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-19.json",
+      "sha256": "8989defa31fd8644cffdb74aab89a3b9fea404172ef131fa0fa4de410b1d3813",
+      "bytes": 16703
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-2.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-2.json",
+      "sha256": "36a2ee0539787e131a2d8ff2da3276c6094fe3cf86f62a0c636ce39d7982a3b9",
+      "bytes": 9776
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-20.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-20.json",
+      "sha256": "cb260c1f04ee517076ea5128eb5a4672cd87e9a37893d8a4804aa6eeca37ae9f",
+      "bytes": 22344
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-21.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-21.json",
+      "sha256": "6f5a14387c74acab8a9c56c6e8966936d8212c74565b5b7cc2bdde2af3d00930",
+      "bytes": 18826
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-22.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-22.json",
+      "sha256": "9f2854092b6308ee7e31b4c13a311b9ea1e869b22522ba5d1f823e633127d456",
+      "bytes": 18247
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-23.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-23.json",
+      "sha256": "0fd5d249cab4f6bde0bfa48d7626d1c88920d1e85ff3cc2ac1ba67a62a601205",
+      "bytes": 23864
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-3.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-3.json",
+      "sha256": "454bb989359dad1e155b9d841c34d7de554a50e15d382eda407a923d7674ffe1",
+      "bytes": 13360
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-4.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-4.json",
+      "sha256": "5199cbeaef0a8c18d6c0c4bd3c8740d4a547fba08ef9354435da13dcc24e28d1",
+      "bytes": 11009
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-5.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-5.json",
+      "sha256": "557f35dd69e5c38ee8a819ad452bab2085fcad2676cb771dce3b3e1323d28195",
+      "bytes": 17899
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-6.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-6.json",
+      "sha256": "7021b90ddca0a8cb5458887e1b1cfdbd0f752f0c6a1afb72b29f18438ba9a401",
+      "bytes": 10120
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-7.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-7.json",
+      "sha256": "b715fc67cead502be51306c75ef2749558bde39fe74fe03bdb3766295b646998",
+      "bytes": 10334
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-8.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-8.json",
+      "sha256": "894790a3759c535d4c5640e54143cfbabc04a818f6cc5ff3a267c221a0dd4025",
+      "bytes": 17977
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.pending-9.json",
+      "target": "iris-opinion-decision-resumed-20261004.pending-9.json",
+      "sha256": "166606b1bbb861ca88f67f0245d5da0a00db732445e8e93fb6211a2d3c3aedf5",
+      "bytes": 10052
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.preflight.json",
+      "target": "iris-opinion-decision-resumed-20261004.preflight.json",
+      "sha256": "fee5779ffaa3ebba97124e569fd8584710ae4dae518843153504c50738d28d94",
+      "bytes": 8670
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-1.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-1.json",
+      "sha256": "6dfe58b3cf6b138595bf48949f8c12d196353600115301e287b0e10ae138ea66",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-10.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-10.json",
+      "sha256": "10e92640fa742caed5f9e97f0f399c1d94ea9328f477f7d89185eacfb8a6b6d4",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-11.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-11.json",
+      "sha256": "d364c458ea51eea5d077ba3d49d960dd5a7328c3eb28f6e04b7f1b5ff6c5f65d",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-12.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-12.json",
+      "sha256": "365ae977d01805ccdecfeef37e5ea1857c65527447d40f6529dc49bfc5b0d8ae",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-13.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-13.json",
+      "sha256": "a8d8c716c45765bbe9ec6a442d724a6be555715ecdb22c9a648f7e36065323b7",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-14.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-14.json",
+      "sha256": "3314b4d75befaec19d814e459b348a05418ff7a0259e49b514fd9cdc01c9fc38",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-15.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-15.json",
+      "sha256": "ee53de576417f353db0457ffecc1a7509f4f06a5d517330173140284de331e2f",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-16.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-16.json",
+      "sha256": "b4575c4d3d3d0a45a9c2dabfcfe675640f18f7f697943ddb284eba5e321ca625",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-17.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-17.json",
+      "sha256": "b2c10beaa150b9e0fa6f074e2e81facd1767b4339511bc59695818af32fc10b0",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-18.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-18.json",
+      "sha256": "f76482ffea544f49d6bdb1b24da4ff84f0e76a5c7ff609bb74dff01353dc2cd3",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-19.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-19.json",
+      "sha256": "b309f34b2f71105945ea4972ea41e7a25779b5a948b83a8bc7f821723f27cb07",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-2.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-2.json",
+      "sha256": "591f0ffc42f6bd38bb3955a16dc97e0e9a0c75380582f73e68e55b1562921a5e",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-20.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-20.json",
+      "sha256": "7928ba9debe88ecde4eadc385c8c1a3162b975732b1d8cfc15a9587fd8e6506e",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-21.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-21.json",
+      "sha256": "249daacbd5fd1688a809019c831e77d07345836f1c41841944c09215f1eaf921",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-22.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-22.json",
+      "sha256": "27d47859f660b362ed1f4ec4662074bac4d3307f1d3c6ba25c5751ffe52a521f",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-23.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-23.json",
+      "sha256": "f55bc8bb0c6f1db572376474ca1ba3ff442d946def21aa69db5af72d9e307b12",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-3.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-3.json",
+      "sha256": "3562623df92b48bddc5e1d2c1e1281b068cb70ed181bbb5b9ca405c9b497587b",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-4.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-4.json",
+      "sha256": "d6a41684b384d0b2ef14755a980b99d45ac35b7293240a3bd760f4ed1ff888b0",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-5.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-5.json",
+      "sha256": "936a2f9017285ca8b849d373535372160d14fc6261e827116b33ef04dbea0aca",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-6.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-6.json",
+      "sha256": "1d629204772e40644c2b937a712a713bc5b71737bf4a4ecaeb8ff7e5e0bb226b",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-7.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-7.json",
+      "sha256": "d70b27cd500b544370c97f880512d95f9a310bbdd75044507c0a3ab702988882",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-8.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-8.json",
+      "sha256": "a1d2adcbfc1399bbe1ae0fd0135e1841ebde7fd044dd99ac8f80e1308444f054",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.quota-9.json",
+      "target": "iris-opinion-decision-resumed-20261004.quota-9.json",
+      "sha256": "8deb1a9131a0344889691afa465d2d3e120b6c9837a57e325c682c400b89b0b5",
+      "bytes": 361
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-arithmetic.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-arithmetic.json",
+      "sha256": "777e9bcaf3153dadb01130c63473d33f888b8c5721bb294f823ee86d092ef16c",
+      "bytes": 425
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-handled.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-handled.json",
+      "sha256": "b494b0a7fca3e78d8c19d772fa507c249db57a18b58a8000aa77af9209558a71",
+      "bytes": 348
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-hypothesis.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-hypothesis.json",
+      "sha256": "24754d08a0e68ae2497ba4c68e27bab038fcae996fd095835986021cbfa94345",
+      "bytes": 357
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-inference.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-inference.json",
+      "sha256": "8e478a654d7f03d08bfbbd8b18cadc241baf826ed9e679e64e0c04ba8de4cb74",
+      "bytes": 536
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-material-update.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-material-update.json",
+      "sha256": "3e40b3a3c0029817c416da224c7ab0399eb7b72f4f74fe45ece2099925305da4",
+      "bytes": 484
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-negative-role-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-negative-role-swap.json",
+      "sha256": "e1fb7ae03dd02ab8a5a324f97cccd08af6d197647e6ddca33888506ade68bf62",
+      "bytes": 621
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-negative-time-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-negative-time-swap.json",
+      "sha256": "d1ee22c166f438dc5c99d038d13bea616b34af7b14b831c428c8e3f1baed91c1",
+      "bytes": 514
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-qualified-risk.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-qualified-risk.json",
+      "sha256": "508dea34674dcbbf2c9c615aacd26588eba2357976c94662b4d067c23752a337",
+      "bytes": 588
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.semantic-separate-next.json",
+      "target": "iris-opinion-decision-resumed-20261004.semantic-separate-next.json",
+      "sha256": "f367395f4d3d21d08eb1180826c1b8a61bb01d1c331f04420deb6b3b4a745791",
+      "bytes": 501
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.started.json",
+      "target": "iris-opinion-decision-resumed-20261004.started.json",
+      "sha256": "7b22342b6030dd3c55e752371af255b935a978380fc7091d0fc757eeefdf1c44",
+      "bytes": 8017
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.target-review-negative-role-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.target-review-negative-role-swap.json",
+      "sha256": "f81a5499b2a52cc8406521057834592b2c7bbe437b6ba8ff6621d3b153994bb6",
+      "bytes": 8080
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.target-review-negative-time-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.target-review-negative-time-swap.json",
+      "sha256": "92299921c399019016b614576577f791044e8b5b961c609cd60ad91b21584a66",
+      "bytes": 8587
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.target-semantic-negative-role-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.target-semantic-negative-role-swap.json",
+      "sha256": "bab819e42740cdcdfc6a2ee629b53ea450e280a9b4dab9f875adb9f8cb067158",
+      "bytes": 612
+    },
+    {
+      "source": "opinion-decision-resumed-20261004.target-semantic-negative-time-swap.json",
+      "target": "iris-opinion-decision-resumed-20261004.target-semantic-negative-time-swap.json",
+      "sha256": "933b3b369cbb6f9e9fd60f9abfe5326f92e6c4412b9c1402f3be93a56156539d",
+      "bytes": 608
+    },
+    {
+      "source": "run-opinion-decision-resumed.ps1",
+      "target": "iris-opinion-decision-resumed-20261004-launcher.txt",
+      "sha256": "7526c37d9f691711ae8bb6d188f74da618b348beb5ec1f1a1d0c99f543c00a3d",
+      "bytes": 1984
+    },
+    {
+      "source": "archive-opinion-decision-resumed-20261004.py",
+      "target": "iris-opinion-decision-resumed-20261004-archive.txt",
+      "sha256": "c0c31e5ed8e6f2132f0cae935d37b4c33bc8a3e24cd8f6b987aa19534b6acee2",
+      "bytes": 23016
+    },
+    {
+      "source": "opinion-runtime-replay-20261004.mts",
+      "target": "iris-opinion-decision-resumed-20261004-runtime-replay-runner.txt",
+      "sha256": "3bb492085762487ed5e67a560b7b2065d4c7e04e5fcb22408165a3cc19e31460",
+      "bytes": 4841
+    },
+    {
+      "source": "opinion-runtime-replay-20261004.json",
+      "target": "iris-opinion-decision-resumed-20261004-runtime-replay.json",
+      "sha256": "e7d1e48a64de223c2419849eeeded7cd736d624b913fbf041ea200c89de8ed63",
+      "bytes": 2066
+    }
+  ]
+}

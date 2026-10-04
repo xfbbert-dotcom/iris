@@ -1,0 +1,90 @@
+{
+  "caseId": "negative-role-swap",
+  "recipe": {
+    "caseId": "negative-role-swap",
+    "originalCaseId": "arithmetic",
+    "left": "unitCost",
+    "right": "budget",
+    "targetError": "unitCost and budget source roles exchanged"
+  },
+  "originalCaseId": "arithmetic",
+  "originalPlanOrigin": {
+    "completionIndex": 13,
+    "requestIndex": 13,
+    "stage": "iris_proactive_discussion_opinion_plan",
+    "content": "{\"kind\":\"calculation\",\"quantities\":{\"count\":{\"sourceRef\":\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\",\"contextQuote\":\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\",\"quantityQuote\":\"两个人\"},\"unitCost\":{\"sourceRef\":\"message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba\",\"contextQuote\":\"招聘两个人，每人要 8 万元；我们认为这些预算足够。\",\"quantityQuote\":\"8 万元\"},\"budget\":{\"sourceRef\":\"message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2\",\"contextQuote\":\"本季度招聘预算 10 万元。\",\"quantityQuote\":\"10 万元\"},\"priorUnitCost\":null},\"changeExplanation\":\"依据来源直接核算：招聘2人、每人8万元合计16万元，超出本季度招聘预算10万元，与发言中'预算足够'的结论矛盾，属于可直接用数量与单价验证的核算问题。\"}",
+    "contentSha256": "34abb7e38a8adaea64c3e9542711726a7b3e9c7f6b45e05b315782a0e83516de",
+    "plan": {
+      "kind": "calculation",
+      "quantities": {
+        "count": {
+          "sourceRef": "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba",
+          "contextQuote": "招聘两个人，每人要 8 万元；我们认为这些预算足够。",
+          "quantityQuote": "两个人"
+        },
+        "unitCost": {
+          "sourceRef": "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba",
+          "contextQuote": "招聘两个人，每人要 8 万元；我们认为这些预算足够。",
+          "quantityQuote": "8 万元"
+        },
+        "budget": {
+          "sourceRef": "message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2",
+          "contextQuote": "本季度招聘预算 10 万元。",
+          "quantityQuote": "10 万元"
+        },
+        "priorUnitCost": null
+      },
+      "changeExplanation": "依据来源直接核算：招聘2人、每人8万元合计16万元，超出本季度招聘预算10万元，与发言中'预算足够'的结论矛盾，属于可直接用数量与单价验证的核算问题。"
+    }
+  },
+  "initialAssessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "招聘两个人，每人要 8 万元；"
+    },
+    "evidenceRefs": [
+      "message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2",
+      "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba"
+    ],
+    "observation": "本季度招聘预算为 10 万元，计划招聘 2 人、每人 8 万元，合计需 16 万元，超出预算 6 万元。材料中'我们认为这些预算足够'的结论与上述数字不符。",
+    "reasoning": "依据已授权的本季度预算 10 万元和招聘需求（2 人 × 8 万元/人 = 16 万元），直接算术差额为 6 万元。当前决定依赖'预算足够'这一未经验证且与已知数字矛盾的前提，若按此推进将导致资金缺口或招聘无法完成。",
+    "suggestion": "暂停按 2 人各 8 万元推进的决定，核实每人 8 万元的口径是否包含全部成本；在预算不增加的前提下，建议调整为招聘 1 人（8 万元 ≤ 10 万元），或与财务确认能否追加至少 6 万元预算。",
+    "uncertainty": "fact",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "发现招聘总需求 16 万元与本季度预算 10 万元存在 6 万元缺口，成员关于预算足够的判断缺乏数字依据，属于影响执行的关键前提错误。",
+      "evidenceRefs": [
+        "message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2",
+        "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba"
+      ]
+    }
+  },
+  "initialAssessmentSha256": "683969cb7f49f1b837f7e0fbad8e15145f7b15613d145f804d86b4aba5f4dc75",
+  "originalContextSha256": "a60eda92129a00e51a7d1fd25155610ff68dcd2a3e94553a66b7622917da235d",
+  "mutatedPlan": {
+    "kind": "calculation",
+    "quantities": {
+      "count": {
+        "sourceRef": "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba",
+        "contextQuote": "招聘两个人，每人要 8 万元；我们认为这些预算足够。",
+        "quantityQuote": "两个人"
+      },
+      "unitCost": {
+        "sourceRef": "message:74769ded5dd25bdb184bd8693be0d1cb933550eb20fdbe141c730ce1433338c2",
+        "contextQuote": "本季度招聘预算 10 万元。",
+        "quantityQuote": "10 万元"
+      },
+      "budget": {
+        "sourceRef": "message:8f268279f2266ad457ab2f69f84a4125b03e0c491a1690cd1da93211c4c5c2ba",
+        "contextQuote": "招聘两个人，每人要 8 万元；我们认为这些预算足够。",
+        "quantityQuote": "8 万元"
+      },
+      "priorUnitCost": null
+    },
+    "changeExplanation": "依据来源直接核算：招聘2人、每人8万元合计16万元，超出本季度招聘预算10万元，与发言中'预算足够'的结论矛盾，属于可直接用数量与单价验证的核算问题。"
+  },
+  "mutatedPlanSha256": "d7c8f44d10b803fae3c05f31855809eb97aaa28f32becf693c59d915f6a74412",
+  "originSha256": "d2c77aec32bd5487abdf9a70a2177eaed4cf978aef08b797b3a5d486c0fade43"
+}

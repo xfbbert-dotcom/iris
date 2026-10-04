@@ -1,0 +1,6 @@
+{
+  "caseId": "qualified-risk",
+  "resultSha256": "00e5307c63b10531bb8bbd08a467d37d9fc322352d443607c869d0bfe821a422",
+  "pass": true,
+  "reason": "Final pair accurately quotes the untested delivery dependency and proposed definite promise. It identifies missing verification and advises checking the integration state before determining conditions, without inevitable delay/breach or unsupported risk intensity. Initial assessment still asserted inevitable failure after possible blockers; this discarded initial-stage defect is preserved, not credited as corrected reviewer behavior."
+}
