@@ -1,0 +1,25 @@
+{
+  "scope": "authorized_readonly_production_preflight",
+  "files": [
+    {
+      "name": "iris-production-readonly-20261004-metadata.py",
+      "bytes": 2145,
+      "sha256": "a222ebf78a4084c5f801a733c1ff636e2431cf9af8e5213fcad96f21f67b5d87"
+    },
+    {
+      "name": "iris-production-readonly-20261004.mjs",
+      "bytes": 4446,
+      "sha256": "03891f1077d665a6bb9570a445e43bbd7a0a3bcfcb2d155bf9aa55346ff43baf"
+    },
+    {
+      "name": "iris-production-readonly-20261004-metadata.json",
+      "bytes": 1282,
+      "sha256": "66e595c6a891026dc40f8b6c4b160e1d88c97c2c58df01feab397a4f24ebcec1"
+    },
+    {
+      "name": "iris-production-readonly-20261004-database.json",
+      "bytes": 7960,
+      "sha256": "3172cd44accac86fdb78ce66ddbe01318086d854f799329de0a5e033942fb12f"
+    }
+  ]
+}

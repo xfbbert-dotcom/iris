@@ -1,5 +1,12 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-04：生产只读差异已核验
+
+[快照](../../development/iris-production-preflight-20261004.md)确认生产Core f6a6dd4、
+Gemini3.5FlashLite、迁移0058，无新PD模块/表；原群持久化主动发言关闭。新版本未部署，
+Qwen的有限合成语义证据不能迁移为Gemini通过；内存global状态未核验。IRIS-CORE-005
+仍部分实现，本次只读授权不包含模型切换、迁移或真实群发送。
+
 ## 2026-10-04：补齐来源计划pilot环境配置
 
 [Compose修复](../../development/iris-opinion-pilot-config-20261004.md)解决显式source-plan

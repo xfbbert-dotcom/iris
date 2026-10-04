@@ -51,6 +51,10 @@ remains `1ea3ae7e`; real Feishu delivery and deployment remain unaccepted.
 The subsequent [pilot configuration fix](docs/development/iris-opinion-pilot-config-20261004.md)
 forwards the mode into the shipped Core container; its default remains legacy. Actual Compose
 rendering and runtime-mode tests pass locally; no deployment or production model check is implied.
+An authorized [read-only production snapshot](docs/development/iris-production-preflight-20261004.md)
+on October 4 found Core `f6a6dd4`, `gemini-3.5-flash-lite` and migrations through 0058, with no new
+PD module/tables. No deployment or setting changed; the bounded Qwen evidence does not validate
+that production model, and live in-memory activation was not inspected.
 
 ### Retained prior candidate results
 

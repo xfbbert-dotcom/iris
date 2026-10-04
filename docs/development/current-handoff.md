@@ -1,5 +1,17 @@
 # Iris 当前接手入口
 
+## 2026-10-04 最新：获准只读核验生产，确认旧版本与模型差异
+
+[现场快照与探针](iris-production-preflight-20261004.md)：09:12–09:16 UTC核验生产Core
+标识f6a6dd4、镜像healthy，模型gemini-3.5-flash-lite，无新source-plan模块/环境变量；
+迁移仅到0058，PD策略/任务/投递表不存在，不能写成队列0。原群durable revision3392、
+proactiveSpeech=false；普通回复未决/待安全告知/待核对均0。live global未读：常用GET
+status会同步内存策略，为遵守严格只读未调用。服务器有既有Caddyfile修改，未触碰。
+只读生产访问已获准并执行；push、部署、迁移、模型/开关变更、群正文和外发仍未授权。
+下一步须区分代码/0059-0060发布与模型选择；Qwen限定语义不能覆盖线上Gemini。建议先
+保持主动关闭与普通问答模型不变，若选PD独立Qwen需先本地配置隔离及明确真实群范围。
+应用源码仍1ea3ae7e、部署配置修复9bfbf0eb，本轮仅诊断/文档，工作树定位见下节。
+
 ## 2026-10-04 最新：修复pilot Compose遗漏来源计划mode
 
 [本轮修复与只读预检提案](iris-opinion-pilot-config-20261004.md)：实际Compose在显式
