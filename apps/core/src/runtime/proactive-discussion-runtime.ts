@@ -11,6 +11,7 @@ import { createPdRegistrar, type PdRegistrar } from "../proactive-discussion/reg
 import { createPdEvaluationWorker } from "../proactive-discussion/evaluation-worker.js";
 import { createPdDeliveryWorker } from "../proactive-discussion/delivery-worker.js";
 import { createPdModel, type PdModel } from "../proactive-discussion/model.js";
+import { pdOpinionModeOptions } from "../proactive-discussion/opinion-mode.js";
 import { createPdContextBuilder, type PdContextBuilder } from "../proactive-discussion/context-builder.js";
 import { createPdSourceVerifier, type PdSourceVerifier } from "../proactive-discussion/source-verifier.js";
 import { createOpenAICompatibleChatCompletionsClient } from "../model/openai-compatible-chat-completions-client.js";
@@ -242,7 +243,7 @@ async function createDefaultResources({ env, runtimeController, isStopping, depe
         sourceTypes: ["group_visible_document", "authorized_wiki_document", "user_submitted_document"],
         crossGroupGrantValidator: grants, canReadDocument: (id, access) => canReadDocument(id, chatId, access) }) });
     const client = createOpenAICompatibleChatCompletionsClient({ config: modelConfig, fetch });
-    const model = createPdModel({ client: { complete(...args) {
+    const model = createPdModel({ ...pdOpinionModeOptions(readProactiveDiscussionConfig(env).opinionMode), client: { complete(...args) {
       if (isStopping()) return Promise.reject(new Error("proactive runtime stopping"));
       return client.complete(...args);
     } } });

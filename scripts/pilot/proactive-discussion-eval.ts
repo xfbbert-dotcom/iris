@@ -10,6 +10,8 @@ import { createPdModel, unwrapPdAssessmentResponse, validatePdAssessment, valida
 import { createPdSourceRef, PD_PILOT_CHAT, type PdAssessment, type PdContext, type PdDraft, type PdIssue } from "../../apps/core/src/proactive-discussion/contracts.js";
 import { hashLocalMessageText } from "../../apps/core/src/memory/local-message-source.js";
 import { PD_REVIEW_FIELDS, type PdScopeReviewHistory } from "../../apps/core/src/proactive-discussion/review-receipts.js";
+import { parsePdOpinionMode, pdOpinionModeOptions, type PdOpinionMode } from "../../apps/core/src/proactive-discussion/opinion-mode.js";
+import { pdSourceFocus } from "../../apps/core/src/proactive-discussion/source-focus.js";
 
 export type PdEvalCase = { id: string; context: PdContext; expectedDecision: "intervene" | "skip"; reviewCriteria: string[] };
 export type PdEvalDiagnostic = {
@@ -19,7 +21,7 @@ export type PdEvalDiagnostic = {
 };
 export type PdEvalResult = { caseId: string; round: number; assessment: PdAssessment | null; draft: PdDraft | null; error: string | null; diagnostic: PdEvalDiagnostic | null };
 
-type SyntheticTraceStage = "assessment" | "draft" | "generated_pair" | "scope_review" | "pair_repair";
+type SyntheticTraceStage = "assessment" | "draft" | "generated_pair" | "scope_review" | "pair_repair" | "plan_generation" | "plan_repair";
 type SyntheticTraceSanitization = {
   truncatedFields: string[];
   droppedFields: string[];
@@ -37,6 +39,9 @@ type SyntheticTraceRecord = {
   acceptedDraft?: boolean;
   draftOrigin?: "model" | "assessment_projection" | "model_prose" | "model_updates";
   boundCandidate?: Record<string, unknown>;
+  compiledObserved?: boolean;
+  planCallIndex?: number;
+  repairInput?: Record<string, unknown>;
 };
 export type SyntheticPdEvalTrace = {
   complete: boolean;
@@ -188,6 +193,7 @@ type ActiveSyntheticTraceCall = {
   context: PdContext;
   assessment?: PdAssessment;
   attempts: Record<SyntheticTraceStage, number>;
+  plan?: { record: SyntheticTraceRecord; value: unknown };
 };
 
 /**
@@ -198,16 +204,19 @@ export async function runSyntheticProactiveDiscussionEval({
   client,
   rounds,
   includeTrace,
+  opinionMode = "legacy",
   traceRedactions = [],
 }: {
   client: OpenAICompatibleChatCompletionsClient;
   rounds: number;
   includeTrace: boolean;
+  opinionMode?: PdOpinionMode;
   traceRedactions?: readonly string[];
-}): Promise<{ cases: PdEvalCase[]; results: PdEvalResult[]; syntheticTrace: SyntheticPdEvalTrace | null }> {
+}): Promise<{ cases: PdEvalCase[]; results: PdEvalResult[]; opinionMode: PdOpinionMode; syntheticTrace: SyntheticPdEvalTrace | null }> {
   const cases = createProactiveDiscussionEvalCases();
+  const modelOptions = pdOpinionModeOptions(opinionMode);
   if (!includeTrace) {
-    return { cases, results: await runProactiveDiscussionEval({ model: createPdModel({ client }), cases, rounds }), syntheticTrace: null };
+    return { cases, results: await runProactiveDiscussionEval({ model: createPdModel({ client, ...modelOptions }), cases, rounds }), opinionMode, syntheticTrace: null };
   }
 
   const trace: SyntheticPdEvalTrace = {
@@ -226,24 +235,58 @@ export async function runSyntheticProactiveDiscussionEval({
   const tracedClient: OpenAICompatibleChatCompletionsClient = {
     async complete(messages, options) {
       const currentCallIndex = ++callIndex;
+      const stage = traceStage(options?.responseFormat?.json_schema.name);
+      let planCallIndex: number | undefined;
+      let planRepairInput: unknown;
+      // Observe the actual request before transport: a later HTTP failure must
+      // not erase the fact that runtime already produced this compiled pair.
+      try {
+        if (active && opinionMode === "source-plan") {
+          const inputMessage = messages.filter(message => message.role === "user").at(-1);
+          if (stage === "scope_review" && inputMessage) {
+            const input: unknown = JSON.parse(inputMessage.content);
+            const plan = active.plan;
+            if (plan && isPlainRecord(input) && isPlainRecord(input.assessment) && isPlainRecord(input.draft)
+              && isPlainRecord(input.sourcePlan) && JSON.stringify(input.sourcePlan) === JSON.stringify(plan.value)) {
+              plan.record.boundCandidate = {
+                assessment: sanitizeAssessmentCandidate(input.assessment, active.context, redactions, plan.record.sanitization),
+                draft: sanitizeDraftCandidate(input.draft, active.context, redactions, plan.record.sanitization),
+                sourcePlan: sanitizePlanCandidate(input.sourcePlan, active.context, redactions, plan.record.sanitization),
+              };
+              plan.record.compiledObserved = true;
+              planCallIndex = plan.record.callIndex;
+            } else markSyntheticTraceIncomplete(trace);
+          }
+          if (stage === "plan_repair" && inputMessage) planRepairInput = JSON.parse(inputMessage.content);
+        }
+      } catch { markSyntheticTraceIncomplete(trace); }
       const content = await client.complete(messages, options);
       try {
-        const stage = traceStage(options?.responseFormat?.json_schema.name);
         if (stage === null || active === undefined) {
           markSyntheticTraceIncomplete(trace);
         } else {
           const attempt = ++active.attempts[stage];
           const repairInput = stage === "pair_repair" ? JSON.parse(messages[1]!.content) : undefined;
-          appendSyntheticTraceRecord(trace, replaySyntheticOutput({
+          const record = replaySyntheticOutput({
             active,
             attempt,
             callIndex: currentCallIndex,
             content,
             redactions,
             stage,
+            opinionMode,
             scopeInput: stage === "scope_review" ? scopeReviewInput(messages, active.context) : undefined,
             repairBase: repairInput ? { assessment: repairInput.assessment, draft: repairInput.draft } : undefined,
-          }));
+          });
+          if (stage === "plan_generation" || stage === "plan_repair") {
+            if (planRepairInput !== undefined) record.repairInput = sanitizePlanRepairInput(
+              planRepairInput, active.context, redactions, record.sanitization);
+            let value: unknown;
+            try { value = JSON.parse(content); } catch { /* Raw parse failure is already recorded. */ }
+            active.plan = { record, value };
+          }
+          if (planCallIndex !== undefined) record.planCallIndex = planCallIndex;
+          appendSyntheticTraceRecord(trace, record);
         }
       } catch {
         markSyntheticTraceIncomplete(trace);
@@ -251,7 +294,7 @@ export async function runSyntheticProactiveDiscussionEval({
       return content;
     },
   };
-  const baseModel = createPdModel({ client: tracedClient });
+  const baseModel = createPdModel({ client: tracedClient, ...modelOptions });
   const model: PdModel = {
     async assess(context, assertActive) {
       const caseId = caseByTrigger.get(context.triggerMessageId);
@@ -265,7 +308,7 @@ export async function runSyntheticProactiveDiscussionEval({
         caseId,
         round,
         context,
-        attempts: { assessment: 0, draft: 0, generated_pair: 0, scope_review: 0, pair_repair: 0 },
+        attempts: { assessment: 0, draft: 0, generated_pair: 0, scope_review: 0, pair_repair: 0, plan_generation: 0, plan_repair: 0 },
       };
       callByContext.set(context, invocation);
       active = invocation;
@@ -288,7 +331,8 @@ export async function runSyntheticProactiveDiscussionEval({
       try {
         const reviewed = await baseModel.render(input, assertActive);
         const draftRecord = [...trace.records].reverse().find(record => record.caseId === invocation.caseId
-          && record.round === invocation.round && (record.stage === "draft" || record.stage === "generated_pair" || record.stage === "pair_repair"));
+          && record.round === invocation.round && (record.stage === "draft" || record.stage === "generated_pair" || record.stage === "pair_repair"
+            || record.stage === "plan_generation" || record.stage === "plan_repair"));
         if (draftRecord) draftRecord.acceptedDraft = reviewed !== null;
         else markSyntheticTraceIncomplete(trace);
         return reviewed;
@@ -298,7 +342,7 @@ export async function runSyntheticProactiveDiscussionEval({
     },
   };
   const results = await runProactiveDiscussionEval({ model, cases, rounds });
-  return { cases, results, syntheticTrace: trace };
+  return { cases, results, opinionMode, syntheticTrace: trace };
 }
 
 function traceStage(name: string | undefined): SyntheticTraceStage | null {
@@ -307,16 +351,19 @@ function traceStage(name: string | undefined): SyntheticTraceStage | null {
   if (name === "iris_proactive_discussion_generated_pair") return "generated_pair";
   if (name === "iris_proactive_discussion_scope_review") return "scope_review";
   if (name === "iris_proactive_discussion_pair_repair") return "pair_repair";
+  if (name === "iris_proactive_discussion_opinion_plan") return "plan_generation";
+  if (name === "iris_proactive_discussion_opinion_plan_repair") return "plan_repair";
   return null;
 }
 
-function replaySyntheticOutput({ active, attempt, callIndex, content, redactions, stage, scopeInput, repairBase }: {
+function replaySyntheticOutput({ active, attempt, callIndex, content, redactions, stage, opinionMode, scopeInput, repairBase }: {
   active: ActiveSyntheticTraceCall;
   attempt: number;
   callIndex: number;
   content: string;
   redactions: readonly string[];
   stage: SyntheticTraceStage;
+  opinionMode: PdOpinionMode;
   scopeInput?: { draftText: string; history?: PdScopeReviewHistory; assessment: PdAssessment };
   repairBase?: PdReviewedIntervention;
 }): SyntheticTraceRecord {
@@ -329,13 +376,19 @@ function replaySyntheticOutput({ active, attempt, callIndex, content, redactions
     return baseSyntheticTraceRecord(active, attempt, callIndex, stage, null, false, "json_invalid", sanitization);
   }
 
+  if (stage === "plan_generation" || stage === "plan_repair") {
+    // Plans are deliberately not recompiled or inferred from response prose.
+    // Only a subsequent actual scope request can establish compiledObserved.
+    return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
+      sanitizePlanCandidate(value, active.context, redactions, sanitization), false, "not_replayed", sanitization);
+  }
   if (stage === "assessment") {
     try { value = unwrapPdAssessmentResponse(value); }
     catch {
       addTraceMarker(sanitization.droppedFields, "$envelope");
       return baseSyntheticTraceRecord(active, attempt, callIndex, stage, null, false, "shape_invalid", sanitization);
     }
-    const replayValidation = replayAssessmentValidation(value, active.context);
+    const replayValidation = replayAssessmentValidation(value, active.context, opinionMode);
     return baseSyntheticTraceRecord(active, attempt, callIndex, stage,
       sanitizeAssessmentCandidate(value, active.context, redactions, sanitization),
       replayValidation.accepted, replayValidation.reason, sanitization);
@@ -422,12 +475,20 @@ function baseSyntheticTraceRecord(
 ): SyntheticTraceRecord {
   return { caseId: active.caseId, round: active.round, callIndex, stage, attempt, candidate,
     replayValidation: { accepted, reason }, sanitization,
-    ...(stage === "draft" || stage === "generated_pair" || stage === "pair_repair" ? { acceptedDraft: false } : {}) };
+    ...(stage === "draft" || stage === "generated_pair" || stage === "pair_repair" ? { acceptedDraft: false } : {}),
+    ...(stage === "plan_generation" || stage === "plan_repair" ? { compiledObserved: false, acceptedDraft: false } : {}) };
 }
 
-function replayAssessmentValidation(value: unknown, context: PdContext): { accepted: boolean; reason: string } {
+function replayAssessmentValidation(value: unknown, context: PdContext, opinionMode: PdOpinionMode): { accepted: boolean; reason: string } {
   try {
-    validatePdAssessment(value, context);
+    const assessment = validatePdAssessment(value, context);
+    if (opinionMode === "source-plan") {
+      if (assessment.decision === "skip" && [assessment.observation, assessment.reasoning, assessment.suggestion].some(text => text.length > 0)) {
+        return { accepted: false, reason: "relation_invalid" };
+      }
+      try { pdSourceFocus(assessment, context); }
+      catch { return { accepted: false, reason: "source_focus_invalid" }; }
+    }
     return { accepted: true, reason: "accepted" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -507,6 +568,72 @@ function replayScopeReviewValidation(value: unknown, input: { draftText: string;
   } catch {
     return { accepted: false, reason: "shape_invalid" };
   }
+}
+
+function sanitizePlanCandidate(
+  value: unknown,
+  context: PdContext,
+  redactions: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  noteUnknownFields(value, ["kind", "premise", "decision", "verificationTarget", "quantities", "changeExplanation"], sanitization);
+  const candidate: Record<string, unknown> = {};
+  for (const key of ["kind", "changeExplanation"]) {
+    if (typeof value[key] === "string") candidate[key] = sanitizeTraceText(value[key], key, redactions, sanitization);
+    else if (value[key] !== undefined) addTraceMarker(sanitization.droppedFields, key);
+  }
+  const allowedRefs = new Set(context.sources.map(source => source.ref));
+  const binding = (item: unknown, path: string, quantity: boolean): Record<string, unknown> | null => {
+    if (!isPlainRecord(item)) { addTraceMarker(sanitization.droppedFields, path); return null; }
+    const keys = quantity ? ["sourceRef", "contextQuote", "quantityQuote"] : ["sourceRef", "quote"];
+    noteUnknownFields(item, keys, sanitization);
+    const result: Record<string, unknown> = {};
+    if (typeof item.sourceRef === "string" && allowedRefs.has(item.sourceRef)) result.sourceRef = item.sourceRef;
+    else if (item.sourceRef !== undefined) sanitization.droppedReferenceCount += 1;
+    for (const key of keys.filter(key => key !== "sourceRef")) {
+      if (typeof item[key] === "string") result[key] = sanitizeTraceText(item[key], `${path}.${key}`, redactions, sanitization);
+      else if (item[key] !== undefined) addTraceMarker(sanitization.droppedFields, `${path}.${key}`);
+    }
+    return result;
+  };
+  for (const key of ["premise", "decision", "verificationTarget"]) {
+    if (Object.hasOwn(value, key)) candidate[key] = binding(value[key], key, false);
+  }
+  if (isPlainRecord(value.quantities)) {
+    const keys = ["count", "unitCost", "budget", "priorUnitCost"];
+    noteUnknownFields(value.quantities, keys, sanitization);
+    const quantities: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (!Object.hasOwn(value.quantities, key)) continue;
+      quantities[key] = key === "priorUnitCost" && value.quantities[key] === null
+        ? null : binding(value.quantities[key], `quantities.${key}`, true);
+    }
+    candidate.quantities = quantities;
+  } else if (value.quantities !== undefined) addTraceMarker(sanitization.droppedFields, "quantities");
+  return candidate;
+}
+
+function sanitizePlanRepairInput(
+  value: unknown,
+  context: PdContext,
+  redactions: readonly string[],
+  sanitization: SyntheticTraceSanitization,
+): Record<string, unknown> {
+  if (!isPlainRecord(value)) return {};
+  const input: Record<string, unknown> = {};
+  if (Object.hasOwn(value, "currentPlan")) input.currentPlan = sanitizePlanCandidate(value.currentPlan, context, redactions, sanitization);
+  if (isPlainRecord(value.localValidation)) {
+    const localValidation: Record<string, unknown> = {};
+    copyEnum(localValidation, value.localValidation, "kind", ["opinion_plan_binding"], sanitization);
+    if (typeof value.localValidation.reason === "string") localValidation.reason = sanitizeTraceText(
+      value.localValidation.reason, "localValidation.reason", redactions, sanitization);
+    input.localValidation = localValidation;
+  }
+  if (Object.hasOwn(value, "assessment")) input.assessment = sanitizeAssessmentCandidate(value.assessment, context, redactions, sanitization);
+  if (Object.hasOwn(value, "draft")) input.draft = sanitizeDraftCandidate(value.draft, context, redactions, sanitization);
+  if (Object.hasOwn(value, "review")) input.review = sanitizeScopeCandidate(value.review, redactions, sanitization);
+  return input;
 }
 
 function sanitizeAssessmentCandidate(
@@ -744,7 +871,7 @@ function markSyntheticTraceIncomplete(trace: SyntheticPdEvalTrace): void {
 
 async function main() {
   try {
-    const { rounds, requestIntervalMs, includeSyntheticTrace } = parseArguments(process.argv.slice(2));
+    const { rounds, requestIntervalMs, includeSyntheticTrace, opinionMode } = parseArguments(process.argv.slice(2));
     const config = readModelProviderConfig();
     if (!config) throw new Error("missing model config");
     const fetch = createRequestPacedFetch({ fetch: globalThis.fetch, requestIntervalMs });
@@ -752,11 +879,12 @@ async function main() {
       client: createOpenAICompatibleChatCompletionsClient({ config, fetch }),
       rounds,
       includeTrace: includeSyntheticTrace,
+      opinionMode,
       traceRedactions: [config.apiKey, config.baseUrl, config.model],
     });
     const decisionMismatches = results.filter(r => r.assessment !== null && r.assessment.decision !== cases.find(c => c.id === r.caseId)!.expectedDecision)
       .map(r => `${r.caseId}:${r.round}`);
-    const report = { kind: "proactive-discussion-synthetic-model-eval", rounds, requestIntervalMs, includeSyntheticTrace, manualReview: "pending",
+    const report = { kind: "proactive-discussion-synthetic-model-eval", rounds, requestIntervalMs, includeSyntheticTrace, opinionMode, manualReview: "pending",
       acceptance: "provider execution only; human semantic review and live-group acceptance remain separate",
       cases: cases.map(({ id, expectedDecision, reviewCriteria }) => ({ id, expectedDecision, reviewCriteria })), results, decisionMismatches,
       ...(syntheticTrace === null ? {} : { syntheticTrace }) };
@@ -765,13 +893,14 @@ async function main() {
       typeof value === "string" ? value.replaceAll(config.apiKey, "[REDACTED]") : value, 2));
     process.exitCode = results.some(r => r.error !== null) || decisionMismatches.length ? 1 : 0;
   } catch {
-    console.error("proactive-eval configuration/arguments unavailable; use IRIS_MODEL_PROVIDER, IRIS_MODEL_BASE_URL, IRIS_MODEL_API_KEY, IRIS_MODEL_NAME, --rounds 1..10, --request-interval-ms 0..60000 and --include-synthetic-trace true|false");
+    console.error("proactive-eval configuration/arguments unavailable; use IRIS_MODEL_PROVIDER, IRIS_MODEL_BASE_URL, IRIS_MODEL_API_KEY, IRIS_MODEL_NAME, --rounds 1..10, --request-interval-ms 0..60000, --include-synthetic-trace true|false and --opinion-mode legacy|source-plan");
     process.exitCode = 2;
   }
 }
 
-function parseArguments(args: readonly string[]): { rounds: number; requestIntervalMs: number; includeSyntheticTrace: boolean } {
+function parseArguments(args: readonly string[]): { rounds: number; requestIntervalMs: number; includeSyntheticTrace: boolean; opinionMode: PdOpinionMode } {
   let rounds = 2, requestIntervalMs = 0, includeSyntheticTrace = false;
+  let opinionMode = parsePdOpinionMode();
   const seen = new Set<string>();
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index], value = args[index + 1];
@@ -780,11 +909,12 @@ function parseArguments(args: readonly string[]): { rounds: number; requestInter
     if (flag === "--rounds" && /^[1-9]\d*$/u.test(value)) rounds = Number(value);
     else if (flag === "--request-interval-ms" && /^\d+$/u.test(value)) requestIntervalMs = Number(value);
     else if (flag === "--include-synthetic-trace" && /^(?:true|false)$/u.test(value)) includeSyntheticTrace = value === "true";
+    else if (flag === "--opinion-mode") opinionMode = parsePdOpinionMode(value);
     else throw new Error("invalid arguments");
   }
   if (!Number.isSafeInteger(rounds) || rounds > 10
     || !Number.isSafeInteger(requestIntervalMs) || requestIntervalMs > 60_000) throw new Error("invalid arguments");
-  return { rounds, requestIntervalMs, includeSyntheticTrace };
+  return { rounds, requestIntervalMs, includeSyntheticTrace, opinionMode };
 }
 
 function sleepForPacing(milliseconds: number, signal?: AbortSignal | null): Promise<void> {

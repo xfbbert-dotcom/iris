@@ -70,7 +70,7 @@ test("bounded close prevents late assessment rendering and drains owned pool onc
 test("new runtime cannot silently enable every group", () => {
   const read = (config as Record<string, unknown>).readProactiveDiscussionConfig as (env: Record<string, string>) => unknown;
   expect(read).toBeTypeOf("function");
-  expect(read({})).toEqual({ enabled: false, groupIds: [], pollIntervalMs: 1000, batchLimit: 10 });
+  expect(read({})).toEqual({ enabled: false, opinionMode: "legacy", groupIds: [], pollIntervalMs: 1000, batchLimit: 10 });
   for (const group of ["", "*", "oc_some_other_group", "oc_637a9aca45f01943477f4e17f1fc5b9a,oc_other"]) {
     expect(() => read({ IRIS_PROACTIVE_DISCUSSION_ENABLED: "true", IRIS_PROACTIVE_DISCUSSION_GROUP_IDS: group })).toThrow();
   }

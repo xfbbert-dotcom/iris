@@ -1,4 +1,5 @@
 import { PD_PILOT_CHAT } from "../proactive-discussion/contracts.js";
+import { parsePdOpinionMode } from "../proactive-discussion/opinion-mode.js";
 
 export function readProactiveDiscussionConfig(env: Record<string, string | undefined>) {
   const enabled = readOptionalBoolean("IRIS_PROACTIVE_DISCUSSION_ENABLED", env.IRIS_PROACTIVE_DISCUSSION_ENABLED, false);
@@ -12,7 +13,7 @@ export function readProactiveDiscussionConfig(env: Record<string, string | undef
     if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${key} must be a bounded positive integer`);
     return value;
   };
-  return { enabled, groupIds,
+  return { enabled, groupIds, opinionMode: parsePdOpinionMode(env.IRIS_PROACTIVE_DISCUSSION_OPINION_MODE),
     pollIntervalMs: positive("IRIS_PROACTIVE_DISCUSSION_POLL_INTERVAL_MS", 1000, 2147483647),
     batchLimit: positive("IRIS_PROACTIVE_DISCUSSION_BATCH_LIMIT", 10, 100) };
 }

@@ -38,6 +38,7 @@ test("CLI default two rounds actually call all synthetic cases and report decisi
   await mockProvider(async (env, requests) => {
     const result = await run([], env); const report = JSON.parse(result.stdout);
     assert.equal(result.code, 1); assert.equal(report.rounds, 2); assert.equal(report.requestIntervalMs, 0); assert.equal(report.includeSyntheticTrace, false); assert.equal(report.results.length, 30);
+    assert.equal(report.opinionMode, "legacy");
     assert.equal(Object.hasOwn(report, "syntheticTrace"), false);
     assert.equal(requests.length, 30); assert.ok(requests.every(r => r.url === "/v1/chat/completions"));
     assert.deepEqual(report.results.map(r => r.round), [...Array(15).fill(1), ...Array(15).fill(2)]);
@@ -83,6 +84,26 @@ test("CLI rejects an invalid request interval before making a provider request",
   await mockProvider(async (env, requests) => {
     const result = await run(["--request-interval-ms", "60001"], env);
     assert.equal(result.code, 2); assert.equal(requests.length, 0);
+  });
+});
+test("CLI selects and reports source-plan consistently with either trace setting", async () => {
+  for (const trace of ["false", "true"]) await mockProvider(async (env, requests) => {
+    const result = await run(["--rounds", "1", "--opinion-mode", "source-plan", "--include-synthetic-trace", trace], env);
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.code, 1); assert.equal(report.opinionMode, "source-plan"); assert.equal(requests.length, 15);
+    const schema = JSON.stringify(requests[0].body.response_format);
+    assert.ok(schema.includes('"enum":[""]'), "source-plan skip schema must require empty prose");
+    assert.ok(requests[0].body.messages[0].content.includes("原文定位"));
+  });
+});
+test("CLI rejects invalid or repeated opinion modes before any provider request", async () => {
+  await mockProvider(async (env, requests) => {
+    for (const args of [["--opinion-mode"], ["--opinion-mode", ""], ["--opinion-mode", "source-plan-secret"],
+      ["--opinion-mode", "legacy", "--opinion-mode", "source-plan"]]) {
+      const result = await run(args, env);
+      assert.equal(result.code, 2); assert.ok(!JSON.stringify(result).includes("source-plan-secret"));
+    }
+    assert.equal(requests.length, 0);
   });
 });
 test("CLI applies the requested low-millisecond interval to actual HTTP requests and reports it", async () => {

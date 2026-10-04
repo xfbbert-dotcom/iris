@@ -203,15 +203,15 @@ export function createPdModel({
   client: OpenAICompatibleChatCompletionsClient;
   /** Local candidate only; runtime does not enable this until semantic acceptance. */
   counterexampleReview?: boolean;
-  /** Local candidate: derive stored prose from one canonical opinion, pending semantic acceptance. */
+  /** Derive stored prose from one canonical opinion; also used by source-plan mode. */
   canonicalOpinion?: boolean;
-  /** Local source-quotation identity candidate; no runtime enablement. */
+  /** Lock new issue identity to source quotation; enabled by source-plan mode. */
   sourceBoundIdentity?: boolean;
   /** Local candidate: review the initial opinion without a second author call. */
   assessmentOpinion?: boolean;
   /** Local candidate: internal novelty is reviewed separately from public prose. */
   separateInterventionValue?: boolean;
-  /** Local bounded candidate: source-bound plans compile all outward prose. */
+  /** Opt-in source-plan contract: source-bound plans compile all outward prose. */
   opinionPlan?: boolean;
 }): PdModel {
   if (canonicalOpinion && counterexampleReview) throw new Error("review candidates cannot be combined");
