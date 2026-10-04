@@ -67,6 +67,34 @@ test("propagates the explicit Core structured-output mode without changing the m
   assert.equal(readEnvAssignment(pilotEnvExample, "IRIS_MODEL_STRUCTURED_OUTPUT_MODE"), "json_schema");
 });
 
+test("forwards the opinion contract into Core with legacy as the absent default", () => {
+  const name = "IRIS_PROACTIVE_DISCUSSION_OPINION_MODE";
+  const defaults = loadPilotCompose("deploy/pilot/ci.env", { [name]: undefined });
+  assert.equal(defaults.services.core.environment[name], "legacy");
+  assert.equal(readEnvAssignment(pilotEnvExample, name), "legacy");
+  const selected = loadPilotCompose("deploy/pilot/ci.env", { [name]: "source-plan" });
+  assert.equal(selected.services.core.environment[name], "source-plan");
+  // Choosing an opinion contract changes exactly one environment value, not permissions/model.
+  assert.deepEqual(selected.services.core.environment, {
+    ...defaults.services.core.environment,
+    [name]: "source-plan",
+  });
+  assert.equal(selected.services.core.environment.IRIS_PROACTIVE_DISCUSSION_ENABLED, "false");
+  assert.equal(selected.services.core.environment.IRIS_PROACTIVE_DISCUSSION_GROUP_IDS, "");
+  assert.equal(selected.services.core.environment.IRIS_RUNTIME_GLOBAL_ENABLED, "false");
+  for (const [serviceName, service] of Object.entries(selected.services)) {
+    if (serviceName !== "core") assert.equal(service.environment?.[name], undefined);
+  }
+});
+
+test("preserves explicit empty and invalid opinion modes for runtime rejection", () => {
+  const name = "IRIS_PROACTIVE_DISCUSSION_OPINION_MODE";
+  for (const value of ["", "invalid-opinion-mode"]) {
+    const rendered = loadPilotCompose("deploy/pilot/ci.env", { [name]: value });
+    assert.equal(rendered.services.core.environment[name], value);
+  }
+});
+
 test("pins every third-party pilot image to an immutable digest", () => {
   for (const serviceName of ["postgres", "redis", "caddy"]) {
     assert.match(
