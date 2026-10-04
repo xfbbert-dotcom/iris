@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { openPdDatabase, pdTestAt as at } from "./helpers/proactive-discussion-postgres.js";
 import { pdContext, pdAssessment, pdSkipAssessment, PILOT_CHAT } from "./fixtures/proactive-discussion.js";
-import type { PdModel } from "../src/proactive-discussion/model.js";
+import { createPdModel, type PdModel } from "../src/proactive-discussion/model.js";
+import { pdOpinionModeOptions } from "../src/proactive-discussion/opinion-mode.js";
+import type { PdAssessment, PdContext, PdDraft } from "../src/proactive-discussion/contracts.js";
+import type { OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
 import { createPdRegistrar } from "../src/proactive-discussion/registrar.js";
 import { createPdContextBuilder } from "../src/proactive-discussion/context-builder.js";
 import { createPdSourceVerifier } from "../src/proactive-discussion/source-verifier.js";
@@ -36,6 +40,142 @@ test("eval executes distinct rounds, never renders skip, and preserves each resu
   expect(calls).toBe(2);
   expect(results.map((r: { round: number }) => r.round)).toEqual([1, 2]);
   expect(results.every((r: { draft: unknown; error: unknown }) => r.draft === null && r.error === null)).toBe(true);
+});
+
+describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("source-plan archived response PostgreSQL delivery", () => {
+  let db: Awaited<ReturnType<typeof openPdDatabase>> | undefined;
+  afterEach(async () => { try { await db?.close(); } finally { db = undefined; vi.unstubAllGlobals(); } });
+
+  async function setup(caseId: "arithmetic" | "hypothesis") {
+    // Offline transport fixtures, not a new model run or real Feishu delivery.
+    const archive = JSON.parse(readFileSync(new URL(
+      "../../../docs/development/evidence/iris-opinion-decision-resumed-20261004.json", import.meta.url), "utf8")) as {
+      completions: { caseId: string; stage: string; messages: OpenAICompatibleChatMessage[]; responseFormat: unknown; content: string }[];
+      results: { caseId: string; kind: string; initialAssessment: PdAssessment; assessment: PdAssessment; draft: PdDraft | null }[];
+    };
+    const expected = archive.results.find(result => result.caseId === caseId && result.kind === "fresh")!;
+    const responses = archive.completions.filter(response => response.caseId === caseId);
+    const stages = caseId === "arithmetic" ? ["iris_proactive_discussion_assessment",
+      "iris_proactive_discussion_opinion_plan", "iris_proactive_discussion_scope_review"] : ["iris_proactive_discussion_assessment"];
+    expect(responses.map(response => response.stage)).toEqual(stages);
+    expect(expected).toBeDefined();
+    const { createProactiveDiscussionEvalCases } = await evaluator();
+    const cases: { id: string; context: PdContext }[] = createProactiveDiscussionEvalCases();
+    const { context } = cases.find(entry => entry.id === caseId)!;
+    const network = vi.fn(async () => { throw new Error("network forbidden in archived PostgreSQL replay"); });
+    vi.stubGlobal("fetch", network);
+    db = await openPdDatabase();
+    await db.repository.setPolicy({ policy: context.policy, expectedVersion: 0, at });
+    await db.pool.query(`UPDATE runtime_control_state SET desired_global_enabled=true,
+      capabilities=jsonb_set(jsonb_set(capabilities,'{readGroupContext}','true'),'{proactiveSpeech}','true')`);
+    const now = () => new Date(at.getTime() + 3000);
+    const remote = new Map<string, FeishuChatHistoryMessage>();
+    const messages = createPostgresConversationMessageRepository({ queryable: db.pool });
+    const registrar = createPdRegistrar({ repository: db.repository, botOpenId: "iris", now });
+    for (const [index, source] of context.sources.entries()) {
+      if (source.kind !== "message") throw new Error("replay only contains synthetic message sources");
+      const messageId = source.binding.messageId, text = context.items[index]!.text;
+      const sentAt = new Date(at.getTime() + index * 1000);
+      remote.set(messageId, { messageId, chatId: PILOT_CHAT, senderId: "human", text, sentAt });
+      const conversationMessage = await messages.upsertMessage({ provider: "feishu", providerMessageId: messageId,
+        chatId: PILOT_CHAT, senderOpenId: "human", messageType: "text", text, sentAt,
+        rawEventIdempotencyKey: `source-plan-replay:${messageId}` });
+      if (messageId === context.triggerMessageId) await registrar.registerMessage({ conversationMessage, senderType: "user", mentionedIris: false });
+    }
+    expect((await db.pool.query("SELECT message_id,state FROM proactive_discussion_jobs")).rows)
+      .toEqual([{ message_id: context.triggerMessageId, state: "pending" }]);
+    const before = await db.repository.readState(PILOT_CHAT);
+    const reader: FeishuChatHistoryReader = {
+      async listRecentMessages() { return [...remote.values()].filter(message => message.role !== "assistant"); },
+      async readMessagesByIds({ messageIds, sender }) { return messageIds.flatMap(id => {
+        const message = remote.get(id);
+        return message && (sender === "assistant" ? message.role === "assistant" : message.role !== "assistant") ? [message] : [];
+      }); },
+    };
+    const sourceVerifier = createPdSourceVerifier({ reader, documents: { async verify() { return []; } },
+      canReadGroup: chatId => chatId === PILOT_CHAT, canProactivelySpeak: chatId => chatId === PILOT_CHAT });
+    const documents = createDocumentRetrievalContextBuilder({ embeddingProfileId: "synthetic",
+      embedder: { async embedTexts(texts) { return texts.map(() => [1]); } },
+      fragments: { async searchSimilarFragments() { return []; } }, canReadDocument: async () => false });
+    const contextBuilder = createPdContextBuilder({ repository: db.repository, reader, sourceVerifier,
+      canReadGroup: chatId => chatId === PILOT_CHAT, documents: () => documents });
+    const calls: string[] = [], requestFailures: unknown[] = [];
+    const model = createPdModel({ ...pdOpinionModeOptions("source-plan"), client: { async complete(request, options) {
+      try {
+        const response = responses.shift();
+        if (!response) throw new Error("unexpected model call after archived responses were exhausted");
+        const stage = options?.responseFormat?.json_schema.name;
+        calls.push(stage!);
+        expect(stage).toBe(response.stage);
+        expect(options?.responseFormat).toEqual(response.responseFormat);
+        expect(request).toHaveLength(2);
+        expect(request[0]).toEqual(response.messages[0]);
+        expect(request[1]!.role).toBe(response.messages[1]!.role);
+        const archivedInput = JSON.parse(response.messages[1]!.content);
+        // Persisted versions come from this real database, never from the archived eval.
+        // All other business materials, source refs, identity and compiled prose must match.
+        const expectedInput = stage === "iris_proactive_discussion_assessment"
+          ? { ...archivedInput, contextVersion: before.contextVersion, catalogVersion: before.catalogVersion } : archivedInput;
+        expect(JSON.parse(request[1]!.content)).toEqual(expectedInput);
+        return response.content;
+      } catch (error) { requestFailures.push(error); throw error; }
+    } } });
+    const sent: { messageId: string; text: string }[] = [];
+    const replier = { async replyText(input: { messageId: string; text: string }) {
+      sent.push({ messageId: input.messageId, text: input.text });
+      return { replyMessageId: `offline-reply-${input.messageId}` };
+    } };
+    const evaluation = createPdEvaluationWorker({ repository: db.repository, contextBuilder, model, reader,
+      membership: { async isCurrentMember() { return false; } }, now, workerId: "source-plan-replay-eval" });
+    const delivery = createPdDeliveryWorker({ repository: db.repository, sourceVerifier, reader, replier,
+      now, workerId: "source-plan-replay-delivery" });
+    const outcome = await evaluation.runOnce();
+    expect(requestFailures).toEqual([]);
+    expect(outcome).toBe("processed");
+    expect(calls).toEqual(stages);
+    expect(responses).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    expect((await db.pool.query("SELECT assessment,draft,outcome FROM proactive_discussion_evaluations")).rows)
+      .toEqual([{ assessment: expected.assessment, draft: expected.draft,
+        outcome: caseId === "arithmetic" ? "prepared" : "skipped" }]);
+    expect(await evaluation.runOnce()).toBe("idle");
+    return { database: db, context, expected, delivery, sent, network, calls, stages };
+  }
+
+  test("accepted source-plan pair is persisted and sent exactly once instead of the initial assessment", async () => {
+    const h = await setup("arithmetic");
+    expect(h.expected.assessment).not.toEqual(h.expected.initialAssessment);
+    const issueRef = h.expected.assessment.issueRef;
+    if (issueRef?.kind !== "new") throw new Error("arithmetic archive must introduce its first issue");
+    expect((await h.database.repository.readState(PILOT_CHAT)).issues).toEqual([expect.objectContaining({
+      description: issueRef.description,
+      lastObservation: h.expected.assessment.observation, lastReasoning: h.expected.assessment.reasoning,
+      lastSuggestion: h.expected.assessment.suggestion, basisSources: h.context.sources, proseSources: h.context.sources,
+    })]);
+    expect((await h.database.pool.query("SELECT trigger_message_id,text,state,authorization_kind FROM proactive_discussion_deliveries")).rows)
+      .toEqual([{ trigger_message_id: h.context.triggerMessageId, text: h.expected.draft!.text, state: "prepared", authorization_kind: "policy" }]);
+    expect(await h.delivery.runOnce()).toBe("processed");
+    expect(h.sent).toEqual([{ messageId: h.context.triggerMessageId, text: h.expected.draft!.text }]);
+    expect((await h.database.pool.query("SELECT state,reply_message_id FROM proactive_discussion_deliveries")).rows)
+      .toEqual([{ state: "sent", reply_message_id: `offline-reply-${h.context.triggerMessageId}` }]);
+    expect(await h.delivery.runOnce()).toBe("idle");
+    expect(h.sent).toHaveLength(1);
+    expect(h.calls).toEqual(h.stages);
+    expect(h.network).not.toHaveBeenCalled();
+  });
+
+  test("source-plan structured silence persists without any plan, issue or delivery", async () => {
+    const h = await setup("hypothesis");
+    expect(h.expected.assessment).toMatchObject({ decision: "skip", reason: "no_work_value",
+      observation: "", reasoning: "", suggestion: "" });
+    expect(h.expected.draft).toBeNull();
+    expect((await h.database.repository.readState(PILOT_CHAT)).issues).toEqual([]);
+    expect((await h.database.pool.query("SELECT id FROM proactive_discussion_deliveries")).rows).toEqual([]);
+    expect(await h.delivery.runOnce()).toBe("idle");
+    expect(h.sent).toEqual([]);
+    expect(h.calls).toEqual(["iris_proactive_discussion_assessment"]);
+    expect(h.network).not.toHaveBeenCalled();
+  });
 });
 
 test("eval retains earlier output when later render fails, redacts errors and rejects zero-source contexts before model", async () => {
