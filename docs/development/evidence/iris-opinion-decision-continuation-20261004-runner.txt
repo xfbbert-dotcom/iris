@@ -1,0 +1,325 @@
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import assert from 'node:assert/strict';
+import { createPdModel, validatePdScopeReview } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createProactiveDiscussionEvalCases } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/scripts/pilot/proactive-discussion-eval.ts';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+
+const root = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder = 'C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918';
+const prefix = `${folder}/opinion-decision-continuation-20261004`;
+const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/u, ''));
+const git = (...args: string[]) => execFileSync('git', args, {cwd:root,encoding:'utf8'}).trim();
+const selected = ['handled','hypothesis','separate-next','inference','qualified-risk','arithmetic','material-update'];
+const catalog = createProactiveDiscussionEvalCases();
+const cases = selected.map(id => { const item = catalog.find(item => item.id === id); assert(item, 'frozen case unavailable'); return item; });
+assert.deepEqual(cases.map(item => item.expectedDecision), ['skip','skip','intervene','intervene','intervene','intervene','intervene']);
+const controls = [
+  {caseId:'negative-role-swap',originalCaseId:'arithmetic',left:'unitCost',right:'budget',targetError:'unitCost and budget source roles exchanged'},
+  {caseId:'negative-time-swap',originalCaseId:'material-update',left:'unitCost',right:'priorUnitCost',targetError:'current and prior unitCost source roles exchanged'},
+];
+const profile = {model:'qwen3.8-max',maxRequests:39,tokenStopBeforeNextRequest:176896,maxTokens:4096,
+  enableThinking:false,requestTimeoutMs:60000,windowMs:2700000,minimumFreeTokens:200000,quotaMaxAgeMs:60000,
+  applicationOptions:{canonicalOpinion:true,sourceBoundIdentity:true,opinionPlan:true},
+  controlOriginRule:'first model-produced calculation plan in original generation or sole plan repair, in completion order',
+  controlMutationRule:'swap the two complete existing quantities bindings; leave count and all other plan content unchanged',
+  plannedControlPlanInjections:2,freshSeededGenerations:0,freshSeededReviews:0};
+const stages: Record<string,number> = {
+  iris_proactive_discussion_assessment:2,iris_proactive_discussion_opinion_plan:1,
+  iris_proactive_discussion_scope_review:2,iris_proactive_discussion_opinion_plan_repair:1,
+};
+const appSources = ['apps/core/src/proactive-discussion/model.ts','apps/core/src/proactive-discussion/contracts.ts',
+  'apps/core/src/proactive-discussion/review-receipts.ts','apps/core/src/proactive-discussion/source-focus.ts',
+  'apps/core/src/proactive-discussion/canonical-opinion.ts','apps/core/src/proactive-discussion/arithmetic.ts',
+  'apps/core/src/proactive-discussion/source-calculation.ts','apps/core/src/proactive-discussion/opinion-plan.ts',
+  'apps/core/src/model/openai-compatible-chat-completions-client.ts','scripts/pilot/proactive-discussion-eval.ts'];
+const privateSources = ['opinion-decision-continuation-20261004.mts','run-opinion-decision-continuation.ps1'];
+const carriedPrefix='opinion-decision-only-20261002';
+const carriedFileHashes:Record<string,string>={
+  [`${carriedPrefix}.json`]:'2dbd22a8426b80ecf0d6406e354ecc687739a33db6b2d79a0b711e780a916d5a',
+  [`${carriedPrefix}.preflight.json`]:'52376e4a783a436bf39e16b0dc32aca0eb310c5b204a8b16dbc021df96dc484f',
+  [`${carriedPrefix}.halted.json`]:'83a5179b24a82206a2d9196d2a307e31b881174577fb01fe9d90195aa496ab62',
+  [`${carriedPrefix}.semantic-paraphrase.json`]:'76b386386756b50de7baddc68b6c3086d76211ff5078c54371941fb30b01a3f2',
+};
+for(const [name,expected] of Object.entries(carriedFileHashes)) assert.equal(hash(readFileSync(`${folder}/${name}`)),expected,'carried original evidence changed');
+const prior=readJson(`${folder}/${carriedPrefix}.json`);
+const priorPreflight=readJson(`${folder}/${carriedPrefix}.preflight.json`);
+const priorHalt=readJson(`${folder}/${carriedPrefix}.halted.json`);
+const carriedSemantic=readJson(`${folder}/${carriedPrefix}.semantic-paraphrase.json`);
+assert.equal(prior.kind,carriedPrefix); assert.equal(prior.commit,'397fedbf2f19c0950fdcd16c185c3011998d76ef');
+assert.equal(prior.executionPassed,false); assert.equal(prior.halted,true); assert.equal(prior.haltReason,'external gate timeout');
+assert.equal(priorHalt.reason,prior.haltReason); assert.equal(priorHalt.at,prior.finishedAt);
+assert.equal(priorHalt.halted,true); assert.equal(priorHalt.executionPassed,false);
+assert.equal(prior.requests.length,1); assert.equal(prior.completions.length,1); assert.equal(prior.results.length,1);
+assert.equal(prior.reportedUsageTokens,3104); assert.equal(prior.controlPlanInjections,0);
+assert.equal(prior.model,profile.model); assert.equal(prior.maxTokens,profile.maxTokens); assert.equal(prior.enableThinking,false);
+assert.deepEqual(prior.sourceHashes,priorPreflight.sourceHashes);
+assert.deepEqual(priorPreflight.caseHashes,['paraphrase',...selected].map(caseId=>({caseId,
+  sha256:hash(JSON.stringify(catalog.find(item=>item.id===caseId)))})),'original frozen case changed');
+for(const [name,expected] of Object.entries(priorPreflight.sourceHashes.probe)) {
+  assert.equal(hash(readFileSync(`${folder}/${name}`)),expected,'original runner/launcher changed');
+  carriedFileHashes[name]=expected as string;
+}
+const priorRequest=prior.requests[0], priorCompletion=prior.completions[0], carriedResult=prior.results[0];
+assert.equal(priorRequest.caseId,'paraphrase'); assert.equal(priorRequest.status,200); assert.equal(priorRequest.reportedUsageTokens,3104);
+assert.equal(hash(priorRequest.wire),priorRequest.requestHash); assert.equal(hash(priorRequest.rawResponse),priorRequest.responseSha256);
+const priorRaw=JSON.parse(priorRequest.rawResponse);
+assert.equal(priorRaw.model,profile.model); assert.equal(priorRaw.usage.total_tokens,3104); assert.equal(priorRaw.choices.length,1);
+assert.equal(priorRaw.choices[0].finish_reason,'stop'); assert.equal(priorRaw.choices[0].message.content,priorCompletion.content);
+assert.equal(priorCompletion.requestIndex,1); assert.equal(hash(priorCompletion.content),priorCompletion.contentSha256);
+assert.equal(carriedResult.caseId,'paraphrase'); assert.equal(carriedResult.expectedDecision,'skip'); assert.equal(carriedResult.draft,null);
+assert.deepEqual(carriedResult.assessment,JSON.parse(priorCompletion.content).assessment);
+assert.deepEqual(carriedResult.initialAssessment,carriedResult.assessment);
+assert.equal(carriedResult.assessment.decision,'skip'); assert.equal(carriedResult.assessment.reason,'duplicate');
+assert.equal(carriedSemantic.caseId,'paraphrase'); assert.equal(carriedSemantic.pass,true);
+assert.equal(carriedSemantic.resultSha256,hash(JSON.stringify(carriedResult)),'carried semantic gate does not bind unchanged result');
+const carriedResults=[{caseId:'paraphrase',originReport:`${carriedPrefix}.json`,
+  originReportSha256:carriedFileHashes[`${carriedPrefix}.json`],originalCommit:prior.commit,
+  originalExecutionPassed:false,originalHaltReason:prior.haltReason,semanticConsumedByOriginalWindow:false,
+  result:carriedResult,semantic:carriedSemantic,note:'Retained final case result only; never injected as a model response or request input.'}];
+const currentHashes = () => ({
+  application:Object.fromEntries(appSources.map(path => [path,hash(readFileSync(`${root}/${path}`))])),
+  probe:Object.fromEntries(privateSources.map(path => [path,hash(readFileSync(`${folder}/${path}`))])),
+  carriedEvidence:Object.fromEntries(Object.keys(carriedFileHashes).map(path=>[path,hash(readFileSync(`${folder}/${path}`))])),
+});
+assert.deepEqual(currentHashes().application,priorPreflight.sourceHashes.application,'application differs from carried window');
+const frozenConfig = () => ({kind:'opinion-plan-offline-preflight',networkRequests:0,credentialRead:false,
+  commit:git('rev-parse','HEAD'),profile,selected,controls,stageCaps:stages,sourceHashes:currentHashes(),
+  carriedResults,aggregateLimits:{maxRequests:40,tokenStopBeforeNextRequest:180000},
+  acceptanceExecution:'Two execution windows; original timeout/incomplete remains unchanged; one retained case plus seven fresh cases, then the original two controls.',
+  caseHashes:cases.map(item => ({caseId:item.id,sha256:hash(JSON.stringify(item))})),
+  wireNote:'Later prompts depend on real earlier responses. Only source/configuration hashes are frozen offline; each actual wire is retained and hashed before its quota gate.'});
+if (process.argv.length === 3 && process.argv[2] === '--preflight') {
+  assert(!existsSync(`${prefix}.started.json`), 'cannot replace preflight after window started');
+  assert.equal(git('status','--porcelain','--',...appSources), '', 'commit application sources before preflight');
+  const value=frozenConfig();
+  writeFileSync(`${prefix}.preflight.json`,JSON.stringify(value,null,2)+'\n');
+  console.log(JSON.stringify({preflightPassed:true,networkRequests:0,credentialRead:false,selected,controls,
+    profile,sourceHashes:value.sourceHashes,path:`${prefix}.preflight.json`}));
+  process.exit(0);
+}
+assert(process.argv.length === 3 && process.argv[2] === '--run', 'only --preflight or --run is allowed');
+assert(!existsSync(`${prefix}.started.json`), 'one bounded window only; no restart');
+const prepared=readJson(`${prefix}.preflight.json`);
+assert.deepEqual(prepared,frozenConfig(), 'source/configuration/HEAD changed after offline preflight');
+assert.equal(git('status','--porcelain','--',...appSources), '', 'application source must stay committed');
+const key=process.env.IRIS_BAILIAN_EVAL_KEY;
+assert(key && !/[\r\n]/u.test(key), 'protected launcher key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const safe=(value:string) => value.replaceAll(key,'[REDACTED]');
+const report:any={kind:'opinion-decision-continuation-20261004',syntheticOnly:true,commit:prepared.commit,sourceHashes:prepared.sourceHashes,
+  startedAt:new Date().toISOString(),...profile,selected,controls,stageCaps:stages,
+  carriedResults,carriedRequests:1,carriedReportedUsageTokens:3104,aggregateLimits:prepared.aggregateLimits,
+  acceptanceExecution:prepared.acceptanceExecution,aggregateUsage:{requests:1,reportedTokens:3104},
+  requests:[],completions:[],results:[],controlOrigins:[],controlPlanInjections:0,reportedUsageTokens:0,
+  independentSemanticReview:'every fresh and control case externally gated; first negative review must recognize its target error before application repair; no oracle sent to model',halted:false};
+const save=()=>{
+  report.aggregateUsage={requests:report.carriedRequests+report.requests.length,reportedTokens:report.carriedReportedUsageTokens+report.reportedUsageTokens};
+  writeFileSync(`${prefix}.json`,safe(JSON.stringify(report,null,2))+'\n');
+};
+writeFileSync(`${prefix}.started.json`,JSON.stringify(report,null,2),{flag:'wx'});
+const deadline=Date.now()+profile.windowMs;
+function checkAbort() {
+  if(existsSync(`${prefix}.abort.json`)) {
+    const value=readJson(`${prefix}.abort.json`);
+    assert(typeof value.abortReason==='string' && value.abortReason.length>0,'abort record must give a reason');
+    throw Error(value.abortReason);
+  }
+}
+async function waitFile(path:string) {
+  const until=Math.min(deadline,Date.now()+300000);
+  while(!existsSync(path)) {
+    checkAbort(); assert(Date.now()<until,'external gate timeout');
+    await new Promise(resolve=>setTimeout(resolve,250));
+  }
+  checkAbort(); assert(Date.now()<deadline,'window expired at external gate');
+  const value=readJson(path); if(typeof value.abortReason==='string') throw Error(value.abortReason); return value;
+}
+let activeCase=''; let activeStage=''; let stageCounts:Record<string,number>={}; let activeCompletion:any=null;
+let activeControl:any=null;
+const origins=new Map<string,any>();
+const baseUrl='https://ws-5mqqdooo3d7i0spz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const base=createOpenAICompatibleChatCompletionsClient({
+  config:{provider:'openai-compatible',baseUrl,apiKey:key,model:profile.model,timeoutMs:profile.requestTimeoutMs,structuredOutputMode:'json_object'},
+  sleep:async()=>{throw Error('automatic HTTP retry prohibited');},
+  fetch:async(url,init)=>{
+    checkAbort();
+    assert.equal(String(url),`${baseUrl}/chat/completions`); assert.equal(init?.method,'POST');
+    assert(report.requests.length<profile.maxRequests && report.reportedUsageTokens<profile.tokenStopBeforeNextRequest && Date.now()<deadline,'bounded window exhausted');
+    assert(activeCompletion && activeCompletion.origin==='model' && activeCompletion.requestIndex===undefined,'one HTTP per completion; no retry');
+    assert.equal(git('rev-parse','HEAD'),prepared.commit,'application HEAD changed during window');
+    assert.deepEqual(currentHashes(),prepared.sourceHashes,'source hash changed during window');
+    const body=JSON.parse(String(init?.body));
+    assert.equal(body.model,profile.model); assert.deepEqual(body.response_format,{type:'json_object'});
+    const wire=JSON.stringify({...body,enable_thinking:false,max_tokens:profile.maxTokens}); const requestHash=hash(wire);
+    const index=report.requests.length+1;
+    const pending={index,caseId:activeCase,stage:activeStage,completionIndex:activeCompletion.index,requestHash,model:profile.model};
+    writeFileSync(`${prefix}.pending-${index}.json`,JSON.stringify({...pending,wire},null,2)+'\n',{flag:'wx'});
+    console.log(JSON.stringify({waitingForQuota:index,caseId:activeCase,stage:activeStage,requestHash}));
+    const quota=await waitFile(`${prefix}.quota-${index}.json`);
+    assert.equal(quota.requestHash,requestHash); assert.equal(quota.model,profile.model); assert.equal(quota.freeExhaustionStop,true);
+    assert(Number.isFinite(quota.remainingTokens) && quota.remainingTokens>=profile.minimumFreeTokens,'free quota insufficient');
+    assert(Date.parse(quota.expiresAt)>Date.now(),'free quota expired');
+    const age=Date.now()-Date.parse(quota.observedAt); assert(age>=0 && age<profile.quotaMaxAgeMs,'quota observation stale');
+    checkAbort(); assert(Date.now()<deadline,'window expired awaiting quota');
+    assert.deepEqual(currentHashes(),prepared.sourceHashes,'source changed while awaiting quota');
+    const record:any={...pending,quota,wire,startedAt:new Date().toISOString()};
+    report.requests.push(record); activeCompletion.requestIndex=index; save();
+    try {
+      const response=await fetch(url,{...init,body:wire,redirect:'error',signal:AbortSignal.timeout(Math.max(1,Math.min(profile.requestTimeoutMs,deadline-Date.now())))});
+      record.status=response.status; save(); assert(response.body,'missing response body');
+      const reader=response.body.getReader(); const chunks:Uint8Array[]=[]; let size=0;
+      while(true) {const part=await reader.read(); if(part.done) break; size+=part.value.byteLength;
+        if(size>262144) {await reader.cancel(); throw Error('response size limit');} chunks.push(part.value);}
+      const bytes=Buffer.concat(chunks); record.rawResponse=safe(bytes.toString()); record.responseSha256=hash(bytes); record.finishedAt=new Date().toISOString(); save();
+      assert(response.ok,'non-success HTTP; no retry');
+      const decoded=JSON.parse(bytes.toString());
+      assert(Number.isSafeInteger(decoded.usage?.total_tokens) && decoded.usage.total_tokens>0,'reported usage unavailable');
+      record.reportedUsageTokens=decoded.usage.total_tokens; report.reportedUsageTokens+=decoded.usage.total_tokens; save();
+      assert.equal(decoded.model,profile.model); assert.equal(decoded.choices?.length,1);
+      assert.equal(decoded.choices[0].finish_reason,'stop','truncated/incomplete completion; no retry');
+      return new Response(bytes,{status:response.status,headers:{'content-type':'application/json'}});
+    } catch(error) {
+      record.error=safe(error instanceof Error?error.message:'request failure'); record.finishedAt??=new Date().toISOString(); save(); throw error;
+    }
+  },
+});
+const client={async complete(messages:any,options:any) {
+  checkAbort(); activeStage=options?.responseFormat?.json_schema?.name;
+  assert(typeof activeStage==='string' && Object.hasOwn(stages,activeStage),'unexpected application stage');
+  stageCounts[activeStage]=(stageCounts[activeStage]??0)+1;
+  assert(stageCounts[activeStage]<=stages[activeStage],'application stage cap exceeded');
+  if(activeControl && activeStage==='iris_proactive_discussion_opinion_plan_repair') {
+    assert(activeControl.initialReviewAcceptedForRepair===true,
+      'negative control failed before its initial semantic review; local compilation recovery is not target-error recognition');
+  }
+  const injected=activeControl!==null && activeStage==='iris_proactive_discussion_opinion_plan';
+  const entry:any={index:report.completions.length+1,caseId:activeCase,stage:activeStage,origin:injected?'injected_control_plan':'model',messages,responseFormat:options.responseFormat};
+  if(activeStage==='iris_proactive_discussion_opinion_plan_repair') {
+    entry.repairTrigger=(stageCounts.iris_proactive_discussion_scope_review??0)===0?'local_plan_compilation':'scope_review_rejection';
+  }
+  if(activeStage==='iris_proactive_discussion_scope_review') {
+    const precedingRepair=report.completions.findLast((item:any)=>item.caseId===activeCase
+      && item.stage==='iris_proactive_discussion_opinion_plan_repair' && typeof item.content==='string');
+    entry.reviewPhase=precedingRepair?'final':'initial';
+    if(precedingRepair) {
+      const input=JSON.parse(messages.findLast((item:any)=>item.role==='user').content);
+      assert.deepEqual(input.sourcePlan,JSON.parse(precedingRepair.content),'final review lost its actual repaired plan');
+      entry.precedingPlanRepairCompletionIndex=precedingRepair.index;
+    }
+  }
+  report.completions.push(entry); activeCompletion=entry; save();
+  if(activeControl && activeStage==='iris_proactive_discussion_scope_review' && stageCounts[activeStage]===1) {
+    assert.equal(entry.reviewPhase,'initial','negative control cannot substitute a recovery final review for its initial target-error review');
+    const input=JSON.parse(messages.findLast((item:any)=>item.role==='user').content);
+    assert.deepEqual(input.sourcePlan,activeControl.mutatedPlan,'initial control review lost injected sourcePlan');
+    const candidate={assessment:input.assessment,draft:input.draft,sourcePlan:input.sourcePlan};
+    activeControl.candidate=candidate;
+    entry.controlCandidate={caseId:activeCase,originSha256:activeControl.originSha256,candidate,
+      candidateSha256:hash(JSON.stringify(candidate)),completionIndex:entry.index};
+    writeFileSync(`${prefix}.control-candidate-${activeCase}.json`,JSON.stringify(entry.controlCandidate,null,2)+'\n',{flag:'wx'});
+    save();
+  }
+  if(injected) {
+    assert.equal(stageCounts[activeStage],1); assert(!activeControl.injected,'control may intercept only initial plan once');
+    activeControl.injected=true; report.controlPlanInjections+=1;
+    entry.controlOriginSha256=activeControl.originSha256; entry.content=JSON.stringify(activeControl.mutatedPlan);
+  } else {
+    entry.content=await base.complete(messages,options);
+  }
+  entry.contentSha256=hash(entry.content); save();
+  if(!activeControl && ['arithmetic','material-update'].includes(activeCase)
+    && ['iris_proactive_discussion_opinion_plan','iris_proactive_discussion_opinion_plan_repair'].includes(activeStage)
+    && !origins.get(activeCase)?.planOrigin) {
+    const plan=JSON.parse(entry.content);
+    if(plan.kind==='calculation') {
+      const origin=origins.get(activeCase); assert(origin,'fresh case origin unavailable');
+      origin.planOrigin={completionIndex:entry.index,requestIndex:entry.requestIndex,stage:entry.stage,content:entry.content,contentSha256:entry.contentSha256,plan};
+      report.controlOrigins.push({caseId:activeCase,...origin.planOrigin}); save();
+    }
+  }
+  if(activeControl && activeStage==='iris_proactive_discussion_scope_review' && stageCounts[activeStage]===1) {
+    const input=JSON.parse(messages.findLast((item:any)=>item.role==='user').content);
+    const candidate=activeControl.candidate;
+    const modelReview=JSON.parse(entry.content);
+    const review=validatePdScopeReview(modelReview,input.draft.text,undefined,input.assessment);
+    const targetReview={caseId:activeCase,targetError:activeControl.recipe.targetError,originSha256:activeControl.originSha256,
+      candidate,candidateSha256:hash(JSON.stringify(candidate)),completionIndex:entry.index,reviewContentSha256:entry.contentSha256,modelReview,review};
+    activeControl.targetReview=targetReview; save();
+    writeFileSync(`${prefix}.target-review-${activeCase}.json`,JSON.stringify(targetReview,null,2)+'\n',{flag:'wx'});
+    console.log(JSON.stringify({waitingForTargetSemanticReview:activeCase,targetReviewSha256:hash(JSON.stringify(targetReview))}));
+    const semantic=await waitFile(`${prefix}.target-semantic-${activeCase}.json`);
+    assert.equal(semantic.caseId,activeCase); assert.equal(semantic.targetReviewSha256,hash(JSON.stringify(targetReview)));
+    entry.targetSemantic=semantic; save();
+    assert.equal(modelReview.supported,false,'model approved the known-bad control; local receipt rejection cannot substitute for semantic recognition');
+    assert.equal(review.supported,false,'known-bad control approved at first review');
+    assert.equal(semantic.pass,true,'negative first-review semantic failure');
+    assert.equal(semantic.targetErrorRecognized,true,'first rejection did not identify the frozen role/time error');
+    activeControl.initialReviewAcceptedForRepair=true;
+  }
+  return entry.content;
+}};
+async function semanticGate(result:any) {
+  report.results.push(result); save();
+  const resultSha256=hash(JSON.stringify(result));
+  console.log(JSON.stringify({waitingForSemanticReview:result.caseId,resultPath:`${prefix}.json`,resultSha256}));
+  const semantic=await waitFile(`${prefix}.semantic-${result.caseId}.json`);
+  assert.equal(semantic.caseId,result.caseId); assert.equal(semantic.resultSha256,resultSha256);
+  result.semantic=semantic; save(); assert.equal(semantic.pass,true,'independent case semantic failure; stop before next case');
+}
+try {
+  for(const item of cases) {
+    activeCase=item.id; activeControl=null; stageCounts={};
+    const context=structuredClone(item.context); const pd=createPdModel({client,...profile.applicationOptions});
+    const initialAssessment=await pd.assess(context);
+    origins.set(item.id,{context,initialAssessment,initialAssessmentSha256:hash(JSON.stringify(initialAssessment))});
+    if(initialAssessment.decision!==item.expectedDecision) {
+      report.results.push({caseId:item.id,kind:'fresh',initialAssessment,assessment:initialAssessment,
+        draft:null,expectedDecision:item.expectedDecision,failureStage:'initial_assessment'});
+      save(); throw Error('fresh initial decision mismatch; stop before render');
+    }
+    const pair=initialAssessment.decision==='intervene'?await pd.render({context,assessment:initialAssessment}):null;
+    const result:any={caseId:item.id,kind:'fresh',initialAssessment,assessment:pair?.assessment??initialAssessment,draft:pair?.draft??null,expectedDecision:item.expectedDecision};
+    if(initialAssessment.decision==='intervene' && !pair) {
+      report.results.push(result); save(); throw Error('fresh decision mismatch or intervention rejected/incomplete');
+    }
+    await semanticGate(result);
+  }
+  assert.equal(report.results.length,7); assert.equal(report.carriedResults.length,1);
+  assert(report.results.every((item:any)=>item.semantic?.pass===true)
+    && report.carriedResults.every((item:any)=>item.semantic?.pass===true),'one carried and seven fresh cases must all pass before injected controls');
+  for(const recipe of controls) {
+    activeCase=recipe.caseId; stageCounts={};
+    const original=origins.get(recipe.originalCaseId); assert(original?.planOrigin,'original fresh case has no model-produced calculation plan');
+    const originalPlan=original.planOrigin.plan;
+    assert.equal(originalPlan.kind,'calculation'); assert(originalPlan.quantities,'numeric bindings unavailable');
+    for(const name of ['count',recipe.left,recipe.right]) assert(originalPlan.quantities[name] && typeof originalPlan.quantities[name]==='object','control binding unavailable');
+    const mutatedPlan=structuredClone(originalPlan);
+    [mutatedPlan.quantities[recipe.left],mutatedPlan.quantities[recipe.right]]=[mutatedPlan.quantities[recipe.right],mutatedPlan.quantities[recipe.left]];
+    assert.notDeepEqual(mutatedPlan,originalPlan,'control mutation would be ineffective');
+    const originRecord={caseId:activeCase,recipe,originalCaseId:recipe.originalCaseId,originalPlanOrigin:original.planOrigin,
+      initialAssessment:original.initialAssessment,initialAssessmentSha256:original.initialAssessmentSha256,
+      originalContextSha256:hash(JSON.stringify(original.context)),mutatedPlan,mutatedPlanSha256:hash(JSON.stringify(mutatedPlan))};
+    const originSha256=hash(JSON.stringify(originRecord));
+    writeFileSync(`${prefix}.control-origin-${activeCase}.json`,JSON.stringify({...originRecord,originSha256},null,2)+'\n',{flag:'wx'});
+    activeControl={recipe,mutatedPlan,originSha256,injected:false};
+    const context=structuredClone(original.context); const initialAssessment=structuredClone(original.initialAssessment);
+    const pd=createPdModel({client,...profile.applicationOptions});
+    const pair=await pd.render({context,assessment:initialAssessment});
+    assert(activeControl.injected && activeControl.targetReview,'control did not reach actual first full review');
+    await semanticGate({caseId:activeCase,kind:'known_bad_injected_plan_control',originSha256,initialAssessment,
+      assessment:pair?.assessment??null,draft:pair?.draft??null,contained:pair===null,
+      firstReview:activeControl.targetReview,acceptanceNote:'null is negative containment only; any returned pair must be semantically corrected; this is not fresh positive generation'});
+  }
+  assert.equal(report.controlPlanInjections,2); report.executionPassed=true;
+} catch(error) {
+  report.halted=true; report.executionPassed=false; report.haltReason=safe(error instanceof Error?error.message:'unknown application failure');
+  report.haltCase=activeCase; report.haltStage=activeStage; process.exitCode=1;
+} finally {
+  report.finishedAt=new Date().toISOString(); save();
+  writeFileSync(`${prefix}.halted.json`,JSON.stringify({at:report.finishedAt,halted:report.halted,executionPassed:report.executionPassed,
+    caseId:activeCase,stage:activeStage,reason:report.haltReason??'bounded opinion-plan window completed'}),{flag:'wx'});
+  console.log(JSON.stringify({done:true,requests:report.requests.length,tokens:report.reportedUsageTokens,passed:report.executionPassed,reason:report.haltReason}));
+}

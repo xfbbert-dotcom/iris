@@ -1,0 +1,99 @@
+{
+  "kind": "opinion-decision-continuation-20261004",
+  "applicationCommit": "397fedbf2f19c0950fdcd16c185c3011998d76ef",
+  "runHead": "c265e9da330d916b82f3c306f7cf43fca6c52503",
+  "requests": 0,
+  "http200": 0,
+  "reportedTokens": 0,
+  "executionPassed": false,
+  "wholeWindowAccepted": false,
+  "windowOutcome": "aborted_before_first_http_fresh_quota_unavailable",
+  "startedAt": "2026-10-04T07:00:39.718Z",
+  "finishedAt": "2026-10-04T07:05:22.156Z",
+  "haltReason": "Stopped before first continuation HTTP: exact-model free quota cannot be freshly verified because the Bailian UI is logged out; prior quota observations are not authorization to call. No continuation request sent.",
+  "pendingRequests": 1,
+  "quotaFiles": 0,
+  "carried": {
+    "requests": 1,
+    "reportedTokens": 3104,
+    "caseId": "paraphrase",
+    "newInvocation": false,
+    "evidenceManifest": "iris-opinion-decision-only-20261002-manifest.json",
+    "evidenceManifestSha256": "1a6775684ad0d4381a13e1ee4336bae68896e925177b35b4d7153cbcca92b671"
+  },
+  "unreached": [
+    "handled",
+    "hypothesis",
+    "separate-next",
+    "inference",
+    "qualified-risk",
+    "arithmetic",
+    "material-update",
+    "negative-role-swap",
+    "negative-time-swap"
+  ],
+  "attribution": "The current Bailian UI was logged out, so a fresh exact-model free-quota observation was unavailable. The pending first request was manually aborted before HTTP. No new model outcome exists; the carried prior result is not a new call or whole-window acceptance.",
+  "verification": {
+    "pendingWireHash": true,
+    "probeSourceHashes": true,
+    "carriedEvidenceHashesAgainstPriorManifest": true,
+    "secretPatternScan": "No credential-shaped values, Bearer tokens or private-key headers found; key file was not read.",
+    "privateRawUnmodified": true
+  },
+  "files": [
+    {
+      "source": "opinion-decision-continuation-20261004.abort.json",
+      "target": "iris-opinion-decision-continuation-20261004.abort.json",
+      "sha256": "29847315998e242d24d77696eba16efa8579c4f02bc59529103dc668e14e6475",
+      "bytes": 240
+    },
+    {
+      "source": "opinion-decision-continuation-20261004.halted.json",
+      "target": "iris-opinion-decision-continuation-20261004.halted.json",
+      "sha256": "99d47e41f6e41e1fe38233eab1c13958ad0da103cd32182dd79b0b0513fef97e",
+      "bytes": 362
+    },
+    {
+      "source": "opinion-decision-continuation-20261004.json",
+      "target": "iris-opinion-decision-continuation-20261004.json",
+      "sha256": "64e9c6f9df9e84f3cfc4be484766fb6c7def32c668857af62d50fb02dd3cc822",
+      "bytes": 22463
+    },
+    {
+      "source": "opinion-decision-continuation-20261004.pending-1.json",
+      "target": "iris-opinion-decision-continuation-20261004.pending-1.json",
+      "sha256": "7cb3bcfe4276403e081d062d345906a4a2ff5c3350f59fb74173e01b9171dff9",
+      "bytes": 10620
+    },
+    {
+      "source": "opinion-decision-continuation-20261004.preflight.json",
+      "target": "iris-opinion-decision-continuation-20261004.preflight.json",
+      "sha256": "b0a8d39223705980fd7587a2741f800a7433074b4ccc493c83f5125ad44e8a30",
+      "bytes": 7677
+    },
+    {
+      "source": "opinion-decision-continuation-20261004.started.json",
+      "target": "iris-opinion-decision-continuation-20261004.started.json",
+      "sha256": "de2b7ffa5a15ded0ea4416ce0a65e49c03d448a287a6dc6634e12932518bbea8",
+      "bytes": 7029
+    },
+    {
+      "source": "opinion-decision-continuation-20261004.mts",
+      "target": "iris-opinion-decision-continuation-20261004-runner.txt",
+      "sha256": "d7b080804307967e766173076fe7d25141f33ee938422f34ac064873f96a614d",
+      "bytes": 27494
+    },
+    {
+      "source": "run-opinion-decision-continuation.ps1",
+      "target": "iris-opinion-decision-continuation-20261004-launcher.txt",
+      "sha256": "6eb5022b2dc2395b98a3a4c70c3f2048ea8cc72ad218ad431ee67c20cff6ae33",
+      "bytes": 1999
+    },
+    {
+      "source": "git:c265e9da330d916b82f3c306f7cf43fca6c52503:docs/development/iris-opinion-decision-only-20261002.md",
+      "target": "iris-opinion-decision-continuation-20261004-frozen-design.txt",
+      "sha256": "47b3a3a5abcc731a114e9639a2f7ac3bd627fc336687f0177b7425400dba9c77",
+      "bytes": 6752
+    }
+  ]
+}
