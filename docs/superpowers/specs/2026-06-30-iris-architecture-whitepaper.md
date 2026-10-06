@@ -517,6 +517,16 @@ pair; they must not recompute an imagined candidate after the fact. The
 [2026-10-04 integration record](../../development/iris-opinion-runtime-20261004.md) separates the
 bounded synthetic acceptance, local runtime wiring and still-required real Feishu acceptance.
 
+Proactive discussion may explicitly select `IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE=shared|dedicated`.
+The absent selector defaults to shared; an empty or unknown selector is invalid. Dedicated configuration
+must supply its own provider, endpoint, credential and model, with no field-by-field fallback to the
+ordinary Q&A configuration. Missing or invalid dedicated settings stop PD startup before resources or
+requests. Explicit token/thinking controls affect only the selected client; absent controls preserve
+the existing request. Runtime, synthetic CLI and pilot Compose must preserve this boundary. Model
+selection neither enables speech nor transfers synthetic credentials or model acceptance to real-group
+use. The [configuration-isolation record](../../development/iris-pd-model-isolation-20261006.md)
+distinguishes expressible transport settings from complete runner-policy or semantic equivalence.
+
 Model-facing contracts must state the decision, issue and evidence relationships required by
 runtime validation; a shape-only JSON Schema is not proof those relationships or semantics hold.
 The assessment adapter constrains generation to complete silence/new-issue/existing-new-evidence/

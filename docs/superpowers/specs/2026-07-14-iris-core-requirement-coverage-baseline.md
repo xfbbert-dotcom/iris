@@ -1,5 +1,12 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-06：主动讨论独立模型配置的本地接入
+
+[配置隔离记录](../../development/iris-pd-model-isolation-20261006.md)增加显式shared/dedicated
+选择，覆盖runtime、CLI、Compose与可选传输参数；普通问答仍用原通用配置。专用配置
+缺失不回退，选择模型不启用发言。验证详情以该记录为准，无新增实模、真实飞书或部署
+验收；IRIS-CORE-005仍部分实现。10月4日的生产快照和有限Qwen证据保留各自时点/范围。
+
 ## 2026-10-04：生产只读差异已核验
 
 [快照](../../development/iris-production-preflight-20261004.md)确认生产Core f6a6dd4、

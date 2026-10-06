@@ -37,8 +37,8 @@ Feishu acceptance or deployment; initial free assessment and reviewer explanatio
 documented defects. Earlier failed candidates below remain historical evidence.
 
 The local runtime can select `IRIS_PROACTIVE_DISCUSSION_OPINION_MODE=source-plan`; synthetic
-evaluation uses `--opinion-mode source-plan`. Both default to `legacy` and use the existing model
-configuration. This selects the opinion contract only: existing source permissions and speech
+evaluation uses `--opinion-mode source-plan`. Both default to `legacy`. The separate model selector
+defaults to the existing shared model configuration. This selects the opinion contract only: existing source permissions and speech
 enablement still apply. Consult the record for current local verification and authorization;
 do not enable production speech or run paid evaluation from this example.
 Local integration commit `1ea3ae7e` passed Core 5012 tests (469 conditional skips), typecheck,
@@ -47,7 +47,7 @@ final pairs through this entry point with trace both on and off; it is not a new
 The subsequent [PostgreSQL acceptance](docs/development/iris-opinion-postgres-20261004.md) replays
 archived responses through the actual source-plan model, database and fake delivery: one accepted
 opinion and one structured skip passed, with 6/6 e2e tests and typecheck passing. Application code
-remains `1ea3ae7e`; real Feishu delivery and deployment remain unaccepted.
+at that acceptance was `1ea3ae7e`; real Feishu delivery and deployment remain unaccepted.
 The subsequent [pilot configuration fix](docs/development/iris-opinion-pilot-config-20261004.md)
 forwards the mode into the shipped Core container; its default remains legacy. Actual Compose
 rendering and runtime-mode tests pass locally; no deployment or production model check is implied.
@@ -55,6 +55,15 @@ An authorized [read-only production snapshot](docs/development/iris-production-p
 on October 4 found Core `f6a6dd4`, `gemini-3.5-flash-lite` and migrations through 0058, with no new
 PD module/tables. No deployment or setting changed; the bounded Qwen evidence does not validate
 that production model, and live in-memory activation was not inspected.
+
+The [October 6 model isolation](docs/development/iris-pd-model-isolation-20261006.md) adds
+`IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE=shared|dedicated` across runtime, synthetic CLI and pilot
+Compose. Dedicated mode requires its own complete `IRIS_PROACTIVE_DISCUSSION_MODEL_*` configuration;
+it never borrows ordinary Q&A fields. Optional explicit token/thinking controls are forwarded without
+changing existing Q&A requests. Defaults stay shared, legacy and speech disabled. This is local
+configuration work, with no new live-model, Feishu or deployment acceptance.
+Application commit `8c120f7b` passes local Core 5057 tests (471 conditional skips), CLI 11,
+Compose 39, typecheck, build and independent review; the linked record contains the four-place closure.
 
 ### Retained prior candidate results
 

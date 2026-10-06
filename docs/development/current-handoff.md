@@ -1,5 +1,17 @@
 # Iris 当前接手入口
 
+## 2026-10-06 最新：本地隔离主动讨论模型配置
+
+[本轮实现与验证](iris-pd-model-isolation-20261006.md)补显式shared/dedicated模型选择，
+runtime与CLI使用同一读取器，pilot Compose传递全部专用字段。独立配置缺项即停止PD，
+不能借用普通问答配置；显式max_tokens/enable_thinking可进入实际请求。缺省仍shared，
+意见mode仍legacy，主动发言仍关闭。未修改凭据、生产或模型；真实模型HTTP和飞书外发为0。
+应用修复`8c120f7b`，本地Core5057通过/471条件跳过、CLI11、Compose39、类型/构建及独立
+审查通过；此前有限语义结论和整体缺陷保持。工作树与分支仍为
+`D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86` / `codex/iris-daily-pilot-followup`。
+下一步是获准发布和原单群验收；尚缺push/部署/迁移/模型配置/真实群材料及发送授权，
+不能将现有合成key直接改作真实群凭据，也不能用继续本地加固替代该验收。
+
 ## 2026-10-04 最新：获准只读核验生产，确认旧版本与模型差异
 
 [现场快照与探针](iris-production-preflight-20261004.md)：09:12–09:16 UTC核验生产Core

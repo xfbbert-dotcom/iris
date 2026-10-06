@@ -83,6 +83,10 @@ Tasks 1–7 的完整失败、候选与审查范围见[执行记录](iris-proact
 
 ## 两轮真实模型门禁
 
+2026-10-06配置补注：当前runtime和CLI已支持[显式共享/独立模型](iris-pd-model-isolation-20261006.md)，
+下文仅描述旧通用配置入口。缺省shared保持该入口；dedicated必须完整提供专用前缀配置，
+不得从通用字段补齐。当前有限语义门槛仍以10月4日八例两负控记录为准，不因配置修复重跑旧两轮实验。
+
 CLI 仅接受现有 `IRIS_MODEL_PROVIDER=openai-compatible`、`IRIS_MODEL_BASE_URL`、`IRIS_MODEL_API_KEY`、`IRIS_MODEL_NAME` 和可选 timeout，默认运行固定合成集、两轮；没有飞书 reader/replier/token provider import，不加载生产群历史，不接受从消息里指定来源/工具/目标群。可通过用户指定的现有本地模型配置安全加载；如用户明确授权服务端就地复用，则先核实实际配置路径，在独立模型进程中只读解析、仅传递上述模型字段，不复制密钥到本地、不继承生产飞书/数据库/Node 选项。实际安全边界和首次运行见[服务端评估记录](iris-proactive-discussion-model-eval-20260915.md#服务端就地使用配置没有复制密钥)。不要把密钥写到命令参数、报告或聊天，不搜索凭据库，不能从历史文档自行推定服务端取用授权。
 
 ```text

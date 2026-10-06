@@ -1,5 +1,15 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-06：主动讨论模型与普通问答配置耦合，归档传输选项未接入运行客户端
+
+PD runtime和CLI直接读取通用IRIS_MODEL配置，无法独立选择模型；生产Gemini与已验收
+合成Qwen的差异不能靠改通用变量解决。另确认归档wire带max_tokens/enable_thinking，
+运行客户端缺少这两个显式字段。[本地修复](../development/iris-pd-model-isolation-20261006.md)
+采用shared/dedicated明确选择，独立配置必须完整、不混入通用字段，错误时先于DB/HTTP停止；
+仅显式透传可选字段，保留普通问答旧请求。runtime、CLI和真实Compose渲染回归均先复现
+问题，最终结果见修复记录。本轮不更换线上模型，不新增实模语义/真实群验收；本地配置
+通过不能迁移为部署或模型能力通过，原语义局限仍开放。
+
 ## 2026-10-04：运行配置可用，但pilot容器遗漏意见合同变量
 
 实际Compose渲染证实，设置source-plan后Core环境仍缺少mode，导致应用默认legacy。
