@@ -64,6 +64,14 @@ export function createOpenAICompatibleChatCompletionsClient({
     && structuredOutputMode !== "json_schema" && structuredOutputMode !== "json_object") {
     throw new Error("model provider structured output mode is invalid");
   }
+  const maxTokens = config.maxTokens;
+  if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)) {
+    throw new Error("model provider maxTokens must be a positive safe integer");
+  }
+  const enableThinking = config.enableThinking;
+  if (enableThinking !== undefined && typeof enableThinking !== "boolean") {
+    throw new Error("model provider enableThinking must be a boolean");
+  }
 
   return {
     async complete(messages, options) {
@@ -92,6 +100,8 @@ export function createOpenAICompatibleChatCompletionsClient({
               model: config.model,
               messages: requestMessages,
               ...(requestFormat === undefined ? {} : { response_format: requestFormat }),
+              ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
+              ...(enableThinking === undefined ? {} : { enable_thinking: enableThinking }),
             }),
             timeoutMs: remainingMs,
             scheduleTimeout,

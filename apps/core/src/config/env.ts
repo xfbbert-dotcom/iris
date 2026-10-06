@@ -12,6 +12,8 @@ export type ModelProviderConfig = {
   model: string;
   timeoutMs: number;
   structuredOutputMode?: "json_schema" | "json_object";
+  maxTokens?: number;
+  enableThinking?: boolean;
 };
 
 export type EmbeddingProviderConfig = {
@@ -272,6 +274,47 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
     model: readRequiredEnv("IRIS_MODEL_NAME", env.IRIS_MODEL_NAME),
     timeoutMs: readTimerDelayEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000),
     ...(structuredOutputMode === undefined ? {} : { structuredOutputMode }),
+  };
+}
+
+export function readProactiveDiscussionModelProviderConfig(
+  env: EnvLike = process.env,
+): ModelProviderConfig | undefined {
+  const source = env.IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE ?? "shared";
+  if (source === "shared") return readModelProviderConfig(env);
+  if (source !== "dedicated") {
+    throw new Error("IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE must be shared or dedicated");
+  }
+
+  // A dedicated profile is complete on its own; never combine providers' credentials or options.
+  const provider = readRequiredEnv(
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_PROVIDER", env.IRIS_PROACTIVE_DISCUSSION_MODEL_PROVIDER,
+  );
+  if (provider !== "openai-compatible") {
+    throw new Error("IRIS_PROACTIVE_DISCUSSION_MODEL_PROVIDER must be openai-compatible");
+  }
+  const structuredOutputMode = readOptionalEnv(env.IRIS_PROACTIVE_DISCUSSION_MODEL_STRUCTURED_OUTPUT_MODE);
+  if (structuredOutputMode !== undefined
+    && structuredOutputMode !== "json_schema" && structuredOutputMode !== "json_object") {
+    throw new Error("IRIS_PROACTIVE_DISCUSSION_MODEL_STRUCTURED_OUTPUT_MODE must be json_schema or json_object");
+  }
+  const maxTokens = readOptionalPositiveIntegerEnv(
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_MAX_TOKENS", env.IRIS_PROACTIVE_DISCUSSION_MODEL_MAX_TOKENS,
+  );
+  const enableThinking = readOptionalEnv(env.IRIS_PROACTIVE_DISCUSSION_MODEL_ENABLE_THINKING);
+  if (enableThinking !== undefined && enableThinking !== "true" && enableThinking !== "false") {
+    throw new Error("IRIS_PROACTIVE_DISCUSSION_MODEL_ENABLE_THINKING must be true or false");
+  }
+
+  return {
+    provider,
+    baseUrl: readHttpBaseUrlEnv("IRIS_PROACTIVE_DISCUSSION_MODEL_BASE_URL", env.IRIS_PROACTIVE_DISCUSSION_MODEL_BASE_URL),
+    apiKey: readRequiredEnv("IRIS_PROACTIVE_DISCUSSION_MODEL_API_KEY", env.IRIS_PROACTIVE_DISCUSSION_MODEL_API_KEY),
+    model: readRequiredEnv("IRIS_PROACTIVE_DISCUSSION_MODEL_NAME", env.IRIS_PROACTIVE_DISCUSSION_MODEL_NAME),
+    timeoutMs: readTimerDelayEnv("IRIS_PROACTIVE_DISCUSSION_MODEL_TIMEOUT_MS", env.IRIS_PROACTIVE_DISCUSSION_MODEL_TIMEOUT_MS, 30000),
+    ...(structuredOutputMode === undefined ? {} : { structuredOutputMode }),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(enableThinking === undefined ? {} : { enableThinking: enableThinking === "true" }),
   };
 }
 

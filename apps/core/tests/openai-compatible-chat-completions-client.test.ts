@@ -134,6 +134,37 @@ describe("OpenAICompatibleChatCompletionsClient", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { config: { maxTokens: 4096, enableThinking: false }, wire: { max_tokens: 4096, enable_thinking: false } },
+    { config: { maxTokens: 512 }, wire: { max_tokens: 512 } },
+    { config: { enableThinking: true }, wire: { enable_thinking: true } },
+  ])("sends only explicitly selected optional transport fields: $wire", async ({ config, wire }) => {
+    const requests: RequestInit[] = [];
+    const client = createOpenAICompatibleChatCompletionsClient({
+      config: { ...modelConfig(), ...config },
+      fetch: async (_url, init) => { requests.push(init!); return completionResponse("ok"); },
+    });
+    await expect(client.complete([{ role: "user", content: "Hello." }])).resolves.toBe("ok");
+    expect(JSON.parse(String(requests[0]!.body))).toEqual({
+      model: "model-a", messages: [{ role: "user", content: "Hello." }], ...wire,
+    });
+  });
+
+  it.each([
+    ["maxTokens", 0], ["maxTokens", -1], ["maxTokens", 1.5],
+    ["maxTokens", Number.MAX_SAFE_INTEGER + 1], ["maxTokens", "private-invalid-tokens"],
+    ["maxTokens", null], ["enableThinking", "private-invalid-thinking"],
+    ["enableThinking", 0], ["enableThinking", null],
+  ])("rejects invalid directly supplied %s before HTTP", (name, value) => {
+    const fetch = vi.fn(async () => completionResponse("unexpected"));
+    const create = () => createOpenAICompatibleChatCompletionsClient({
+      config: { ...modelConfig(), [name as string]: value } as ModelProviderConfig, fetch,
+    });
+    expect(create).toThrow(`model provider ${name}`);
+    expect(create).not.toThrow("private-invalid");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it.each(["json_schema", "json_object"] as const)("rejects over-budget or invalid schema before HTTP in mode %s", async structuredOutputMode => {
     const fetch = vi.fn(async () => completionResponse("unexpected"));
     const client = createOpenAICompatibleChatCompletionsClient({ config: { ...modelConfig(), structuredOutputMode }, fetch });

@@ -10,8 +10,9 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const guard = `import { register } from 'node:module'; register(${JSON.stringify("data:text/javascript," + encodeURIComponent("export async function resolve(s,c,n){if(/feishu-(chat-history-reader|message-replier|tenant-access-token-provider)/.test(s))throw Error('forbidden sending dependency');return n(s,c)}"))}, import.meta.url);`;
 function run(args, env = {}, entry = script) {
   return new Promise((resolve, reject) => {
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("IRIS_PROACTIVE_DISCUSSION_MODEL_")));
     const child = spawn(process.execPath, ["--import", "data:text/javascript," + encodeURIComponent(guard), "--import", "tsx", ...(entry === script ? [script, ...args] : ["--input-type=module", "--eval", entry])], {
-      cwd: root, env: { ...process.env, IRIS_MODEL_PROVIDER: "", IRIS_MODEL_API_KEY: "", IRIS_MODEL_BASE_URL: "", IRIS_MODEL_NAME: "", ...env }, stdio: ["ignore", "pipe", "pipe"],
+      cwd: root, env: { ...inherited, IRIS_MODEL_PROVIDER: "", IRIS_MODEL_API_KEY: "", IRIS_MODEL_BASE_URL: "", IRIS_MODEL_NAME: "", ...env }, stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "", stderr = "";
     child.stdout.on("data", b => { stdout += b; }); child.stderr.on("data", b => { stderr += b; });
@@ -22,7 +23,7 @@ async function mockProvider(operation, fail = false) {
   const requests = [];
   const server = createServer(async (req, res) => {
     let body = ""; for await (const chunk of req) body += chunk;
-    requests.push({ url: req.url, body: JSON.parse(body), receivedAt: performance.now() });
+    requests.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse(body), receivedAt: performance.now() });
     res.setHeader("Content-Type", "application/json");
     if (fail) { res.statusCode = 401; res.end(JSON.stringify({ error: "synthetic-secret" })); return; }
     res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "skip", reason: "no_work_value", issueRef: null,
@@ -33,6 +34,44 @@ async function mockProvider(operation, fail = false) {
     IRIS_MODEL_BASE_URL: `http://127.0.0.1:${server.address().port}/v1`, IRIS_MODEL_TIMEOUT_MS: "1000" }, requests); }
   finally { await new Promise(resolve => server.close(resolve)); }
 }
+
+test("CLI dedicated model uses its own endpoint, credential and explicit transport settings", async () => {
+  await mockProvider(async (common, sharedRequests) => {
+    await mockProvider(async (pd, pdRequests) => {
+      const dedicated = Object.fromEntries(Object.entries(pd).map(([key, value]) => [key.replace("IRIS_MODEL_", "IRIS_PROACTIVE_DISCUSSION_MODEL_"), value]));
+      const result = await run(["--rounds", "1", "--opinion-mode", "source-plan", "--include-synthetic-trace", "true"], {
+        ...common, ...dedicated, IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE: "dedicated",
+        IRIS_PROACTIVE_DISCUSSION_MODEL_API_KEY: "dedicated-synthetic-key", IRIS_PROACTIVE_DISCUSSION_MODEL_NAME: "dedicated-synthetic-model",
+        IRIS_PROACTIVE_DISCUSSION_MODEL_STRUCTURED_OUTPUT_MODE: "json_object",
+        IRIS_PROACTIVE_DISCUSSION_MODEL_MAX_TOKENS: "4096", IRIS_PROACTIVE_DISCUSSION_MODEL_ENABLE_THINKING: "false",
+      });
+      assert.equal(result.code, 1, result.stderr);
+      assert.equal(sharedRequests.length, 0);
+      assert.equal(pdRequests.length, 15);
+      for (const request of pdRequests) {
+        assert.equal(request.url, "/v1/chat/completions");
+        assert.equal(request.authorization, "Bearer dedicated-synthetic-key");
+        assert.equal(request.body.model, "dedicated-synthetic-model");
+        assert.deepEqual(request.body.response_format, { type: "json_object" });
+        assert.equal(request.body.max_tokens, 4096); assert.equal(request.body.enable_thinking, false);
+      }
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.opinionMode, "source-plan");
+      assert.ok(!JSON.stringify(result).includes("dedicated-synthetic-key"));
+    });
+  });
+});
+
+test("CLI never falls back to shared provider for missing or invalid dedicated configuration", async () => {
+  await mockProvider(async (env, requests) => {
+    for (const source of ["dedicated", "", "invalid-source-private-value"]) {
+      const result = await run(["--rounds", "1"], { ...env, IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE: source });
+      assert.equal(result.code, 2);
+      assert.ok(!JSON.stringify(result).includes("invalid-source-private-value"));
+    }
+    assert.equal(requests.length, 0);
+  });
+});
 
 test("CLI default two rounds actually call all synthetic cases and report decision failures with nonzero exit", async () => {
   await mockProvider(async (env, requests) => {

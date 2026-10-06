@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { readModelProviderConfig } from "../../apps/core/src/config/env.js";
+import { readProactiveDiscussionModelProviderConfig } from "../../apps/core/src/config/env.js";
 import {
   createOpenAICompatibleChatCompletionsClient,
   type OpenAICompatibleChatCompletionsClient,
@@ -872,7 +872,7 @@ function markSyntheticTraceIncomplete(trace: SyntheticPdEvalTrace): void {
 async function main() {
   try {
     const { rounds, requestIntervalMs, includeSyntheticTrace, opinionMode } = parseArguments(process.argv.slice(2));
-    const config = readModelProviderConfig();
+    const config = readProactiveDiscussionModelProviderConfig();
     if (!config) throw new Error("missing model config");
     const fetch = createRequestPacedFetch({ fetch: globalThis.fetch, requestIntervalMs });
     const { cases, results, syntheticTrace } = await runSyntheticProactiveDiscussionEval({
@@ -893,7 +893,7 @@ async function main() {
       typeof value === "string" ? value.replaceAll(config.apiKey, "[REDACTED]") : value, 2));
     process.exitCode = results.some(r => r.error !== null) || decisionMismatches.length ? 1 : 0;
   } catch {
-    console.error("proactive-eval configuration/arguments unavailable; use IRIS_MODEL_PROVIDER, IRIS_MODEL_BASE_URL, IRIS_MODEL_API_KEY, IRIS_MODEL_NAME, --rounds 1..10, --request-interval-ms 0..60000, --include-synthetic-trace true|false and --opinion-mode legacy|source-plan");
+    console.error("proactive-eval configuration/arguments unavailable; use IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE=shared|dedicated and the selected IRIS_MODEL_* or IRIS_PROACTIVE_DISCUSSION_MODEL_* configuration, --rounds 1..10, --request-interval-ms 0..60000, --include-synthetic-trace true|false and --opinion-mode legacy|source-plan");
     process.exitCode = 2;
   }
 }

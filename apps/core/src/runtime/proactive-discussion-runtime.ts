@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readProactiveDiscussionConfig } from "../config/runtime-config.js";
-import { readEmbeddingProviderConfig, readModelProviderConfig, readOptionalFeishuBotOpenId, readOptionalFeishuOpenApiConfig, type EnvLike } from "../config/env.js";
+import { readEmbeddingProviderConfig, readProactiveDiscussionModelProviderConfig, readOptionalFeishuBotOpenId, readOptionalFeishuOpenApiConfig, type EnvLike } from "../config/env.js";
 import { readDatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 import type { RuntimeController } from "../admin/runtime-controller.js";
@@ -162,7 +162,7 @@ export function createProactiveDiscussionRuntime({ env = process.env, runtimeCon
 }
 
 async function createDefaultResources({ env, runtimeController, isStopping, dependencies = {} }: ResourceInput): Promise<PdRuntimeResources> {
-  const feishu = readOptionalFeishuOpenApiConfig(env), modelConfig = readModelProviderConfig(env);
+  const feishu = readOptionalFeishuOpenApiConfig(env), modelConfig = readProactiveDiscussionModelProviderConfig(env);
   const botOpenId = readOptionalFeishuBotOpenId(env);
   if (!feishu || !modelConfig || !botOpenId || !runtimeController) throw new Error("proactive dependencies unavailable");
   const fetch: typeof globalThis.fetch = (...args) => {

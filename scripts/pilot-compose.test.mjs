@@ -49,6 +49,7 @@ const documentReindexQueueSource = readFileSync(
 const caddyfile = readFileSync("deploy/pilot/Caddyfile", "utf8");
 const pilotCiEnv = readFileSync("deploy/pilot/ci.env", "utf8");
 const pilotEnvExample = readFileSync(".env.pilot.example", "utf8");
+const localEnvExample = readFileSync(".env.example", "utf8");
 const localEmbeddingMigrationScript = readFileSync(
   "deploy/pilot/migrate-local-embedding.sh",
   "utf8",
@@ -90,6 +91,77 @@ test("forwards the opinion contract into Core with legacy as the absent default"
 test("preserves explicit empty and invalid opinion modes for runtime rejection", () => {
   const name = "IRIS_PROACTIVE_DISCUSSION_OPINION_MODE";
   for (const value of ["", "invalid-opinion-mode"]) {
+    const rendered = loadPilotCompose("deploy/pilot/ci.env", { [name]: value });
+    assert.equal(rendered.services.core.environment[name], value);
+  }
+});
+
+test("defaults the discussion model source to shared without dedicated configuration", () => {
+  const sourceName = "IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE";
+  const dedicatedNames = [
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_PROVIDER",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_BASE_URL",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_API_KEY",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_NAME",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_TIMEOUT_MS",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_STRUCTURED_OUTPUT_MODE",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_MAX_TOKENS",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_ENABLE_THINKING",
+  ];
+  const defaults = loadPilotCompose("deploy/pilot/ci.env", {
+    [sourceName]: undefined,
+    ...Object.fromEntries(dedicatedNames.map((name) => [name, undefined])),
+  });
+  assert.equal(defaults.services.core.environment[sourceName], "shared");
+  for (const name of dedicatedNames) {
+    assert.equal(defaults.services.core.environment[name], "");
+  }
+  const shared = loadPilotCompose("deploy/pilot/ci.env", {
+    [sourceName]: "shared",
+    ...Object.fromEntries(dedicatedNames.map((name) => [name, ""])),
+  });
+  assert.deepEqual(shared.services, defaults.services);
+  for (const example of [localEnvExample, pilotEnvExample]) {
+    assert.equal(readEnvAssignment(example, sourceName), "shared");
+    for (const name of dedicatedNames) assert.equal(readEnvAssignment(example, name), "");
+    assert.equal(readEnvAssignment(example, "IRIS_PROACTIVE_DISCUSSION_ENABLED"), "false");
+    assert.equal(readEnvAssignment(example, "IRIS_PROACTIVE_DISCUSSION_GROUP_IDS"), "");
+  }
+});
+
+test("forwards dedicated discussion model settings only into Core", () => {
+  const dedicated = {
+    IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE: "dedicated",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_PROVIDER: "openai-compatible",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_BASE_URL: "https://discussion-model.invalid/v1",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_API_KEY: "ci-discussion-model-key",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_NAME: "ci-discussion-model",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_TIMEOUT_MS: "60000",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_STRUCTURED_OUTPUT_MODE: "json_object",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_MAX_TOKENS: "4096",
+    IRIS_PROACTIVE_DISCUSSION_MODEL_ENABLE_THINKING: "false",
+  };
+  const defaults = loadPilotCompose("deploy/pilot/ci.env", Object.fromEntries(
+    Object.keys(dedicated).map((name) => [name, undefined]),
+  ));
+  const selected = loadPilotCompose("deploy/pilot/ci.env", dedicated);
+  assert.deepEqual(selected.services.core.environment, {
+    ...defaults.services.core.environment,
+    ...dedicated,
+  });
+  assert.equal(selected.services.core.environment.IRIS_PROACTIVE_DISCUSSION_ENABLED, "false");
+  assert.equal(selected.services.core.environment.IRIS_PROACTIVE_DISCUSSION_GROUP_IDS, "");
+  assert.equal(selected.services.core.environment.IRIS_RUNTIME_GLOBAL_ENABLED, "false");
+  for (const [serviceName, service] of Object.entries(selected.services)) {
+    if (serviceName === "core") continue;
+    assert.deepEqual(service, defaults.services[serviceName]);
+    for (const name of Object.keys(dedicated)) assert.equal(service.environment?.[name], undefined);
+  }
+});
+
+test("preserves empty and invalid discussion model sources for runtime rejection", () => {
+  const name = "IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE";
+  for (const value of ["", "invalid-model-source"]) {
     const rendered = loadPilotCompose("deploy/pilot/ci.env", { [name]: value });
     assert.equal(rendered.services.core.environment[name], value);
   }
