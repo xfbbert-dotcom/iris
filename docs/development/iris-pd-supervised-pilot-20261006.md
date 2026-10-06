@@ -73,12 +73,16 @@ provider响应封装；`accepted`不表示语义正确或飞书已发送，`unce
 ## 待授权的首个产品窗口
 
 先做原固定群的一次真实讨论触发。目标配置为source-plan、dedicated、qwen3.8-max、
-json_object、4096、thinking=false、60000ms；QA仍为既有配置。精确群取
+json_object、4096、thinking=false、60000ms；QA模型配置保持，首窗不恢复普通问答。
+在global仍关闭时暂置`replyWhenMentioned=false`及`generateKnowledgeDrafts=false`，避免
+Qwen门禁外的普通QA/知识草稿模型调用；[普通QA闸门](../../apps/core/src/admin/runtime-controller.ts)
+与[知识卡闸门](../../apps/core/src/runtime/knowledge-card-runtime.ts)须现场核对。
+精确群取
 [PD_PILOT_CHAT](../../apps/core/src/proactive-discussion/contracts.ts)，无需用户重新查ID。
 上述门禁限制8次真实HTTP；任何停止原因都保留，不换窗口重采以求通过。
 
 执行前需要明确授权：在生产安装/接入试点工具与专用配置；将原群获准来源交给Qwen并把
-现有受保护合成凭据扩展到此次真实群范围；恢复global所影响的既有入口；开启原群PD与
+现有受保护合成凭据扩展到此次真实群范围；按上述能力限制暂时开启global所影响的入口；开启原群PD与
 真实发言。当前授权仍缺这些范围。还须现场核对当前未禁用群及无群入口影响，不能把
 PD名单承诺成全局名单；如果仅允许原群，则必须保持global关闭直到范围隔离得到解决。
 文档检索embedding也须确认使用既有本地服务，不能将Qwen门禁当作所有模型费用保证。
@@ -91,7 +95,9 @@ PD名单承诺成全局名单；如果仅允许原群，则必须保持global关
    凭据只通过受保护配置提供。新工具退出即没有可用PD模型入口。先用无业务正文的本地
    假上游验证实际接线路径，确认没有绕过门禁；不能只改env就宣称逐请求保护生效。
 3. 原群名单启动PD runtime，保持policy关闭；确认专用配置、审计角色、running/status，
-   旧planner/delivery/memory/task/Wiki能力仍关闭。依本次授权恢复global与原群读取、
+   旧planner/delivery/memory/task/Wiki能力仍关闭。global关闭时先通过受保护capabilities
+   接口临时关闭replyWhenMentioned和generateKnowledgeDrafts并核持久状态；其他模型入口
+   若无法证明关闭或仅本地免费运行则停止。依本次授权开启global与原群读取、
    proactiveSpeech；最后从DB读取当前policy版本，调用受保护
    `PUT /internal/proactive-discussion/policy {chatId,expectedVersion,enabled:true}`。
    不存在用0；409重新读，不强写或伪造批准。
@@ -130,7 +136,7 @@ PD名单承诺成全局名单；如果仅允许原群，则必须保持global关
 | 最终`node --test scripts/pilot/proactive-discussion-free-gate.test.mjs` | 20通过、0失败/跳过，2.728秒；在全套之后完成入口断连原因回归并由主代理重跑，未把全套写成215项。 |
 | `node --check`及CLI `--help` | 均exit0；没有传入真实凭据或启动生产门禁。 |
 | 独立范围审查 | 初审发现dispatch前异步竞争和缺content响应未停窗，修复后的18项复跑通过；随后最终写入与入口断连回归由主代理验证，最终共20项。控制流程审查指出结束步骤缺明确global关闭调用，已补。 |
-| 文档路径与diff | 本轮所改5份记录309个相对文件链接有效，`git diff --check`通过；Git提示LF/CRLF归一化，不是测试失败。 |
+| 文档路径与diff | 本轮所改5份记录311个相对文件链接有效，`git diff --check`通过；Git提示LF/CRLF归一化，不是测试失败。 |
 
 新测试的入站是实际本机HTTP，出站为注入的模拟fetch，不连接真实供应商。
 保留实际RED：初版在途停止等到30秒超时、并发产生两个pending、复用旧观察获200；
