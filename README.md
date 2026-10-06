@@ -29,6 +29,14 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [October 6 release preparation](docs/development/iris-release-readiness-20261006.md) follows the
+model-isolation fix: building its exact runtime image exposed two production dependency audit alerts.
+The bounded dependency update, final local image checks and proposed release scope are recorded there.
+Candidate `2116ff70` passes Core 5057 (471 conditional skips), pilot 195, typecheck/build and an offline
+Node 22 runtime-image check. Production dependency audit is zero; nine development-tool alerts remain
+recorded and their packages are absent from the runtime image.
+No push, deployment, production changes or new model/Feishu acceptance occurred in that preparation.
+
 The [source-plan runtime record](docs/development/iris-opinion-runtime-20261004.md) records the
 latest bounded semantic acceptance. Application `397fedbf` passed the frozen eight synthetic business
 cases and both source-role/time controls on exact `qwen3.8-max`, across retained and resumed

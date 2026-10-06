@@ -1,5 +1,12 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-06：本地发布候选依赖修复与镜像准备
+
+[发布准备记录](../../development/iris-release-readiness-20261006.md)处理真实构建暴露的
+Fastify/fast-uri运行依赖告警，保留精确镜像、audit及本地回归层级。没有改变主动讨论
+语义合同，不新增真实模型、真实飞书或部署验收；IRIS-CORE-005仍部分实现。生产仍以
+10月4日只读快照为最后观察，不将本地新版本当成上线。
+
 ## 2026-10-06：主动讨论独立模型配置的本地接入
 
 [配置隔离记录](../../development/iris-pd-model-isolation-20261006.md)增加显式shared/dedicated
