@@ -1,0 +1,36 @@
+{
+  "capturedAt": "2026-10-06T06:14:29.899797+00:00",
+  "sourceCommit": "f6a6dd4187dcb1b574fb78a11f837edec8b09b89",
+  "encryptedArchiveBytes": 722936328,
+  "encryptedArchiveSha256": "93fe394bffe7e2bf3e791a31c5d3fe162a005a50cd53de58d9b480a0808d042d",
+  "offHostCopyHashMatches": true,
+  "existingIdentityDecryption": true,
+  "identityTransferred": false,
+  "manifest": {
+    "created_at": "20261006T054756Z",
+    "format": "iris-pilot-paired-v1",
+    "runtime_global_enabled": "false",
+    "runtime_desired_global_enabled": "false",
+    "runtime_revision": "3393",
+    "runtime_persistence_storage": "postgres",
+    "runtime_persistence_ok": "true"
+  },
+  "pgRestoreListPassed": true,
+  "redisCheckRdbPassed": true,
+  "payloads": {
+    "postgres.dump": {
+      "bytes": 722749423,
+      "sha256": "2206719b5ea3e91f54d932f35308f7286ea84ff0ecf737b2e26ab211af3db922"
+    },
+    "redis.rdb": {
+      "bytes": 268,
+      "sha256": "5617a46cbadd423eaddb37c100be8a9348250a470ea3c4bb9864ca3cd8b78959"
+    }
+  },
+  "inspectionOutputHashes": {
+    "pg": "7a0f5a7f1796c591a9372fae835a52c0330bf05ee9ab0b8efe578bcb456955b4",
+    "redis": "7cf91ea95b987ad2a7fd7eba458c4921389ace1b48e16313490ae77bdd8e8809"
+  },
+  "productionDatabaseRestored": false,
+  "derivedPlaintextRemoved": true
+}

@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-06T06:20:24.814130+00:00",
+  "vantage": "operator workstation",
+  "hostnameFromExistingCaddyEnvironment": true,
+  "publicHttp": {
+    "/health": 200,
+    "/internal/status": 404,
+    "/internal/runtime-control/status": 404
+  },
+  "caddyRunning": true,
+  "caddyContainerId": "e40996a5e3b465b492ec4e2f3439b5f9d96438dcfde92590bbf41802b81460e3",
+  "feishuMessagesSent": 0
+}

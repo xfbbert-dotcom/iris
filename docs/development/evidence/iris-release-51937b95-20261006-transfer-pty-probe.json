@@ -1,0 +1,7 @@
+{
+  "transport": "SSH raw PTY encrypted-prefix probe",
+  "exitCode": 0,
+  "bytes": 1048576,
+  "seconds": 16.59,
+  "sha256": "f0f775efef67db2a218146d33e4009be98abc21cbbc8ed3e840da199f0ec28bd"
+}

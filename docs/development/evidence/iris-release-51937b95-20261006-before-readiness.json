@@ -1,0 +1,98 @@
+{
+  "capturedAt": "2026-10-06T05:46:28.922Z",
+  "ok": true,
+  "status": "ready",
+  "summary": {
+    "checkCount": 21,
+    "passCount": 21,
+    "warnCount": 0,
+    "failCount": 0,
+    "highestSeverity": "pass"
+  },
+  "checks": [
+    {
+      "id": "database",
+      "status": "pass"
+    },
+    {
+      "id": "formalTaskDrafts",
+      "status": "pass"
+    },
+    {
+      "id": "formalTaskActions",
+      "status": "pass"
+    },
+    {
+      "id": "serverPort",
+      "status": "pass"
+    },
+    {
+      "id": "feishuWebhookAuth",
+      "status": "pass"
+    },
+    {
+      "id": "feishuOpenApi",
+      "status": "pass"
+    },
+    {
+      "id": "feishuBotIdentity",
+      "status": "pass"
+    },
+    {
+      "id": "eventWorker",
+      "status": "pass"
+    },
+    {
+      "id": "documentSyncWorker",
+      "status": "pass"
+    },
+    {
+      "id": "reindexWorker",
+      "status": "pass"
+    },
+    {
+      "id": "answerDraftRuntime",
+      "status": "pass"
+    },
+    {
+      "id": "answerDraftModel",
+      "status": "pass"
+    },
+    {
+      "id": "documentEmbeddings",
+      "status": "pass"
+    },
+    {
+      "id": "answerDraftPermissionGuard",
+      "status": "pass"
+    },
+    {
+      "id": "internalApiToken",
+      "status": "pass"
+    },
+    {
+      "id": "knowledgeCards",
+      "status": "pass"
+    },
+    {
+      "id": "actionApprovals",
+      "status": "pass"
+    },
+    {
+      "id": "documentSourceGroupGrants",
+      "status": "pass"
+    },
+    {
+      "id": "knowledgeConflicts",
+      "status": "pass"
+    },
+    {
+      "id": "actionReviews",
+      "status": "pass"
+    },
+    {
+      "id": "managedKnowledgeUpdates",
+      "status": "pass"
+    }
+  ]
+}

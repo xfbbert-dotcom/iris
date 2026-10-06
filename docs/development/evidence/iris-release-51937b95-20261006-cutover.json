@@ -1,0 +1,85 @@
+{
+  "capturedAt": "2026-10-06T06:15:44.375288+00:00",
+  "sourceCommit": "51937b954733020799e02f139abd32df74b3349c",
+  "imageId": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "coreContainerId": "e9c0aa9d9c8ff2c5059dbeb34de779acf2f2e7c66d7eef20055572fca01702c5",
+  "migration": {
+    "applied": [
+      "0059_proactive_discussion.sql",
+      "0060_proactive_discussion_prose_sources.sql"
+    ],
+    "skipped": [
+      "0001_document_sources.sql",
+      "0002_document_snapshots.sql",
+      "0003_document_fragments.sql",
+      "0004_embedding_profiles.sql",
+      "0005_dimension_sharded_vector_storage.sql",
+      "0012_conversation_messages.sql",
+      "0013_document_fragment_profile_uniqueness.sql",
+      "0014_denied_document_source_capability_lock.sql",
+      "0015_document_source_policy_overrides.sql",
+      "0016_runtime_control_state.sql",
+      "0017_group_memories.sql",
+      "0018_group_memory_request_fingerprints.sql",
+      "0019_group_memory_extraction.sql",
+      "0020_group_memory_extraction_failure_count.sql",
+      "0021_group_memory_extraction_memory_delete.sql",
+      "0022_group_memory_extraction_conflicts.sql",
+      "0023_conversation_message_mentions.sql",
+      "0024_semantic_thread_action_memory.sql",
+      "0025_conversation_state_extraction.sql",
+      "0026_projection_rollout_contracts.sql",
+      "0027_semantic_thread_action_review_fixes.sql",
+      "0028_conversation_message_deletion_tombstones.sql",
+      "0030_knowledge_draft_facts.sql",
+      "0031_knowledge_draft_presentations.sql",
+      "0032_action_approval_facts.sql",
+      "0033_approval_interaction_intents.sql",
+      "0034_action_review_attestations.sql",
+      "0035_knowledge_publications.sql",
+      "0036_knowledge_draft_publication_metadata.sql",
+      "0037_proactive_signal_candidates.sql",
+      "0038_proactive_signal_delivery_outbox.sql",
+      "0039_agent_execution_ledger.sql",
+      "0040_proactive_signal_feedback.sql",
+      "0041_wiki_space_authorizations.sql",
+      "0042_document_fragment_embeddings_1024.sql",
+      "0043_document_fragment_embeddings_768.sql",
+      "0044_knowledge_publication_group_result.sql",
+      "0045_answer_source_citations.sql",
+      "0046_knowledge_conflict_candidates.sql",
+      "0047_knowledge_conflict_callback_identities.sql",
+      "0048_knowledge_conflict_draft_reattestations.sql",
+      "0049_answer_reply_knowledge_conflict_candidate_version.sql",
+      "0050_answer_reply_not_sent_reconciliation.sql",
+      "0051_document_source_group_grants.sql",
+      "0052_managed_knowledge_publication_updates.sql",
+      "0053_action_review_target_fingerprint_compatibility.sql",
+      "0054_managed_knowledge_runtime_capability.sql",
+      "0055_managed_update_execution_identity.sql",
+      "0056_managed_resync_index_completion.sql",
+      "0057_governed_feishu_task_actions.sql",
+      "0058_shared_working_chat.sql"
+    ]
+  },
+  "phases": [
+    {
+      "phase": "old-core-stopped",
+      "at": "2026-10-06T06:15:33.557672+00:00"
+    },
+    {
+      "phase": "new-source-and-config-installed",
+      "at": "2026-10-06T06:15:33.825551+00:00"
+    },
+    {
+      "phase": "migrations-0059-0060-complete",
+      "at": "2026-10-06T06:15:38.090602+00:00"
+    },
+    {
+      "phase": "new-core-healthy-ingress-closed",
+      "at": "2026-10-06T06:15:44.374801+00:00"
+    }
+  ],
+  "caddyRunning": false,
+  "finalLiveAcceptancePending": true
+}

@@ -1,5 +1,13 @@
 # Iris 核心需求覆盖基线
 
+## 2026-10-06：51937b95生产发布与关闭状态验收通过
+
+[发布记录](../../development/iris-release-51937b95-20261006.md)：已实际部署Core51937b95，
+0059/0060迁移完成，备份机外解密/PG-RDB校验、live21项、新表权限、队列、公网边界
+通过。普通QA配置保持，global/desired/PD关闭，mode=legacy/source=shared。
+代码与迁移已到生产，不等于启用主动讨论；未新增模型测试或真实飞书质量验收，
+IRIS-CORE-005仍部分实现，原限定语义及历史文档1200字等局限保留。
+
 ## 2026-10-06：窗口外历史basis原文恢复的有限修复
 
 [应用51937b95](../../development/iris-pd-history-basis-20261006.md)补齐已核验basis引用到

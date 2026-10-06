@@ -1,0 +1,5 @@
+{
+  "transport": "SSH IPQoS none / aes128-gcm",
+  "timeoutSeconds": 30,
+  "bytesReceived": 851968
+}

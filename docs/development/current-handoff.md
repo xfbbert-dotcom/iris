@@ -1,5 +1,18 @@
 # Iris 当前接手入口
 
+## 2026-10-06 最新：51937b95已部署，global与主动讨论保持关闭
+
+[实际发布记录](iris-release-51937b95-20261006.md)：用户明确批准最终候选后完成生产
+Core切换与0059/0060迁移，06:19 UTC运行验收通过。精确镜像/源码51937b95；实际live
+readiness21/21、53项迁移及新9表/2序列权限、队列、公共health200/internal404均通过，
+本机公网复核亦通过。普通QA配置等价，非Core容器ID/镜像与既有Caddyfile保留。
+live global=false、desired=false、revision3394，PD关闭、mode=legacy/source=shared。
+不是机器人已启用或真实飞书质量通过；没有新模型测试/飞书外发。
+旧版成对备份已机外解密并校验PG/RDB，私钥未上传；慢下载与首次公网连接失败完整保留，
+未重跑迁移或恢复生产库。原限定语义、历史文档1200字及restore helper局限保留。
+实现工作树/分支仍为 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86` /
+`codex/iris-daily-pilot-followup`；本轮文档提交不是新的应用版本。
+
 ## 2026-10-06 最新：修复窗口外的历史依据正文缺失
 
 [修复记录](iris-pd-history-basis-20261006.md)，应用51937b95。第二轮CI确认context只留

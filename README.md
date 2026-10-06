@@ -29,13 +29,18 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+Application `51937b95` is [deployed with migrations 0059/0060](docs/development/iris-release-51937b95-20261006.md).
+The paired production backup was decrypted and inspected off-host before migration. Live readiness
+passes 21/21, database privileges and public ingress boundaries pass, and ordinary QA configuration
+is unchanged. Global and proactive discussion remain disabled; this is not real-Feishu quality acceptance.
+
 The [historical basis fix](docs/development/iris-pd-history-basis-20261006.md), application `51937b95`,
 restores verified source text for an existing issue after its premises leave the recent-message window.
 Exact message hashes, snapshot identities, permissions and text limits remain enforced. All 112 affected
 database-enabled PD cases, 25 new history cases, Core 5082 (471 conditional skips), typecheck/build and
 independent review pass. Exact-source CI also passes, including the full PostgreSQL stage, stack startup,
 role boundaries, paired backup/restore and Redis failure drill. This is not new model-semantic or real-Feishu
-acceptance, and the fix has not been deployed.
+acceptance. The subsequent deployment and remaining disabled state are recorded above.
 
 The [October 6 release execution](docs/development/iris-deploy-20261006.md) is authorized for push,
 free CI and a gated Core/migration deployment with proactive discussion disabled. The first CI

@@ -1,0 +1,14 @@
+{
+  "phase": "first public HTTP gate",
+  "sanitizedFailure": "000\ncurl: (7) Failed to connect to [public-host] port 443 after 44 ms: Couldn't connect to server\n",
+  "caddyRunning": false,
+  "coreHealthy": true,
+  "databaseGatePassed": true,
+  "liveReadiness": {
+    "checkCount": 21,
+    "passCount": 21,
+    "warnCount": 0,
+    "failCount": 0,
+    "highestSeverity": "pass"
+  }
+}

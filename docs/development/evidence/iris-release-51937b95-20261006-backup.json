@@ -1,0 +1,31 @@
+{
+  "capturedAt": "2026-10-06T05:50:26.075309+00:00",
+  "sourceCommit": "f6a6dd4187dcb1b574fb78a11f837edec8b09b89",
+  "path": "/opt/iris/repository/evidence/release-20261006-51937b95/backups/iris-20261006T054756Z.bundle.tar.age",
+  "bytes": 722936328,
+  "sha256": "93fe394bffe7e2bf3e791a31c5d3fe162a005a50cd53de58d9b480a0808d042d",
+  "mode": "0600",
+  "durableDisable": {
+    "httpStatus": 200,
+    "globalEnabled": false,
+    "durable": true
+  },
+  "defaultAndDedicatedBackupLocks": true,
+  "coreHealthyOldVersion": true,
+  "caddyRunning": false,
+  "phases": [
+    {
+      "phase": "durable-global-disabled",
+      "at": "2026-10-06T05:47:56.195738+00:00"
+    },
+    {
+      "phase": "caddy-stopped",
+      "at": "2026-10-06T05:47:56.489038+00:00"
+    },
+    {
+      "phase": "paired-backup-complete-ingress-closed",
+      "at": "2026-10-06T05:50:26.075105+00:00"
+    }
+  ],
+  "offHostDecryptionVerified": false
+}

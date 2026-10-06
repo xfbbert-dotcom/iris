@@ -1,0 +1,37 @@
+{
+  "scope": "backup transfer only; no migrations during transfer diagnosis",
+  "sftp": {
+    "timeoutSeconds": 120,
+    "partialBytes": 2818048,
+    "partialRetainedPrivately": true
+  },
+  "directSshPrefix": {
+    "timeoutSeconds": 40,
+    "targetBytes": 1048576,
+    "receivedByteCountNotRecorded": true
+  },
+  "followupEvidence": [
+    "iris-release-51937b95-20261006-transfer-probe.json",
+    "iris-release-51937b95-20261006-transfer-pty-probe.json",
+    "iris-release-51937b95-20261006-transfer-parallel-probe.json"
+  ],
+  "rawPtyPrefixHashMatchesRemote": true,
+  "serverDiskRead": {
+    "bytes": 33554432,
+    "seconds": 0.0527797
+  },
+  "attribution": "observed slow inbound SSH transfer; network/host cause not isolated",
+  "serverSshConfigurationChanged": false,
+  "credentialChanged": false,
+  "paidFallback": false,
+  "largeChunkTransfer": {
+    "streams": 24,
+    "observedAtStopSeconds": 600,
+    "completeParts": 15,
+    "manuallyStoppedSlowParts": 9,
+    "retainedBytes": 577530851,
+    "exitCode": 1,
+    "reason": "nine long-running streams remained slow; retained encrypted prefixes were verified against the server before smaller-range continuation",
+    "allRetainedPrefixesVerified": true
+  }
+}

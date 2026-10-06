@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-06T06:14:09.022709+00:00",
+  "transport": "verified-prefix SSH raw PTY range continuation",
+  "prefixesAllMatchRemote": true,
+  "retainedBytes": 577530851,
+  "rangeCount": 142,
+  "rangeTimeoutSeconds": 120,
+  "streams": 24,
+  "automaticRetries": 0,
+  "encryptedArchiveBytes": 722936328,
+  "sha256": "93fe394bffe7e2bf3e791a31c5d3fe162a005a50cd53de58d9b480a0808d042d",
+  "fullHashMatches": true,
+  "elapsedSeconds": 243.27
+}

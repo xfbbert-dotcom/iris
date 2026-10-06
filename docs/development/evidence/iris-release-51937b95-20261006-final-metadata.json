@@ -1,0 +1,27 @@
+{
+  "capturedAt": "2026-10-06T06:23:46.215757+00:00",
+  "repositoryHead": "51937b954733020799e02f139abd32df74b3349c",
+  "repositoryStatus": "M deploy/pilot/Caddyfile\n M deploy/pilot/docker-compose.yml\n?? .iris-approved-commit\n?? .iris-candidate-commit\n?? .iris-source-commit\n?? backups/\n?? evidence/",
+  "core": {
+    "imageId": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+    "imageTag": "iris-core:51937b954733020799e02f139abd32df74b3349c",
+    "state": "running",
+    "health": "healthy",
+    "composeFiles": "/opt/iris/repository/deploy/pilot/docker-compose.yml",
+    "workingDir": "/opt/iris/repository/deploy/pilot",
+    "environmentFile": "/opt/iris/repository/.env.pilot",
+    "revisionLabel": "51937b954733020799e02f139abd32df74b3349c"
+  },
+  "environment": {
+    "IRIS_MODEL_PROVIDER": "openai-compatible",
+    "IRIS_MODEL_NAME": "gemini-3.5-flash-lite",
+    "IRIS_MODEL_STRUCTURED_OUTPUT_MODE": "json_schema",
+    "IRIS_PROACTIVE_DISCUSSION_OPINION_MODE": "legacy",
+    "IRIS_PROACTIVE_DISCUSSION_ENABLED": "false",
+    "IRIS_PROACTIVE_DISCUSSION_GROUP_IDS": "",
+    "IRIS_RUNTIME_GLOBAL_ENABLED": "false",
+    "IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED": "false",
+    "IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED": "false"
+  },
+  "sourcePlanModulePresent": true
+}

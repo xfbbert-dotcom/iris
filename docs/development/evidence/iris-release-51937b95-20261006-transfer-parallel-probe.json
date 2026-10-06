@@ -1,0 +1,29 @@
+{
+  "elapsedSeconds": 12.84,
+  "streams": [
+    {
+      "index": 0,
+      "exitCode": 0,
+      "bytes": 262144,
+      "seconds": 12.81
+    },
+    {
+      "index": 1,
+      "exitCode": 0,
+      "bytes": 262144,
+      "seconds": 11.33
+    },
+    {
+      "index": 2,
+      "exitCode": 0,
+      "bytes": 262144,
+      "seconds": 11.41
+    },
+    {
+      "index": 3,
+      "exitCode": 0,
+      "bytes": 262144,
+      "seconds": 10.95
+    }
+  ]
+}
