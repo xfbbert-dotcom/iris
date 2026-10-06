@@ -1,0 +1,63 @@
+{
+  "kind": "local-verification-summary",
+  "recordedAt": "2026-10-06T06:51:31.995Z",
+  "toolRevision": "7c1357729c4a734747f8caf962c0b8d71f22b524",
+  "applicationChanges": false,
+  "lastObservedDeployedApplication": "51937b954733020799e02f139abd32df74b3349c",
+  "gitBlobSha256": {
+    "scripts/pilot/proactive-discussion-free-gate.mjs": "2f2e199b3454e67e4e17a6db7ac5cba9446440ec1bdded558e84f83504d2803c",
+    "scripts/pilot/proactive-discussion-free-gate.test.mjs": "2a6cf564a5ba1964cef0723a96248933ccc8bf621550a580624067f731235557",
+    "package.json": "0eb6d85033f50efc4e2b3ae89c1d1c9f0e2e3f3d1a1c3bba76cae38739649f5f"
+  },
+  "verification": [
+    {
+      "command": "npm run test:pilot",
+      "exitCode": 0,
+      "passed": 214,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 296394.0112,
+      "scope": "195 existing pilot cases plus 19 gate cases; before final cancellation-reason regression"
+    },
+    {
+      "command": "node --test scripts/pilot/proactive-discussion-free-gate.test.mjs",
+      "exitCode": 0,
+      "passed": 20,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 2728.3042,
+      "scope": "final tool source, includes cancellation-entry regression"
+    },
+    {
+      "command": "node --check scripts/pilot/proactive-discussion-free-gate.mjs",
+      "exitCode": 0
+    },
+    {
+      "command": "node scripts/pilot/proactive-discussion-free-gate.mjs --help",
+      "exitCode": 0
+    },
+    {
+      "command": "git diff --cached --check",
+      "exitCode": 0
+    }
+  ],
+  "testTransport": "real local inbound HTTP; injected simulated upstream fetch; no real provider",
+  "externalModelRequests": 0,
+  "productionAccess": false,
+  "feishuMessagesSent": 0,
+  "pushed": false,
+  "limits": {
+    "maxRequests": 8,
+    "windowMs": 900000,
+    "reportedTokenStopBeforeNextRequest": 60000,
+    "minimumObservedFreeTokens": 200000,
+    "quotaMaxAgeMs": 60000,
+    "permitWaitMs": 20000,
+    "upstreamTimeoutMs": 30000
+  },
+  "limitations": [
+    "Operator permits are assertions about observed provider UI, not automated billing verification.",
+    "stop.json requires observed stopped.json acknowledgement; already-started I/O may settle.",
+    "Runtime integration, production configuration, real group sources and sends remain separately authorized gates."
+  ]
+}
