@@ -1,0 +1,286 @@
+{
+  "capturedAt": "2026-10-06T03:29:52.376Z",
+  "scope": "authorized_readonly_original_pilot",
+  "transaction": {
+    "read_only": "on",
+    "schema": "public"
+  },
+  "tables": [
+    {
+      "name": "schema_migrations",
+      "present": true
+    },
+    {
+      "name": "runtime_control_state",
+      "present": true
+    },
+    {
+      "name": "proactive_discussion_policies",
+      "present": false
+    },
+    {
+      "name": "proactive_discussion_jobs",
+      "present": false
+    },
+    {
+      "name": "proactive_discussion_deliveries",
+      "present": false
+    },
+    {
+      "name": "answer_reply_deliveries",
+      "present": true
+    }
+  ],
+  "migrations": [
+    {
+      "name": "0001_document_sources.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0002_document_snapshots.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0003_document_fragments.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0004_embedding_profiles.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0005_dimension_sharded_vector_storage.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0012_conversation_messages.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0013_document_fragment_profile_uniqueness.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0014_denied_document_source_capability_lock.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0015_document_source_policy_overrides.sql",
+      "applied_at": "2026-07-11T17:54:27.653Z"
+    },
+    {
+      "name": "0016_runtime_control_state.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0017_group_memories.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0018_group_memory_request_fingerprints.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0019_group_memory_extraction.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0020_group_memory_extraction_failure_count.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0021_group_memory_extraction_memory_delete.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0022_group_memory_extraction_conflicts.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0023_conversation_message_mentions.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0024_semantic_thread_action_memory.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0025_conversation_state_extraction.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0026_projection_rollout_contracts.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0027_semantic_thread_action_review_fixes.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0028_conversation_message_deletion_tombstones.sql",
+      "applied_at": "2026-07-16T19:51:05.548Z"
+    },
+    {
+      "name": "0030_knowledge_draft_facts.sql",
+      "applied_at": "2026-07-19T07:32:43.829Z"
+    },
+    {
+      "name": "0031_knowledge_draft_presentations.sql",
+      "applied_at": "2026-07-19T07:32:43.829Z"
+    },
+    {
+      "name": "0032_action_approval_facts.sql",
+      "applied_at": "2026-07-22T09:33:59.808Z"
+    },
+    {
+      "name": "0033_approval_interaction_intents.sql",
+      "applied_at": "2026-07-22T09:33:59.808Z"
+    },
+    {
+      "name": "0034_action_review_attestations.sql",
+      "applied_at": "2026-07-23T04:10:47.408Z"
+    },
+    {
+      "name": "0035_knowledge_publications.sql",
+      "applied_at": "2026-07-23T08:33:11.474Z"
+    },
+    {
+      "name": "0036_knowledge_draft_publication_metadata.sql",
+      "applied_at": "2026-07-23T12:28:49.643Z"
+    },
+    {
+      "name": "0037_proactive_signal_candidates.sql",
+      "applied_at": "2026-07-24T08:46:56.473Z"
+    },
+    {
+      "name": "0038_proactive_signal_delivery_outbox.sql",
+      "applied_at": "2026-07-24T08:46:56.473Z"
+    },
+    {
+      "name": "0039_agent_execution_ledger.sql",
+      "applied_at": "2026-07-27T10:31:08.854Z"
+    },
+    {
+      "name": "0040_proactive_signal_feedback.sql",
+      "applied_at": "2026-07-28T08:07:54.286Z"
+    },
+    {
+      "name": "0041_wiki_space_authorizations.sql",
+      "applied_at": "2026-07-30T01:18:22.691Z"
+    },
+    {
+      "name": "0042_document_fragment_embeddings_1024.sql",
+      "applied_at": "2026-07-30T05:18:48.888Z"
+    },
+    {
+      "name": "0043_document_fragment_embeddings_768.sql",
+      "applied_at": "2026-07-30T09:07:43.980Z"
+    },
+    {
+      "name": "0044_knowledge_publication_group_result.sql",
+      "applied_at": "2026-08-01T21:42:47.694Z"
+    },
+    {
+      "name": "0045_answer_source_citations.sql",
+      "applied_at": "2026-08-02T12:02:13.020Z"
+    },
+    {
+      "name": "0046_knowledge_conflict_candidates.sql",
+      "applied_at": "2026-08-17T00:25:18.850Z"
+    },
+    {
+      "name": "0047_knowledge_conflict_callback_identities.sql",
+      "applied_at": "2026-08-17T00:25:18.850Z"
+    },
+    {
+      "name": "0048_knowledge_conflict_draft_reattestations.sql",
+      "applied_at": "2026-08-17T00:25:18.850Z"
+    },
+    {
+      "name": "0049_answer_reply_knowledge_conflict_candidate_version.sql",
+      "applied_at": "2026-08-17T00:25:18.850Z"
+    },
+    {
+      "name": "0050_answer_reply_not_sent_reconciliation.sql",
+      "applied_at": "2026-08-17T12:04:34.578Z"
+    },
+    {
+      "name": "0051_document_source_group_grants.sql",
+      "applied_at": "2026-08-18T03:35:50.021Z"
+    },
+    {
+      "name": "0052_managed_knowledge_publication_updates.sql",
+      "applied_at": "2026-08-22T04:46:07.238Z"
+    },
+    {
+      "name": "0053_action_review_target_fingerprint_compatibility.sql",
+      "applied_at": "2026-08-22T04:46:07.238Z"
+    },
+    {
+      "name": "0054_managed_knowledge_runtime_capability.sql",
+      "applied_at": "2026-08-22T04:46:07.238Z"
+    },
+    {
+      "name": "0055_managed_update_execution_identity.sql",
+      "applied_at": "2026-08-22T04:46:07.238Z"
+    },
+    {
+      "name": "0056_managed_resync_index_completion.sql",
+      "applied_at": "2026-08-22T04:46:07.238Z"
+    },
+    {
+      "name": "0057_governed_feishu_task_actions.sql",
+      "applied_at": "2026-08-23T11:13:10.576Z"
+    },
+    {
+      "name": "0058_shared_working_chat.sql",
+      "applied_at": "2026-09-09T05:21:45.061Z"
+    }
+  ],
+  "durableControl": [
+    {
+      "revision": "3392",
+      "desired_global_enabled": true,
+      "pilot_disabled": false,
+      "read_group_context": true,
+      "reply_when_mentioned": true,
+      "proactive_speech": false
+    }
+  ],
+  "policy": {
+    "unavailable": "schema_missing_or_incompatible"
+  },
+  "queues": {
+    "proactive_discussion_jobs": {
+      "unavailable": "schema_missing_or_incompatible"
+    },
+    "proactive_discussion_deliveries": {
+      "unavailable": "schema_missing_or_incompatible"
+    },
+    "answer_reply_deliveries": [
+      {
+        "state": "not_sent_reconciled",
+        "count": 1
+      },
+      {
+        "state": "permission_blocked",
+        "count": 10
+      },
+      {
+        "state": "sent",
+        "count": 39
+      }
+    ]
+  },
+  "answerReplyHealth": [
+    {
+      "unresolved_count": 0,
+      "pending_safe_notice_count": 0,
+      "reconciliation_required_count": 0
+    }
+  ],
+  "liveRuntime": {
+    "verified": false,
+    "reason": "status_GET_can_install_durable_snapshot_into_live_controller; not_called"
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "runId": 37408896531,
+  "headSha": "2116ff70451499f5b1bb1ac35319851fa7f5c855",
+  "conclusion": "failure",
+  "url": "https://github.com/xfbbert-dotcom/iris/actions/runs/37408896531",
+  "jobs": [
+    {
+      "name": "Core",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Initialize containers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout",
+          "conclusion": "success"
+        },
+        {
+          "name": "Setup Node",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Node dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Typecheck",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build Core production artifacts",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test core",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test pilot deployment contracts",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test Postgres integrations",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Validate Docker Compose",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Validate pilot readiness",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Validate pilot Compose",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Start pilot stack",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify pilot database role boundaries",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Drill paired pilot backup and restore",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Reject callbacks while Redis ingress is unavailable",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Show pilot logs on failure",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stop pilot stack",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Setup Node",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Checkout",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stop containers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "AI Worker",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout",
+          "conclusion": "success"
+        },
+        {
+          "name": "Setup Python",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Python dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test AI worker",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Setup Python",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Checkout",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "failure": {
+    "file": "apps/core/tests/postgres-proactive-discussion-concurrency.test.ts",
+    "passed": 33,
+    "failed": 6,
+    "normalAndGrantedCases": "delivery row absent",
+    "hiddenCatalogCases": "expected incomplete_catalog, received evaluation_failed",
+    "confirmedCause": "stale full-pair generation HTTP fixture rejected by live prose-only contract"
+  }
+}

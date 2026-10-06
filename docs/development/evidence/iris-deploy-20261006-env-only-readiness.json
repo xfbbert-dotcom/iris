@@ -1,0 +1,15 @@
+{
+  "capturedAt": "2026-10-06T03:43:03Z",
+  "imageSource": "341f7c8ac08d47f7316af47685be75c7d98ba693",
+  "command": "candidate compose run --rm --no-deps core node apps/core/dist/admin/internal-rollout-readiness-cli.js",
+  "scope": "standalone CLI without --live-readiness-url; no application runtime status supplied",
+  "exitCode": 1,
+  "ok": false,
+  "summary": { "checkCount": 21, "passCount": 18, "warnCount": 0, "failCount": 3 },
+  "failures": [
+    { "id": "knowledgeCards", "detail": "Knowledge-card runtime status is unavailable." },
+    { "id": "actionApprovals", "detail": "Action-approval runtime status is unavailable." },
+    { "id": "actionReviews", "detail": "Action-review runtime status is unavailable." }
+  ],
+  "interpretation": "This invocation cannot verify enabled running components. Keep this failed result; use authenticated live /internal/readiness before and after release, without changing capabilities or bypassing any failed check."
+}

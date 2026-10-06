@@ -1,5 +1,16 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-06：真实runtime的HTTP fixture遗漏生成合同迁移
+
+2116ff70精确CI的PG并发6例在生成阶段失败，错误并非被测发送或目录保护分支：
+测试仍返回旧完整pair，真实runtime要求prose，应用正确拒绝后worker记录evaluation_failed。
+其他单元fixture经过转换器掩盖了这一遗漏，无DB的Core全套会条件跳过该文件。
+[修复341f7c8a及证据](../development/iris-deploy-20261006.md)仅更新HTTP响应编码，保留
+原正文和所有验收预期，真实PG39通过。模型wire变更需覆盖实际装配/HTTP边界，不能用
+纯单测通过替代已跳过的PG验收，也不能为让旧mock通过而放宽应用合同。
+出口是原失败文件与完整CI通过、精确发布来源及文档同步；应用输入未变，不扩大语义
+测试窗口或声称整体缺陷关闭。首次失败CI保留，部署和真实飞书验收另计。
+
 ## 2026-10-06：镜像构建通过不能覆盖运行依赖告警
 
 发布准备的精确8c120f7b镜像构建exit0，但prune后的运行依赖仍报告2项high。对锁文件

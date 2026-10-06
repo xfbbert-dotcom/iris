@@ -1,0 +1,128 @@
+{
+  "capturedAt": "2026-10-06T03:28:14.998Z",
+  "ok": true,
+  "components": {
+    "audit": {
+      "ok": true,
+      "enabled": true
+    },
+    "runtimeControl": {
+      "ok": true,
+      "enabled": false,
+      "globalEnabled": false,
+      "desiredGlobalEnabled": true,
+      "activationRequired": true,
+      "disabledGroupCount": 14,
+      "revision": 3392
+    },
+    "answerDraft": {
+      "ok": true,
+      "enabled": true
+    },
+    "agentExecutionLedger": {
+      "ok": true,
+      "enabled": false,
+      "writeFailureCount": 0
+    },
+    "feishuGateway": {
+      "ok": true,
+      "enabled": true,
+      "enqueueFailureCount": 0
+    },
+    "memoryExtraction": {
+      "ok": true,
+      "enabled": false,
+      "running": false
+    },
+    "eventWorker": {
+      "ok": true,
+      "enabled": true,
+      "running": true,
+      "intervalMs": 1000,
+      "batchLimit": 50,
+      "mentionRepliesEnabled": true,
+      "pendingEventCount": 0,
+      "deadLetterEventCount": 0,
+      "answerReplyUnresolvedCount": 0,
+      "answerReplyPendingSafeNoticeCount": 0,
+      "answerReplyReconciliationRequiredCount": 0
+    },
+    "documentSync": {
+      "ok": true,
+      "enabled": true,
+      "running": true,
+      "intervalMs": 1000,
+      "batchLimit": 10,
+      "pendingJobCount": 0,
+      "deadLetterJobCount": 0
+    },
+    "reindex": {
+      "ok": true,
+      "enabled": true,
+      "running": true,
+      "intervalMs": 1000,
+      "batchLimit": 25,
+      "pendingJobCount": 0,
+      "deadLetterJobCount": 0
+    },
+    "knowledgeConflicts": {
+      "ok": true,
+      "enabled": false,
+      "running": false
+    },
+    "actionApprovals": {
+      "ok": true,
+      "enabled": true,
+      "running": true,
+      "enabledGroupCount": 1
+    },
+    "formalTaskDrafts": {
+      "ok": true,
+      "enabled": false,
+      "companyCreationEnabled": false
+    },
+    "formalTaskActions": {
+      "ok": true,
+      "enabled": false,
+      "deploymentEnabled": false,
+      "running": false,
+      "enabledGroupCount": 0,
+      "runtimeCreationEnabled": false
+    },
+    "managedKnowledgeUpdates": {
+      "ok": true,
+      "enabled": false,
+      "running": false
+    },
+    "proactiveSignals": {
+      "ok": true,
+      "enabled": false,
+      "running": false
+    }
+  },
+  "control": {
+    "globalEnabled": false,
+    "desiredGlobalEnabled": true,
+    "activationRequired": true,
+    "revision": 3392,
+    "capabilities": {
+      "readGroupContext": true,
+      "replyWhenMentioned": true,
+      "readGroupDocuments": true,
+      "retrieveKnowledgeBase": true,
+      "proactiveSpeech": false,
+      "generateKnowledgeDrafts": true,
+      "generateTaskDrafts": false,
+      "createFeishuTasks": false,
+      "writeKnowledgeBase": false,
+      "updateManagedKnowledge": false,
+      "callExternalTools": false
+    },
+    "persistence": {
+      "storage": "postgres",
+      "ok": true
+    },
+    "disabledGroupCount": 14,
+    "disabledGroupsFingerprint": "f54e266d6902ce4e29728301a910a78458cacb3f5a97925b8fa08350c3f8aa32"
+  }
+}

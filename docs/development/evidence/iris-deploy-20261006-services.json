@@ -1,0 +1,90 @@
+{
+  "services": [
+    {
+      "name": "/iris-pilot-core-1",
+      "id": "79f8a852f3503bbcbd2d86c01aabefaf154783b8a503edaa7c2fb54b96df4343",
+      "image": "iris-core:f6a6dd4187dcb1b574fb78a11f837edec8b09b89",
+      "imageId": "sha256:cb6e915b84adfa2a2189cc6928b31ad6ec00929f1ea9e2329d4e9f4894ef2383",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "name": "/iris-pilot-ai-worker-1",
+      "id": "f62181a9383ce164edfa12a05671e00489a94f1978e99d92da0aca96d7f48f9f",
+      "image": "iris-ai-worker:f6a6dd4187dcb1b574fb78a11f837edec8b09b89",
+      "imageId": "sha256:23c73eac3ec914d93b7705a391880b2a30480df74e7c9c5adb37df7a96849265",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "name": "/iris-pilot-caddy-1",
+      "id": "e40996a5e3b465b492ec4e2f3439b5f9d96438dcfde92590bbf41802b81460e3",
+      "image": "caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648",
+      "imageId": "sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648",
+      "state": "running",
+      "health": null
+    },
+    {
+      "name": "/iris-pilot-postgres-1",
+      "id": "089517bc6b3bef57f713eaef479c23a7974f358e4ba5338c3fe859f576f8d1aa",
+      "image": "pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
+      "imageId": "sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "name": "/iris-pilot-redis-1",
+      "id": "5792f23a3adf857b6b775aa9b69b0c5aa64cd1d7b7b2171e223be8da3f4aa963",
+      "image": "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+      "imageId": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+      "state": "running",
+      "health": "healthy"
+    },
+    {
+      "name": "/iris-pilot-embedding-model-1",
+      "id": "b307a92b96a51f8fb1cfe3970c8e787869128ec28967d58185a76581bc9fe8ca",
+      "image": "ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a",
+      "imageId": "sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a",
+      "state": "running",
+      "health": "healthy"
+    }
+  ],
+  "caddySha256": "80ac0aceb176f0e6d1bb6827aa9692c5a2751d517e89bf9c8e3aaf88dcdd7a07",
+  "composeSha256": "a7342c3ab3977601c3748066b52bbfdd36cecc501b670f59f9203ee2d9c4e366",
+  "tools": {
+    "age": "/usr/bin/age",
+    "age-keygen": "/usr/bin/age-keygen",
+    "tar": "/usr/bin/tar",
+    "git": "/usr/bin/git",
+    "docker": "/usr/bin/docker"
+  },
+  "knownBackupPathMetadata": [
+    {
+      "path": "/etc/iris/backup-recipient",
+      "exists": true,
+      "readable": true
+    },
+    {
+      "path": "/etc/iris/backup-identity",
+      "exists": false,
+      "readable": false
+    },
+    {
+      "path": "/etc/iris/backup-identity.txt",
+      "exists": false,
+      "readable": false
+    },
+    {
+      "path": "/home/irisops/.config/iris/backup-identity.txt",
+      "exists": false,
+      "readable": false
+    },
+    {
+      "path": "/home/irisops/.config/iris/age-key.txt",
+      "exists": false,
+      "readable": false
+    }
+  ],
+  "diskFreeBytes": 24981168128,
+  "memoryAvailable": "MemAvailable:    2766672 kB"
+}

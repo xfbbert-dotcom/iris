@@ -29,6 +29,15 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [October 6 release execution](docs/development/iris-deploy-20261006.md) is authorized for push,
+free CI and a gated Core/migration deployment with proactive discussion disabled. The first CI
+failed on a stale runtime HTTP fixture; test-only fix `341f7c8a` preserves the assertions and passes
+all 39 local PostgreSQL concurrency cases. Its production inputs equal application `2116ff70`.
+The second CI passes those cases but exposes two actual failures: historical basis references lack
+their source text outside the recent-message window. Both candidates are withheld pending that fix.
+Production remains `f6a6dd41`, with its actual live gate off; maintenance has not started. The existing
+operator-held backup identity matches the server recipient, and old Core live readiness passes 21/21.
+
 The [October 6 release preparation](docs/development/iris-release-readiness-20261006.md) follows the
 model-isolation fix: building its exact runtime image exposed two production dependency audit alerts.
 The bounded dependency update, final local image checks and proposed release scope are recorded there.

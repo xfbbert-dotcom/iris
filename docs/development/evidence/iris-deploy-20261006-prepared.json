@@ -1,0 +1,40 @@
+{
+  "releaseCommit": "341f7c8ac08d47f7316af47685be75c7d98ba693",
+  "importedImageId": "sha256:b8c6948a64ed6c273db426b3fcbbb10cedda19398f4b614eb3a56028d31d4eda",
+  "qaConfigurationEquivalent": true,
+  "unchangedServiceConfigurations": [
+    "ai-worker",
+    "postgres",
+    "redis",
+    "embedding-model",
+    "embedding-model-init",
+    "caddy"
+  ],
+  "addedOrChangedCoreEnvironmentKeys": [
+    "IRIS_INTERNAL_API_AUDIT_ACTOR",
+    "IRIS_MODEL_STRUCTURED_OUTPUT_MODE",
+    "IRIS_PROACTIVE_DISCUSSION_BATCH_LIMIT",
+    "IRIS_PROACTIVE_DISCUSSION_ENABLED",
+    "IRIS_PROACTIVE_DISCUSSION_GROUP_IDS",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_API_KEY",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_BASE_URL",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_ENABLE_THINKING",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_MAX_TOKENS",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_NAME",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_PROVIDER",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_SOURCE",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_STRUCTURED_OUTPUT_MODE",
+    "IRIS_PROACTIVE_DISCUSSION_MODEL_TIMEOUT_MS",
+    "IRIS_PROACTIVE_DISCUSSION_OPINION_MODE",
+    "IRIS_PROACTIVE_DISCUSSION_POLL_INTERVAL_MS",
+    "NODE_ENV",
+    "NODE_VERSION",
+    "PATH",
+    "YARN_VERSION"
+  ],
+  "aiWorkerPinnedImage": "iris-ai-worker:f6a6dd4187dcb1b574fb78a11f837edec8b09b89",
+  "candidateComposeSha256": "0c172a581a733358d728e3739888e08279493e0084f9ac43f4722038826d5ee6",
+  "privateFilesMode600": true,
+  "servicesSwitched": false,
+  "databaseMigrated": false
+}

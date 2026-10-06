@@ -1,0 +1,11 @@
+{
+  "releaseCommit": "341f7c8ac08d47f7316af47685be75c7d98ba693",
+  "approvedApplicationCommit": "2116ff70451499f5b1bb1ac35319851fa7f5c855",
+  "imageId": "sha256:b8c6948a64ed6c273db426b3fcbbb10cedda19398f4b614eb3a56028d31d4eda",
+  "os": "linux",
+  "architecture": "amd64",
+  "revision": "341f7c8ac08d47f7316af47685be75c7d98ba693",
+  "rootFilesystemLayersEqual": true,
+  "productionInputDiff": [],
+  "buildContext": "git archive of exact release commit; normal Dockerfile build with cache; no image retagging"
+}
