@@ -237,7 +237,7 @@ async function createDefaultResources({ env, runtimeController, isStopping, depe
     const fragments = createDocumentFragmentRepository({ queryable: pool, embeddingProfiles: profiles });
     const embedding = await resolveRuntimeEmbedding({ embeddingConfig: readEmbeddingProviderConfig(env), profiles,
       createEmbeddingProvider: config => createOpenAICompatibleEmbeddingProvider({ config, fetch }) });
-    const contextBuilder = createPdContextBuilder({ repository, reader, sourceVerifier, canReadGroup,
+    const contextBuilder = createPdContextBuilder({ repository, reader, sourceVerifier, canReadGroup, historicalSnapshots: snapshots,
       documents: chatId => createDocumentRetrievalContextBuilder({ embeddingProfileId: embedding.profile.id,
         embedder: embedding.embedder, fragments, groupId: chatId,
         sourceTypes: ["group_visible_document", "authorized_wiki_document", "user_submitted_document"],

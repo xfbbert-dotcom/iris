@@ -1,4 +1,5 @@
 import type { RetrievedDocumentFragment } from "../documents/document-fragment-repository.js";
+import type { DocumentSnapshotRepository } from "../documents/document-snapshot-repository.js";
 import { normalizeConversationMessageTextForStorage } from "../conversation/conversation-message-repository.js";
 import type {
   FeishuChatHistoryMessage,
@@ -35,12 +36,14 @@ export function createPdContextBuilder({
   documents,
   sourceVerifier,
   canReadGroup,
+  historicalSnapshots,
 }: {
   repository: Pick<PdRepository, "readState">;
   reader: FeishuChatHistoryReader;
   documents: (chatId: string) => DocumentRetrievalContextBuilder;
   sourceVerifier: PdSourceVerifier;
   canReadGroup: (chatId: string) => boolean;
+  historicalSnapshots?: Pick<DocumentSnapshotRepository, "findSnapshotById">;
 }): PdContextBuilder {
   return {
     async load(job) {
@@ -121,12 +124,24 @@ export function createPdContextBuilder({
       // Never clip provenance while retaining text derived from the missing part.
       if (allSources.length > 1000) return null;
 
+      const sourceRefs = new Set(allSources.map(source => source.ref));
+      const currentRefs = new Set(currentSources.map(source => source.ref));
+      const basis = uniqueSources(verifiedIssues.flatMap(issue => issue.basisSources));
+      if (basis.some(source => !sourceRefs.has(source.ref) || source.ref !== createPdSourceRef(source))) return null;
+      const missingBasis = basis.filter(source => !currentRefs.has(source.ref));
+      // A verified historical binding alone is not evidence text. Restore only
+      // the accepted baseline, never the accumulated prose history or AI text.
+      const restored = await restoreBasisText(missingBasis, job.chatId);
+      if (restored === null) return null;
+      if (missingBasis.length && !await sourceVerifier.verify({ chatId: job.chatId, sources: allSources })) return null;
+
       const bounded = boundLiveAnalysisItems([
         ...messageEntries.map(({ source, text }) => ({ ref: source.ref, text })),
         ...documentEntries.map(({ source, text }) => ({
           ref: source.ref,
           text: truncateLiveAnalysisText(text, MAX_DOCUMENT_TEXT),
         })),
+        ...restored,
       ]);
       const after = await repository.readState(job.chatId);
       if (
@@ -148,6 +163,42 @@ export function createPdContextBuilder({
       };
     },
   };
+
+  async function restoreBasisText(sources: PdSource[], chatId: string): Promise<{ ref: string; text: string }[] | null> {
+    const restored: { ref: string; text: string }[] = [];
+    try {
+      const messages = sources.filter(source => source.kind === "message");
+      if (messages.length && !reader.readMessagesByIds) return null;
+      for (let offset = 0; offset < messages.length; offset += 8) {
+        if (!canReadGroup(chatId)) return null;
+        const batch = messages.slice(offset, offset + 8);
+        const expected = new Map(batch.map(source => [source.binding.messageId, source]));
+        if (expected.size !== batch.length) return null;
+        const read = await reader.readMessagesByIds!({ chatId, messageIds: [...expected.keys()], sender: "user" });
+        if (read.length !== batch.length) return null;
+        const seen = new Set<string>();
+        for (const message of read) {
+          const source = expected.get(message.messageId);
+          if (!source || seen.has(message.messageId) || source.binding.chatId !== chatId
+            || uniqueCurrentHumanMessages([message], chatId).length !== 1
+            || message.underlyingLocalMessageSources !== undefined
+            || hashLocalMessageText(message.text) !== source.binding.contentHash) return null;
+          seen.add(message.messageId);
+          restored.push({ ref: source.ref, text: message.text });
+        }
+      }
+      for (const source of sources) {
+        if (source.kind !== "document") continue;
+        if (!canReadGroup(chatId) || !historicalSnapshots) return null;
+        const snapshot = await historicalSnapshots.findSnapshotById(source.binding.documentSnapshotId);
+        if (!snapshot || snapshot.id !== source.binding.documentSnapshotId
+          || snapshot.documentSourceId !== source.binding.documentSourceId || snapshot.fetchStatus !== "succeeded"
+          || !snapshot.bodyText?.trim()) return null;
+        restored.push({ ref: source.ref, text: truncateLiveAnalysisText(snapshot.bodyText, MAX_DOCUMENT_TEXT) });
+      }
+      return canReadGroup(chatId) ? restored : null;
+    } catch { return null; }
+  }
 }
 
 function policyMatchesJob(

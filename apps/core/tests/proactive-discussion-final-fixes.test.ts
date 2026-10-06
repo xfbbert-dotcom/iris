@@ -70,8 +70,12 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("final review real PostgreS
     }
     const payloads: string[] = [];
     const model = createPdModel({ client: { complete: async messages => { payloads.push(messages[1]!.content); return JSON.stringify(assessment); } } });
-    expect(await model.assess(context)).toEqual(assessment);
-    expect(await db.repository.commitEvaluation({ job, context, assessment, draft: { text: "报价增加，建议核对总预算。", evidenceRefs: [cRef] }, at })).toBe("prepared");
+    const assessed = await model.assess(context);
+    const closedRefs = revoked === "other-issue" ? [cRef]
+      : [cRef, ...pdContext().sources.slice(0, revoked === "uncited" ? 1 : 2).map(source => source.ref)];
+    expect(assessed).toEqual({ ...assessment, evidenceRefs: closedRefs });
+    expect(await db.repository.commitEvaluation({ job, context, assessment: assessed,
+      draft: { text: "报价增加，建议核对总预算。", evidenceRefs: closedRefs }, at })).toBe("prepared");
     const next = (await db.pool.query("SELECT id FROM proactive_discussion_deliveries WHERE id<>$1", [birth.id])).rows[0];
     const nextDelivery = (await db.repository.readDelivery(next.id))!;
     expect(nextDelivery.sources.map(s => s.ref)).toEqual(expect.arrayContaining(pdContext().sources.map(s => s.ref)));
