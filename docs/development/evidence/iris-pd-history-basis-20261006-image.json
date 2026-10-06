@@ -1,0 +1,14 @@
+{
+  "releaseCommit": "51937b954733020799e02f139abd32df74b3349c",
+  "imageId": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "os": "linux",
+  "architecture": "amd64",
+  "revision": "51937b954733020799e02f139abd32df74b3349c",
+  "build": "git archive of exact commit, pinned Node22 Dockerfile",
+  "productionDependencyAuditCount": 0,
+  "archiveBytes": 84102144,
+  "archiveSha256": "8b374d8a665d7fd9d79b5ee328bbf511814f8a85fc0518dd0b42244283a0c2af",
+  "archiveStorage": "operator-only local release directory",
+  "uploaded": false,
+  "deployed": false
+}

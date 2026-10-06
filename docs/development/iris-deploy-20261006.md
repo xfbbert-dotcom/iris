@@ -48,6 +48,9 @@ PostgreSQL集成阶段在 `postgres-proactive-discussion-concurrency.test.ts` �
 这是应用变化；341f7c8a及2116均不能继续部署。新提交、回归、CI及实际发布状态必须
 另有证据，不以已上传的旧候选镜像代替。
 
+后续已实现的[51937b95修复与验证](iris-pd-history-basis-20261006.md)单独记录；本节保留
+两次停止时的历史事实，不能据此把旧候选提升为已通过或已部署。
+
 本轮push到当前分支，并分别创建固定来源分支 `codex/iris-release-2116ff70` 和
 `codex/iris-release-341f7c8a` 供workflow_dispatch。没有更改master或创建PR。
 仓库在本次查询为public，现有workflow使用标准ubuntu-latest，无larger runner；

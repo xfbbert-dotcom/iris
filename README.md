@@ -29,6 +29,14 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [historical basis fix](docs/development/iris-pd-history-basis-20261006.md), application `51937b95`,
+restores verified source text for an existing issue after its premises leave the recent-message window.
+Exact message hashes, snapshot identities, permissions and text limits remain enforced. All 112 affected
+database-enabled PD cases, 25 new history cases, Core 5082 (471 conditional skips), typecheck/build and
+independent review pass. Exact-source CI also passes, including the full PostgreSQL stage, stack startup,
+role boundaries, paired backup/restore and Redis failure drill. This is not new model-semantic or real-Feishu
+acceptance, and the fix has not been deployed.
+
 The [October 6 release execution](docs/development/iris-deploy-20261006.md) is authorized for push,
 free CI and a gated Core/migration deployment with proactive discussion disabled. The first CI
 failed on a stale runtime HTTP fixture; test-only fix `341f7c8a` preserves the assertions and passes
