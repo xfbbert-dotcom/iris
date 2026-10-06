@@ -1,5 +1,22 @@
 # Iris 当前接手入口
 
+## 2026-10-06 最新：首个受监督窗口已执行并关闭，未收到真实讨论输入
+
+用户明确确认[首窗方案](iris-pd-supervised-pilot-20261006.md)后，完成
+[实际接线、启用与恢复](iris-pd-window-20261006.md)。操作/验证脚本`a2d5f412`，应用仍51937b95。
+生产同容器门禁接线验证通过；普通QA/知识草稿能力临时关闭，现场Wiki原true临时false。
+07:13:43–07:22:17 UTC开启原群，未出现真实触发；provider HTTP0、tokens0、飞书意见0，
+没有模型语义或真实飞书通过结论。只读确认原群可访问，不能代替成员发起讨论。
+07:23:49 UTC最终核验：Core健康，global/desired/PD关闭，policy version2 disabled，
+revision3400；能力恢复，env及Compose原字节相等，非Core容器不变。普通QA仍受global关闭。
+保留policy/group各1及事件3行；业务评估/发送表仍空，无unknown待对账。
+准备/执行失败和证据局限见记录，主动讨论缺陷未关闭，IRIS-CORE-005仍部分实现。
+下一步是先等成员准备好在原群发起真实讨论，再开新的有限窗口；不重做接线或自动续开。
+真实群用途授权已在本次取得，不能沿用下方历史“尚未授权”作为再次询问同一范围的理由；
+也不能把本次授权扩展为无限窗口、付费或普通QA重新启用。未push，无新应用版本发布。
+工作树/分支仍为 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86` /
+`codex/iris-daily-pilot-followup`。
+
 ## 2026-10-06 后续：准备逐请求免费门禁，尚未启用真实单群
 
 [本轮有限路径](iris-pd-supervised-pilot-20261006.md)直接核对当前代码：PD名单不限制global，

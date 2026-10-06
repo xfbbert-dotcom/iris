@@ -1,0 +1,84 @@
+{
+  "kind": "supervised-pd-window-without-human-trigger",
+  "capturedAt": "2026-10-06T07:23:49.230Z",
+  "app": "51937b954733020799e02f139abd32df74b3349c",
+  "imageId": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "coreHealthy": true,
+  "startedAt": "2026-10-06T07:13:43.055Z",
+  "stop": {
+    "reason": "operator-stop",
+    "at": "2026-10-06T07:22:17.693Z",
+    "uncertain": false
+  },
+  "restoredAt": "2026-10-06T07:22:26.179Z",
+  "global": false,
+  "desired": false,
+  "pdEnabled": false,
+  "policyVersion": "2",
+  "policyEnabled": false,
+  "controlRevision": 3400,
+  "capabilitiesRestored": true,
+  "envByteEqual": true,
+  "liveEnvEqual": true,
+  "composeByteEqual": true,
+  "nonCoreContainersUnchanged": true,
+  "wikiRestoredEnabled": true,
+  "gateFiles": {
+    "pending": 0,
+    "permit": 0,
+    "outcome": 0,
+    "final": 0,
+    "uncertain": 0
+  },
+  "providerHttp": 0,
+  "reportedModelTokens": 0,
+  "realDiscussionTriggers": 0,
+  "feishuOpinionSends": 0,
+  "domainCounts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 0,
+    "proactive_discussion_evaluations": 0,
+    "proactive_discussion_issues": 0,
+    "proactive_discussion_deliveries": 0,
+    "proactive_discussion_sources": 0,
+    "proactive_discussion_events": 3
+  },
+  "pendingJobs": [],
+  "deliveries": [],
+  "semanticAcceptance": "not-exercised",
+  "realFeishuAcceptance": "not-exercised",
+  "wiringSmoke": {
+    "kind": "compiled-core-free-gate-wiring-smoke",
+    "checks": [
+      {
+        "case": "missing-permit-no-retry",
+        "passed": true
+      },
+      {
+        "case": "fresh-mock-permit-identical-wire",
+        "passed": true
+      }
+    ],
+    "loopbackHttp": 2,
+    "fakeUpstreamCalls": 1,
+    "providerHttp": 0,
+    "readsProductionConfig": false,
+    "semanticAcceptance": false,
+    "feishuAcceptance": false,
+    "compiledClientSha256": "88d586a2162a92da7b96e03acaf1bb5bd41c0ee9cff0b25101f21022fa1fcb71",
+    "compiledConfigSha256": "3735f9c6b760d3c59336f939dc652d9cd84e1b4c2f67d4482d00fe86cf8aee0b",
+    "gateSha256": "2f2e199b3454e67e4e17a6db7ac5cba9446440ec1bdded558e84f83504d2803c"
+  },
+  "watchdogRecoveryFailures": 0,
+  "filesSha256": {
+    "gate.mjs": "7d7fc473821abd6cec7b77899d4c70a99602d12e61488c6e2c25a9e38b019084",
+    "proactive-discussion-free-gate.mjs": "2f2e199b3454e67e4e17a6db7ac5cba9446440ec1bdded558e84f83504d2803c",
+    "final.py": "383d756a3498639fa820bf39842128c6fefb6fdc8abe965756318ee63cdd578d",
+    "ops.py": "fc248cb2af9fdc9c156a07eace6dab150052d3a8421eda1e553d4d159507dc5e",
+    "proactive-discussion-free-gate-wiring-smoke.mjs": "3fabbaffa2ad6112cfbe1f69ab9d570c06ee0c9a970d91c0f6296e0467013b4b",
+    "control.mjs": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67",
+    "preflight.py": "efa6d57d6cac9d99d455ae92980fd322b1798d04c77976b9416db95510565599",
+    "capture.mjs": "9e4a9f3840e791fc34115034b466f9094ba22a768107f94b70377d4e389f7b7d"
+  }
+}
