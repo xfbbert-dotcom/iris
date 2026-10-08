@@ -1,5 +1,20 @@
 # Iris 当前接手入口
 
+## 2026-10-08 最新：新时间配置已现场验证，监督连接中断后已关闭恢复
+
+[本次真实窗口](iris-pd-window-20261008.md)按用户本次就绪开启；60秒许可/30秒上游/
+120000ms专用客户端在实际Core容器接线验证通过，应用51937b95及镜像未变。
+13:11–13:16北京时间窗口未收到新的真实触发，pending和供应商HTTP均0。
+本机域名SSH路径连续失败；DNS返回198.18.0.94，通过公开DNS得到真实地址后，以原
+HostKeyAlias和StrictHostKeyChecking=yes直连完成停止恢复，没有修改系统DNS、SSH配置
+或放宽主机身份校验。尚未证明代理内部根因，不归因于模型或应用。
+13:19最终独立核验Core健康，global/desired/PD关闭，policy version6 disabled、revision3412；
+能力/live env及env/Compose原字节恢复，非Core不变。保留旧cancelled任务1、事件14，
+没有新增评估/发送或unknown待对账。修复工具已临时接入并随关窗撤除，不是新应用部署。
+原失败与本次证据均保留；用户随后明确回复仍就绪，下一新窗口单独记录，不复用旧窗口。
+IRIS-CORE-005仍部分实现，真实模型和飞书质量仍未验。工作树/分支仍为
+`D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86` / `codex/iris-daily-pilot-followup`。
+
 ## 2026-10-08 最新：真实触发因监督超时停止，时间预算已作本地修复
 
 [10月7日窗口与10月8日修复](iris-pd-window-20261007.md)：用户就绪并登录后原群收到1条

@@ -1,0 +1,136 @@
+{
+  "kind": "supervised-pd-window-operator-connection-failure",
+  "capturedAt": "2026-10-08T05:19:56.848Z",
+  "app": "51937b954733020799e02f139abd32df74b3349c",
+  "image": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "coreHealthy": true,
+  "startedAt": "2026-10-08T05:11:19.737Z",
+  "stopped": {
+    "reason": "operator-stop",
+    "at": "2026-10-08T05:16:17.553Z",
+    "uncertain": false
+  },
+  "restoredAt": "2026-10-08T05:16:26.038Z",
+  "operatorUiObservation": {
+    "observedAt": "2026-10-08T05:09:12.917Z",
+    "model": "qwen3.8-max",
+    "displayedRemaining": "533.62K / 1M",
+    "expiresOn": "2026-12-18",
+    "freeExhaustionStop": true,
+    "permitWritten": false,
+    "basis": "preparation only; no pending request"
+  },
+  "global": false,
+  "desired": false,
+  "pdEnabled": false,
+  "policyVersion": "6",
+  "policyEnabled": false,
+  "controlRevision": 3412,
+  "capabilitiesRestored": true,
+  "liveEnvEqual": true,
+  "envByteEqual": true,
+  "composeByteEqual": true,
+  "nonCoreContainersUnchanged": true,
+  "gateFiles": {
+    "pending": 0,
+    "permit": 0,
+    "outcome": 0,
+    "final": 0,
+    "uncertain": 0
+  },
+  "realDiscussionTriggers": 0,
+  "providerHttp": 0,
+  "reportedModelTokens": 0,
+  "feishuOpinionSends": 0,
+  "jobs": [
+    {
+      "state": "cancelled",
+      "n": 1
+    }
+  ],
+  "domainCounts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 1,
+    "proactive_discussion_evaluations": 0,
+    "proactive_discussion_issues": 0,
+    "proactive_discussion_deliveries": 0,
+    "proactive_discussion_sources": 0,
+    "proactive_discussion_events": 14
+  },
+  "semanticAcceptance": "not-exercised",
+  "realFeishuOpinionAcceptance": "not-exercised",
+  "watchdogRecoveryFailures": 0,
+  "wiringSmoke": {
+    "kind": "compiled-core-free-gate-wiring-smoke",
+    "checks": [
+      {
+        "case": "missing-permit-no-retry",
+        "passed": true
+      },
+      {
+        "case": "fresh-mock-permit-identical-wire",
+        "passed": true
+      }
+    ],
+    "loopbackHttp": 2,
+    "fakeUpstreamCalls": 1,
+    "providerHttp": 0,
+    "readsProductionConfig": false,
+    "timing": {
+      "permitWaitMs": 60000,
+      "requestMs": 30000,
+      "clientTimeoutMs": 120000
+    },
+    "semanticAcceptance": false,
+    "feishuAcceptance": false,
+    "compiledClientSha256": "88d586a2162a92da7b96e03acaf1bb5bd41c0ee9cff0b25101f21022fa1fcb71",
+    "compiledConfigSha256": "3735f9c6b760d3c59336f939dc652d9cd84e1b4c2f67d4482d00fe86cf8aee0b",
+    "gateSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502"
+  },
+  "scriptDerivation": {
+    "operationSource": "20261007",
+    "toolFixCommit": "749491868d5e6e422d5c26729511705176dc98ae",
+    "changes": {
+      "control.mjs": {
+        "fromSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67",
+        "toSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67"
+      },
+      "gate.mjs": {
+        "fromSha256": "ddbe0402bbe77ddd0d83023f25a1ed61690a49b00ff71b6a2aaed96654adbf9b",
+        "toSha256": "fd61b822698e8ed34c7128ceea5584f37c99d144b92337ceccfb1d7670e18622"
+      },
+      "ops.py": {
+        "fromSha256": "d12deebfa32ae2def4a28fd988d84c7b184ac87a755ccce3ff129b73a0363082",
+        "toSha256": "ac1f7a1ff23269d01aae33868752bfefd43e5294d61c4031838c24ae6152cbf0"
+      },
+      "preflight.py": {
+        "fromSha256": "7db1a0b39c03e9642b01e8c9d52996cdda7c2417f94d703391bae15484268424",
+        "toSha256": "e5b9847d64f94d2a6d8fc872b52241f4ee8ff56b1339b81eddcf3381b113f545"
+      },
+      "capture.mjs": {
+        "fromSha256": "8f298563004e38ca5cf57276aa55b3376e9fab0da89fcf8298d783d8737e8c07",
+        "toSha256": "8f298563004e38ca5cf57276aa55b3376e9fab0da89fcf8298d783d8737e8c07"
+      },
+      "proactive-discussion-free-gate.mjs": {
+        "fromSha256": "2f2e199b3454e67e4e17a6db7ac5cba9446440ec1bdded558e84f83504d2803c",
+        "toSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502"
+      },
+      "proactive-discussion-free-gate-wiring-smoke.mjs": {
+        "fromSha256": "3fabbaffa2ad6112cfbe1f69ab9d570c06ee0c9a970d91c0f6296e0467013b4b",
+        "toSha256": "49a48a1b870664b09082b2e592949e2a97f93bc0a0fada61b1b3159a50ee2ce5"
+      }
+    }
+  },
+  "connectionFailure": {
+    "domainAttempts": [
+      "closed",
+      "closed",
+      "timeout"
+    ],
+    "systemDnsAddress": "198.18.0.94",
+    "dnsOverHttpsAddress": "43.160.229.172",
+    "recovery": "HostName override with original HostKeyAlias and StrictHostKeyChecking=yes",
+    "rootCauseAttribution": "domain path failed, direct path succeeded; proxy internals not established"
+  }
+}
