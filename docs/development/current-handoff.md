@@ -1,5 +1,22 @@
 # Iris 当前接手入口
 
+## 2026-10-08 最新：首个真实群“应沉默”案例有限通过，窗口已关闭
+
+用户再次明确就绪后，[新独立窗口](iris-pd-real-skip-20261008.md)通过保留原主机身份校验的
+直连执行；13:25开启，13:30关闭恢复（北京时间），未复用此前断线窗口或旧任务。
+1条真实触发、1次qwen3.8-max HTTP200/7217tokens、1次完成评估；实际skip/no_work_value、
+正文为空、无草稿/问题/投递。独立来源检查在未看模型结果前冻结should-skip：普通会议
+时间协调，无需主动插话。Feishu精确回读补齐20条消息且哈希全匹配，原19条限定记录保留；
+与模型结果比较通过的是**一个真实应沉默负例**，不是主动发现/生成/审核/发送质量通过。
+原始逐次wire/context未保存的证据限制保持，不从source绑定重建宣称精确原始请求。
+13:35独立最终核验Core51937b95健康，global/desired/PD关闭、policy8 disabled、revision3418；
+能力/live env及env/Compose原字节恢复、非Core不变。旧cancelled任务1与新completed任务1保留，
+evaluation1/sources21/events21，无sending/unknown。监督工具74949186已用于本次临时窗口，
+没有新应用部署、push或意见外发。上一断线空窗f079d776及失败证据保留。
+下一产品门槛是有实质议题的真实讨论及意见质量，不能重跑普通协调消息或人为逼出发言来
+替代。QA本轮始终关闭，@追问需另行确认其启用范围。IRIS-CORE-005仍部分实现。
+工作树/分支为 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86` / `codex/iris-daily-pilot-followup`。
+
 ## 2026-10-08 最新：新时间配置已现场验证，监督连接中断后已关闭恢复
 
 [本次真实窗口](iris-pd-window-20261008.md)按用户本次就绪开启；60秒许可/30秒上游/

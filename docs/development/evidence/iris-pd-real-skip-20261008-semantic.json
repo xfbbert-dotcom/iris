@@ -1,0 +1,46 @@
+{
+  "kind": "bounded-real-group-silence-acceptance",
+  "comparedAt": "2026-10-08T05:38:47.516160+00:00",
+  "caseKind": "ordinary tentative meeting-time coordination",
+  "sourceOnlyFrozenAt": "2026-10-08T05:34:23.1362442+00:00",
+  "independentReview": "reviewer read only source bundles, not model/evaluation/delivery outcomes; parent compared the result after the expectation was frozen",
+  "expectedDecision": "should-skip",
+  "actualDecision": "skip",
+  "actualReason": "no_work_value",
+  "outcome": "skipped",
+  "draftPresent": false,
+  "freeAssessmentProseEmpty": true,
+  "materialChange": {
+    "kind": "none",
+    "explanation": "",
+    "evidenceRefs": []
+  },
+  "issueCreated": false,
+  "deliveryCreated": false,
+  "passed": true,
+  "acceptanceScope": "one actual non-intervention case only; not proactive-opinion quality or general capability acceptance",
+  "boundMessageOriginals": 20,
+  "matchedMessageHashes": 20,
+  "privateSourceOnlySha256": "2873b3cdee2277a73d95ae86295edb98e8374e819071e9b9d4c820eb9a9e42f2",
+  "privatePriorSourceOnlySha256": "76ae4f572544ab369519abc8ad41481b27738335ba1efa2b83a52dd1b9fe35b1",
+  "privateExpectationSha256": "e0e3c9ba77f4308ae4f7145af822118eaf084d1688011a9e456e379eb5d6f110",
+  "privatePriorExpectationSha256": "95551e68ffaf0060f61df9988df6b766db1571c38a1e38ac0032c95433f3dbd0",
+  "privateCaptureSha256": "bbd66e9953bcc57e8030bbb9a48c68a5f32c16dd17952ba12a20bf34a859e5c9",
+  "persistedAssessmentCanonicalSha256": "e8212a62cd9a88c131ef4202f4a622232ca783d981e3c2b9f899cd5c29f15054",
+  "sourceCompletion": "initial DB source bundle had 19 of 20 originals; exact-ID Feishu GET supplied all 20 with matching hashes before the final expectation was frozen. The original expectation is retained and its should-skip decision did not change.",
+  "providerHttp": 1,
+  "reportedModelTokens": 7217,
+  "feishuOpinionSends": 0,
+  "limitations": [
+    "Stored bindings plus later source text are not the exact original model context. Matching identities and hashes verify the supplied bound text, but do not reconstruct context.items, live retrieval selection, exact document excerpts or provider request bodies.",
+    "The source record contains no issue entries; that alone does not establish complete lifetime intervention history. The skip judgment is based on ordinary content, not a fabricated duplicate or resolved status.",
+    "This independent expectation makes no claim about the actual model decision, delivery or acceptance of the overall capability."
+  ],
+  "pendingProductGates": [
+    "real substantive issue discovery",
+    "opinion generation and pre-send review",
+    "actual opinion delivery and receipt quality",
+    "repeated/handled issue suppression and material updates",
+    "mention follow-up under separately enabled QA scope"
+  ]
+}

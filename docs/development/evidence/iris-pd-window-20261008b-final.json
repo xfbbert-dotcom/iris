@@ -1,0 +1,154 @@
+{
+  "kind": "supervised-pd-window-real-evaluation",
+  "capturedAt": "2026-10-08T05:35:00.420Z",
+  "app": "51937b954733020799e02f139abd32df74b3349c",
+  "image": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "coreHealthy": true,
+  "startedAt": "2026-10-08T05:25:08.224Z",
+  "stopped": {
+    "reason": "operator-stop",
+    "at": "2026-10-08T05:29:51.926Z",
+    "uncertain": false
+  },
+  "restoredAt": "2026-10-08T05:30:00.411Z",
+  "global": false,
+  "desired": false,
+  "pdEnabled": false,
+  "policyVersion": "8",
+  "policyEnabled": false,
+  "controlRevision": 3418,
+  "capabilitiesRestored": true,
+  "liveEnvEqual": true,
+  "envByteEqual": true,
+  "composeByteEqual": true,
+  "nonCoreContainersUnchanged": true,
+  "gateFiles": {
+    "pending": 1,
+    "permit": 1,
+    "outcome": 1,
+    "final": 1,
+    "uncertain": 0
+  },
+  "realDiscussionTriggers": 1,
+  "providerHttp": 1,
+  "reportedModelTokens": 7217,
+  "feishuOpinionSends": 0,
+  "requestRecords": [
+    {
+      "requestId": "9a42ce9c-686b-4240-ba94-67d715a105a5-1",
+      "requestHash": "be0de2fa721c55df9590493ddaa1a691f1009bc52db863819919ab94916c1504",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T05:26:36.421Z",
+      "status": "accepted",
+      "sentAt": "2026-10-08T05:26:57.824Z",
+      "httpStatus": 200,
+      "responseSha256": "4d9621a1ccb7f1d8686cc3da652c52dd0b21c0a4814e199602a5219041ba9d33",
+      "reportedTokens": 7217,
+      "finishedAt": "2026-10-08T05:27:00.095Z"
+    }
+  ],
+  "permits": [
+    {
+      "requestId": "9a42ce9c-686b-4240-ba94-67d715a105a5-1",
+      "requestHash": "be0de2fa721c55df9590493ddaa1a691f1009bc52db863819919ab94916c1504",
+      "model": "qwen3.8-max",
+      "remainingTokens": 533620,
+      "observedAt": "2026-10-08T05:26:50.499Z",
+      "expiresAt": "2026-12-18T00:00:00+08:00",
+      "freeExhaustionStop": true
+    }
+  ],
+  "jobs": [
+    {
+      "state": "completed",
+      "n": 1
+    },
+    {
+      "state": "cancelled",
+      "n": 1
+    }
+  ],
+  "domainCounts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 2,
+    "proactive_discussion_evaluations": 1,
+    "proactive_discussion_issues": 0,
+    "proactive_discussion_deliveries": 0,
+    "proactive_discussion_sources": 21,
+    "proactive_discussion_events": 21
+  },
+  "semanticAcceptance": "separate-source-only-comparison-required",
+  "realFeishuOpinionAcceptance": "not-exercised",
+  "feishuReadback": {
+    "authRequests": 1,
+    "messageGets": 20,
+    "readFailures": 0,
+    "bindingChecks": 20,
+    "bindingChecksAllMatch": true,
+    "triggerChecksAllMatch": true
+  },
+  "privateCaptureSha256": "bbd66e9953bcc57e8030bbb9a48c68a5f32c16dd17952ba12a20bf34a859e5c9",
+  "watchdogRecoveryFailures": 0,
+  "wiringSmoke": {
+    "kind": "compiled-core-free-gate-wiring-smoke",
+    "checks": [
+      {
+        "case": "missing-permit-no-retry",
+        "passed": true
+      },
+      {
+        "case": "fresh-mock-permit-identical-wire",
+        "passed": true
+      }
+    ],
+    "loopbackHttp": 2,
+    "fakeUpstreamCalls": 1,
+    "providerHttp": 0,
+    "readsProductionConfig": false,
+    "timing": {
+      "permitWaitMs": 60000,
+      "requestMs": 30000,
+      "clientTimeoutMs": 120000
+    },
+    "semanticAcceptance": false,
+    "feishuAcceptance": false,
+    "compiledClientSha256": "88d586a2162a92da7b96e03acaf1bb5bd41c0ee9cff0b25101f21022fa1fcb71",
+    "compiledConfigSha256": "3735f9c6b760d3c59336f939dc652d9cd84e1b4c2f67d4482d00fe86cf8aee0b",
+    "gateSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502"
+  },
+  "scriptDerivation": {
+    "operationSource": "20261008",
+    "toolFixCommit": "749491868d5e6e422d5c26729511705176dc98ae",
+    "changes": {
+      "control.mjs": {
+        "fromSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67",
+        "toSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67"
+      },
+      "gate.mjs": {
+        "fromSha256": "fd61b822698e8ed34c7128ceea5584f37c99d144b92337ceccfb1d7670e18622",
+        "toSha256": "217502f3d2edfc1bb8ee7f19e157121d7a2093dde8e3ba40a921beeda82ea165"
+      },
+      "ops.py": {
+        "fromSha256": "ac1f7a1ff23269d01aae33868752bfefd43e5294d61c4031838c24ae6152cbf0",
+        "toSha256": "834bb62f937fac58eff832ebdb2f658e146da50260290081cd4954ab524e9028"
+      },
+      "preflight.py": {
+        "fromSha256": "e5b9847d64f94d2a6d8fc872b52241f4ee8ff56b1339b81eddcf3381b113f545",
+        "toSha256": "ba258364e4f33d9f28073197479b97fec0ed0525c464fb0b1b7bef80378405c6"
+      },
+      "capture.mjs": {
+        "fromSha256": "8f298563004e38ca5cf57276aa55b3376e9fab0da89fcf8298d783d8737e8c07",
+        "toSha256": "8f298563004e38ca5cf57276aa55b3376e9fab0da89fcf8298d783d8737e8c07"
+      },
+      "proactive-discussion-free-gate.mjs": {
+        "fromSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502",
+        "toSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502"
+      },
+      "proactive-discussion-free-gate-wiring-smoke.mjs": {
+        "fromSha256": "49a48a1b870664b09082b2e592949e2a97f93bc0a0fada61b1b3159a50ee2ce5",
+        "toSha256": "49a48a1b870664b09082b2e592949e2a97f93bc0a0fada61b1b3159a50ee2ce5"
+      }
+    }
+  }
+}
