@@ -1,0 +1,70 @@
+{
+  "kind": "source-selection-bounded-result",
+  "implementationCommit": "dd091d9fb3aa375452212d399efc974374ca90c7",
+  "passed": false,
+  "providerHttp": 4,
+  "providerHttp200": 4,
+  "reportedModelTokens": 11385,
+  "syntheticOnly": true,
+  "realFeishuSends": 0,
+  "casesSha256": "06c26b30108c57a639dc5628f7df7b66a1edf4cbe6d6d04f2bdf90357ac32012",
+  "stageCounts": {
+    "assessment": 2,
+    "opinion_plan": 1,
+    "scope_review": 1,
+    "opinion_plan_repair": 0
+  },
+  "cases": [
+    {
+      "id": "order-wait",
+      "status": "correct_initial_skip",
+      "withdrawalExercised": false,
+      "selectionExercised": false,
+      "independentPass": true
+    },
+    {
+      "id": "order-bypass",
+      "status": "accepted_opinion_failed_independent_semantics",
+      "initialDecision": "intervene",
+      "acceptedOpinion": true,
+      "selectionExercised": true,
+      "independentPass": false
+    },
+    {
+      "id": "permission-wait",
+      "status": "not_called_after_failure"
+    },
+    {
+      "id": "permission-bypass",
+      "status": "not_called_after_failure"
+    }
+  ],
+  "failure": "Program-resolved exact source ranges retained 就 and reached scope review, but the accepted suggestion only asks to verify the already-established not-yet-accepted status. It identifies no remaining acceptance or feasibility check and no specific conditional commitment adjustment. Generic scope or conditions is not actionable.",
+  "independentSemanticReason": "Source identification is supported; advice usefulness is not. The actual reviewed_opinion does not satisfy the frozen actionable-verification or conditional-commitment criterion. HTTP200, exact binding, compilation and model supported=true do not establish product acceptance.",
+  "acceptance": "Four-case end-to-end gate failed. Source-selection transport succeeded on one positive case, but final advice failed independently; no evidence of the withdrawal branch, no later cases, no product or Feishu acceptance.",
+  "stopReason": "independent semantic failure; stop before next case\n\nfalse !== true\n",
+  "finishedAt": "2026-10-08T09:39:08.498Z",
+  "casesAndContextsMatchOriginal": true,
+  "wireResponseCompletionHashesVerified": true,
+  "archivedOriginalByteHashesVerified": true,
+  "files": {
+    "iris-source-selection-20261008.json": "96ac85aed4ff6b907c5922cdca7ff9bc5620678bbbded1a399339bf49513babb",
+    "iris-source-selection-20261008.preflight.json": "dbd4496583ba5dc3861f8ad3954276796b98a7551e39e7e29286e6d0a223d60a",
+    "iris-source-selection-20261008.started.json": "5da45e9760f7e3334f7d24532f4a9b7d602c6029850c1a47a4aae45652eb26bb",
+    "iris-source-selection-20261008.halted.json": "2c3b1343fff0f305942b11c1912ece07aaecca5743c26e678ec8b73e1cdd31d7",
+    "iris-source-selection-20261008.pending-1.json": "10507ee1106bfead2967aeaaa11b7704585870dcedce8c47158841e66dc7248c",
+    "iris-source-selection-20261008.quota-1.json": "ba93df12824cb14f0d94ece8e7f76f2769af0e03c0b040611c8866025498624d",
+    "iris-source-selection-20261008.pending-2.json": "45feb2c7ca2c46a208757374b6fb2537b18a989a640df461984d6a5b4610a697",
+    "iris-source-selection-20261008.quota-2.json": "2a4b78091c7de4e90f5556eed5fd040185c5b28d330f10ba7c7544cda4addcbe",
+    "iris-source-selection-20261008.pending-3.json": "7fb6c6599dd9dabe6aed84ebd9ff96edf91d73b02d1f674e1484b2244b90b59f",
+    "iris-source-selection-20261008.quota-3.json": "274ee4a8845376707070e378a214a827751794fe78eaf0de1d84e4ea1ee07fe2",
+    "iris-source-selection-20261008.pending-4.json": "e4a09a883ca1afd3da5ae1fbeb604c75bbe8cf352cb1fee96e62f26302ef835d",
+    "iris-source-selection-20261008.quota-4.json": "28452620d46315c9d20c80bdb8cb00cf8303345668f44f7fc0690b0e42972d65",
+    "iris-source-selection-20261008.result-order-wait.json": "e50b5205fb235ee09d9768e95f18c23261b6cb1f0b3e1b1645838f24bbf758d3",
+    "iris-source-selection-20261008.result-order-bypass.json": "9077cf3309628dcf752373459f2398c6efe38b3f11e38174c52392ced6057d61",
+    "iris-source-selection-20261008.semantic-order-wait.json": "5df604387c6a4a4dad660877169c53248c321758715c2d16a40d8c386a14ef63",
+    "iris-source-selection-20261008.semantic-order-bypass.json": "48ee3865f647081c470a8efa9fe12d39700420a154916cb0ba2860402135f962",
+    "iris-source-selection-20261008-runner.txt": "1a36bd4644bf6341c6f2384c7906b21e7a349d3716cff8846dd2846df76f6df2",
+    "iris-source-selection-20261008-launcher.txt": "124382d21c705d2e84beba447ee3420792c258c9493ebddce9fc46e8b2d922bd"
+  }
+}

@@ -1,5 +1,14 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-08：固定建议不能把已知状态当作待查问题
+
+[来源位置窗口](../development/iris-source-selection-20261008.md)的dd091d9f解决漏字并
+进入审核，但固定dependency模板要求核实已明确的未验收状态，scope仍全部批准。
+4HTTP200/11385tokens后独立语义失败，后两例未调用。问题在实际生成的建议不调整任何
+当前决定，不能只检查引用和无编造。[有限修正](../development/iris-decision-gate-20261008.md)
+将建议落到暂缓当前决定、完成所需验证/确认后再推进，去掉不再参与生成的核实对象字段。
+同四例和原预期继续作为独立产品门槛；语义及部署层级以该记录实际结果为准。
+
 ## 2026-10-08：来源选择与原文复制应分开验证
 
 [位置选择修复](../development/iris-source-selection-20261008.md)针对已归档的两次漏字失败，

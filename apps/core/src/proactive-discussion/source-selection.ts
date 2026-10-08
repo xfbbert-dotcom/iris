@@ -7,7 +7,7 @@ const gapShape = { premise: rangeSchema, decision: rangeSchema,
   changeExplanation: pdCanonicalOpinionPlanSchema.options[1].shape.changeExplanation };
 const selectionSchema = z.discriminatedUnion("kind", [
   pdCanonicalOpinionPlanSchema.options[0],
-  z.object({ kind: z.literal("dependency"), ...gapShape, verificationTarget: rangeSchema }).strict(),
+  z.object({ kind: z.literal("dependency"), ...gapShape }).strict(),
   z.object({ kind: z.literal("inference"), ...gapShape }).strict(),
   pdCanonicalOpinionPlanSchema.options[3],
 ]);
@@ -42,13 +42,7 @@ export function resolvePdOpinionSourceSelection(value: unknown, catalog: PdOpini
     return { sourceRef: range.sourceRef, quote };
   };
   const premise = resolve(plan.premise), decision = resolve(plan.decision);
-  if (plan.kind === "inference") return { ...plan, premise, decision };
-  const verificationTarget = resolve(plan.verificationTarget);
-  if (![plan.premise, plan.decision].some(range => range.sourceRef === plan.verificationTarget.sourceRef
-    && range.startUnit <= plan.verificationTarget.startUnit && range.endUnit >= plan.verificationTarget.endUnit)) {
-    throw new PdOpinionPlanBindingError("opinion plan verification target is outside the selected gap");
-  }
-  return { ...plan, premise, decision, verificationTarget };
+  return { ...plan, premise, decision };
 }
 
 /** Reuse the canonical branches so quantity and withdrawal contracts cannot drift. */
@@ -58,7 +52,7 @@ export function pdOpinionSelectionFormat(repair = false) {
     properties: { sourceRef: { type: "string", minLength: 1, maxLength: 200 },
       startUnit: { type: "integer", minimum: 0 }, endUnit: { type: "integer", minimum: 0 } } };
   for (const branch of format.json_schema.schema.anyOf as { properties: Record<string, unknown> }[]) {
-    for (const field of ["premise", "decision", "verificationTarget"]) {
+    for (const field of ["premise", "decision"]) {
       if (Object.hasOwn(branch.properties, field)) branch.properties[field] = range;
     }
   }

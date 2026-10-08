@@ -112,7 +112,8 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("source-plan archived respo
         if (stage === "iris_proactive_discussion_opinion_plan") {
           // Explicit wire adaptation: current dependency/inference use ranges;
           // this archive only returns calculation, whose response stays unchanged.
-          // Compare the old canonical contract separately; never rewrite the archive.
+          // Compare the canonical contract separately, explicitly adapting the
+          // now-removed dependency target role. Never rewrite the archive.
           expect(options!.responseFormat).toEqual(pdOpinionSelectionFormat());
           const currentFormat = pdCanonicalOpinionPlanFormat() as any;
           const branches = currentFormat.json_schema.schema.anyOf;
@@ -121,7 +122,11 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("source-plan archived respo
             properties: { kind: { type: "string", enum: ["no_intervention"] },
               reason: { type: "string", enum: ["no_material_issue", "insufficient_basis", "already_handled"] } } });
           currentFormat.json_schema.schema.anyOf = branches.filter((branch: any) => branch !== withdrawal);
-          expect(currentFormat).toEqual(response.responseFormat);
+          const expectedFormat = structuredClone(response.responseFormat) as any;
+          const archivedDependency = expectedFormat.json_schema.schema.anyOf.find((branch: any) => branch.properties.kind.enum[0] === "dependency");
+          delete archivedDependency.properties.verificationTarget;
+          archivedDependency.required = archivedDependency.required.filter((key: string) => key !== "verificationTarget");
+          expect(currentFormat).toEqual(expectedFormat);
           const actualBranches = (options!.responseFormat!.json_schema.schema as any).anyOf;
           expect(actualBranches.find((branch: any) => branch.properties.kind.enum[0] === "calculation"))
             .toEqual(branches.find((branch: any) => branch.properties.kind.enum[0] === "calculation"));

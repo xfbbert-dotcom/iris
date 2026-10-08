@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-08T09:39:08.498Z",
+  "halted": true,
+  "executionPassed": false,
+  "caseId": "order-bypass",
+  "stage": "iris_proactive_discussion_scope_review",
+  "reason": "independent semantic failure; stop before next case\n\nfalse !== true\n"
+}

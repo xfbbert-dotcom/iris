@@ -1,0 +1,65 @@
+{
+  "caseId": "order-bypass",
+  "kind": "fresh-full-application-flow",
+  "expectedDecision": "intervene",
+  "reviewCriteria": "Identify unfinished acceptance and the unsupported definite promise; give an actionable verification or conditional-commitment suggestion without invented outcomes.",
+  "contextSha256": "1fc3662146263262a31419602915bb7eec50e55d65cf7eb6da051f67ba59e18d",
+  "initialAssessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "版本A尚未验收，但现在就向客户承诺，文档全部事项明天完成。"
+    },
+    "evidenceRefs": [
+      "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+    ],
+    "observation": "材料显示版本A尚未通过验收，但已向客户承诺文档全部事项将于明天完成。该承诺依赖的关键前提（版本A验收通过）目前未满足。",
+    "reasoning": "在版本A未验收的情况下向客户做出确定性交付承诺，属于超出当前依据的结论。若明天验收未通过或发现需修改事项，将直接导致对客户的承诺无法兑现，造成履约风险和信誉损失。授权材料表明当前结论超出依据，且确定承诺依赖尚未验证的关键前提。",
+    "suggestion": "建议立即暂停向客户发送该承诺；先核实版本A的验收进度和预计完成时间，确认所有文档事项确实可在明天前完成后再做对外沟通。如必须回复客户，应将表述调整为条件性说明，例如'待版本A验收通过后，预计明天完成全部文档事项'，避免形成不可撤回的确定承诺。",
+    "uncertainty": "qualified_inference",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "首次识别到在关键前提（版本A验收）未满足时已对客户作出确定性交付承诺的实质风险，可能造成履约失败。",
+      "evidenceRefs": [
+        "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+      ]
+    }
+  },
+  "assessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "材料里一方面说“版本A尚未验收”，另一方面提出“但现在就向客户承诺，文档全部事项明天完成”。"
+    },
+    "evidenceRefs": [
+      "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+    ],
+    "observation": "材料里一方面说“版本A尚未验收”，另一方面提出“但现在就向客户承诺，文档全部事项明天完成”。",
+    "reasoning": "这个前提尚未核实，直接推进当前决定还缺少关键验证。",
+    "suggestion": "建议先核实“版本A尚未验收”，再根据验证结果明确可以推进的范围或条件。",
+    "uncertainty": "qualified_inference",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "来源明确指出版本A尚未验收这一关键前提未满足，却已准备向客户承诺文档全部事项明天完成，属于未验证前提即作出确定承诺的实质问题。",
+      "evidenceRefs": [
+        "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+      ]
+    }
+  },
+  "draft": {
+    "text": "材料里一方面说“版本A尚未验收”，另一方面提出“但现在就向客户承诺，文档全部事项明天完成”。这个前提尚未核实，直接推进当前决定还缺少关键验证。建议先核实“版本A尚未验收”，再根据验证结果明确可以推进的范围或条件。",
+    "evidenceRefs": [
+      "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+    ]
+  },
+  "disposition": "reviewed_opinion",
+  "withdrawal": null,
+  "completionIds": [
+    2,
+    3,
+    4
+  ],
+  "technicalError": null
+}

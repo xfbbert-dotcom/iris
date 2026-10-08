@@ -518,6 +518,13 @@ and exact quotation does not prove a valid premise/conclusion relationship or us
 The [source-selection record](../../development/iris-source-selection-20261008.md) separates this
 transport contract from actual end-to-end model and Feishu acceptance.
 
+A dependency opinion selects the source premise and proposed decision. Its advice must state an
+actionable conditional adjustment to that decision; asking users to re-verify a status already
+explicitly established in the source is insufficient. The bounded compiler defers the decision
+until the needed verification/confirmation and scope are established, without inventing actors,
+deadlines or consequences. Source relationships and whether that intervention is useful still need
+full semantic review; see the [decision-gate record](../../development/iris-decision-gate-20261008.md).
+
 Source-only generation and its one permitted correction may also return a strict `no_intervention`
 plan when re-reading the complete sources invalidates the initial intervention. This branch carries
 only a fixed reason, compiles no public prose, and ends rendering without another review or fallback.

@@ -1,0 +1,7 @@
+{
+  "caseId": "order-wait",
+  "reason": "Parent and independent reviewer: explicit post-completion ordering supplies no present material issue. Actual initial_skip, empty prose and no draft are correct; selection/withdrawal mechanism not exercised.",
+  "reviewedAt": "2026-10-08T09:36:00.0856588Z",
+  "pass": true,
+  "resultSha256": "e50b5205fb235ee09d9768e95f18c23261b6cb1f0b3e1b1645838f24bbf758d3"
+}

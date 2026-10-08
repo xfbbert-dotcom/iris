@@ -10,7 +10,6 @@ const plan = {
   kind: "dependency",
   premise: { sourceRef: "dependency", quote: "交付依赖的供应商接口还没有联调验证。" },
   decision: { sourceRef: "decision", quote: "准备今天向客户承诺下周肯定交付。" },
-  verificationTarget: { sourceRef: "dependency", quote: "供应商接口" },
   changeExplanation: "当前尚未验证的接口依赖与即将作出的确定承诺需要共同核对。",
 };
 const calculationEvidence = [{ ref: "budget", text: "本季度招聘预算10万元。" },
@@ -49,7 +48,7 @@ test("dependency plan compiles one source-bound opinion without authored consequ
   const { prose } = compilePdOpinionPlan(plan, true, evidence)!;
   expect(prose.observation).toContain("交付依赖的供应商接口还没有联调验证。");
   expect(prose.observation).toContain("准备今天向客户承诺下周肯定交付。");
-  expect(prose.suggestion).toContain("供应商接口");
+  expect(prose.suggestion).toContain("暂缓上述决定");
   expect(prose.uncertainty).toBe("qualified_inference");
   expect(prose.issueDescription).toBe(prose.observation);
   expect(prose.changeExplanation).toBe(plan.changeExplanation);
@@ -68,11 +67,6 @@ test.each([
   { ...plan, changeExplanation: " " },
 ])("unbound, new authored, or inapplicable plan data is refused: %j", value => {
   expect(() => compilePdOpinionPlan(value, true, [...evidence, { ref: "other", text: "供应商接口" }])).toThrow();
-});
-
-test("a target elsewhere in selected evidence cannot bypass its chosen premise and decision", () => {
-  const value = { ...plan, premise: { sourceRef: "dependency", quote: "还没有联调验证" } };
-  expect(() => compilePdOpinionPlan(value, true, evidence)).toThrow();
 });
 
 test("inference advice refers to the selected conclusion, not a separately selected known premise", () => {
@@ -104,21 +98,18 @@ test("a dependency can concern a planned action without inventing a promise or p
   const { prose } = compilePdOpinionPlan({ kind: "dependency",
     premise: { sourceRef: "permission", quote: "客户数据权限还没确认" },
     decision: { sourceRef: "permission", quote: "接下来就把完整客户名单公开给合作方" },
-    verificationTarget: { sourceRef: "permission", quote: "客户数据权限" },
     changeExplanation: "公开客户名单的决定仍缺少已确认的权限前提。" }, true, sources)!;
   expect(prose.draftText).not.toContain("承诺");
   expect(prose.draftText).not.toMatch(/已违规|已获授权|已经公开/u);
-  expect(prose.reasoning).toContain("关键验证");
-  expect(prose.suggestion).toContain("客户数据权限");
+  expect(prose.reasoning).toContain("不足以支持直接推进");
+  expect(prose.suggestion).toContain("明确可执行的范围和条件");
 });
 
 test.each([false, true])("plan wire format accepts only the bounded branch for generation or repair: %s", repair => {
   const validate = new Ajv().compile(pdCanonicalOpinionPlanFormat(repair).json_schema.schema);
   expect(validate(plan)).toBe(true);
-  const { verificationTarget, ...withoutTarget } = plan;
-  expect(validate(withoutTarget)).toBe(false);
-  expect(validate({ ...withoutTarget, kind: "inference" })).toBe(true);
-  expect(validate({ ...withoutTarget, kind: "inference", verificationTarget })).toBe(false);
+  expect(validate({ ...plan, kind: "inference" })).toBe(true);
+  expect(validate({ ...plan, kind: "inference", verificationTarget: plan.premise })).toBe(false);
   expect(validate({ ...plan, draftText: "unreviewed free prose" })).toBe(false);
   expect(validate({ kind: "calculation", quantities, changeExplanation: "成本更新需要重新核算。" })).toBe(true);
   expect(validate({ kind: "calculation", quantities, changeExplanation: "成本更新需要重新核算。", total: 999 })).toBe(false);

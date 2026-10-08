@@ -13,7 +13,6 @@ function setup(verdicts = [true], repairExtra: Record<string, unknown> = {}) {
   assessment.materialChange.explanation = "UNVERIFIED_INITIAL_VALUE";
   const plan = { kind: "dependency", premise: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 8 },
     decision: { sourceRef: context.items[1]!.ref, startUnit: 0, endUnit: 7 },
-    verificationTarget: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 2 },
     changeExplanation: "当前尚未处理这个确定承诺所依赖的验证缺口。" };
   const client = { complete: vi.fn<OpenAICompatibleChatCompletionsClient["complete"]>(async (messages, options) => {
     const name = options!.responseFormat!.json_schema.name;
@@ -35,8 +34,7 @@ test.each(["generation", "binding_repair", "review_repair"] as const)("a conditi
   const withdrawal = { kind: "no_intervention", reason: "no_material_issue" };
   const mistaken = { ...plan,
     premise: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 2 },
-    decision: { sourceRef: context.items[0]!.ref, startUnit: 4, endUnit: 8 },
-    verificationTarget: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 2 } };
+    decision: { sourceRef: context.items[0]!.ref, startUnit: 4, endUnit: 8 } };
   if (stage === "generation") client.complete.mockResolvedValueOnce(JSON.stringify(withdrawal));
   if (stage === "binding_repair") client.complete
     .mockResolvedValueOnce(JSON.stringify({ ...mistaken, decision: mistaken.premise }))

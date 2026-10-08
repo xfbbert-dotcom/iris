@@ -1,4 +1,4 @@
-# Iris 来源位置选择：替换引文抄写职责
+# Iris 来源位置选择：引文传输成功，建议价值未通过
 
 日期2026-10-08。实现树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支
 `codex/iris-daily-pilot-followup`，开始HEAD `6d2e2311`。本轮只做本地修复、验证及同一
@@ -52,7 +52,7 @@ reported tokens达到100000后禁止下次调用、45分钟一次窗口；逐HTT
 
 ## 实施与实际验收
 
-本地代码已补，应用提交将在冻结preflight后记录精确SHA；尚未开始本轮模型调用。
+本地候选应用为 `dd091d9fb3aa375452212d399efc974374ca90c7`，已冻结并完成一次受限验证。
 [source-selection](../../apps/core/src/proactive-discussion/source-selection.ts)建立完整词法
 目录及严格范围协议，原quote编译器保留为内部合同，实时生成不接受quote-only回退。
 [model](../../apps/core/src/proactive-discussion/model.ts)固定一次render的来源快照，
@@ -68,7 +68,21 @@ resolvedSourcePlan分开记录。评估trace保留实际范围和审核请求中
   目录元数据，保留归档calculation/hypothesis原始响应及完整业务输入、预期评估和草稿。
   不把离线协议适配当作新模型或真实数据库运行证据。
 
-受限实模尚未运行。以上不表示介入关系判断已修好、真实飞书通过或部署。
+受限实模4次HTTP200、11385tokens，17:39:08.498停止（北京时间）。第一例正确初判skip；
+第二例assess→source selection→scope review成功返回reviewed_opinion，没有绑定修正。
+程序保留“就”并精确取回来源，原引用复制故障未重现；但最终建议仍是先核实来源已经
+明确的“版本A尚未验收”，没有指出剩余验证或如何调整当前确定承诺。“范围或条件”泛化，
+不满足冻结的actionable verification or conditional-commitment suggestion标准。
+模型scope review全部supported=true；主执行者和独立语义审查均判失败，后两例未调用。
+新增撤回分支未被采用。初判正文中的过度确定未进入最终文案，不能混同最终失败依据。
+
+[原始报告](evidence/iris-source-selection-20261008.json)、
+[停止记录](evidence/iris-source-selection-20261008.halted.json)及
+[汇总和哈希](evidence/iris-source-selection-20261008-summary.json)保留本次事实。
+不重跑dd091d9f或修改预期。该版本只改善引用传输，不能称为产品通过或发布候选。
+下一步局限于已确认的dependency固定建议模板：它应提出当前决定的具体条件调整，
+不能重复要求确认已知状态；若修改生成合同，单独冻结新版本和有限窗口，旧失败不覆盖。
+本轮到此没有生产访问、部署、QA启用、真实群新窗口或外发。
 
 ## 白皮书11.2四处处置
 

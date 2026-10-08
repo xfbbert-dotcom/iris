@@ -1,0 +1,7 @@
+{
+  "caseId": "order-bypass",
+  "pass": false,
+  "reason": "Parent and independent reviewer: exact range binding preserved 就, but accepted advice merely asks to verify the explicitly known not-yet-accepted status. It identifies no remaining acceptance/feasibility check or specific conditional promise adjustment; generic scope/conditions is not actionable. Supported=true does not meet frozen product criterion.",
+  "resultSha256": "9077cf3309628dcf752373459f2398c6efe38b3f11e38174c52392ced6057d61",
+  "reviewedAt": "2026-10-08T09:39:08.0829247Z"
+}

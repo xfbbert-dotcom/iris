@@ -14,7 +14,6 @@ function setup() {
   assessment.issueRef = { kind: "new", description: context.items[1]!.text };
   const plan = { kind: "dependency", premise: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 8 },
     decision: { sourceRef: context.items[1]!.ref, startUnit: 0, endUnit: 8 },
-    verificationTarget: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 2 },
     changeExplanation: "当前承诺缺少接口验证。" };
   const client = { complete: vi.fn<OpenAICompatibleChatCompletionsClient["complete"]>(async (messages, options) => {
     if (options!.responseFormat!.json_schema.name.startsWith("iris_proactive_discussion_opinion_plan")) return JSON.stringify(plan);
@@ -32,17 +31,15 @@ test("continuous source selection preserves the dropped 就 and passes exact quo
   expect(() => compilePdOpinionPlan({ ...plan,
     premise: { sourceRef: plan.premise.sourceRef, quote: context.items[0]!.text },
     decision: { sourceRef: plan.decision.sourceRef, quote: "现在向客户承诺下周肯定交付。" },
-    verificationTarget: { sourceRef: plan.premise.sourceRef, quote: "供应商接口" },
   }, true, context.items)).toThrow("quote is not bound");
   const pair = await model.render({ context, assessment });
   expect(pair?.draft.text).toContain("现在就向客户承诺下周肯定交付。");
   expect(pair?.draft.text).not.toContain("现在向客户");
-  expect(pair?.assessment.suggestion).toContain("供应商接口");
+  expect(pair?.assessment.suggestion).toContain("暂缓上述决定");
   expect(client.complete).toHaveBeenCalledTimes(2);
   const review = JSON.parse(client.complete.mock.calls[1]![0][1]!.content);
   expect(review.sourcePlan).toEqual(plan);
   expect(review.resolvedSourcePlan.decision).toEqual({ sourceRef: plan.decision.sourceRef, quote: "现在就向客户承诺下周肯定交付。" });
-  expect(review.resolvedSourcePlan.verificationTarget.quote).toBe("供应商接口");
   expect(review.evidence.map((item: any) => item.text)).toEqual(context.items.map(item => item.text));
 });
 
@@ -99,7 +96,6 @@ test("live quote-only responses cannot fall back to the canonical internal compi
   client.complete.mockResolvedValueOnce(JSON.stringify({ ...plan,
     premise: { sourceRef: plan.premise.sourceRef, quote: context.items[0]!.text },
     decision: { sourceRef: plan.decision.sourceRef, quote: context.items[1]!.text },
-    verificationTarget: { sourceRef: plan.premise.sourceRef, quote: "供应商接口" },
   }));
   await expect(model.render({ context, assessment })).rejects.toThrow("draft was invalid");
   expect(client.complete).toHaveBeenCalledTimes(1);
@@ -124,11 +120,10 @@ test("a render snapshots full source context before awaits so review and repairs
 test("resolved quotes preserve combining Unicode bytes while outward prose keeps its existing NFC contract", async () => {
   const { context, assessment, plan, client, model } = setup();
   context.items[0]!.text = "甲 乙，\r\n甲 e\u0301🙂";
-  client.complete.mockResolvedValueOnce(JSON.stringify({ ...plan, verificationTarget: { ...plan.premise, startUnit: 7, endUnit: 8 } }));
+  client.complete.mockResolvedValueOnce(JSON.stringify(plan));
   const pair = await model.render({ context, assessment });
   const review = JSON.parse(client.complete.mock.calls[1]![0][1]!.content);
   expect(review.resolvedSourcePlan.premise.quote).toBe("甲 乙，\r\n甲 e\u0301🙂");
-  expect(review.resolvedSourcePlan.verificationTarget.quote).toBe("e\u0301🙂");
   expect(pair?.draft.text).toContain("甲 乙，\r\n甲 é🙂");
 });
 
@@ -156,13 +151,4 @@ test("resolver rejects ambiguous references, missing unit IDs, empty sources and
     buildPdOpinionSourceCatalog([{ ref: "source", text: "" }]),
     buildPdOpinionSourceCatalog([{ ref: "source", text: "a".repeat(201) }]),
   ]) expect(() => resolvePdOpinionSourceSelection(plan, catalog)).toThrow();
-});
-
-test("verification target containment uses source locations even when identical words repeat elsewhere", () => {
-  const catalog = buildPdOpinionSourceCatalog([{ ref: "source", text: "甲 乙 甲" }]);
-  expect(() => resolvePdOpinionSourceSelection({ kind: "dependency",
-    premise: { sourceRef: "source", startUnit: 0, endUnit: 0 },
-    decision: { sourceRef: "source", startUnit: 2, endUnit: 2 },
-    verificationTarget: { sourceRef: "source", startUnit: 4, endUnit: 4 }, changeExplanation: "test",
-  }, catalog)).toThrow("outside the selected gap");
 });
