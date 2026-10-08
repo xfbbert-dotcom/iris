@@ -290,9 +290,11 @@ export function createPdModel({
         try {
           const value: unknown = JSON.parse(generatedContent);
           if (opinionPlan) currentPlan = value;
-          generated = validatePdProseIntervention(opinionPlan
+          const prose = opinionPlan
             ? compilePdOpinionPlan(value, validated.issueRef?.kind === "new", generation.evidence)
-            : canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue) : value, context, validated);
+            : canonicalOpinion ? canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue) : value;
+          if (opinionPlan && prose === null) return null;
+          generated = validatePdProseIntervention(prose, context, validated);
         }
         catch (error) {
           if (!opinionPlan || !(error instanceof PdOpinionPlanBindingError)) {
@@ -309,8 +311,9 @@ export function createPdModel({
           await assertActive?.();
           try {
             currentPlan = JSON.parse(correctedContent);
-            generated = validatePdProseIntervention(
-              compilePdOpinionPlan(currentPlan, validated.issueRef?.kind === "new", generation.evidence), context, validated);
+            const prose = compilePdOpinionPlan(currentPlan, validated.issueRef?.kind === "new", generation.evidence);
+            if (prose === null) return null;
+            generated = validatePdProseIntervention(prose, context, validated);
           } catch { throw new Error("proactive discussion draft was invalid"); }
           planWasCorrected = true;
         }
@@ -343,12 +346,14 @@ export function createPdModel({
       let repaired: PdReviewedIntervention;
       try {
         const value: unknown = JSON.parse(repairedContent);
-        repaired = opinionPlan
-          ? validatePdProseIntervention(compilePdOpinionPlan(value, validated.issueRef?.kind === "new", input.evidence), context, validated)
-          : canonicalOpinion
+        if (opinionPlan) {
+          currentPlan = value;
+          const prose = compilePdOpinionPlan(value, validated.issueRef?.kind === "new", input.evidence);
+          if (prose === null) return null;
+          repaired = validatePdProseIntervention(prose, context, validated);
+        } else repaired = canonicalOpinion
           ? validatePdProseIntervention(canonicalOpinionProse(value, validated.issueRef?.kind === "new", separateInterventionValue), context, validated)
           : validatePdRepairUpdates(value, context, validated, generated);
-        if (opinionPlan) currentPlan = value;
       } catch {
         if (opinionPlan) throw new Error("proactive discussion draft was invalid");
         return null;

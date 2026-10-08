@@ -40,6 +40,7 @@ type SyntheticTraceRecord = {
   draftOrigin?: "model" | "assessment_projection" | "model_prose" | "model_updates";
   boundCandidate?: Record<string, unknown>;
   compiledObserved?: boolean;
+  withdrawalObserved?: boolean;
   planCallIndex?: number;
   repairInput?: Record<string, unknown>;
 };
@@ -333,7 +334,15 @@ export async function runSyntheticProactiveDiscussionEval({
         const draftRecord = [...trace.records].reverse().find(record => record.caseId === invocation.caseId
           && record.round === invocation.round && (record.stage === "draft" || record.stage === "generated_pair" || record.stage === "pair_repair"
             || record.stage === "plan_generation" || record.stage === "plan_repair"));
-        if (draftRecord) draftRecord.acceptedDraft = reviewed !== null;
+        if (draftRecord) {
+          draftRecord.acceptedDraft = reviewed !== null;
+          // Successful runtime return establishes that the raw withdrawal was
+          // valid. Do not infer this from a sanitized or malformed response.
+          if (reviewed === null && invocation.plan?.record === draftRecord
+            && isPlainRecord(invocation.plan.value) && invocation.plan.value.kind === "no_intervention") {
+            draftRecord.withdrawalObserved = true;
+          }
+        }
         else markSyntheticTraceIncomplete(trace);
         return reviewed;
       } finally {
@@ -577,8 +586,9 @@ function sanitizePlanCandidate(
   sanitization: SyntheticTraceSanitization,
 ): Record<string, unknown> | null {
   if (!isPlainRecord(value)) return null;
-  noteUnknownFields(value, ["kind", "premise", "decision", "verificationTarget", "quantities", "changeExplanation"], sanitization);
+  noteUnknownFields(value, ["kind", "reason", "premise", "decision", "verificationTarget", "quantities", "changeExplanation"], sanitization);
   const candidate: Record<string, unknown> = {};
+  if (Object.hasOwn(value, "reason")) copyEnum(candidate, value, "reason", ["no_material_issue", "insufficient_basis", "already_handled"], sanitization);
   for (const key of ["kind", "changeExplanation"]) {
     if (typeof value[key] === "string") candidate[key] = sanitizeTraceText(value[key], key, redactions, sanitization);
     else if (value[key] !== undefined) addTraceMarker(sanitization.droppedFields, key);

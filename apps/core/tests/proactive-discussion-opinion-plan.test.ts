@@ -22,8 +22,31 @@ const quantities = {
   priorUnitCost: null,
 };
 
+test.each(["no_material_issue", "insufficient_basis", "already_handled"])("a strict no-intervention plan ends without compiling prose: %s", reason => {
+  const withdrawal = { kind: "no_intervention", reason };
+  expect(compilePdOpinionPlan(withdrawal, true, evidence)).toBeNull();
+  for (const repair of [false, true]) {
+    const validate = new Ajv().compile(pdOpinionPlanFormat(repair).json_schema.schema);
+    expect(validate(withdrawal)).toBe(true);
+  }
+});
+
+test.each([
+  { kind: "no_intervention" },
+  { kind: "no_intervention", reason: "other" },
+  { kind: "no_intervention", reason: "no_material_issue", draftText: "必须马上停止。" },
+  { kind: "no_intervention", reason: "already_handled", changeExplanation: "未审核解释" },
+  { kind: "no_intervention", reason: "insufficient_basis", premise: plan.premise },
+])("withdrawal cannot carry unaudited prose or malformed reasons: %j", value => {
+  expect(() => compilePdOpinionPlan(value, true, evidence)).toThrow();
+  for (const repair of [false, true]) {
+    const validate = new Ajv().compile(pdOpinionPlanFormat(repair).json_schema.schema);
+    expect(validate(value)).toBe(false);
+  }
+});
+
 test("dependency plan compiles one source-bound opinion without authored consequences or internal justification", () => {
-  const { prose } = compilePdOpinionPlan(plan, true, evidence);
+  const { prose } = compilePdOpinionPlan(plan, true, evidence)!;
   expect(prose.observation).toContain("交付依赖的供应商接口还没有联调验证。");
   expect(prose.observation).toContain("准备今天向客户承诺下周肯定交付。");
   expect(prose.suggestion).toContain("供应商接口");
@@ -57,7 +80,7 @@ test("inference advice refers to the selected conclusion, not a separately selec
     { ref: "revenue", text: "因此认定全部用户都会付费，直接按全量付费用户定收入。" }];
   const { prose } = compilePdOpinionPlan({ kind: "inference", premise: { sourceRef: "likes", quote: sources[0]!.text },
     decision: { sourceRef: "revenue", quote: sources[1]!.text },
-    changeExplanation: "喜欢与付费之间仍缺乏验证。" }, false, sources);
+    changeExplanation: "喜欢与付费之间仍缺乏验证。" }, false, sources)!;
   expect(prose.issueDescription).toBeNull();
   expect(prose.observation).toContain(sources[0]!.text);
   expect(prose.reasoning).toContain("不足以证明");
@@ -82,7 +105,7 @@ test("a dependency can concern a planned action without inventing a promise or p
     premise: { sourceRef: "permission", quote: "客户数据权限还没确认" },
     decision: { sourceRef: "permission", quote: "接下来就把完整客户名单公开给合作方" },
     verificationTarget: { sourceRef: "permission", quote: "客户数据权限" },
-    changeExplanation: "公开客户名单的决定仍缺少已确认的权限前提。" }, true, sources);
+    changeExplanation: "公开客户名单的决定仍缺少已确认的权限前提。" }, true, sources)!;
   expect(prose.draftText).not.toContain("承诺");
   expect(prose.draftText).not.toMatch(/已违规|已获授权|已经公开/u);
   expect(prose.reasoning).toContain("关键验证");
@@ -111,7 +134,7 @@ test("calculation plan cannot substitute an unbound amount for a literal quantit
 });
 
 test("calculation plan uses computed quantities without accepting model-authored amounts", () => {
-  const { prose } = compilePdOpinionPlan({ kind: "calculation", quantities, changeExplanation: "当前预算判断需复核。" }, true, calculationEvidence);
+  const { prose } = compilePdOpinionPlan({ kind: "calculation", quantities, changeExplanation: "当前预算判断需复核。" }, true, calculationEvidence)!;
   expect(prose.observation).toContain("总成本16万元");
   expect(prose.observation).toContain("多6万元");
   expect(prose.uncertainty).toBe("fact");

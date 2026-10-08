@@ -509,6 +509,14 @@ consume that same correction before review; it does not add a second repair allo
 this mode retains the structured decision, identity and references with empty observation,
 reasoning and suggestion, avoiding unreviewed free-text silence explanations.
 
+Source-only generation and its one permitted correction may also return a strict `no_intervention`
+plan when re-reading the complete sources invalidates the initial intervention. This branch carries
+only a fixed reason, compiles no public prose, and ends rendering without another review or fallback.
+An explicit condition or future sequence is not evidence that a member plans to bypass that condition;
+absence of a reported completion status is not itself an actionable defect. This exit does not prove
+the model will choose correctly. With the current persistence contract a withdrawn initial intervention
+remains a blocked evaluation, not a rewritten initial skip; synthetic traces must distinguish the two.
+
 Runtime `IRIS_PROACTIVE_DISCUSSION_OPINION_MODE` and synthetic eval `--opinion-mode` share the
 `legacy | source-plan` selection; the default is `legacy`. This selection changes neither model
 provider nor source permissions, active-send switches or approval requirements. Evaluation traces

@@ -4,6 +4,7 @@ import { openPdDatabase, pdTestAt as at } from "./helpers/proactive-discussion-p
 import { pdContext, pdAssessment, pdSkipAssessment, PILOT_CHAT } from "./fixtures/proactive-discussion.js";
 import { createPdModel, type PdModel } from "../src/proactive-discussion/model.js";
 import { pdOpinionModeOptions } from "../src/proactive-discussion/opinion-mode.js";
+import { pdOpinionPlanSystem } from "../src/proactive-discussion/opinion-plan.js";
 import type { PdAssessment, PdContext, PdDraft } from "../src/proactive-discussion/contracts.js";
 import type { OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
 import { createPdRegistrar } from "../src/proactive-discussion/registrar.js";
@@ -107,9 +108,25 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("source-plan archived respo
         const stage = options?.responseFormat?.json_schema.name;
         calls.push(stage!);
         expect(stage).toBe(response.stage);
-        expect(options?.responseFormat).toEqual(response.responseFormat);
+        if (stage === "iris_proactive_discussion_opinion_plan") {
+          // Replay unchanged historical output into the current contract. The
+          // withdrawal branch is new; every historical intervention branch and
+          // the full business input below must remain unchanged.
+          const currentFormat = structuredClone(options!.responseFormat!) as any;
+          const branches = currentFormat.json_schema.schema.anyOf;
+          const withdrawal = branches.find((branch: any) => branch.properties.kind.enum[0] === "no_intervention");
+          expect(withdrawal).toEqual({ type: "object", additionalProperties: false, required: ["kind", "reason"],
+            properties: { kind: { type: "string", enum: ["no_intervention"] },
+              reason: { type: "string", enum: ["no_material_issue", "insufficient_basis", "already_handled"] } } });
+          currentFormat.json_schema.schema.anyOf = branches.filter((branch: any) => branch !== withdrawal);
+          expect(currentFormat).toEqual(response.responseFormat);
+          expect(request[0]).toEqual({ role: "system", content: pdOpinionPlanSystem });
+          expect(request[0]!.content.endsWith(response.messages[0]!.content.split("\n").slice(1).join("\n"))).toBe(true);
+        } else {
+          expect(options?.responseFormat).toEqual(response.responseFormat);
+          expect(request[0]).toEqual(response.messages[0]);
+        }
         expect(request).toHaveLength(2);
-        expect(request[0]).toEqual(response.messages[0]);
         expect(request[1]!.role).toBe(response.messages[1]!.role);
         const archivedInput = JSON.parse(response.messages[1]!.content);
         // Persisted versions come from this real database, never from the archived eval.

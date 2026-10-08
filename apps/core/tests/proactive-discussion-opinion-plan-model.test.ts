@@ -28,6 +28,38 @@ function setup(verdicts = [true], repairExtra: Record<string, unknown> = {}) {
   return { context, assessment, plan, client, model };
 }
 
+test.each(["generation", "binding_repair", "review_repair"] as const)("a conditional plan can withdraw a mistaken intervention at %s without more review or repair", async stage => {
+  const { context, assessment, plan, client, model } = setup([false]);
+  context.items[0]!.text = "版本A完成后，把文档事项落实。";
+  assessment.issueRef = { kind: "new", description: context.items[0]!.text };
+  const withdrawal = { kind: "no_intervention", reason: "no_material_issue" };
+  const mistaken = { ...plan,
+    premise: { sourceRef: context.items[0]!.ref, quote: "版本A完成后" },
+    decision: { sourceRef: context.items[0]!.ref, quote: "把文档事项落实" },
+    verificationTarget: { sourceRef: context.items[0]!.ref, quote: "版本A完成后" } };
+  if (stage === "generation") client.complete.mockResolvedValueOnce(JSON.stringify(withdrawal));
+  if (stage === "binding_repair") client.complete
+    .mockResolvedValueOnce(JSON.stringify({ ...mistaken, decision: mistaken.premise }))
+    .mockResolvedValueOnce(JSON.stringify(withdrawal));
+  if (stage === "review_repair") client.complete
+    .mockResolvedValueOnce(JSON.stringify(mistaken))
+    .mockResolvedValueOnce(JSON.stringify({ fieldChecks: { ...pdReviewFieldChecks(), reasoning: { supported: false, reason: "原句已保留先后条件。" } },
+      supported: false, reason: "没有绕过前提的决定。", requiredNumbers: [], adviceQuote: null }))
+    .mockResolvedValueOnce(JSON.stringify(withdrawal));
+  expect(await model.render({ context, assessment })).toBeNull();
+  expect(client.complete).toHaveBeenCalledTimes(stage === "generation" ? 1 : stage === "binding_repair" ? 2 : 3);
+  expect(assessment.decision).toBe("intervene");
+  const initialInput = JSON.parse(client.complete.mock.calls[0]![0][1]!.content);
+  expect(initialInput.evidence[0].text).toBe("版本A完成后，把文档事项落实。");
+});
+
+test("malformed withdrawal is a render failure rather than silently accepted abstention", async () => {
+  const { context, assessment, client, model } = setup();
+  client.complete.mockResolvedValueOnce(JSON.stringify({ kind: "no_intervention", reason: "no_material_issue", draftText: "未审核意见" }));
+  await expect(model.render({ context, assessment })).rejects.toThrow("proactive discussion draft was invalid");
+  expect(client.complete).toHaveBeenCalledTimes(1);
+});
+
 test("controlled plan compiles source-bound prose and still receives full semantic review", async () => {
   const { context, assessment, plan, client, model } = setup();
   const pair = await model.render({ context, assessment });

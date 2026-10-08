@@ -60,6 +60,40 @@ function scriptedPlan({ failure, finalSupported = true, explanation = "喜欢不
 function records(result: any) { return result.syntheticTrace.records.filter((record: any) => record.caseId === "inference"); }
 function inference(result: any) { return result.results.find((item: any) => item.caseId === "inference"); }
 
+test.each(["generation", "binding_repair", "review_repair"] as const)("trace records actual withdrawal at %s without inventing an accepted draft", async stage => {
+  const fixture = scriptedPlan({ failure: stage === "binding_repair" ? "binding" : stage === "review_repair" ? "semantic" : undefined });
+  const client: OpenAICompatibleChatCompletionsClient = { async complete(messages, options) {
+    const content = await fixture.client.complete(messages, options);
+    const name = options!.responseFormat!.json_schema.name;
+    if (name === (stage === "generation" ? "iris_proactive_discussion_opinion_plan" : "iris_proactive_discussion_opinion_plan_repair")) {
+      return JSON.stringify({ kind: "no_intervention", reason: "no_material_issue" });
+    }
+    return content;
+  } };
+  const result = await run({ client, opinionMode: "source-plan" });
+  const rows = records(result);
+  expect(inference(result)).toMatchObject({ assessment: { decision: "intervene" }, draft: null, error: "draft_rejected" });
+  expect(rows.at(-1)).toMatchObject({ candidate: { kind: "no_intervention", reason: "no_material_issue" },
+    withdrawalObserved: true, compiledObserved: false, acceptedDraft: false, replayValidation: { accepted: false, reason: "not_replayed" } });
+  expect(rows.at(-1)).not.toHaveProperty("boundCandidate");
+  expect(rows.some((row: any) => row.acceptedDraft === true)).toBe(false);
+  expect(result.syntheticTrace.complete).toBe(true);
+});
+
+test("trace must not call malformed no-intervention output an observed withdrawal", async () => {
+  const fixture = scriptedPlan();
+  const client: OpenAICompatibleChatCompletionsClient = { async complete(messages, options) {
+    const content = await fixture.client.complete(messages, options);
+    return options!.responseFormat!.json_schema.name === "iris_proactive_discussion_opinion_plan"
+      ? JSON.stringify({ kind: "no_intervention", reason: "no_material_issue", draftText: "PRIVATE-UNREVIEWED" }) : content;
+  } };
+  const result = await run({ client, opinionMode: "source-plan" });
+  expect(inference(result)).toMatchObject({ draft: null, error: "render_failed" });
+  expect(records(result).at(-1)).not.toHaveProperty("withdrawalObserved");
+  expect(records(result).at(-1).acceptedDraft).toBe(false);
+  expect(JSON.stringify(result.syntheticTrace)).not.toContain("PRIVATE-UNREVIEWED");
+});
+
 test("source-plan selection uses the same model path with trace on and off while default stays legacy", async () => {
   const plain = scriptedPlan(), traced = scriptedPlan(), legacy = scriptedPlan();
   const off = await run({ client: plain.client, opinionMode: "source-plan", includeTrace: false });
