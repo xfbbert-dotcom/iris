@@ -509,6 +509,15 @@ consume that same correction before review; it does not add a second repair allo
 this mode retains the structured decision, identity and references with empty observation,
 reasoning and suggestion, avoiding unreviewed free-text silence explanations.
 
+For dependency and inference plans, source quotation is a program responsibility: a complete,
+neutral lexical-unit catalog lets the model select one continuous range within a selected source.
+The program resolves that selection against the frozen original text; it must not fuzzy-match,
+normalize, omit intervening words or accept a model-authored quote as a fallback. Complete sources
+and discussion context remain available for semantic review. Location IDs are not business facts,
+and exact quotation does not prove a valid premise/conclusion relationship or useful advice.
+The [source-selection record](../../development/iris-source-selection-20261008.md) separates this
+transport contract from actual end-to-end model and Feishu acceptance.
+
 Source-only generation and its one permitted correction may also return a strict `no_intervention`
 plan when re-reading the complete sources invalidates the initial intervention. This branch carries
 only a fixed reason, compiles no public prose, and ends rendering without another review or fallback.

@@ -4,7 +4,8 @@ import { openPdDatabase, pdTestAt as at } from "./helpers/proactive-discussion-p
 import { pdContext, pdAssessment, pdSkipAssessment, PILOT_CHAT } from "./fixtures/proactive-discussion.js";
 import { createPdModel, type PdModel } from "../src/proactive-discussion/model.js";
 import { pdOpinionModeOptions } from "../src/proactive-discussion/opinion-mode.js";
-import { pdOpinionPlanSystem } from "../src/proactive-discussion/opinion-plan.js";
+import { pdCanonicalOpinionPlanFormat, pdOpinionPlanSystem } from "../src/proactive-discussion/opinion-plan.js";
+import { pdOpinionSelectionFormat } from "../src/proactive-discussion/source-selection.js";
 import type { PdAssessment, PdContext, PdDraft } from "../src/proactive-discussion/contracts.js";
 import type { OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
 import { createPdRegistrar } from "../src/proactive-discussion/registrar.js";
@@ -109,10 +110,11 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("source-plan archived respo
         calls.push(stage!);
         expect(stage).toBe(response.stage);
         if (stage === "iris_proactive_discussion_opinion_plan") {
-          // Replay unchanged historical output into the current contract. The
-          // withdrawal branch is new; every historical intervention branch and
-          // the full business input below must remain unchanged.
-          const currentFormat = structuredClone(options!.responseFormat!) as any;
+          // Explicit wire adaptation: current dependency/inference use ranges;
+          // this archive only returns calculation, whose response stays unchanged.
+          // Compare the old canonical contract separately; never rewrite the archive.
+          expect(options!.responseFormat).toEqual(pdOpinionSelectionFormat());
+          const currentFormat = pdCanonicalOpinionPlanFormat() as any;
           const branches = currentFormat.json_schema.schema.anyOf;
           const withdrawal = branches.find((branch: any) => branch.properties.kind.enum[0] === "no_intervention");
           expect(withdrawal).toEqual({ type: "object", additionalProperties: false, required: ["kind", "reason"],
@@ -120,11 +122,17 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("source-plan archived respo
               reason: { type: "string", enum: ["no_material_issue", "insufficient_basis", "already_handled"] } } });
           currentFormat.json_schema.schema.anyOf = branches.filter((branch: any) => branch !== withdrawal);
           expect(currentFormat).toEqual(response.responseFormat);
+          const actualBranches = (options!.responseFormat!.json_schema.schema as any).anyOf;
+          expect(actualBranches.find((branch: any) => branch.properties.kind.enum[0] === "calculation"))
+            .toEqual(branches.find((branch: any) => branch.properties.kind.enum[0] === "calculation"));
           expect(request[0]).toEqual({ role: "system", content: pdOpinionPlanSystem });
-          expect(request[0]!.content.endsWith(response.messages[0]!.content.split("\n").slice(1).join("\n"))).toBe(true);
         } else {
           expect(options?.responseFormat).toEqual(response.responseFormat);
-          expect(request[0]).toEqual(response.messages[0]);
+          // Scope now explains locator IDs and the separately resolved plan.
+          const expectedSystem = stage === "iris_proactive_discussion_scope_review"
+            ? response.messages[0]!.content.replace("程序只保证引文字面绑定", "sourceCatalog的编号及startUnit/endUnit只定位原文，不是业务数值或事实。resolvedSourcePlan由程序按目录连续范围还原原句；程序只保证引文字面绑定")
+            : response.messages[0]!.content;
+          expect(request[0]).toEqual({ ...response.messages[0], content: expectedSystem });
         }
         expect(request).toHaveLength(2);
         expect(request[1]!.role).toBe(response.messages[1]!.role);
@@ -133,7 +141,19 @@ describe.skipIf(!process.env.IRIS_TEST_DATABASE_URL)("source-plan archived respo
         // All other business materials, source refs, identity and compiled prose must match.
         const expectedInput = stage === "iris_proactive_discussion_assessment"
           ? { ...archivedInput, contextVersion: before.contextVersion, catalogVersion: before.catalogVersion } : archivedInput;
-        expect(JSON.parse(request[1]!.content)).toEqual(expectedInput);
+        const actualInput = JSON.parse(request[1]!.content);
+        if (stage !== "iris_proactive_discussion_assessment") {
+          // Added locator metadata exhaustively represents the identical evidence.
+          expect(actualInput.sourceCatalog.map((source: any) => ({ ref: source.sourceRef,
+            text: source.units.map((unit: any) => unit.text).join("") })))
+            .toEqual(actualInput.evidence.map(({ ref, text }: any) => ({ ref, text })));
+          delete actualInput.sourceCatalog;
+          if (stage === "iris_proactive_discussion_scope_review") {
+            expect(actualInput.resolvedSourcePlan).toEqual(actualInput.sourcePlan);
+            delete actualInput.resolvedSourcePlan;
+          }
+        }
+        expect(actualInput).toEqual(expectedInput);
         return response.content;
       } catch (error) { requestFailures.push(error); throw error; }
     } } });

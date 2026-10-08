@@ -1,6 +1,6 @@
 import { Ajv } from "ajv";
 import { expect, test } from "vitest";
-import { compilePdOpinionPlan, pdOpinionPlanFormat } from "../src/proactive-discussion/opinion-plan.js";
+import { compilePdOpinionPlan, pdCanonicalOpinionPlanFormat } from "../src/proactive-discussion/opinion-plan.js";
 
 const evidence = [
   { ref: "dependency", text: "交付依赖的供应商接口还没有联调验证。" },
@@ -26,7 +26,7 @@ test.each(["no_material_issue", "insufficient_basis", "already_handled"])("a str
   const withdrawal = { kind: "no_intervention", reason };
   expect(compilePdOpinionPlan(withdrawal, true, evidence)).toBeNull();
   for (const repair of [false, true]) {
-    const validate = new Ajv().compile(pdOpinionPlanFormat(repair).json_schema.schema);
+    const validate = new Ajv().compile(pdCanonicalOpinionPlanFormat(repair).json_schema.schema);
     expect(validate(withdrawal)).toBe(true);
   }
 });
@@ -40,7 +40,7 @@ test.each([
 ])("withdrawal cannot carry unaudited prose or malformed reasons: %j", value => {
   expect(() => compilePdOpinionPlan(value, true, evidence)).toThrow();
   for (const repair of [false, true]) {
-    const validate = new Ajv().compile(pdOpinionPlanFormat(repair).json_schema.schema);
+    const validate = new Ajv().compile(pdCanonicalOpinionPlanFormat(repair).json_schema.schema);
     expect(validate(value)).toBe(false);
   }
 });
@@ -113,7 +113,7 @@ test("a dependency can concern a planned action without inventing a promise or p
 });
 
 test.each([false, true])("plan wire format accepts only the bounded branch for generation or repair: %s", repair => {
-  const validate = new Ajv().compile(pdOpinionPlanFormat(repair).json_schema.schema);
+  const validate = new Ajv().compile(pdCanonicalOpinionPlanFormat(repair).json_schema.schema);
   expect(validate(plan)).toBe(true);
   const { verificationTarget, ...withoutTarget } = plan;
   expect(validate(withoutTarget)).toBe(false);

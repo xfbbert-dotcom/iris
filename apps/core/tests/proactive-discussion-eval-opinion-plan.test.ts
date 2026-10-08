@@ -38,8 +38,8 @@ function scriptedPlan({ failure, finalSupported = true, explanation = "喜欢不
     if (stage === "iris_proactive_discussion_opinion_plan" || stage === "iris_proactive_discussion_opinion_plan_repair") {
       const initial = stage === "iris_proactive_discussion_opinion_plan";
       if (initial && failure === "json") return "{bad-json";
-      const plan = { kind: "inference", premise: { sourceRef: input.evidence[0].ref, quote: input.evidence[0].text },
-        decision: { sourceRef: input.evidence[1].ref, quote: input.evidence[1].text }, changeExplanation: explanation };
+      const plan = { kind: "inference", premise: { sourceRef: input.evidence[0].ref, startUnit: 0, endUnit: input.sourceCatalog[0].units.length - 1 },
+        decision: { sourceRef: input.evidence[1].ref, startUnit: 0, endUnit: input.sourceCatalog[1].units.length - 1 }, changeExplanation: explanation };
       if (initial && failure === "binding") plan.decision = { ...plan.premise };
       if (initial && failure === "schema") plan.kind = "unknown-plan";
       return JSON.stringify(plan);
@@ -118,6 +118,9 @@ test("plan trace preserves raw plan and links the actual scope request candidate
   expect(rows[1]).toMatchObject({ candidate: scope.sourcePlan, compiledObserved: true, acceptedDraft: true,
     replayValidation: { accepted: false, reason: "not_replayed" },
     boundCandidate: { assessment: scope.assessment, draft: scope.draft, sourcePlan: scope.sourcePlan } });
+  expect(rows[1].boundCandidate.resolvedSourcePlan).toEqual(scope.resolvedSourcePlan);
+  expect(rows[1].candidate.decision).toEqual({ sourceRef: scope.evidence[1].ref, startUnit: 0, endUnit: 16 });
+  expect(rows[1].boundCandidate.resolvedSourcePlan.decision.quote).toBe("因此认定全部用户都会付费，直接按全量付费用户定收入。");
   expect(rows[2].planCallIndex).toBe(rows[1].callIndex);
   expect(inference(result).draft).toEqual(scope.draft);
   expect(result.syntheticTrace.complete).toBe(true);
@@ -183,6 +186,7 @@ test("plan and bound candidate retain existing redaction and text limits", async
   expect(plan.candidate.changeExplanation).toHaveLength(500);
   expect(plan.boundCandidate.assessment.materialChange.explanation).toHaveLength(500);
   expect(plan.boundCandidate.sourcePlan.changeExplanation).toHaveLength(500);
+  expect(plan.boundCandidate.resolvedSourcePlan.changeExplanation).toHaveLength(500);
   expect(JSON.stringify(result.syntheticTrace)).not.toContain("PRIVATE-PLAN");
   expect(plan.sanitization.truncatedFields).toContain("changeExplanation");
 });

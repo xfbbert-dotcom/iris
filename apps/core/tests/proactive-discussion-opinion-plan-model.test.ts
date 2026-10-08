@@ -11,9 +11,9 @@ function setup(verdicts = [true], repairExtra: Record<string, unknown> = {}) {
   assessment.issueRef = { kind: "new", description: context.items[1]!.text };
   assessment.reasoning = "UNVERIFIED_INITIAL_CERTAINTY";
   assessment.materialChange.explanation = "UNVERIFIED_INITIAL_VALUE";
-  const plan = { kind: "dependency", premise: { sourceRef: context.items[0]!.ref, quote: context.items[0]!.text },
-    decision: { sourceRef: context.items[1]!.ref, quote: context.items[1]!.text },
-    verificationTarget: { sourceRef: context.items[0]!.ref, quote: "供应商接口" },
+  const plan = { kind: "dependency", premise: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 8 },
+    decision: { sourceRef: context.items[1]!.ref, startUnit: 0, endUnit: 7 },
+    verificationTarget: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 2 },
     changeExplanation: "当前尚未处理这个确定承诺所依赖的验证缺口。" };
   const client = { complete: vi.fn<OpenAICompatibleChatCompletionsClient["complete"]>(async (messages, options) => {
     const name = options!.responseFormat!.json_schema.name;
@@ -34,9 +34,9 @@ test.each(["generation", "binding_repair", "review_repair"] as const)("a conditi
   assessment.issueRef = { kind: "new", description: context.items[0]!.text };
   const withdrawal = { kind: "no_intervention", reason: "no_material_issue" };
   const mistaken = { ...plan,
-    premise: { sourceRef: context.items[0]!.ref, quote: "版本A完成后" },
-    decision: { sourceRef: context.items[0]!.ref, quote: "把文档事项落实" },
-    verificationTarget: { sourceRef: context.items[0]!.ref, quote: "版本A完成后" } };
+    premise: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 2 },
+    decision: { sourceRef: context.items[0]!.ref, startUnit: 4, endUnit: 8 },
+    verificationTarget: { sourceRef: context.items[0]!.ref, startUnit: 0, endUnit: 2 } };
   if (stage === "generation") client.complete.mockResolvedValueOnce(JSON.stringify(withdrawal));
   if (stage === "binding_repair") client.complete
     .mockResolvedValueOnce(JSON.stringify({ ...mistaken, decision: mistaken.premise }))
@@ -93,7 +93,7 @@ test("only one complete plan correction is allowed and final rejection remains e
 test.each([
   { draftText: "一定会违约。" },
   { kind: "unsupported" },
-  { verificationTarget: { sourceRef: "missing", quote: "供应商接口" } },
+  { verificationTarget: { sourceRef: "missing", startUnit: 0, endUnit: 2 } },
 ])("invalid plan correction remains an execution failure without a prose fallback: %j", async repairExtra => {
   const { context, assessment, client, model } = setup([false, true], repairExtra);
   await expect(model.render({ context, assessment })).rejects.toThrow("proactive discussion draft was invalid");
@@ -134,7 +134,7 @@ test.each([true, false])("a locally invalid binding consumes the only correction
   expect(JSON.stringify(correction)).not.toContain("UNVERIFIED_INITIAL");
   const reviewed = JSON.parse(client.complete.mock.calls[2]![0][1]!.content);
   expect(reviewed.sourcePlan).toEqual(plan);
-  expect(reviewed.draft.text).toContain(plan.decision.quote);
+  expect(reviewed.draft.text).toContain(context.items[1]!.text);
   expect(reviewed).not.toHaveProperty("previousReview");
 });
 
@@ -142,7 +142,7 @@ test.each(["same", "missing", "unsupported"])("failed local correction stays an 
   const { context, assessment, plan, client, model } = setup();
   const invalid = { ...plan, decision: plan.premise };
   const correction = kind === "same" ? invalid : kind === "unsupported" ? { kind: "unsupported" }
-    : { ...plan, decision: { sourceRef: "missing", quote: "missing" } };
+    : { ...plan, decision: { sourceRef: "missing", startUnit: 0, endUnit: 0 } };
   client.complete.mockResolvedValueOnce(JSON.stringify(invalid)).mockResolvedValueOnce(JSON.stringify(correction));
   await expect(model.render({ context, assessment })).rejects.toThrow("proactive discussion draft was invalid");
   expect(client.complete).toHaveBeenCalledTimes(2);

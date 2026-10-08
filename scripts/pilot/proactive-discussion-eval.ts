@@ -253,6 +253,7 @@ export async function runSyntheticProactiveDiscussionEval({
                 assessment: sanitizeAssessmentCandidate(input.assessment, active.context, redactions, plan.record.sanitization),
                 draft: sanitizeDraftCandidate(input.draft, active.context, redactions, plan.record.sanitization),
                 sourcePlan: sanitizePlanCandidate(input.sourcePlan, active.context, redactions, plan.record.sanitization),
+                resolvedSourcePlan: sanitizePlanCandidate(input.resolvedSourcePlan, active.context, redactions, plan.record.sanitization),
               };
               plan.record.compiledObserved = true;
               planCallIndex = plan.record.callIndex;
@@ -596,13 +597,14 @@ function sanitizePlanCandidate(
   const allowedRefs = new Set(context.sources.map(source => source.ref));
   const binding = (item: unknown, path: string, quantity: boolean): Record<string, unknown> | null => {
     if (!isPlainRecord(item)) { addTraceMarker(sanitization.droppedFields, path); return null; }
-    const keys = quantity ? ["sourceRef", "contextQuote", "quantityQuote"] : ["sourceRef", "quote"];
+    const keys = quantity ? ["sourceRef", "contextQuote", "quantityQuote"] : ["sourceRef", "quote", "startUnit", "endUnit"];
     noteUnknownFields(item, keys, sanitization);
     const result: Record<string, unknown> = {};
     if (typeof item.sourceRef === "string" && allowedRefs.has(item.sourceRef)) result.sourceRef = item.sourceRef;
     else if (item.sourceRef !== undefined) sanitization.droppedReferenceCount += 1;
     for (const key of keys.filter(key => key !== "sourceRef")) {
-      if (typeof item[key] === "string") result[key] = sanitizeTraceText(item[key], `${path}.${key}`, redactions, sanitization);
+      if (!quantity && (key === "startUnit" || key === "endUnit") && Number.isSafeInteger(item[key])) result[key] = item[key];
+      else if (key !== "startUnit" && key !== "endUnit" && typeof item[key] === "string") result[key] = sanitizeTraceText(item[key], `${path}.${key}`, redactions, sanitization);
       else if (item[key] !== undefined) addTraceMarker(sanitization.droppedFields, `${path}.${key}`);
     }
     return result;

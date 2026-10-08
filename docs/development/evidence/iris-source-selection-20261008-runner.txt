@@ -1,0 +1,242 @@
+// Copy unchanged to the protected folder as source-selection-20261008.mts.
+// Synthetic only. --preflight performs no credential read or network request.
+// Independent semantic gate additionally requires positive advice to be specific and intelligible,
+// without redundantly verifying an already-established status; all original case criteria remain binding.
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import assert from 'node:assert/strict';
+import { createPdModel } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/model.ts';
+import { createPdSourceRef, PD_PILOT_CHAT, type PdContext } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/proactive-discussion/contracts.ts';
+import { hashLocalMessageText } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/memory/local-message-source.ts';
+import { createOpenAICompatibleChatCompletionsClient } from 'file:///D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86/apps/core/src/model/openai-compatible-chat-completions-client.ts';
+
+const root='D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86';
+const folder='C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918';
+const name='source-selection-20261008';
+const prefix=`${folder}/${name}`;
+const hash=(value:string|Buffer)=>createHash('sha256').update(value).digest('hex');
+const readJson=(path:string)=>JSON.parse(readFileSync(path,'utf8').replace(/^\uFEFF/u,''));
+const git=(...args:string[])=>execFileSync('git',args,{cwd:root,encoding:'utf8'}).trim();
+const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+const cases=[
+  {id:'order-wait',text:'版本A完成后，把文档事项逐项落实。',expectedDecision:'skip',
+    reviewCriteria:'Preserve the explicit ordering condition; do not infer that it was bypassed or that a material gap exists.'},
+  {id:'order-bypass',text:'版本A尚未验收，但现在就向客户承诺，文档全部事项明天完成。',expectedDecision:'intervene',
+    reviewCriteria:'Identify unfinished acceptance and the unsupported definite promise; give an actionable verification or conditional-commitment suggestion without invented outcomes.'},
+  {id:'permission-wait',text:'客户数据授权尚未确认。等授权确认后，再向合作方开放名单。',expectedDecision:'skip',
+    reviewCriteria:'Preserve the plan to wait for confirmed authorization; do not treat the explicitly gated action as already permitted or already executed.'},
+  {id:'permission-bypass',text:'客户数据授权尚未确认，但今天就把完整名单向合作方开放。',expectedDecision:'intervene',
+    reviewCriteria:'Identify the unverified authorization before sharing and recommend confirming scope first; do not invent legal conclusions or certain adverse consequences.'},
+] as const;
+function contextFor(text:string,index:number):PdContext {
+  const messageId=`synthetic-withdrawal-message-${index+1}`;
+  const binding={chatId:PD_PILOT_CHAT,messageId,contentHash:hashLocalMessageText(text)};
+  const source={kind:'message' as const,binding,ref:createPdSourceRef({kind:'message',binding})};
+  return {chatId:PD_PILOT_CHAT,triggerMessageId:messageId,
+    policy:{chatId:PD_PILOT_CHAT,version:1,enabled:true,operatorId:'synthetic-operator'},
+    contextVersion:1,catalogVersion:1,sources:[source],items:[{ref:source.ref,text}],issues:[]};
+}
+const contexts=cases.map((item,index)=>contextFor(item.text,index));
+const profile={model:'qwen3.8-max',maxRequests:24,tokenStopBeforeNextRequest:100000,
+  maxTokens:4096,enableThinking:false,clientTimeoutMs:120000,httpTimeoutMs:30000,
+  quotaWaitMs:60000,quotaMaxAgeMs:60000,semanticWaitMs:300000,windowMs:2700000,minimumFreeTokens:200000,
+  applicationOptions:{canonicalOpinion:true,sourceBoundIdentity:true,opinionPlan:true}};
+const stageCaps:Record<string,number>={iris_proactive_discussion_assessment:2,
+  iris_proactive_discussion_opinion_plan:1,iris_proactive_discussion_scope_review:2,
+  iris_proactive_discussion_opinion_plan_repair:1};
+const privateSources=[`${name}.mts`,`run-${name}.ps1`];
+const trackedApplicationSources=()=>git('ls-files','--','apps/core/src').split(/\r?\n/u).filter(path=>path.endsWith('.ts')).sort();
+const sourceHashes=()=>({
+  application:Object.fromEntries(trackedApplicationSources().map(path=>[path,hash(readFileSync(`${root}/${path}`))])),
+  runtimeManifests:Object.fromEntries(['package.json','package-lock.json','apps/core/package.json'].map(path=>[path,hash(readFileSync(`${root}/${path}`))])),
+  probe:Object.fromEntries(privateSources.map(path=>[path,hash(readFileSync(`${folder}/${path}`))])),
+});
+const frozenConfig=()=>({kind:`${name}-preflight`,networkRequests:0,credentialRead:false,
+  commit:git('rev-parse','HEAD'),profile,stageCaps,sourceHashes:sourceHashes(),
+  casesSha256:hash(JSON.stringify(cases)),caseHashes:cases.map((item,index)=>({caseId:item.id,
+    sha256:hash(JSON.stringify(item)),contextSha256:hash(JSON.stringify(contexts[index]))})),
+  syntheticOnly:true,oracleIsolation:'Only contexts[index] reaches createPdModel; expectedDecision and reviewCriteria stay outside model inputs.',
+  acceptance:'All four fresh cases must pass in frozen order; first failure stops. No response injection, retry, prior case carryover or restart.',
+  wireNote:'Actual production-client wire and raw response are preserved and hashed for each individual HTTP; later prompts depend on real preceding responses.'});
+assert(process.argv.length===3 && ['--preflight','--run'].includes(process.argv[2]),'only --preflight or --run is allowed');
+assert(!existsSync(`${prefix}.started.json`),'one bounded window only; no restart');
+assert.equal(git('status','--porcelain','--','apps/core/src','package.json','package-lock.json','apps/core/package.json'),'','commit application sources before preflight/run');
+if(process.argv[2]==='--preflight') {
+  const prepared=frozenConfig();
+  writeFileSync(`${prefix}.preflight.json`,JSON.stringify(prepared,null,2)+'\n',{flag:'wx'});
+  console.log(JSON.stringify({preflightPassed:true,networkRequests:0,credentialRead:false,
+    selected:cases.map(item=>item.id),commit:prepared.commit,casesSha256:prepared.casesSha256,path:`${prefix}.preflight.json`}));
+  process.exit(0);
+}
+const prepared=readJson(`${prefix}.preflight.json`);
+assert.deepEqual(prepared,frozenConfig(),'source/configuration/HEAD changed after preflight');
+const key=process.env.IRIS_BAILIAN_EVAL_KEY;
+assert(typeof key==='string' && key.length>=16 && !/[\r\n]/u.test(key),'protected launcher key unavailable');
+delete process.env.IRIS_BAILIAN_EVAL_KEY;
+const safe=(value:string)=>value.replaceAll(key,'[REDACTED]');
+const report:any={kind:name,syntheticOnly:true,commit:prepared.commit,sourceHashes:prepared.sourceHashes,
+  casesSha256:prepared.casesSha256,caseHashes:prepared.caseHashes,startedAt:new Date().toISOString(),
+  ...profile,stageCaps,cases,contexts,requests:[],completions:[],results:[],semanticGates:[],
+  reportedUsageTokens:0,halted:false,executionPassed:false};
+const save=()=>writeFileSync(`${prefix}.json`,safe(JSON.stringify(report,null,2))+'\n');
+writeFileSync(`${prefix}.started.json`,JSON.stringify({startedAt:report.startedAt,commit:prepared.commit,
+  preflightSha256:hash(readFileSync(`${prefix}.preflight.json`))},null,2)+'\n',{flag:'wx'});
+const deadline=Date.now()+profile.windowMs;
+function checkAbort() {
+  if(existsSync(`${prefix}.abort.json`)) {
+    const value=readJson(`${prefix}.abort.json`);
+    assert(typeof value.abortReason==='string' && value.abortReason.length>0,'abort record requires reason');
+    throw Error(value.abortReason);
+  }
+  assert(Date.now()<deadline,'bounded window expired');
+}
+function checkFrozen() {
+  checkAbort();
+  assert.equal(git('rev-parse','HEAD'),prepared.commit,'HEAD changed during window');
+  assert.equal(git('status','--porcelain','--','apps/core/src','package.json','package-lock.json','apps/core/package.json'),'','application changed during window');
+  assert.deepEqual(sourceHashes(),prepared.sourceHashes,'source changed during window');
+  assert.equal(hash(JSON.stringify(cases)),prepared.casesSha256,'cases changed during window');
+}
+async function waitFile(path:string,waitMs:number,signal?:AbortSignal) {
+  const until=Math.min(deadline,Date.now()+waitMs);
+  while(!existsSync(path)) {
+    checkAbort();assert(!signal?.aborted,'client cancelled while awaiting gate');
+    assert(Date.now()<until,'external gate timeout');await sleep(100);
+  }
+  checkAbort();assert(Date.now()<until && !signal?.aborted,'external gate arrived too late');
+  const value=readJson(path);if(typeof value.abortReason==='string')throw Error(value.abortReason);
+  return value;
+}
+let activeCase='';let activeStage='';let activeCompletion:any=null;
+let stageCounts:Record<string,number>={};
+const baseUrl='https://ws-5mqqdooo3d7i0spz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+const base=createOpenAICompatibleChatCompletionsClient({
+  config:{provider:'openai-compatible',baseUrl,apiKey:key,model:profile.model,timeoutMs:profile.clientTimeoutMs,
+    structuredOutputMode:'json_object',maxTokens:profile.maxTokens,enableThinking:false},
+  sleep:async()=>{throw Error('automatic HTTP retry prohibited');},
+  fetch:async(url,init)=>{
+    checkFrozen();assert.equal(String(url),`${baseUrl}/chat/completions`);assert.equal(init?.method,'POST');
+    assert(report.requests.length<profile.maxRequests && report.reportedUsageTokens<profile.tokenStopBeforeNextRequest,'request/token budget exhausted');
+    assert(activeCompletion && activeCompletion.requestIndex===undefined,'one HTTP per completion; no retry');
+    assert(typeof init?.body==='string','production client wire must be a string');
+    const wire=init.body;const body=JSON.parse(wire);
+    assert.equal(body.model,profile.model);assert.deepEqual(body.response_format,{type:'json_object'});
+    assert.equal(body.max_tokens,profile.maxTokens);assert.equal(body.enable_thinking,false);
+    assert(body.stream===undefined || body.stream===false);assert(Buffer.byteLength(wire)<=262144,'wire size exceeded');
+    const index=report.requests.length+1;const requestHash=hash(wire);
+    const pending={index,caseId:activeCase,stage:activeStage,completionIndex:activeCompletion.index,
+      at:new Date().toISOString(),requestHash,model:profile.model};
+    writeFileSync(`${prefix}.pending-${index}.json`,JSON.stringify({...pending,wire},null,2)+'\n',{flag:'wx'});
+    console.log(JSON.stringify({waitingForQuota:index,caseId:activeCase,stage:activeStage,at:pending.at,requestHash}));
+    const quota=await waitFile(`${prefix}.quota-${index}.json`,profile.quotaWaitMs,init.signal??undefined);
+    const quotaValid=()=>{
+      assert.equal(quota.index,index);assert.equal(quota.requestHash,requestHash);assert.equal(quota.model,profile.model);
+      assert.equal(quota.freeExhaustionStop,true);
+      assert(Number.isFinite(quota.remainingTokens) && quota.remainingTokens>=profile.minimumFreeTokens,'insufficient free quota');
+      const observed=Date.parse(quota.observedAt),now=Date.now();
+      assert(Number.isFinite(observed) && observed>=Date.parse(pending.at) && observed<=now && now-observed<profile.quotaMaxAgeMs,'quota observation predates pending or is stale');
+      assert(Date.parse(quota.expiresAt)>now,'free quota expired');
+      assert(now-Date.parse(pending.at)<profile.quotaWaitMs,'quota dispatch wait expired');
+      assert(!init.signal?.aborted,'client cancelled before dispatch');
+    };
+    checkFrozen();quotaValid();
+    const record:any={...pending,quota,wire,startedAt:new Date().toISOString(),status:'dispatch-prepared'};
+    report.requests.push(record);activeCompletion.requestIndex=index;save();
+    const controller=new AbortController();
+    const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(Math.max(1,Math.min(profile.httpTimeoutMs,deadline-Date.now()))),
+      ...(init.signal?[init.signal]:[])]);
+    let monitorError:Error|undefined;
+    const monitor=setInterval(()=>{try{checkFrozen();}catch(error){monitorError=error instanceof Error?error:Error('window invalid');controller.abort();}},1000);
+    try {
+      checkAbort();quotaValid();record.sentAt=new Date().toISOString();save();
+      const response=await fetch(url,{...init,body:wire,redirect:'error',signal});
+      record.httpStatus=response.status;save();assert(response.body,'missing response body');
+      const reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;
+      try {while(true){if(signal.aborted)throw monitorError??Error('HTTP aborted');const part=await reader.read();if(part.done)break;
+        size+=part.value.byteLength;if(size>262144){await reader.cancel();throw Error('response size limit');}chunks.push(part.value);}}
+      finally{reader.releaseLock();}
+      const bytes=Buffer.concat(chunks);record.rawResponse=safe(bytes.toString('utf8'));record.responseSha256=hash(bytes);
+      record.finishedAt=new Date().toISOString();save();assert(response.ok,'non-success HTTP; no retry');
+      const decoded=JSON.parse(bytes.toString('utf8'));
+      assert(Number.isSafeInteger(decoded.usage?.total_tokens) && decoded.usage.total_tokens>0,'usage unavailable');
+      record.reportedUsageTokens=decoded.usage.total_tokens;report.reportedUsageTokens+=decoded.usage.total_tokens;save();
+      assert.equal(decoded.model,profile.model);assert.equal(decoded.choices?.length,1);
+      assert.equal(decoded.choices[0].finish_reason,'stop','incomplete completion; no retry');
+      assert(typeof decoded.choices[0].message?.content==='string','missing completion text');
+      checkFrozen();assert(!signal.aborted,'HTTP/client cancelled before completion');
+      record.status='accepted';save();return new Response(bytes,{status:response.status,headers:{'content-type':'application/json'}});
+    } catch(error) {
+      record.status=record.sentAt?'uncertain-or-rejected':'not-sent';
+      record.error=safe(monitorError?.message??(error instanceof Error?error.message:'request failure'));
+      record.finishedAt??=new Date().toISOString();save();throw error;
+    } finally {clearInterval(monitor);}
+  },
+});
+const client={async complete(messages:any,options:any){
+  checkFrozen();activeStage=options?.responseFormat?.json_schema?.name;
+  assert(typeof activeStage==='string' && Object.hasOwn(stageCaps,activeStage),'unexpected application stage');
+  stageCounts[activeStage]=(stageCounts[activeStage]??0)+1;
+  assert(stageCounts[activeStage]<=stageCaps[activeStage],'application stage budget exceeded');
+  const entry:any={index:report.completions.length+1,caseId:activeCase,stage:activeStage,
+    origin:'model',messagesSha256:hash(JSON.stringify(messages))};
+  report.completions.push(entry);activeCompletion=entry;save();
+  entry.content=await base.complete(messages,options);entry.contentSha256=hash(entry.content);save();
+  return entry.content;
+}};
+function persistResult(result:any) {
+  report.results.push(result);save();
+  const bytes=JSON.stringify(result,null,2)+'\n';const resultSha256=hash(bytes);
+  const resultPath=`${prefix}.result-${result.caseId}.json`;
+  writeFileSync(resultPath,bytes,{flag:'wx'});return {resultSha256,resultPath};
+}
+try {
+  save();
+  for(let index=0;index<cases.length;index++) {
+    checkFrozen();const item=cases[index];activeCase=item.id;activeStage='';stageCounts={};
+    const context=structuredClone(contexts[index]);const pd=createPdModel({client,...profile.applicationOptions});
+    let initialAssessment:any;let pair:any;let result:any;
+    try {
+      initialAssessment=await pd.assess(context,async()=>checkFrozen());
+      pair=await pd.render({context,assessment:initialAssessment},async()=>checkFrozen());
+      const completionIds=report.completions.filter((entry:any)=>entry.caseId===item.id).map((entry:any)=>entry.index);
+      const lastPlan=report.completions.findLast((entry:any)=>entry.caseId===item.id && typeof entry.content==='string'
+        && ['iris_proactive_discussion_opinion_plan','iris_proactive_discussion_opinion_plan_repair'].includes(entry.stage));
+      const plan=lastPlan?JSON.parse(lastPlan.content):null;
+      const withdrawn=initialAssessment.decision==='intervene' && pair===null && plan?.kind==='no_intervention'
+        && Object.keys(plan).sort().join(',')==='kind,reason' && ['no_material_issue','insufficient_basis','already_handled'].includes(plan.reason);
+      const disposition=pair?'reviewed_opinion':initialAssessment.decision==='skip'?'initial_skip':withdrawn?'explicit_no_intervention':'review_rejected_or_incomplete';
+      result={caseId:item.id,kind:'fresh-full-application-flow',expectedDecision:item.expectedDecision,
+        reviewCriteria:item.reviewCriteria,contextSha256:hash(JSON.stringify(context)),initialAssessment,
+        assessment:pair?.assessment??null,draft:pair?.draft??null,disposition,
+        withdrawal:withdrawn?{stage:lastPlan.stage,completionIndex:lastPlan.index,plan}:null,
+        completionIds,technicalError:null};
+    } catch(error) {
+      result={caseId:item.id,kind:'fresh-full-application-flow',expectedDecision:item.expectedDecision,
+        reviewCriteria:item.reviewCriteria,contextSha256:hash(JSON.stringify(context)),initialAssessment:initialAssessment??null,
+        assessment:null,draft:null,disposition:'technical_error',technicalError:safe(error instanceof Error?error.message:'application failure')};
+      const saved=persistResult(result);console.log(JSON.stringify({caseTechnicalFailure:item.id,...saved}));
+      throw error;
+    }
+    const saved=persistResult(result);
+    console.log(JSON.stringify({awaitingSemanticGate:item.id,...saved,disposition:result.disposition}));
+    const semantic=await waitFile(`${prefix}.semantic-${item.id}.json`,profile.semanticWaitMs);
+    assert.equal(semantic.caseId,item.id);assert.equal(semantic.resultSha256,saved.resultSha256);
+    report.semanticGates.push(semantic);save();checkFrozen();
+    assert.equal(semantic.pass,true,'independent semantic failure; stop before next case');
+    assert(result.disposition!=='review_rejected_or_incomplete','rejection/incomplete render is not a valid silence result');
+    assert(item.expectedDecision==='skip'?['initial_skip','explicit_no_intervention'].includes(result.disposition):result.disposition==='reviewed_opinion',
+      'final product disposition differs from frozen expectation');
+  }
+  assert.equal(report.results.length,4);assert.equal(report.semanticGates.length,4);
+  assert(report.semanticGates.every((gate:any)=>gate.pass===true));report.executionPassed=true;
+} catch(error) {
+  report.halted=true;report.executionPassed=false;report.haltReason=safe(error instanceof Error?error.message:'unknown failure');
+  report.haltCase=activeCase;report.haltStage=activeStage;process.exitCode=1;
+} finally {
+  report.finishedAt=new Date().toISOString();save();
+  writeFileSync(`${prefix}.halted.json`,JSON.stringify({at:report.finishedAt,halted:report.halted,executionPassed:report.executionPassed,
+    caseId:activeCase,stage:activeStage,reason:report.haltReason??'four fresh synthetic cases completed'},null,2)+'\n',{flag:'wx'});
+  console.log(JSON.stringify({done:true,requests:report.requests.filter((row:any)=>row.sentAt).length,
+    reportedTokens:report.reportedUsageTokens,passed:report.executionPassed,reason:report.haltReason??null}));
+}
