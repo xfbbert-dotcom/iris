@@ -1,0 +1,27 @@
+{
+  "kind": "real-group-false-positive-intervention",
+  "passed": false,
+  "sourceOnlyFrozenAt": "2026-10-08T08:29:30.5442120Z",
+  "comparedAt": "2026-10-08T08:33:10.7197964Z",
+  "expectedDecision": "insufficient-evidence",
+  "expectedAction": "skip",
+  "actualDecision": "intervene",
+  "semanticVerdict": "fail-false-positive-intervention",
+  "independentReview": "Source-only expectation frozen before reviewer read actual model/evaluation/delivery outputs; not preregistered before the provider call.",
+  "failurePattern": "A future action explicitly conditioned on finishing an earlier stage was treated as an unverified premise being bypassed. Advice repeated the stated condition without established work value.",
+  "userFeedback": "Judgment wrong or disruptive; user did not understand the opinion and reported no reply to an @ follow-up.",
+  "followUpBoundary": "Ordinary mention QA disabled during this window; global restored off at 08:24:52.699Z. User screenshot shows follow-up at 16:25 Asia/Shanghai. Exact follow-up event was not separately traced.",
+  "sourceOnlySha256": "c76844b0719c085662a2ac2c0ac25879480ec98ea8bd2781812b482828e43b49",
+  "expectationSha256": "54959fa00a1eb39b36e01d6b957ade60ab2998af94da9d918f5b42848cee2f50",
+  "comparisonSha256": "349e997d8e281f89e5ae98cffb2cfeae83e7cbbe92ea3b259bf09b3425058325",
+  "privateCaptureSha256": "bf1661b461912e73ad2fb515017a2f3c0eb0adca6dcd9e744a22b9957c7cd318",
+  "providerHttp": 4,
+  "reportedModelTokens": 25899,
+  "feishuOpinionSends": 1,
+  "transportAcceptance": "One sent receipt verified by exact message GET; text equals stored draft and parent equals trigger. This does not establish semantic correctness.",
+  "limitations": [
+    "Original per-call request/response bodies and exact source-plan objects were not retained by the supervised gate. The precise failing intermediate plan cannot be asserted.",
+    "Later bound source readback does not reconstruct exact original model context. A source document binding does not establish identity with the document being replied to.",
+    "This candidate product behavior failed; original real silence case and historical synthetic passes do not override it."
+  ]
+}

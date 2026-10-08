@@ -1,0 +1,272 @@
+{
+  "kind": "supervised-pd-window-real-delivery",
+  "capturedAt": "2026-10-08T08:31:07.664Z",
+  "app": "51937b954733020799e02f139abd32df74b3349c",
+  "image": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "coreHealthy": true,
+  "startedAt": "2026-10-08T08:20:08.910Z",
+  "stopped": {
+    "reason": "operator-stop",
+    "at": "2026-10-08T08:24:44.072Z",
+    "uncertain": false
+  },
+  "restoredAt": "2026-10-08T08:24:52.699Z",
+  "global": false,
+  "desired": false,
+  "pdEnabled": false,
+  "policyVersion": "10",
+  "policyEnabled": false,
+  "controlRevision": 3424,
+  "capabilitiesRestored": true,
+  "liveEnvEqual": true,
+  "envByteEqual": true,
+  "composeByteEqual": true,
+  "nonCoreContainersUnchanged": true,
+  "gateFiles": {
+    "pending": 4,
+    "permit": 4,
+    "outcome": 4,
+    "final": 4,
+    "uncertain": 0
+  },
+  "realDiscussionTriggers": 1,
+  "providerHttp": 4,
+  "reportedModelTokens": 25899,
+  "feishuOpinionSends": 1,
+  "requestRecords": [
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-1",
+      "requestHash": "6c9c86296a3b2f86434dd402a7ac8fa9e9953b02d4b802344a70f3de71b3650e",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:21:48.897Z",
+      "status": "accepted",
+      "sentAt": "2026-10-08T08:22:11.760Z",
+      "httpStatus": 200,
+      "responseSha256": "cd69b1074f2afbd84df85f919ec6005f1f84c6a1b060ecb0be889ed1b46bcf33",
+      "reportedTokens": 8057,
+      "finishedAt": "2026-10-08T08:22:28.078Z"
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-2",
+      "requestHash": "da96f4bd5e55edb024f837697984e8ad60a6ae6073463b19be3960c07453d1da",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:22:28.088Z",
+      "status": "accepted",
+      "sentAt": "2026-10-08T08:22:59.890Z",
+      "httpStatus": 200,
+      "responseSha256": "bc67064387013e93c2a08146c2ac87bd67746f5bf8780945be48c38b3606c96a",
+      "reportedTokens": 5156,
+      "finishedAt": "2026-10-08T08:23:07.044Z"
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-3",
+      "requestHash": "8f80bf01ae5ee3ce156a3ba119e0a90ed0f6cfd0b579344dface7e361a0372a6",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:23:07.052Z",
+      "status": "accepted",
+      "sentAt": "2026-10-08T08:23:27.178Z",
+      "httpStatus": 200,
+      "responseSha256": "1cd562e7a1ec61db091fc01c93be1388ebb687eb4ddadd45c36c9c0e6e40e9b4",
+      "reportedTokens": 5634,
+      "finishedAt": "2026-10-08T08:23:34.179Z"
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-4",
+      "requestHash": "2cf55d759744ae724ed961566551f399dcdc1554ca7f20d9ff54c5bafa1dd34e",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:23:34.185Z",
+      "status": "accepted",
+      "sentAt": "2026-10-08T08:24:01.554Z",
+      "httpStatus": 200,
+      "responseSha256": "d1beea7a66039f0ba55a3afb0985bdc7cdea2ad3d5dac6802baef8c7d91997fe",
+      "reportedTokens": 7052,
+      "finishedAt": "2026-10-08T08:24:10.416Z"
+    }
+  ],
+  "outcomeRecords": [
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-1",
+      "requestHash": "6c9c86296a3b2f86434dd402a7ac8fa9e9953b02d4b802344a70f3de71b3650e",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:21:48.897Z",
+      "status": "dispatch-prepared"
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-2",
+      "requestHash": "da96f4bd5e55edb024f837697984e8ad60a6ae6073463b19be3960c07453d1da",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:22:28.088Z",
+      "status": "dispatch-prepared"
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-3",
+      "requestHash": "8f80bf01ae5ee3ce156a3ba119e0a90ed0f6cfd0b579344dface7e361a0372a6",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:23:07.052Z",
+      "status": "dispatch-prepared"
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-4",
+      "requestHash": "2cf55d759744ae724ed961566551f399dcdc1554ca7f20d9ff54c5bafa1dd34e",
+      "model": "qwen3.8-max",
+      "startedAt": "2026-10-08T08:23:34.185Z",
+      "status": "dispatch-prepared"
+    }
+  ],
+  "permits": [
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-1",
+      "requestHash": "6c9c86296a3b2f86434dd402a7ac8fa9e9953b02d4b802344a70f3de71b3650e",
+      "model": "qwen3.8-max",
+      "remainingTokens": 526400,
+      "observedAt": "2026-10-08T08:21:59.114Z",
+      "expiresAt": "2026-12-18T00:00:00+08:00",
+      "freeExhaustionStop": true
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-2",
+      "requestHash": "da96f4bd5e55edb024f837697984e8ad60a6ae6073463b19be3960c07453d1da",
+      "model": "qwen3.8-max",
+      "remainingTokens": 526400,
+      "observedAt": "2026-10-08T08:22:48.227Z",
+      "expiresAt": "2026-12-18T00:00:00+08:00",
+      "freeExhaustionStop": true
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-3",
+      "requestHash": "8f80bf01ae5ee3ce156a3ba119e0a90ed0f6cfd0b579344dface7e361a0372a6",
+      "model": "qwen3.8-max",
+      "remainingTokens": 526400,
+      "observedAt": "2026-10-08T08:23:15.071Z",
+      "expiresAt": "2026-12-18T00:00:00+08:00",
+      "freeExhaustionStop": true
+    },
+    {
+      "requestId": "606c4e69-69eb-4cc1-90f7-f08f522053bb-4",
+      "requestHash": "2cf55d759744ae724ed961566551f399dcdc1554ca7f20d9ff54c5bafa1dd34e",
+      "model": "qwen3.8-max",
+      "remainingTokens": 526400,
+      "observedAt": "2026-10-08T08:23:47.776Z",
+      "expiresAt": "2026-12-18T00:00:00+08:00",
+      "freeExhaustionStop": true
+    }
+  ],
+  "jobs": [
+    {
+      "state": "completed",
+      "n": 2
+    },
+    {
+      "state": "cancelled",
+      "n": 1
+    }
+  ],
+  "deliveries": [
+    {
+      "state": "sent",
+      "n": 1
+    }
+  ],
+  "jobAttempts": [
+    1
+  ],
+  "domainCounts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 3,
+    "proactive_discussion_evaluations": 2,
+    "proactive_discussion_issues": 1,
+    "proactive_discussion_deliveries": 1,
+    "proactive_discussion_sources": 63,
+    "proactive_discussion_events": 42
+  },
+  "baselineDomainCounts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 2,
+    "proactive_discussion_evaluations": 1,
+    "proactive_discussion_issues": 0,
+    "proactive_discussion_deliveries": 0,
+    "proactive_discussion_sources": 21,
+    "proactive_discussion_events": 21
+  },
+  "semanticAcceptance": "separate-source-only-comparison-required",
+  "realFeishuDeliveryAcceptance": "receipt-text-and-parent-match",
+  "feishuReadback": {
+    "authRequests": 1,
+    "messageGets": 21,
+    "readFailures": 0,
+    "humanMessages": 20,
+    "assistantMessages": 1,
+    "bindingChecks": 40,
+    "bindingChecksAllMatch": true,
+    "triggerChecks": 1,
+    "triggerChecksAllMatch": true,
+    "deliveryChecks": 1,
+    "deliveryTextExactlyMatches": true,
+    "deliveryParentMatchesTrigger": true
+  },
+  "privateCaptureSha256": "bf1661b461912e73ad2fb515017a2f3c0eb0adca6dcd9e744a22b9957c7cd318",
+  "watchdogRecoveryFailures": 0,
+  "wiringSmoke": {
+    "kind": "compiled-core-free-gate-wiring-smoke",
+    "checks": [
+      {
+        "case": "missing-permit-no-retry",
+        "passed": true
+      },
+      {
+        "case": "fresh-mock-permit-identical-wire",
+        "passed": true
+      }
+    ],
+    "loopbackHttp": 2,
+    "fakeUpstreamCalls": 1,
+    "providerHttp": 0,
+    "readsProductionConfig": false,
+    "timing": {
+      "permitWaitMs": 60000,
+      "requestMs": 30000,
+      "clientTimeoutMs": 120000
+    },
+    "semanticAcceptance": false,
+    "feishuAcceptance": false,
+    "compiledClientSha256": "88d586a2162a92da7b96e03acaf1bb5bd41c0ee9cff0b25101f21022fa1fcb71",
+    "compiledConfigSha256": "3735f9c6b760d3c59336f939dc652d9cd84e1b4c2f67d4482d00fe86cf8aee0b",
+    "gateSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502"
+  },
+  "scriptDerivation": {
+    "operationSource": "20261008b",
+    "toolFixCommit": "749491868d5e6e422d5c26729511705176dc98ae",
+    "changes": {
+      "control.mjs": {
+        "fromSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67",
+        "toSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67"
+      },
+      "gate.mjs": {
+        "fromSha256": "217502f3d2edfc1bb8ee7f19e157121d7a2093dde8e3ba40a921beeda82ea165",
+        "toSha256": "867fabb27aab3becd42c210d5b177c0d386287b3f7c44f0e64f10e3f6bb3ed7c"
+      },
+      "ops.py": {
+        "fromSha256": "834bb62f937fac58eff832ebdb2f658e146da50260290081cd4954ab524e9028",
+        "toSha256": "93d58c110c31b8724f08076a33e2b1d228b1e84c46b8d9ad856c8628521a81f5"
+      },
+      "preflight.py": {
+        "fromSha256": "ba258364e4f33d9f28073197479b97fec0ed0525c464fb0b1b7bef80378405c6",
+        "toSha256": "3a7be3eedf17968bf8ad411bcbb3f4a9be09d20e1b6200de1300e18be3f30cd1"
+      },
+      "capture.mjs": {
+        "fromSha256": "8f298563004e38ca5cf57276aa55b3376e9fab0da89fcf8298d783d8737e8c07",
+        "toSha256": "8f298563004e38ca5cf57276aa55b3376e9fab0da89fcf8298d783d8737e8c07"
+      },
+      "proactive-discussion-free-gate.mjs": {
+        "fromSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502",
+        "toSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502"
+      },
+      "proactive-discussion-free-gate-wiring-smoke.mjs": {
+        "fromSha256": "49a48a1b870664b09082b2e592949e2a97f93bc0a0fada61b1b3159a50ee2ce5",
+        "toSha256": "49a48a1b870664b09082b2e592949e2a97f93bc0a0fada61b1b3159a50ee2ce5"
+      }
+    }
+  }
+}
