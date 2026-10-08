@@ -8,6 +8,10 @@ import { pathToFileURL } from 'node:url';
 
 const MODEL='qwen3.8-max';
 const MAX_BODY=262144;
+// Manual UI + tool round trips exceeded 20 seconds in the supervised pilot.
+// Dedicated clients need room for both this wait and the upstream response.
+// This changes neither permit freshness nor the overall pilot window.
+export const FREE_GATE_TIMING=Object.freeze({permitWaitMs:60000,requestMs:30000,clientTimeoutMs:120000});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const iso=ms=>new Date(ms).toISOString();
@@ -62,7 +66,8 @@ export function createFreeGate(options={}) {
   if(typeof apiKey!=='string' || !apiKey.trim()) throw Error('gate API key required');
   if(typeof sessionParent!=='string' || !sessionParent) throw Error('session parent required');
   const upstream=endpoint(upstreamUrl);
-  const limits={maxRequests:8,windowMs:900000,tokenStop:60000,permitWaitMs:20000,requestMs:30000};
+  const limits={maxRequests:8,windowMs:900000,tokenStop:60000,
+    permitWaitMs:FREE_GATE_TIMING.permitWaitMs,requestMs:FREE_GATE_TIMING.requestMs};
   // Overrides exist for deterministic local tests; the CLI never passes them.
   for(const k of Object.keys(limits)) if(options[k]!==undefined) {
     if(!Number.isSafeInteger(options[k]) || options[k]<=0) throw Error('invalid local test limit');

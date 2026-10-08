@@ -8,7 +8,7 @@ import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createFreeGate } from './proactive-discussion-free-gate.mjs';
+import { createFreeGate, FREE_GATE_TIMING } from './proactive-discussion-free-gate.mjs';
 
 const key = 'iris-wiring-smoke-placeholder-not-a-real-key';
 const upstream = 'https://wiring-smoke.invalid/v1/chat/completions';
@@ -87,13 +87,13 @@ async function main() {
           IRIS_PROACTIVE_DISCUSSION_MODEL_BASE_URL: baseUrl,
           IRIS_PROACTIVE_DISCUSSION_MODEL_API_KEY: key,
           IRIS_PROACTIVE_DISCUSSION_MODEL_NAME: 'qwen3.8-max',
-          IRIS_PROACTIVE_DISCUSSION_MODEL_TIMEOUT_MS: '60000',
+          IRIS_PROACTIVE_DISCUSSION_MODEL_TIMEOUT_MS: String(FREE_GATE_TIMING.clientTimeoutMs),
           IRIS_PROACTIVE_DISCUSSION_MODEL_STRUCTURED_OUTPUT_MODE: 'json_object',
           IRIS_PROACTIVE_DISCUSSION_MODEL_MAX_TOKENS: '4096',
           IRIS_PROACTIVE_DISCUSSION_MODEL_ENABLE_THINKING: 'false',
         });
         assert.deepEqual(config, {provider: 'openai-compatible', baseUrl, apiKey: key,
-          model: 'qwen3.8-max', timeoutMs: 60000, structuredOutputMode: 'json_object',
+          model: 'qwen3.8-max', timeoutMs: 120000, structuredOutputMode: 'json_object',
           maxTokens: 4096, enableThinking: false});
         const client = createOpenAICompatibleChatCompletionsClient({config,
           fetch: async (url, init) => {
@@ -129,7 +129,7 @@ async function main() {
         const result = await completed;
         assert.equal(outbound.length, 1, 'the client must not retry 422 or a success');
         assert.equal(timeouts.length, 1);
-        assert.ok(timeouts[0] > 59000 && timeouts[0] <= 60000);
+        assert.ok(timeouts[0] > 119000 && timeouts[0] <= 120000);
         const wire = JSON.parse(outbound[0].toString('utf8'));
         assert.deepEqual(Object.keys(wire).sort(), ['enable_thinking', 'max_tokens', 'messages', 'model', 'response_format']);
         assert.equal(wire.model, 'qwen3.8-max');
@@ -158,6 +158,7 @@ async function main() {
     assert.equal(fakeUpstreamCalls, 1);
     console.log(JSON.stringify({kind: 'compiled-core-free-gate-wiring-smoke', checks,
       loopbackHttp, fakeUpstreamCalls, providerHttp: 0, readsProductionConfig: false,
+      timing: FREE_GATE_TIMING,
       semanticAcceptance: false, feishuAcceptance: false,
       compiledClientSha256: sha(await readFile(clientPath)), compiledConfigSha256: sha(await readFile(configPath)),
       gateSha256: sha(await readFile(gatePath))}));

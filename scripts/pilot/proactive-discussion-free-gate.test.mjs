@@ -60,6 +60,38 @@ test('fresh bound permit forwards identical wire once without sensitive records'
   assert.ok(!contents.includes('{"ok":true}'));
 });
 
+test('default operator wait accepts a fresh observation after a 25-second UI round trip',async t=>{
+  let clock=Date.now();
+  const entered=deferred(),release=deferred();
+  const x=await setup({now:()=>clock,readFileImpl:async(path,...args)=>{
+    if(basename(path).startsWith('permit-')) {entered.resolve();await release.promise;}
+    return readFile(path,...args);
+  }});t.after(x.cleanup);
+  const reply=request(x.url);const p=await pending(x.gate);await entered.promise;
+  clock+=25000;
+  await permit(x.gate,p,{observedAt:new Date(clock).toISOString(),expiresAt:new Date(clock+30000).toISOString()});
+  release.resolve();
+  assert.equal((await reply).status,200);
+  assert.equal(x.calls.length,1);
+  assert.deepEqual(x.calls[0].init.body,Buffer.from(wire));
+});
+
+test('default operator wait still rejects a fresh permit arriving after one minute',async t=>{
+  let clock=Date.now();
+  const entered=deferred(),release=deferred();
+  const x=await setup({now:()=>clock,readFileImpl:async(path,...args)=>{
+    if(basename(path).startsWith('permit-')) {entered.resolve();await release.promise;}
+    return readFile(path,...args);
+  }});t.after(x.cleanup);
+  const reply=request(x.url);const p=await pending(x.gate);await entered.promise;
+  clock+=60001;
+  await permit(x.gate,p,{observedAt:new Date(clock).toISOString(),expiresAt:new Date(clock+30000).toISOString()});
+  release.resolve();
+  assert.equal((await reply).status,422);
+  assert.equal(x.calls.length,0);
+  assert.equal(JSON.parse(await readFile(join(x.gate.sessionDir,'stopped.json'),'utf8')).uncertain,false);
+});
+
 test('the same wire needs a new request-specific permit',async t=>{
   const x=await setup();t.after(x.cleanup);
   const first=request(x.url);const p1=await pending(x.gate);await permit(x.gate,p1);assert.equal((await first).status,200);
@@ -117,12 +149,13 @@ test('concurrent request is rejected while another waits for permit',async t=>{
 });
 
 test('operator stop cancels an in-flight upstream and blocks later requests',async t=>{
-  let sawAbort=false;
+  let sawAbort=false;const dispatched=deferred();
   const x=await setup({fetchImpl:(_url,init)=>new Promise((_resolve,reject)=>{
     init.signal.addEventListener('abort',()=>{sawAbort=true;reject(Error('aborted'));},{once:true});
+    dispatched.resolve();
   })});t.after(x.cleanup);
   const reply=request(x.url);const p=await pending(x.gate);await permit(x.gate,p);
-  for(let i=0;i<100 && !(await readdir(x.gate.sessionDir)).some(f=>f.startsWith('outcome-'));i++) await new Promise(r=>setTimeout(r,10));
+  await dispatched.promise;
   const started=Date.now();
   await writeFile(join(x.gate.sessionDir,'stop.json'),'{}',{flag:'wx'});
   assert.equal((await reply).status,422);
@@ -193,14 +226,15 @@ test('simultaneously arriving requests create only one pending request',async t=
 });
 
 test('caller disconnect during upstream cancels in-flight work and marks uncertainty',async t=>{
-  let sawAbort=false;
+  let sawAbort=false;const dispatched=deferred();
   const x=await setup({fetchImpl:(_url,init)=>new Promise((_resolve,reject)=>{
     init.signal.addEventListener('abort',()=>{sawAbort=true;reject(Error('aborted'));},{once:true});
+    dispatched.resolve();
   })});t.after(x.cleanup);
   const controller=new AbortController();
   const reply=fetch(x.url,{method:'POST',headers:{authorization:`Bearer ${secret}`},body:wire,signal:controller.signal}).catch(()=>undefined);
   const p=await pending(x.gate);await permit(x.gate,p);
-  for(let i=0;i<100 && !(await readdir(x.gate.sessionDir)).some(f=>f.startsWith('outcome-'));i++) await new Promise(r=>setTimeout(r,10));
+  await dispatched.promise;
   controller.abort();await reply;
   for(let i=0;i<100 && !(await readdir(x.gate.sessionDir)).includes('stopped.json');i++) await new Promise(r=>setTimeout(r,10));
   assert.equal(sawAbort,true);

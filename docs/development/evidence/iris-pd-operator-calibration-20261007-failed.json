@@ -1,0 +1,13 @@
+{
+  "kind": "manual-operator-timing-calibration",
+  "syntheticOnly": true,
+  "providerHttp": 0,
+  "startedAt": "2026-10-07T09:55:28.504Z",
+  "httpStatus": 422,
+  "fakeUpstreamCalls": 0,
+  "dispatchDelayMs": null,
+  "windowLimitMs": 20000,
+  "passed": false,
+  "semanticAcceptance": false,
+  "feishuAcceptance": false
+}

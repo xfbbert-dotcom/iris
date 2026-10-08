@@ -1,0 +1,23 @@
+{
+  "kind": "manual-operator-timing-calibration",
+  "syntheticOnly": true,
+  "providerHttp": 0,
+  "startedAt": "2026-10-08T04:40:07.093Z",
+  "httpStatus": 200,
+  "fakeUpstreamCalls": 1,
+  "loopbackHttp": 1,
+  "observedAt": "2026-10-08T04:40:21.467Z",
+  "dispatchDelayMs": 40546,
+  "timing": {
+    "permitWaitMs": 60000,
+    "requestMs": 30000,
+    "clientTimeoutMs": 120000
+  },
+  "clientTimeoutMs": 120000,
+  "passed": true,
+  "compiledClientSha256": "88d586a2162a92da7b96e03acaf1bb5bd41c0ee9cff0b25101f21022fa1fcb71",
+  "compiledConfigSha256": "3735f9c6b760d3c59336f939dc652d9cd84e1b4c2f67d4482d00fe86cf8aee0b",
+  "gateSha256": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502",
+  "semanticAcceptance": false,
+  "feishuAcceptance": false
+}

@@ -1,0 +1,40 @@
+// One manual timing drill. Only loopback HTTP; the upstream is an injected fake.
+// Never pass a real key or business text. A browser quota observation permits only
+// this synthetic request and must never be copied to a real session.
+import assert from 'node:assert/strict';
+import {mkdtemp,readFile,readdir,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createFreeGate} from './proactive-discussion-free-gate.mjs';
+assert.equal(process.argv.length,2);
+const parent=await mkdtemp(join(tmpdir(),'iris-pd-operator-calibration-'));
+let fakeUpstreamCalls=0;
+const gate=createFreeGate({sessionParent:parent,apiKey:'operator-calibration-placeholder',
+  upstreamUrl:'https://operator-calibration.invalid/v1/chat/completions',
+  fetchImpl:async()=>{fakeUpstreamCalls++;return new Response(JSON.stringify({model:'qwen3.8-max',
+    choices:[{finish_reason:'stop',message:{content:'{"calibration":true}'}}],usage:{total_tokens:1}}),{status:200});}});
+try {
+  await gate.start();
+  const response=fetch(`http://127.0.0.1:${gate.server.address().port}/v1/chat/completions`,{
+    method:'POST',headers:{authorization:'Bearer operator-calibration-placeholder','content-type':'application/json'},
+    body:JSON.stringify({model:'qwen3.8-max',response_format:{type:'json_object'},max_tokens:4096,enable_thinking:false,
+      messages:[{role:'user',content:'Local synthetic operator timing drill.'}]})});
+  let pending;
+  while(!pending){
+    const file=(await readdir(gate.sessionDir)).find(x=>x.startsWith('pending-'));
+    if(file)pending=JSON.parse(await readFile(join(gate.sessionDir,file),'utf8'));
+    else await new Promise(r=>setTimeout(r,10));
+  }
+  console.log(JSON.stringify({syntheticOnly:true,sessionDir:gate.sessionDir,pending}));
+  const result=await response;await result.arrayBuffer();
+  const finalPath=join(gate.sessionDir,`final-${pending.requestId}.json`);
+  let final=null;try{final=JSON.parse(await readFile(finalPath,'utf8'));}catch{}
+  const report={kind:'manual-operator-timing-calibration',syntheticOnly:true,providerHttp:0,
+    startedAt:pending.at,httpStatus:result.status,fakeUpstreamCalls,
+    dispatchDelayMs:final?.sentAt?Date.parse(final.sentAt)-Date.parse(pending.at):null,
+    windowLimitMs:20000,passed:result.status===200&&fakeUpstreamCalls===1,
+    semanticAcceptance:false,feishuAcceptance:false};
+  await writeFile(join(parent,'report.json'),JSON.stringify(report,null,2),{flag:'wx'});
+  console.log(JSON.stringify({reportPath:join(parent,'report.json'),...report}));
+  if(!report.passed)process.exitCode=1;
+} finally {await gate.close();}

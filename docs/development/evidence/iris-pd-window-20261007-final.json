@@ -1,0 +1,126 @@
+{
+  "kind": "supervised-pd-window-permit-timeout",
+  "capturedAt": "2026-10-07T09:53:32.738Z",
+  "app": "51937b954733020799e02f139abd32df74b3349c",
+  "image": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "coreHealthy": true,
+  "startedAt": "2026-10-07T09:45:22.998Z",
+  "pending": {
+    "requestId": "b1510a4b-4a64-45cb-b369-24a58b761d87-1",
+    "requestHash": "8033f08ded6f0b50d2fc5388d179bcc9e2e75a8da78d2ad10e6d4544917eb104",
+    "model": "qwen3.8-max",
+    "at": "2026-10-07T09:47:28.512Z"
+  },
+  "stopped": {
+    "reason": "permit-or-upstream-failure",
+    "at": "2026-10-07T09:47:48.522Z",
+    "uncertain": false
+  },
+  "operatorUiObservation": {
+    "observedAt": "2026-10-07T09:47:48.624Z",
+    "model": "qwen3.8-max",
+    "displayedRemaining": "533.62K / 1M",
+    "expiresOn": "2026-12-18",
+    "freeExhaustionStop": true,
+    "permitWritten": false,
+    "basis": "visible quota UI after reload; not billing audit"
+  },
+  "restoredAt": "2026-10-07T09:47:58.394Z",
+  "global": false,
+  "desired": false,
+  "pdEnabled": false,
+  "policyVersion": "4",
+  "policyEnabled": false,
+  "controlRevision": 3406,
+  "capabilitiesRestored": true,
+  "liveEnvEqual": true,
+  "envByteEqual": true,
+  "composeByteEqual": true,
+  "nonCoreContainersUnchanged": true,
+  "gateFiles": {
+    "pending": 1,
+    "permit": 0,
+    "outcome": 0,
+    "final": 0,
+    "uncertain": 0
+  },
+  "realDiscussionTriggers": 1,
+  "providerHttp": 0,
+  "reportedModelTokens": 0,
+  "feishuOpinionSends": 0,
+  "jobs": [
+    {
+      "state": "cancelled",
+      "attempts": 2,
+      "lastError": "policy_or_trigger_invalid"
+    }
+  ],
+  "domainCounts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 1,
+    "proactive_discussion_evaluations": 0,
+    "proactive_discussion_issues": 0,
+    "proactive_discussion_deliveries": 0,
+    "proactive_discussion_sources": 0,
+    "proactive_discussion_events": 12
+  },
+  "semanticAcceptance": "not-exercised",
+  "realFeishuOpinionAcceptance": "not-exercised",
+  "watchdogRecoveryFailures": 0,
+  "wiringSmoke": {
+    "kind": "compiled-core-free-gate-wiring-smoke",
+    "checks": [
+      {
+        "case": "missing-permit-no-retry",
+        "passed": true
+      },
+      {
+        "case": "fresh-mock-permit-identical-wire",
+        "passed": true
+      }
+    ],
+    "loopbackHttp": 2,
+    "fakeUpstreamCalls": 1,
+    "providerHttp": 0,
+    "readsProductionConfig": false,
+    "semanticAcceptance": false,
+    "feishuAcceptance": false,
+    "compiledClientSha256": "88d586a2162a92da7b96e03acaf1bb5bd41c0ee9cff0b25101f21022fa1fcb71",
+    "compiledConfigSha256": "3735f9c6b760d3c59336f939dc652d9cd84e1b4c2f67d4482d00fe86cf8aee0b",
+    "gateSha256": "2f2e199b3454e67e4e17a6db7ac5cba9446440ec1bdded558e84f83504d2803c"
+  },
+  "scriptDerivation": {
+    "sourceCommit": "a2d5f412",
+    "changes": {
+      "control.mjs": {
+        "fromSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67",
+        "toSha256": "5878fd0fec5579eea8abe9ecd7f4a8f5c2c5fd712fd1bf3dad97bbe972db9c67"
+      },
+      "gate.mjs": {
+        "fromSha256": "7d7fc473821abd6cec7b77899d4c70a99602d12e61488c6e2c25a9e38b019084",
+        "toSha256": "ddbe0402bbe77ddd0d83023f25a1ed61690a49b00ff71b6a2aaed96654adbf9b"
+      },
+      "ops.py": {
+        "fromSha256": "fc248cb2af9fdc9c156a07eace6dab150052d3a8421eda1e553d4d159507dc5e",
+        "toSha256": "d12deebfa32ae2def4a28fd988d84c7b184ac87a755ccce3ff129b73a0363082"
+      },
+      "preflight.py": {
+        "fromSha256": "efa6d57d6cac9d99d455ae92980fd322b1798d04c77976b9416db95510565599",
+        "toSha256": "7db1a0b39c03e9642b01e8c9d52996cdda7c2417f94d703391bae15484268424"
+      },
+      "capture.mjs": {
+        "fromSha256": "9e4a9f3840e791fc34115034b466f9094ba22a768107f94b70377d4e389f7b7d",
+        "toSha256": "8f298563004e38ca5cf57276aa55b3376e9fab0da89fcf8298d783d8737e8c07"
+      },
+      "proactive-discussion-free-gate.mjs": {
+        "fromSha256": "2f2e199b3454e67e4e17a6db7ac5cba9446440ec1bdded558e84f83504d2803c",
+        "toSha256": "2f2e199b3454e67e4e17a6db7ac5cba9446440ec1bdded558e84f83504d2803c"
+      },
+      "proactive-discussion-free-gate-wiring-smoke.mjs": {
+        "fromSha256": "3fabbaffa2ad6112cfbe1f69ab9d570c06ee0c9a970d91c0f6296e0467013b4b",
+        "toSha256": "3fabbaffa2ad6112cfbe1f69ab9d570c06ee0c9a970d91c0f6296e0467013b4b"
+      }
+    }
+  }
+}

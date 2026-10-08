@@ -1,0 +1,79 @@
+{
+  "kind": "supervised-gate-timing-local-verification",
+  "localDate": "2026-10-08",
+  "scope": "scripts and synthetic loopback; no application source or production changes",
+  "pilot": {
+    "command": "npm run test:pilot",
+    "exitCode": 0,
+    "tests": 217,
+    "pass": 216,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 1,
+    "durationMs": 305903.9053,
+    "skippedReason": "Docker daemon unavailable for pinned Caddy action-review boundary probe",
+    "logSha256": "ae7e6c1aeff8c8940628f204cd30f2daaf0d7e15793236f6896220cde1a5e4b2"
+  },
+  "defaultBudgetRegression": {
+    "before": {
+      "pass": 1,
+      "fail": 1,
+      "failure": "25-second fresh permit: 422 !== 200"
+    },
+    "after": {
+      "pass": 22,
+      "fail": 0
+    },
+    "retainedIntermediateFailure": {
+      "pass": 21,
+      "fail": 1,
+      "failure": "in-flight disconnect fixture observed dispatch-prepared rather than actual fake upstream entry",
+      "fix": "both in-flight fixtures wait for actual fake fetch entry; assertions unchanged"
+    }
+  },
+  "wiringSmoke": {
+    "cases": [
+      "missing-permit-no-retry",
+      "fresh-mock-permit-identical-wire"
+    ],
+    "passed": true,
+    "loopbackHttp": 2,
+    "fakeUpstreamCalls": 1,
+    "providerHttp": 0,
+    "clientTimeoutMs": 120000,
+    "compiledClientSha256": "88d586a2162a92da7b96e03acaf1bb5bd41c0ee9cff0b25101f21022fa1fcb71",
+    "compiledConfigSha256": "3735f9c6b760d3c59336f939dc652d9cd84e1b4c2f67d4482d00fe86cf8aee0b"
+  },
+  "failedManualObservation": {
+    "observedAt": "2026-10-07T09:55:53.513Z",
+    "displayedRemaining": "533.62K / 1M",
+    "expiresOn": "2026-12-18",
+    "freeExhaustionStop": true,
+    "permitWritten": false
+  },
+  "passedManualObservation": {
+    "observedAt": "2026-10-08T04:40:21.467Z",
+    "displayedRemaining": "533.62K / 1M",
+    "expiresOn": "2026-12-18",
+    "freeExhaustionStop": true,
+    "permitScope": "only synthetic local calibration"
+  },
+  "providerHttp": 0,
+  "realFeishuOpinionSends": 0,
+  "semanticAcceptance": false,
+  "newToolsUsedInProduction": false,
+  "fileSha256Basis": "bytes tested in this Windows worktree; Git may normalize line endings",
+  "filesSha256": {
+    "scripts/pilot/proactive-discussion-free-gate.mjs": "7c4fe0cd9d8b1b4bd6bf5fd0270c31e35e0da0bffcf5e05fd73d169b92644502",
+    "scripts/pilot/proactive-discussion-free-gate.test.mjs": "6ba9ce95b16e5d5ad8bddbe0fbf3fb37719dab2475f1f648e1da83e3e89d3f03",
+    "scripts/pilot/proactive-discussion-free-gate-wiring-smoke.mjs": "49a48a1b870664b09082b2e592949e2a97f93bc0a0fada61b1b3159a50ee2ce5",
+    "scripts/pilot/proactive-discussion-operator-calibration.mjs": "bfe81ed358c0c7e63785362103230b0fd1deed636ddae6eb25a3d7c2d83794a5",
+    "docs/development/evidence/iris-pd-window-20261007-stage.py": "570b7d4b334977bd53ca3de7edbdb2d98aa1a0a5302b0bc568986cbb739da4ec",
+    "docs/development/evidence/iris-pd-window-20261007-final.py": "357be9688c1c55bdbb37fde129c616f8306d903728ac9daf9f5d10564a0b6421",
+    "docs/development/evidence/iris-pd-window-20261007-launch.ps1": "ca93d264e7ec089d66b218785fe4e3ae3136559c142ff35144ece3d6fdc50798",
+    "docs/development/evidence/iris-pd-window-20261007-final.json": "8f0cda6b1cc902aed538afb3cef6dd17b3e60d7e26df7a3f3ad5b308bcc8b28d",
+    "docs/development/evidence/iris-pd-operator-calibration-20261007-before.mjs.txt": "7a37b8acf0fb39cffa4035f926742eaa5c0cbe5fd2b2434fc2797945c9beb45c",
+    "docs/development/evidence/iris-pd-operator-calibration-20261007-failed.json": "943649a258d99bbdb2ec1912245eed94172a1165eee0d9c044747a60dbda0e83",
+    "docs/development/evidence/iris-pd-operator-calibration-20261008-passed.json": "99ae80d8fc8a9e453d9c6012c43c565915ee168546a872ffb38fa205e90866af"
+  }
+}
