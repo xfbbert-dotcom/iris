@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-08T08:49:14.393Z",
+  "halted": true,
+  "executionPassed": false,
+  "caseId": "order-bypass",
+  "stage": "iris_proactive_discussion_opinion_plan_repair",
+  "reason": "proactive discussion draft was invalid"
+}

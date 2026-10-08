@@ -1,0 +1,33 @@
+{
+  "caseId": "order-bypass",
+  "kind": "fresh-full-application-flow",
+  "expectedDecision": "intervene",
+  "reviewCriteria": "Identify unfinished acceptance and the unsupported definite promise; give an actionable verification or conditional-commitment suggestion without invented outcomes.",
+  "contextSha256": "1fc3662146263262a31419602915bb7eec50e55d65cf7eb6da051f67ba59e18d",
+  "initialAssessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "版本A尚未验收，但现在就向客户承诺，文档全部事项明天完成。"
+    },
+    "evidenceRefs": [
+      "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+    ],
+    "observation": "当前材料显示版本A尚未通过验收，但已计划或正在向客户承诺文档全部事项将于明天完成。该承诺依赖的关键前提（版本A验收通过）尚未验证。",
+    "reasoning": "在版本A未验收的情况下向客户做出明确的时间承诺，构成对尚未验证前提的依赖。若验收过程中发现需修改的事项，可能导致无法按承诺时间交付，进而引发客户信任受损或履约风险。授权材料仅表明版本A尚未验收及存在对外承诺意向，未提供验收进度、剩余工作量或团队产能等可支撑该承诺的依据。",
+    "suggestion": "建议立即暂停向客户发送该承诺；先核实版本A验收的具体阻塞项及预计解决时间，评估明天完成全部文档事项的可行性。如确需与客户沟通进度，应改为条件性表述（例如说明待验收通过后给出具体时间表），避免形成确定承诺。",
+    "uncertainty": "qualified_inference",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "识别到一项实质风险：在版本A尚未验收的前提下向客户做出确定性完成时间承诺，可能因验收不通过导致承诺无法兑现。",
+      "evidenceRefs": [
+        "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+      ]
+    }
+  },
+  "assessment": null,
+  "draft": null,
+  "disposition": "technical_error",
+  "technicalError": "proactive discussion draft was invalid"
+}

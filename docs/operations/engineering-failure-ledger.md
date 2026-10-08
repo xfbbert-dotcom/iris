@@ -1,5 +1,13 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-08：新增撤回出口不能代替实模端到端验收
+
+[43b8bb3e受限验证](../development/iris-opinion-withdrawal-20261008.md)4次HTTP200/9651tokens。
+第一负例初判skip正确；第二正例初判intervene，但生成与唯一修正都漏抄原文中的一个字，
+后者只加标点仍自述逐字正确，严格绑定再次拒绝。四例出口未通过，后两例0调用。
+新增撤回分支未被实模采用，不能把首例初判成功当作该修复机制的验证。保留原请求/响应、
+哈希与停止记录，不追加同类prompt、放宽引文检查或把technical_error算作合理沉默。
+
 ## 2026-10-08：初判不能强迫来源生成继续认定存在问题
 
 [本地候选](../development/iris-opinion-withdrawal-20261008.md)给source-plan新增严格撤回

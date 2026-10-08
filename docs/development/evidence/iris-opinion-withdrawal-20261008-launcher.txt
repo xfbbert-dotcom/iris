@@ -1,0 +1,47 @@
+$ErrorActionPreference = 'Stop'
+$taskFolder = 'C:/Users/59912/AppData/Local/Iris/bailian-eval-20260918'
+$taskPrefix = 'opinion-withdrawal-20261008'
+if ($args.Count -ne 0 -or (Test-Path -LiteralPath "$taskFolder/$taskPrefix.started.json")) {
+  throw 'Single bounded synthetic window only; no arguments or repeat.'
+}
+if (-not (Test-Path -LiteralPath "$taskFolder/$taskPrefix.preflight.json")) {
+  throw 'Offline preflight is required before protected launcher.'
+}
+$taskManifest = Get-Content -Raw -LiteralPath "$taskFolder/$taskPrefix.preflight.json" | ConvertFrom-Json
+foreach ($taskSource in @("$taskPrefix.mts", "run-$taskPrefix.ps1")) {
+  $taskActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $taskFolder $taskSource)).Hash.ToLowerInvariant()
+  if ($taskActualHash -ne $taskManifest.sourceHashes.probe.$taskSource) { throw 'Runner or launcher changed after preflight.' }
+}
+Add-Type -AssemblyName System.Security
+$clearBytes = $null
+$taskStart = $null
+$taskProcess = $null
+$resultCode = 1
+try {
+  $clearBytes = [Security.Cryptography.ProtectedData]::Unprotect(
+    [IO.File]::ReadAllBytes((Join-Path $taskFolder 'bailian-key.dpapi')), $null,
+    [Security.Cryptography.DataProtectionScope]::CurrentUser)
+  $taskStart = [Diagnostics.ProcessStartInfo]::new()
+  $taskStart.FileName = 'D:/软件安装/node.exe'
+  $taskStart.WorkingDirectory = 'D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86'
+  $taskStart.UseShellExecute = $false
+  $taskStart.CreateNoWindow = $true
+  $taskStart.ArgumentList.Add('--import')
+  $taskStart.ArgumentList.Add('tsx')
+  $taskStart.ArgumentList.Add((Join-Path $taskFolder "$taskPrefix.mts"))
+  $taskStart.ArgumentList.Add('--run')
+  $taskStart.Environment['IRIS_BAILIAN_EVAL_KEY'] = [Text.Encoding]::UTF8.GetString($clearBytes)
+  $taskProcess = [Diagnostics.Process]::Start($taskStart)
+  $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null
+  [Array]::Clear($clearBytes, 0, $clearBytes.Length)
+  $clearBytes = $null
+  $taskProcess.WaitForExit()
+  $resultCode = $taskProcess.ExitCode
+} catch {
+  Write-Host 'Bounded synthetic launcher failed; no credential details logged.'
+} finally {
+  if ($null -ne $taskStart) { $taskStart.Environment.Remove('IRIS_BAILIAN_EVAL_KEY') | Out-Null }
+  if ($null -ne $clearBytes) { [Array]::Clear($clearBytes,0,$clearBytes.Length) }
+  if ($null -ne $taskProcess) { $taskProcess.Dispose() }
+}
+exit $resultCode

@@ -1,0 +1,7 @@
+{
+  "caseId": "order-wait",
+  "resultSha256": "e50b5205fb235ee09d9768e95f18c23261b6cb1f0b3e1b1645838f24bbf758d3",
+  "pass": true,
+  "reviewedAt": "2026-10-08T08:47:22.775126+00:00",
+  "reason": "Explicit future sequencing contains no bypass or substantive defect. Empty no_work_value skip is faithful; this case did not exercise the new withdrawal branch."
+}

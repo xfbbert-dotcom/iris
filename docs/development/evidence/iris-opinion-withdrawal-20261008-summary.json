@@ -1,0 +1,51 @@
+{
+  "kind": "source-plan-withdrawal-bounded-result",
+  "implementationCommit": "43b8bb3e3dae036538c5746774b20665717037d6",
+  "passed": false,
+  "providerHttp": 4,
+  "reportedModelTokens": 9651,
+  "syntheticOnly": true,
+  "realFeishuSends": 0,
+  "cases": [
+    {
+      "id": "order-wait",
+      "status": "correct_initial_skip",
+      "withdrawalExercised": false
+    },
+    {
+      "id": "order-bypass",
+      "status": "technical_failure_after_single_plan_repair",
+      "initialDecision": "intervene",
+      "acceptedOpinion": false
+    },
+    {
+      "id": "permission-wait",
+      "status": "not_called_after_failure"
+    },
+    {
+      "id": "permission-bypass",
+      "status": "not_called_after_failure"
+    }
+  ],
+  "failure": "Both generated and corrected decision quotes omit a character from the continuous source span. Exact quote binding correctly rejected them. No final scope review or accepted pair was reached.",
+  "acceptance": "Four-case end-to-end gate failed. Local withdrawal wiring passed tests, but real-model use or product benefit of that branch was not established.",
+  "stopReason": "proactive discussion draft was invalid",
+  "finishedAt": "2026-10-08T08:49:14.393Z",
+  "files": {
+    "iris-opinion-withdrawal-20261008.preflight.json": "a376abe7447ef382f882037321afbe1952f7967128e1ddc4fd4974c0706244de",
+    "iris-opinion-withdrawal-20261008.started.json": "99c01f343131244fb4c3586c3370d865248d872d6424d7e0f877786320baf303",
+    "iris-opinion-withdrawal-20261008.json": "51ee143260ca78a80b64c0f9deea1b2af447e3349a8c83ca7d6b1a3773a2d1de",
+    "iris-opinion-withdrawal-20261008.halted.json": "20705ec1d31d2d29422db77b22dcd5d68f4e1c00791c307ed3c4bde3a2219748",
+    "iris-opinion-withdrawal-20261008.result-order-wait.json": "e50b5205fb235ee09d9768e95f18c23261b6cb1f0b3e1b1645838f24bbf758d3",
+    "iris-opinion-withdrawal-20261008.result-order-bypass.json": "c76bd69c27374f5dffb795916a8a9adb5eedb27a6016141a8dc040d072d8521f",
+    "iris-opinion-withdrawal-20261008.semantic-order-wait.json": "0030fb871bdf7172e2c217bcaa82bccdbbce8584f8ae15ae0d2821172424b0d3",
+    "iris-opinion-withdrawal-20261008.pending-1.json": "c385d0b5985a41db21879a2dbaab60de6b0798476db245c075ec1ca49c34123c",
+    "iris-opinion-withdrawal-20261008.pending-2.json": "eccb7f800e6fa6859a0a12fdb1af24a4c27c24505ada60e149dcde6463f7564a",
+    "iris-opinion-withdrawal-20261008.pending-3.json": "04ad586c81775ddd356920f8f44fcf259b76dbbaa9e6f37e07f323b64e06f81c",
+    "iris-opinion-withdrawal-20261008.pending-4.json": "e95089f4fcc16031ae48c04ca61c91f17f864328dddf1f3ecca5486fc9556828",
+    "iris-opinion-withdrawal-20261008.quota-1.json": "0bf4accbdda18544a9d679bbb6e2e5eaa9c24218302aadf111f2763ecc3efc7b",
+    "iris-opinion-withdrawal-20261008.quota-2.json": "47de260c84c47ec8d1c2431e52b269f573a84fba504c871341a5a85ee665a846",
+    "iris-opinion-withdrawal-20261008.quota-3.json": "2542282c64afdeca90158c8ee85db20275fb3d1fd496ae79c8e7f75f63887627",
+    "iris-opinion-withdrawal-20261008.quota-4.json": "d3d9ffcad34a4d82f1e0de1c74c4b34809e6637898a3b38b2bb50c51760989b3"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "caseId": "order-wait",
+  "kind": "fresh-full-application-flow",
+  "expectedDecision": "skip",
+  "reviewCriteria": "Preserve the explicit ordering condition; do not infer that it was bypassed or that a material gap exists.",
+  "contextSha256": "d5a0f74ebc7aad4d19bca8e0b1ae0908dcd22f172a1fa1dae0416293f4e25366",
+  "initialAssessment": {
+    "decision": "skip",
+    "reason": "no_work_value",
+    "issueRef": null,
+    "evidenceRefs": [],
+    "observation": "",
+    "reasoning": "",
+    "suggestion": "",
+    "uncertainty": "fact",
+    "materialChange": {
+      "kind": "none",
+      "explanation": "",
+      "evidenceRefs": []
+    }
+  },
+  "assessment": null,
+  "draft": null,
+  "disposition": "initial_skip",
+  "withdrawal": null,
+  "completionIds": [
+    1
+  ],
+  "technicalError": null
+}
