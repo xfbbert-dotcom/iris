@@ -1,0 +1,7 @@
+{
+  "reviewedAt": "2026-10-08T09:54:07.3573987Z",
+  "resultSha256": "21acabecafefcd4d32f1dbb455baf1a9cea255ee8e6a442ef53aeb2f681ecc6c",
+  "pass": true,
+  "caseId": "order-bypass",
+  "reason": "Parent and independent reviewer: final pair accurately juxtaposes unfinished acceptance and immediate definite customer promise, avoids invented consequences, and explicitly defers that quoted decision pending required verification/confirmation. This changes immediate behavior and conditions the promise rather than rechecking the known status. Pass original bounded criterion; general multi-issue usefulness and discarded initial prose are not established."
+}

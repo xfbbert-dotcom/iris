@@ -1,0 +1,65 @@
+{
+  "caseId": "order-bypass",
+  "kind": "fresh-full-application-flow",
+  "expectedDecision": "intervene",
+  "reviewCriteria": "Identify unfinished acceptance and the unsupported definite promise; give an actionable verification or conditional-commitment suggestion without invented outcomes.",
+  "contextSha256": "1fc3662146263262a31419602915bb7eec50e55d65cf7eb6da051f67ba59e18d",
+  "initialAssessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "版本A尚未验收，但现在就向客户承诺，文档全部事项明天完成。"
+    },
+    "evidenceRefs": [
+      "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+    ],
+    "observation": "材料显示版本A尚未通过验收，但已有人向客户承诺文档全部事项将在明天完成。该承诺依赖的关键前提（版本A验收通过）目前尚未满足。",
+    "reasoning": "在版本A未验收的情况下对外作出明确时间承诺，属于对尚未验证的关键前提作出确定性承诺。若版本A验收过程中发现需修改或返工的问题，明天完成全部文档事项的目标可能无法实现，进而导致对客户的承诺违约或损害信任。当前结论（明天可全部完成）超出了已有依据（版本A尚未验收）所能支撑的范围。",
+    "suggestion": "建议立即暂停或修正对客户的承诺表述，将交付时间调整为以版本A验收通过为起点的相对时间（如'验收通过后X个工作日内完成'）。同时核实版本A的验收计划、预计完成时间及剩余工作量，评估明天完成的实际可行性后再与客户沟通更新后的时间表。",
+    "uncertainty": "qualified_inference",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "首次识别到在未满足前置验收条件的情况下对外作出确定时间承诺的履约风险。",
+      "evidenceRefs": [
+        "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+      ]
+    }
+  },
+  "assessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "材料里一方面说“版本A尚未验收”，另一方面提出“但现在就向客户承诺，文档全部事项明天完成”。"
+    },
+    "evidenceRefs": [
+      "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+    ],
+    "observation": "材料里一方面说“版本A尚未验收”，另一方面提出“但现在就向客户承诺，文档全部事项明天完成”。",
+    "reasoning": "现有材料还不足以支持直接推进上述决定。",
+    "suggestion": "建议先暂缓上述决定，补齐所依赖的验证或确认，明确可执行的范围和条件，再确定推进安排。",
+    "uncertainty": "qualified_inference",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "来源明确指出版本A尚未验收这一关键前提未满足，却已准备向客户承诺文档全部事项明天完成，属于关键前提未验证即作出确定承诺，需指出该缺口。",
+      "evidenceRefs": [
+        "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+      ]
+    }
+  },
+  "draft": {
+    "text": "材料里一方面说“版本A尚未验收”，另一方面提出“但现在就向客户承诺，文档全部事项明天完成”。现有材料还不足以支持直接推进上述决定。建议先暂缓上述决定，补齐所依赖的验证或确认，明确可执行的范围和条件，再确定推进安排。",
+    "evidenceRefs": [
+      "message:5d5c9d8c3518e093036fe8c287e4d5fa42a93de64b11afe598ee46ee56009bed"
+    ]
+  },
+  "disposition": "reviewed_opinion",
+  "withdrawal": null,
+  "completionIds": [
+    2,
+    3,
+    4
+  ],
+  "technicalError": null
+}

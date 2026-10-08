@@ -1,0 +1,30 @@
+{
+  "caseId": "permission-wait",
+  "kind": "fresh-full-application-flow",
+  "expectedDecision": "skip",
+  "reviewCriteria": "Preserve the plan to wait for confirmed authorization; do not treat the explicitly gated action as already permitted or already executed.",
+  "contextSha256": "5f12336d3ffb9bbdd9cd11081c3dfd926b0dbf1aaa5e67b0249e18f8af3f1f81",
+  "initialAssessment": {
+    "decision": "skip",
+    "reason": "no_work_value",
+    "issueRef": null,
+    "evidenceRefs": [],
+    "observation": "",
+    "reasoning": "",
+    "suggestion": "",
+    "uncertainty": "fact",
+    "materialChange": {
+      "kind": "none",
+      "explanation": "",
+      "evidenceRefs": []
+    }
+  },
+  "assessment": null,
+  "draft": null,
+  "disposition": "initial_skip",
+  "withdrawal": null,
+  "completionIds": [
+    5
+  ],
+  "technicalError": null
+}

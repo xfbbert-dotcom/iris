@@ -1,0 +1,112 @@
+{
+  "kind": "dependency-decision-gate-bounded-result",
+  "implementationCommit": "c7a286f37a85afa5c023359135b1331fdc556e94",
+  "passed": true,
+  "providerHttp": 8,
+  "providerHttp200": 8,
+  "reportedModelTokens": 22280,
+  "syntheticOnly": true,
+  "realFeishuSends": 0,
+  "casesSha256": "06c26b30108c57a639dc5628f7df7b66a1edf4cbe6d6d04f2bdf90357ac32012",
+  "stageCounts": {
+    "assessment": 4,
+    "opinion_plan": 2,
+    "scope_review": 2,
+    "opinion_plan_repair": 0,
+    "withdrawal": 0
+  },
+  "cases": [
+    {
+      "id": "order-wait",
+      "status": "correct_initial_skip",
+      "independentPass": true,
+      "requests": 1,
+      "reportedTokens": 1948,
+      "withdrawalExercised": false,
+      "selectionExercised": false
+    },
+    {
+      "id": "order-bypass",
+      "status": "reviewed_opinion_independently_accepted",
+      "independentPass": true,
+      "requests": 3,
+      "reportedTokens": 9224,
+      "withdrawalExercised": false,
+      "selectionExercised": true
+    },
+    {
+      "id": "permission-wait",
+      "status": "correct_initial_skip",
+      "independentPass": true,
+      "requests": 1,
+      "reportedTokens": 1975,
+      "withdrawalExercised": false,
+      "selectionExercised": false
+    },
+    {
+      "id": "permission-bypass",
+      "status": "reviewed_opinion_independently_accepted",
+      "independentPass": true,
+      "requests": 3,
+      "reportedTokens": 9133,
+      "withdrawalExercised": false,
+      "selectionExercised": true
+    }
+  ],
+  "independentSemanticReason": "Both explicit wait-until-condition messages correctly remained silent. Both bypass messages retained exact source wording and yielded usable advice to defer the identified decision, complete its prerequisite verification or confirmation, establish scope and conditions, then proceed. The actual final pairs did not invent legal findings or certain adverse consequences. For these short single-premise/single-decision inputs the adjacent quotations make the action and prerequisite intelligible.",
+  "acceptance": "All four unchanged frozen synthetic cases passed independent final-pair review. This is bounded application-to-model semantic evidence, not real Feishu, deployment, broader multi-issue usefulness, arithmetic/history regression or withdrawal-branch evidence.",
+  "limitations": [
+    "Initial discarded assessment prose still contained unsupported expansion; its general reasoning was not proved fixed.",
+    "The dependency advice remains broad; complex-context usefulness is unverified.",
+    "Retained source punctuation can yield an extra sentence punctuation mark; cosmetic follow-up only.",
+    "No withdrawal or plan repair branch was used in this final window.",
+    "The preceding source-selection failure and original frozen criteria remain preserved."
+  ],
+  "turnTotals": {
+    "priorFailedWindow": "source-selection-20261008",
+    "priorProviderHttp": 4,
+    "priorReportedTokens": 11385,
+    "combinedProviderHttp": 12,
+    "combinedReportedTokens": 33665,
+    "combinedRequestLimit": 24,
+    "combinedReportedTokenStopBeforeNextRequest": 100000
+  },
+  "finishedAt": "2026-10-08T09:58:03.543Z",
+  "casesAndContextsMatchOriginal": true,
+  "wireResponseCompletionHashesVerified": true,
+  "freshExactModelFreeQuotaGatesVerified": 8,
+  "frozenSourceHashesVerified": 289,
+  "archivedOriginalByteHashesVerified": true,
+  "files": {
+    "iris-decision-gate-20261008.json": "66974ea4b5168de2c37e023e415516ac4464ff342754018013abfdb5b01e3ce5",
+    "iris-decision-gate-20261008.preflight.json": "31696dc42df74746ae92fe7ae9b722b46bb69268c080b33bf4081e3f2d21ab48",
+    "iris-decision-gate-20261008.started.json": "a4429ecc7b1dda40531cb253663fffbceb5f536503999b1cca49aac5a7f3532b",
+    "iris-decision-gate-20261008.halted.json": "7d623b104a4821e7f769f483dbbae7b7125fed33f7c2c600bd1f9cf781570436",
+    "iris-decision-gate-20261008.pending-1.json": "c6046ff87da96a362c26ffb287d19463bfd531e58be36ce85b12924d47f3aa57",
+    "iris-decision-gate-20261008.quota-1.json": "2c0f377b32387c275fb399ed8763a7bc2840638c08712925f36cd1dbfb864960",
+    "iris-decision-gate-20261008.pending-2.json": "a6dfc81813cf825038a0399e95017dde243d77a344f81a2b96eeae9fe8f338fd",
+    "iris-decision-gate-20261008.quota-2.json": "e68259c2761ac279d42712d7f221836a83100d33d53c626f1a2da9c8969e306f",
+    "iris-decision-gate-20261008.pending-3.json": "2e0a0d10f36e1720c54d2b9df9b8dfe45f62b241af3cbecc06620e48f59443f3",
+    "iris-decision-gate-20261008.quota-3.json": "3846913691832fc010ad7288630ed1de849764472fc43678d228c1579cb36b3f",
+    "iris-decision-gate-20261008.pending-4.json": "99c8b9274a4741cf81a0495bdf23473ffb1d012fd471cf3eea1234111c091214",
+    "iris-decision-gate-20261008.quota-4.json": "9bffd49ee722fc4948255ef959761c3f2f1bbb05351eb84c1d8b0746aed59dcb",
+    "iris-decision-gate-20261008.pending-5.json": "22eee2354f061b9e504f8c85d835205709877e7de94394f0700de1f90a22a236",
+    "iris-decision-gate-20261008.quota-5.json": "866d6fe4a1fbc7af56df681c090bd660043ff605c2d6170f03ed6f83e1888b5d",
+    "iris-decision-gate-20261008.pending-6.json": "0e3c95b05ab17c957376b2ac7d0071064c344e0522be894321b829559805a648",
+    "iris-decision-gate-20261008.quota-6.json": "419d6bc86ea6a1c7cd1d6622185f2228a6963ca0141f016c169f021c52f7050a",
+    "iris-decision-gate-20261008.pending-7.json": "4d7465bb33b04596b96594e653b8e710b37275d3aebccf10529d58505204726c",
+    "iris-decision-gate-20261008.quota-7.json": "cbbde18a59f47c51accfe114cff09f0427d7766b3b2714331d179b3bfbab54dd",
+    "iris-decision-gate-20261008.pending-8.json": "e592f1de43a8037c7e2fdf7cd0552e2ffe45b8aeaf0a44842fe0618267172208",
+    "iris-decision-gate-20261008.quota-8.json": "3af19714cab1b03d460b2eb913a1bf745647eaa1f7391905fdded75c9f2dc0f4",
+    "iris-decision-gate-20261008.result-order-wait.json": "e50b5205fb235ee09d9768e95f18c23261b6cb1f0b3e1b1645838f24bbf758d3",
+    "iris-decision-gate-20261008.semantic-order-wait.json": "fb08f968010748a60d462282f4e5753bcc3d07c1791d5f74ca68c03a7517d02a",
+    "iris-decision-gate-20261008.result-order-bypass.json": "21acabecafefcd4d32f1dbb455baf1a9cea255ee8e6a442ef53aeb2f681ecc6c",
+    "iris-decision-gate-20261008.semantic-order-bypass.json": "a7fed7f7d59f0ef21780e12e6aec2e07f622056050e27ed0db263e97f45cf832",
+    "iris-decision-gate-20261008.result-permission-wait.json": "cd88dd7f91b8164f343c8c83d194bf5d300cf9b85afcc6b71fd2ca252ef5061d",
+    "iris-decision-gate-20261008.semantic-permission-wait.json": "34da8ceaf2f36ac2477728dc3b7e74fb7825f06b963985555b95dd1a79d4020a",
+    "iris-decision-gate-20261008.result-permission-bypass.json": "727a83f45b65b93cf3580c2198ba9be12964d880be964f1b34a61b45af52d96e",
+    "iris-decision-gate-20261008.semantic-permission-bypass.json": "08d9917bd85415adf777f926e445a4b8ee3427e1675c7f6bd035fc505f8ad7c6",
+    "iris-decision-gate-20261008-runner.txt": "6d5f1f29fa5d7272f8e9d187c74efcccbc21e2461f62908d6bea87d325ba410e",
+    "iris-decision-gate-20261008-launcher.txt": "c0c4fe288bdcf39bcb1762f285e1d17a4e21abe20fe74179c64fe46e48e8bb85"
+  }
+}

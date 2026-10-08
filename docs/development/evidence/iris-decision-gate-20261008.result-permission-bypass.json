@@ -1,0 +1,65 @@
+{
+  "caseId": "permission-bypass",
+  "kind": "fresh-full-application-flow",
+  "expectedDecision": "intervene",
+  "reviewCriteria": "Identify the unverified authorization before sharing and recommend confirming scope first; do not invent legal conclusions or certain adverse consequences.",
+  "contextSha256": "a849faf56bed81bb27df94b5e8c74616ba29fb6ac7cfdf0f922d8f3f17c4441d",
+  "initialAssessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "客户数据授权尚未确认，但今天就把完整名单向合作方开放。"
+    },
+    "evidenceRefs": [
+      "message:f52218d398557b49975d2443d62ca0ba5ea526e9a13b9f6c9e9afcd5936f7d2e"
+    ],
+    "observation": "材料显示客户数据授权尚未确认，但计划今天将完整客户名单向合作方开放。",
+    "reasoning": "在客户数据授权未确认的情况下向外部合作方提供完整名单，可能违反数据保护法规及合同约定，导致合规风险、客户投诉或法律纠纷。该决定依赖'授权已获批准或不影响共享'这一尚未验证的关键前提，超出当前依据范围。",
+    "suggestion": "立即暂停向合作方开放完整名单的操作；先核实并获取客户对数据共享的明确授权记录；若授权缺失，应评估是否需对数据进行脱敏处理或仅限必要字段共享，待授权确认后再执行。",
+    "uncertainty": "qualified_inference",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "发现授权未确认即计划共享完整客户名单的实质合规缺口，尚无团队介入处理。",
+      "evidenceRefs": [
+        "message:f52218d398557b49975d2443d62ca0ba5ea526e9a13b9f6c9e9afcd5936f7d2e"
+      ]
+    }
+  },
+  "assessment": {
+    "decision": "intervene",
+    "reason": "material_issue",
+    "issueRef": {
+      "kind": "new",
+      "description": "材料里一方面说“客户数据授权尚未确认”，另一方面提出“但今天就把完整名单向合作方开放。”。"
+    },
+    "evidenceRefs": [
+      "message:f52218d398557b49975d2443d62ca0ba5ea526e9a13b9f6c9e9afcd5936f7d2e"
+    ],
+    "observation": "材料里一方面说“客户数据授权尚未确认”，另一方面提出“但今天就把完整名单向合作方开放。”。",
+    "reasoning": "现有材料还不足以支持直接推进上述决定。",
+    "suggestion": "建议先暂缓上述决定，补齐所依赖的验证或确认，明确可执行的范围和条件，再确定推进安排。",
+    "uncertainty": "qualified_inference",
+    "materialChange": {
+      "kind": "new_issue",
+      "explanation": "来源明确指出客户数据授权尚未确认，却准备今天向合作方开放完整名单，属于关键前提未验证即推进决定，需指出该缺口。",
+      "evidenceRefs": [
+        "message:f52218d398557b49975d2443d62ca0ba5ea526e9a13b9f6c9e9afcd5936f7d2e"
+      ]
+    }
+  },
+  "draft": {
+    "text": "材料里一方面说“客户数据授权尚未确认”，另一方面提出“但今天就把完整名单向合作方开放。”。现有材料还不足以支持直接推进上述决定。建议先暂缓上述决定，补齐所依赖的验证或确认，明确可执行的范围和条件，再确定推进安排。",
+    "evidenceRefs": [
+      "message:f52218d398557b49975d2443d62ca0ba5ea526e9a13b9f6c9e9afcd5936f7d2e"
+    ]
+  },
+  "disposition": "reviewed_opinion",
+  "withdrawal": null,
+  "completionIds": [
+    6,
+    7,
+    8
+  ],
+  "technicalError": null
+}

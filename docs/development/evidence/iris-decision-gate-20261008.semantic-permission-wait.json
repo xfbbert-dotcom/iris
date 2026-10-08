@@ -1,0 +1,7 @@
+{
+  "caseId": "permission-wait",
+  "resultSha256": "cd88dd7f91b8164f343c8c83d194bf5d300cf9b85afcc6b71fd2ca252ef5061d",
+  "reason": "Parent and independent reviewer: source explicitly waits for authorization before sharing; no unhandled bypass is established. Actual initial_skip, empty prose, no draft/error matches frozen expectation. No selection or withdrawal branch exercised.",
+  "reviewedAt": "2026-10-08T09:55:34.6774758Z",
+  "pass": true
+}

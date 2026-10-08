@@ -1,0 +1,9 @@
+{
+  "expiresAt": "2026-12-18T00:00:00+08:00",
+  "remainingTokens": 488900,
+  "requestHash": "e9ecbb7f75db97bc80dcfda5ca827c087b6ef285a038bccc3e8a970b5288518b",
+  "freeExhaustionStop": true,
+  "index": 1,
+  "model": "qwen3.8-max",
+  "observedAt": "2026-10-08T09:49:49.045Z"
+}

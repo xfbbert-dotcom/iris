@@ -1,4 +1,4 @@
-# Iris 依赖缺口建议：明确调整当前决定
+# Iris 依赖缺口建议：有限四例实模通过，尚未部署
 
 日期2026-10-08，实现树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支
 `codex/iris-daily-pilot-followup`。承接[来源位置窗口失败](iris-source-selection-20261008.md)，
@@ -41,7 +41,8 @@ permission-wait、permission-bypass），逐例从assess开始，不注入人工
 
 ## 实施与实际结果
 
-本地修改完成，精确候选SHA在提交后由preflight冻结，新窗口尚未调用。
+候选应用提交：`c7a286f37a85afa5c023359135b1331fdc556e94`，精确SHA、完整Core源码及
+运行清单/脚本由[preflight](evidence/iris-decision-gate-20261008.preflight.json)冻结。
 dependency只保留premise/decision，旧verificationTarget在内部与实时schema中均严格
 拒绝。两个精确合成正例的本地编译均先准确引用当前决定，再给出上述条件调整建议，
 没有重新询问已知状态。inference/计算/撤回和调用预算未改。
@@ -52,13 +53,50 @@ dependency只保留premise/decision，旧verificationTarget在内部与实时sch
 - 完整Core285文件通过、13文件条件跳过；5118项通过、471项条件跳过。
 - 类型检查、构建、eval CLI 11/11及diff check通过。PG实库归档回放仍条件跳过，
   其适配仅在内存克隆的schema中移除废弃角色，原响应、材料、评估和草稿预期不变。
-- 独立审查无阻塞问题。仍需完整四例实模语义验收；没有真实群修复效果或部署证据。
+- 独立代码审查无阻塞问题。后续实际四例结果如下；没有真实群修复效果或部署证据。
+
+## 实际合成结果与边界
+
+北京时间17:49:33—17:58:03，一次窗口完成8次HTTP200、22280 reported tokens；
+进程exit0，executionPassed=true。主执行者和独立审查逐例按未改动的标准判断，四份
+semantic gate均绑定对应结果文件的原字节哈希。未注入人工中间响应或为模型提供预期。
+
+| 原冻结案例 | 实际结果 | HTTP / tokens |
+| --- | --- | --- |
+| order-wait | 初判skip/no_work_value，空正文、无草稿，正确保留版本完成后的安排。 | 1 / 1948 |
+| order-bypass | intervene→位置计划→scope review→合格意见；准确引用未验收与立即承诺，建议先暂缓该承诺，完成依赖验证后再推进，无确定后果。 | 3 / 9224 |
+| permission-wait | 初判skip/no_work_value，空正文、无草稿，正确保留授权确认后才开放的条件。 | 1 / 1975 |
+| permission-bypass | intervene→位置计划→scope review→合格意见；建议先暂缓开放，确认依赖及范围/条件后再推进，未宣称已经外发、违法或必然损失。 | 3 / 9133 |
+
+模型实际阶段为assessment4、plan2、scope review2、repair0。两个正例完整保留关键
+连接词和时间关系；“暂缓上述决定”的对象由紧邻的具体承诺/开放原句唯一定位，因此
+是可理解的条件性行动调整。不能单凭scope supported=true通过，实际建议由独立语义
+判断另行核对。两负例都在初判沉默，没有实模使用no_intervention撤回的证据。
+
+每次请求前均刷新精确qwen3.8-max免费页面，核对剩余额度至少200000、2026-12-18
+到期及用完即停开启，再写入绑定该请求hash/index的许可。最后页面观察为17:56:41、
+466.32K；这是当时UI读数，不是实时余额或账单审计。
+[原始报告](evidence/iris-decision-gate-20261008.json)、
+[停止记录](evidence/iris-decision-gate-20261008.halted.json)及
+[摘要/文件哈希](evidence/iris-decision-gate-20261008-summary.json)保留全部请求和响应。
+与此前失败的来源位置窗口合计，本轮12次HTTP200、33665 tokens；没有继续第三候选、
+重采或付费回退。第一次失败完整保留，未被此后通过覆盖。
+
+本轮达到的是**本地程序修复 + 四例完整应用调用的独立语义通过**。尚未部署，没有新
+真实群测试或飞书外发。生产最后证据仍为[16:31关闭核验](iris-pd-real-opinion-20261008.md)
+的51937b95；不把本轮本地HEAD写成生产版本。来源目录/建议模板的有限修复可停止扩建，
+接下来的产品门槛是发布验证及真实讨论中的判断、意见价值和追问体验，不继续加同类probe。
+
+已知后续：初判自由正文仍出现把意向写成已发生及未经依据的影响推断，它们未进入最终
+组合；不能宣称初判正文全面修复。复杂多议题、历史重复/已处理问题和真实条件句仍须
+真实使用验收。建议仍有模板感，某引用尾部保留句号后出现重复标点，记非阻塞措辞改进，
+不扩展本轮；普通QA未开启导致的追问体验缺口不在此修复中关闭。
 
 ## 白皮书11.2四处处置
 
 | 位置 | 处置 |
 | --- | --- |
-| 白皮书 | **updated**：[source-plan建议合同](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md)要求对当前决定给出有行动意义的条件调整，重复核实已知状态不足以通过。 |
+| 白皮书 | **updated**：[source-plan建议合同](../superpowers/specs/2026-06-30-iris-architecture-whitepaper.md)要求对当前决定给出有行动意义的条件调整，重复核实已知状态不足以通过；实模结束后**reviewed-unchanged**，有限通过没有改变完整语义和真实群的验收边界。 |
 | 工程故障台账 | **updated**：[台账](../operations/engineering-failure-ledger.md)记录引用完整但模板/审核未提供价值的确认失败，以及去掉无用角色的有限修正。 |
 | 核心需求覆盖基线 | **updated**：[覆盖基线](../superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md)分开已失败窗口与新修正，IRIS-CORE-005仍部分实现，未宣称真实群或产品全部通过。 |
 | README / AGENTS / current-handoff | **updated**：[交接](current-handoff.md)指向当前候选及有限后续。**reviewed-unchanged**：[README](../../README.md)的生产51937b95与交接入口有效；[AGENTS](../../AGENTS.md)的工作树、权限、四处闭环和有限出口要求保持。 |

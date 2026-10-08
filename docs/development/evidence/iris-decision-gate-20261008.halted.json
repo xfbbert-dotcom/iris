@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-08T09:58:03.543Z",
+  "halted": false,
+  "executionPassed": true,
+  "caseId": "permission-bypass",
+  "stage": "iris_proactive_discussion_scope_review",
+  "reason": "four fresh synthetic cases completed"
+}
