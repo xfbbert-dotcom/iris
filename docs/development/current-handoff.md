@@ -1,5 +1,22 @@
 # Iris 当前接手入口
 
+## 2026-10-09 最新：c7a286f3已部署，主动讨论与普通QA关闭
+
+用户明确批准先核验备份、仅更新Core并保持关闭后，[实际发布](iris-release-c7a286f3-20261009.md)
+已完成。精确应用c7a286f37a85afa5c023359135b1331fdc556e94，image19cce91342a1…；
+07:48:19 UTC独立核验源码/镜像/标记、Core健康、readiness21/21、非Core容器与原配置保留，
+53项迁移和业务记录基线全等。global/desired/replyWhenMentioned/proactiveSpeech全false，
+PD worker/policy关闭，revision3427。公网health200/internal404，入口已恢复。
+机外加密备份整包SHA、既有age身份解密、PG/RDB检查均在切换前通过；原传输/路径守卫
+失败保留，单连接恢复结果见记录。无新迁移、数据恢复、业务模型请求或飞书外发。
+
+生产模型及opinion配置保持。本次只完成关闭状态部署，未新开主动窗口或普通QA；修复后
+真实意见与@追问仍未验收，IRIS-CORE-005仍部分实现。下一步需落实普通QA免费保护及
+明确测试范围、成员在场后验证实际意见和追问承接，不能直接复用此前PD窗口授权。
+四处文档闭环见发布记录；本轮后续提交仅操作脚本/证据/文档，不是新应用修复。
+实现树`D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`、分支`codex/iris-daily-pilot-followup`；
+默认工作树未改。以下日期段落保留当时状态，不代表最新生产版本。
+
 ## 2026-10-08 最新：修复已推送，精确免费CI通过；未部署
 
 用户本次明确授权push和免费CI；[发布验证记录](iris-ci-readiness-20261008.md)固定

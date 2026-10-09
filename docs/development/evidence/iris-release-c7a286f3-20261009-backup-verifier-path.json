@@ -1,0 +1,18 @@
+{
+  "phase": "off-host-backup-verification",
+  "firstAttempt": {
+    "exitCode": 1,
+    "failedAssertion": "private_root == PRIVATE.absolute()",
+    "decryptionStarted": false,
+    "plaintextCreated": false
+  },
+  "diagnosis": {
+    "logicalDirectory": "C:/Users/59912/AppData/Local/Iris/release-20261009-c7a286f3",
+    "resolvedDirectory": "C:/Users/59912/AppData/Local/Packages/OpenAI.Codex_2p2nqsd0c76g0/LocalCache/Local/Iris/release-20261009-c7a286f3",
+    "sameFile": true,
+    "aclInheritanceDisabled": true,
+    "allowedPrincipals": ["current operator", "SYSTEM"]
+  },
+  "fix": "Allow only the original absolute directory or the exact verified application-managed LocalCache alias, require samefile, and retain canonical-child checks for archive and plaintext cleanup.",
+  "subsequentResult": "Passed; see iris-release-c7a286f3-20261009-backup-verified.json."
+}

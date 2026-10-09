@@ -1,0 +1,18 @@
+{
+  "capturedAt": "2026-10-09T07:16:43.769957+00:00",
+  "applicationSha": "c7a286f37a85afa5c023359135b1331fdc556e94",
+  "imageId": "sha256:19cce91342a177a68bb5cb94efb86e69c011cf54829a118f40ef990974bbea4e",
+  "archiveHashMatches": true,
+  "configAndRootFSMatch": true,
+  "runningNonCoreConfigurationsEqual": true,
+  "oneShotCoreImageAliases": [
+    "migrate",
+    "embedding-model-verify"
+  ],
+  "oneShotHelpersExecuted": false,
+  "coreEnvironmentEqual": true,
+  "composeBytesPreserved": true,
+  "candidateEnvSha256": "fafaf8c7eec0ce1051a7ee6614bd7c95f67999e4ab06787e00b0494bfb462dbf",
+  "servicesSwitched": false,
+  "migrationsRun": false
+}

@@ -1,0 +1,62 @@
+{
+  "phase": "encrypted-backup-transfer",
+  "firstAttemptStreams": 16,
+  "rangeBytes": 4194304,
+  "failedRange": 9,
+  "failedRangeBytes": 0,
+  "retainedCompleteRanges": 15,
+  "retainedBytes": 62914560,
+  "rootCause": "Not established; the initial script did not retain that subprocess stderr. Do not attribute this solely to bandwidth or SSH MaxStartups.",
+  "response": "Stop original transfer; verify retained ranges against the remote encrypted file, then continue only missing ranges at six concurrent streams with per-range stderr retained.",
+  "productionVersionChanged": false,
+  "caddyRunning": false,
+  "backupRecreated": false,
+  "automaticRetries": 0,
+  "secondAttempt": {
+    "streams": 6,
+    "rangeBytes": 4194304,
+    "failedRange": 70,
+    "stderr": "Connection closed by remote host",
+    "retainedNumberedFiles": 73,
+    "retainedBytes": 300359077,
+    "partialRanges": [69, 70, 71],
+    "rootCause": "Remote connection closure observed; underlying network or server cause unresolved.",
+    "response": "Verify every retained full and partial prefix against the server; transfer only missing suffixes in 1 MiB pieces, six streams, at most three bounded continuation attempts per suffix. Require the original whole-file hash."
+  },
+  "thirdAttempt": {
+    "streams": 6,
+    "rangeBytes": 1048576,
+    "maxAttemptsPerSuffix": 3,
+    "failedSuffixes": [88, 91, 94, 95],
+    "exampleSuffix88": {
+      "expectedBytes": 1048576,
+      "receivedBytes": 778232,
+      "exitCodes": [0, 255, 255],
+      "reconnectError": "Connection closed by remote host"
+    },
+    "retainedPartsAndTailsBytes": 396091384,
+    "remainingBytes": 363400432,
+    "mappingReconstructedIndependently": true,
+    "response": "Stop concurrent raw-PTY transfer. Preserve and freeze every absolute range, size and hash before changing transport."
+  },
+  "transportInvestigation": {
+    "sshMaxStartups": "10:30:100",
+    "journalWindowMinutes": 60,
+    "journalKeywordCounts": {
+      "MaxStartups": 3,
+      "drop connection": 1,
+      "Connection reset": 7,
+      "Accepted publickey": 187
+    },
+    "singleNonPtyProbe": {
+      "bytes": 1048576,
+      "elapsedSeconds": 5.73,
+      "exitCode": 0,
+      "remoteSha256Matches": true
+    },
+    "attribution": "Connection admission limiting and resets are observed, but individual failures are not all causally attributed. A successful exit code can accompany a short raw-PTY transfer. The probe supports testing one persistent non-PTY stream; it does not prove PTY is the sole cause.",
+    "boundedRecovery": "One persistent non-PTY SSH connection, verify all retained range hashes remotely first, stream three missing intervals to a separate file, 900-second limit and no automatic retries; require the original whole archive length and SHA256 before decryption or Core cutover.",
+    "sshConfigurationChanged": false,
+    "hostKeyVerificationWeakened": false
+  }
+}

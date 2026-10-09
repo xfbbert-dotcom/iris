@@ -1,5 +1,15 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-09：备份短传不能凭SSH退出码判定成功
+
+[c7a286f3发布记录](../development/iris-release-c7a286f3-20261009.md)保留三次并发raw-PTY
+备份传输停止记录，含exit0但字节不足，以及后续连接被关闭。只缩小分片和降低并发未解决。
+服务器日志观察到MaxStartups限流及连接重置，单个无PTY探针长度/hash正确；尚不能将每次
+失败都归因于限流或PTY。恢复方案冻结所有原片段offset/长度/hash，逐段远端校验后，使用
+一个持久无PTY连接传缺口，保留原失败文件；不改SSH配置或放宽主机身份校验。
+出口是15分钟有界传输、完整加密包长度/SHA与机外age/PG/RDB检查，未过不得切换Core。
+检查备份目录不等于真实恢复演练。底层连接归因不继续扩成基础设施加固，实际结果见发布记录。
+
 ## 2026-10-08：Docker启动失败先核对实际崩溃点
 
 [本地发布准备](../development/iris-ci-readiness-20261008.md)中，Docker管道未出现、

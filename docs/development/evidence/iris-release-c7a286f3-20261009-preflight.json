@@ -1,0 +1,622 @@
+{
+  "capturedAt": "2026-10-09T07:12:46.770682+00:00",
+  "sourceCommit": "51937b954733020799e02f139abd32df74b3349c",
+  "coreImage": "sha256:d1d4e7f732efbfe205bed9ece9bbce37f4531c21e5b52042c21d8029f06446f9",
+  "coreHealthy": true,
+  "status": {
+    "capturedAt": "2026-10-09T07:12:46.352Z",
+    "ok": true,
+    "components": {
+      "proactiveDiscussion": {
+        "pending": 0,
+        "failed": 0,
+        "deadLetter": 0,
+        "unknown": 0,
+        "enabled": false,
+        "running": false,
+        "ok": true
+      },
+      "audit": {
+        "ok": true,
+        "enabled": true
+      },
+      "runtimeControl": {
+        "ok": true,
+        "enabled": false,
+        "globalEnabled": false,
+        "desiredGlobalEnabled": false,
+        "activationRequired": false,
+        "disabledGroupCount": 14,
+        "revision": 3424
+      },
+      "answerDraft": {
+        "ok": true,
+        "enabled": true
+      },
+      "agentExecutionLedger": {
+        "ok": true,
+        "enabled": false,
+        "writeFailureCount": 0
+      },
+      "feishuGateway": {
+        "ok": true,
+        "enabled": true,
+        "enqueueFailureCount": 0
+      },
+      "memoryExtraction": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      },
+      "eventWorker": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "intervalMs": 1000,
+        "batchLimit": 50,
+        "mentionRepliesEnabled": true,
+        "pendingEventCount": 0,
+        "deadLetterEventCount": 0,
+        "answerReplyUnresolvedCount": 0,
+        "answerReplyPendingSafeNoticeCount": 0,
+        "answerReplyReconciliationRequiredCount": 0
+      },
+      "documentSync": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "intervalMs": 1000,
+        "batchLimit": 10,
+        "pendingJobCount": 0,
+        "deadLetterJobCount": 0
+      },
+      "reindex": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "intervalMs": 1000,
+        "batchLimit": 25,
+        "pendingJobCount": 0,
+        "deadLetterJobCount": 0
+      },
+      "knowledgeConflicts": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      },
+      "actionApprovals": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "enabledGroupCount": 1
+      },
+      "formalTaskDrafts": {
+        "ok": true,
+        "enabled": false,
+        "companyCreationEnabled": false
+      },
+      "formalTaskActions": {
+        "ok": true,
+        "enabled": false,
+        "deploymentEnabled": false,
+        "running": false,
+        "enabledGroupCount": 0,
+        "runtimeCreationEnabled": false
+      },
+      "managedKnowledgeUpdates": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      },
+      "proactiveSignals": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      }
+    },
+    "control": {
+      "globalEnabled": false,
+      "desiredGlobalEnabled": false,
+      "activationRequired": false,
+      "revision": 3424,
+      "capabilities": {
+        "readGroupContext": true,
+        "replyWhenMentioned": true,
+        "readGroupDocuments": true,
+        "retrieveKnowledgeBase": true,
+        "proactiveSpeech": false,
+        "generateKnowledgeDrafts": true,
+        "generateTaskDrafts": false,
+        "createFeishuTasks": false,
+        "writeKnowledgeBase": false,
+        "updateManagedKnowledge": false,
+        "callExternalTools": false
+      },
+      "persistence": {
+        "storage": "postgres",
+        "ok": true
+      },
+      "disabledGroupCount": 14,
+      "disabledGroupsFingerprint": "f54e266d6902ce4e29728301a910a78458cacb3f5a97925b8fa08350c3f8aa32"
+    }
+  },
+  "readiness": {
+    "capturedAt": "2026-10-09T07:12:46.486Z",
+    "ok": true,
+    "status": "ready",
+    "summary": {
+      "checkCount": 21,
+      "passCount": 21,
+      "warnCount": 0,
+      "failCount": 0,
+      "highestSeverity": "pass"
+    },
+    "checks": [
+      {
+        "id": "database",
+        "status": "pass"
+      },
+      {
+        "id": "formalTaskDrafts",
+        "status": "pass"
+      },
+      {
+        "id": "formalTaskActions",
+        "status": "pass"
+      },
+      {
+        "id": "serverPort",
+        "status": "pass"
+      },
+      {
+        "id": "feishuWebhookAuth",
+        "status": "pass"
+      },
+      {
+        "id": "feishuOpenApi",
+        "status": "pass"
+      },
+      {
+        "id": "feishuBotIdentity",
+        "status": "pass"
+      },
+      {
+        "id": "eventWorker",
+        "status": "pass"
+      },
+      {
+        "id": "documentSyncWorker",
+        "status": "pass"
+      },
+      {
+        "id": "reindexWorker",
+        "status": "pass"
+      },
+      {
+        "id": "answerDraftRuntime",
+        "status": "pass"
+      },
+      {
+        "id": "answerDraftModel",
+        "status": "pass"
+      },
+      {
+        "id": "documentEmbeddings",
+        "status": "pass"
+      },
+      {
+        "id": "answerDraftPermissionGuard",
+        "status": "pass"
+      },
+      {
+        "id": "internalApiToken",
+        "status": "pass"
+      },
+      {
+        "id": "knowledgeCards",
+        "status": "pass"
+      },
+      {
+        "id": "actionApprovals",
+        "status": "pass"
+      },
+      {
+        "id": "documentSourceGroupGrants",
+        "status": "pass"
+      },
+      {
+        "id": "knowledgeConflicts",
+        "status": "pass"
+      },
+      {
+        "id": "actionReviews",
+        "status": "pass"
+      },
+      {
+        "id": "managedKnowledgeUpdates",
+        "status": "pass"
+      }
+    ]
+  },
+  "database": {
+    "capturedAt": "2026-10-09T07:12:46.598Z",
+    "transaction": "repeatable-read/read-only",
+    "migrations": [
+      {
+        "name": "0001_document_sources.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0002_document_snapshots.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0003_document_fragments.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0004_embedding_profiles.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0005_dimension_sharded_vector_storage.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0012_conversation_messages.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0013_document_fragment_profile_uniqueness.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0014_denied_document_source_capability_lock.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0015_document_source_policy_overrides.sql",
+        "applied_at": "2026-07-11T17:54:27.653Z"
+      },
+      {
+        "name": "0016_runtime_control_state.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0017_group_memories.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0018_group_memory_request_fingerprints.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0019_group_memory_extraction.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0020_group_memory_extraction_failure_count.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0021_group_memory_extraction_memory_delete.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0022_group_memory_extraction_conflicts.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0023_conversation_message_mentions.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0024_semantic_thread_action_memory.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0025_conversation_state_extraction.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0026_projection_rollout_contracts.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0027_semantic_thread_action_review_fixes.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0028_conversation_message_deletion_tombstones.sql",
+        "applied_at": "2026-07-16T19:51:05.548Z"
+      },
+      {
+        "name": "0030_knowledge_draft_facts.sql",
+        "applied_at": "2026-07-19T07:32:43.829Z"
+      },
+      {
+        "name": "0031_knowledge_draft_presentations.sql",
+        "applied_at": "2026-07-19T07:32:43.829Z"
+      },
+      {
+        "name": "0032_action_approval_facts.sql",
+        "applied_at": "2026-07-22T09:33:59.808Z"
+      },
+      {
+        "name": "0033_approval_interaction_intents.sql",
+        "applied_at": "2026-07-22T09:33:59.808Z"
+      },
+      {
+        "name": "0034_action_review_attestations.sql",
+        "applied_at": "2026-07-23T04:10:47.408Z"
+      },
+      {
+        "name": "0035_knowledge_publications.sql",
+        "applied_at": "2026-07-23T08:33:11.474Z"
+      },
+      {
+        "name": "0036_knowledge_draft_publication_metadata.sql",
+        "applied_at": "2026-07-23T12:28:49.643Z"
+      },
+      {
+        "name": "0037_proactive_signal_candidates.sql",
+        "applied_at": "2026-07-24T08:46:56.473Z"
+      },
+      {
+        "name": "0038_proactive_signal_delivery_outbox.sql",
+        "applied_at": "2026-07-24T08:46:56.473Z"
+      },
+      {
+        "name": "0039_agent_execution_ledger.sql",
+        "applied_at": "2026-07-27T10:31:08.854Z"
+      },
+      {
+        "name": "0040_proactive_signal_feedback.sql",
+        "applied_at": "2026-07-28T08:07:54.286Z"
+      },
+      {
+        "name": "0041_wiki_space_authorizations.sql",
+        "applied_at": "2026-07-30T01:18:22.691Z"
+      },
+      {
+        "name": "0042_document_fragment_embeddings_1024.sql",
+        "applied_at": "2026-07-30T05:18:48.888Z"
+      },
+      {
+        "name": "0043_document_fragment_embeddings_768.sql",
+        "applied_at": "2026-07-30T09:07:43.980Z"
+      },
+      {
+        "name": "0044_knowledge_publication_group_result.sql",
+        "applied_at": "2026-08-01T21:42:47.694Z"
+      },
+      {
+        "name": "0045_answer_source_citations.sql",
+        "applied_at": "2026-08-02T12:02:13.020Z"
+      },
+      {
+        "name": "0046_knowledge_conflict_candidates.sql",
+        "applied_at": "2026-08-17T00:25:18.850Z"
+      },
+      {
+        "name": "0047_knowledge_conflict_callback_identities.sql",
+        "applied_at": "2026-08-17T00:25:18.850Z"
+      },
+      {
+        "name": "0048_knowledge_conflict_draft_reattestations.sql",
+        "applied_at": "2026-08-17T00:25:18.850Z"
+      },
+      {
+        "name": "0049_answer_reply_knowledge_conflict_candidate_version.sql",
+        "applied_at": "2026-08-17T00:25:18.850Z"
+      },
+      {
+        "name": "0050_answer_reply_not_sent_reconciliation.sql",
+        "applied_at": "2026-08-17T12:04:34.578Z"
+      },
+      {
+        "name": "0051_document_source_group_grants.sql",
+        "applied_at": "2026-08-18T03:35:50.021Z"
+      },
+      {
+        "name": "0052_managed_knowledge_publication_updates.sql",
+        "applied_at": "2026-08-22T04:46:07.238Z"
+      },
+      {
+        "name": "0053_action_review_target_fingerprint_compatibility.sql",
+        "applied_at": "2026-08-22T04:46:07.238Z"
+      },
+      {
+        "name": "0054_managed_knowledge_runtime_capability.sql",
+        "applied_at": "2026-08-22T04:46:07.238Z"
+      },
+      {
+        "name": "0055_managed_update_execution_identity.sql",
+        "applied_at": "2026-08-22T04:46:07.238Z"
+      },
+      {
+        "name": "0056_managed_resync_index_completion.sql",
+        "applied_at": "2026-08-22T04:46:07.238Z"
+      },
+      {
+        "name": "0057_governed_feishu_task_actions.sql",
+        "applied_at": "2026-08-23T11:13:10.576Z"
+      },
+      {
+        "name": "0058_shared_working_chat.sql",
+        "applied_at": "2026-09-09T05:21:45.061Z"
+      },
+      {
+        "name": "0059_proactive_discussion.sql",
+        "applied_at": "2026-10-06T06:15:34.416Z"
+      },
+      {
+        "name": "0060_proactive_discussion_prose_sources.sql",
+        "applied_at": "2026-10-06T06:15:34.416Z"
+      }
+    ],
+    "tablePrivileges": [
+      {
+        "name": "answer_reply_local_source_traces",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_deliveries",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_evaluations",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_events",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_groups",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_issues",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_jobs",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_policies",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      },
+      {
+        "name": "proactive_discussion_sources",
+        "owner_matches_migrator": true,
+        "app_not_owner": true,
+        "can_select": true,
+        "can_insert": true,
+        "can_update": true,
+        "can_delete": true
+      }
+    ],
+    "sequencePrivileges": [
+      {
+        "name": "proactive_discussion_events_id_seq",
+        "owner_matches_migrator": true,
+        "can_use": true,
+        "can_select": true
+      },
+      {
+        "name": "proactive_discussion_sources_id_seq",
+        "owner_matches_migrator": true,
+        "can_use": true,
+        "can_select": true
+      }
+    ],
+    "appRole": {
+      "superuser": false,
+      "schema_create": false
+    },
+    "proseSourcesColumn": [
+      {
+        "data_type": "jsonb",
+        "is_nullable": "YES"
+      }
+    ],
+    "domainCounts": {
+      "proactive_discussion_policies": 1,
+      "proactive_discussion_groups": 1,
+      "proactive_discussion_jobs": 3,
+      "proactive_discussion_evaluations": 2,
+      "proactive_discussion_issues": 1,
+      "proactive_discussion_deliveries": 1,
+      "proactive_discussion_sources": 63,
+      "proactive_discussion_events": 42,
+      "answer_reply_local_source_traces": 0
+    },
+    "runtime": {
+      "revision": "3424",
+      "desired_global_enabled": false,
+      "proactive_speech": false,
+      "reply_when_mentioned": true
+    },
+    "jobs": [
+      {
+        "state": "cancelled",
+        "n": 1
+      },
+      {
+        "state": "completed",
+        "n": 2
+      }
+    ],
+    "deliveries": [
+      {
+        "state": "sent",
+        "n": 1
+      }
+    ],
+    "answers": [
+      {
+        "state": "not_sent_reconciled",
+        "n": 1
+      },
+      {
+        "state": "permission_blocked",
+        "n": 16
+      },
+      {
+        "state": "sent",
+        "n": 72
+      }
+    ],
+    "policies": [
+      {
+        "enabled": false,
+        "n": 1
+      }
+    ],
+    "ok": true
+  },
+  "caddyfileSha256": "80ac0aceb176f0e6d1bb6827aa9692c5a2751d517e89bf9c8e3aaf88dcdd7a07",
+  "configurationPreservedPrivately": true
+}

@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-09T07:44:24.411831+00:00",
+  "transport": "single persistent SSH non-PTY connection",
+  "retainedBytes": 396091384,
+  "allRetainedHashesVerifiedRemote": true,
+  "missingBytes": 363400432,
+  "connections": 1,
+  "automaticRetries": 0,
+  "timeoutSeconds": 900,
+  "bytes": 759491816,
+  "sha256": "d5b64b5efc19da5023d3df0cb10f8a3f5af8900c2af1cdfc976b38152f96362b",
+  "fullHashMatches": true,
+  "elapsedSeconds": 165.12
+}

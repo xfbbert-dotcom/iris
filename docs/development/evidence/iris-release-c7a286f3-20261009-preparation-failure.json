@@ -1,0 +1,17 @@
+{
+  "phase": "candidate-prepare",
+  "passed": false,
+  "failure": "non-Core service config changed",
+  "servicesSwitched": false,
+  "confirmedDifference": [
+    "services.core.image",
+    "services.migrate.image",
+    "services.embedding-model-verify.image",
+    "x-core-image.image"
+  ],
+  "rootCause": "The release guard omitted the existing one-shot embedding-model-verify helper that inherits the shared Core image alias.",
+  "correction": "Allow only its image to follow the approved Core SHA, alongside migrate; compare all remaining fields and every other service exactly. Do not run either one-shot helper.",
+  "applicationChanged": false,
+  "productionConfigurationChanged": false,
+  "repeatedUnchangedRun": false
+}

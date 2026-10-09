@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-10-09T07:47:47.132935+00:00",
+  "vantage": "operator workstation via normal hostname and TLS verification",
+  "publicHttp": {
+    "/health": 200,
+    "/internal/status": 404,
+    "/internal/runtime-control/status": 404
+  },
+  "allPassed": true
+}

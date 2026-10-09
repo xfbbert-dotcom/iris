@@ -1,0 +1,256 @@
+{
+  "capturedAt": "2026-10-09T07:47:21.437331+00:00",
+  "applicationSha": "c7a286f37a85afa5c023359135b1331fdc556e94",
+  "imageId": "sha256:19cce91342a177a68bb5cb94efb86e69c011cf54829a118f40ef990974bbea4e",
+  "coreHealthy": true,
+  "coreEnvironmentEqual": true,
+  "nonCoreContainersUnchanged": true,
+  "caddyfileAndComposePreserved": true,
+  "databaseBaselinePreserved": true,
+  "migrationsRun": false,
+  "publicHttp": {
+    "/health": 200,
+    "/internal/status": 404,
+    "/internal/runtime-control/status": 404
+  },
+  "status": {
+    "capturedAt": "2026-10-09T07:47:21.076Z",
+    "ok": true,
+    "components": {
+      "proactiveDiscussion": {
+        "pending": 0,
+        "failed": 0,
+        "deadLetter": 0,
+        "unknown": 0,
+        "enabled": false,
+        "running": false,
+        "ok": true
+      },
+      "audit": {
+        "ok": true,
+        "enabled": true
+      },
+      "runtimeControl": {
+        "ok": true,
+        "enabled": false,
+        "globalEnabled": false,
+        "desiredGlobalEnabled": false,
+        "activationRequired": false,
+        "disabledGroupCount": 14,
+        "revision": 3427
+      },
+      "answerDraft": {
+        "ok": true,
+        "enabled": true
+      },
+      "agentExecutionLedger": {
+        "ok": true,
+        "enabled": false,
+        "writeFailureCount": 0
+      },
+      "feishuGateway": {
+        "ok": true,
+        "enabled": true,
+        "enqueueFailureCount": 0
+      },
+      "memoryExtraction": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      },
+      "eventWorker": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "intervalMs": 1000,
+        "batchLimit": 50,
+        "mentionRepliesEnabled": true,
+        "pendingEventCount": 0,
+        "deadLetterEventCount": 0,
+        "answerReplyUnresolvedCount": 0,
+        "answerReplyPendingSafeNoticeCount": 0,
+        "answerReplyReconciliationRequiredCount": 0
+      },
+      "documentSync": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "intervalMs": 1000,
+        "batchLimit": 10,
+        "pendingJobCount": 0,
+        "deadLetterJobCount": 0
+      },
+      "reindex": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "intervalMs": 1000,
+        "batchLimit": 25,
+        "pendingJobCount": 0,
+        "deadLetterJobCount": 0
+      },
+      "knowledgeConflicts": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      },
+      "actionApprovals": {
+        "ok": true,
+        "enabled": true,
+        "running": true,
+        "enabledGroupCount": 1
+      },
+      "formalTaskDrafts": {
+        "ok": true,
+        "enabled": false,
+        "companyCreationEnabled": false
+      },
+      "formalTaskActions": {
+        "ok": true,
+        "enabled": false,
+        "deploymentEnabled": false,
+        "running": false,
+        "enabledGroupCount": 0,
+        "runtimeCreationEnabled": false
+      },
+      "managedKnowledgeUpdates": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      },
+      "proactiveSignals": {
+        "ok": true,
+        "enabled": false,
+        "running": false
+      }
+    },
+    "control": {
+      "globalEnabled": false,
+      "desiredGlobalEnabled": false,
+      "activationRequired": false,
+      "revision": 3427,
+      "capabilities": {
+        "readGroupContext": true,
+        "replyWhenMentioned": false,
+        "readGroupDocuments": true,
+        "retrieveKnowledgeBase": true,
+        "proactiveSpeech": false,
+        "generateKnowledgeDrafts": true,
+        "generateTaskDrafts": false,
+        "createFeishuTasks": false,
+        "writeKnowledgeBase": false,
+        "updateManagedKnowledge": false,
+        "callExternalTools": false
+      },
+      "persistence": {
+        "storage": "postgres",
+        "ok": true
+      },
+      "disabledGroupCount": 14,
+      "disabledGroupsFingerprint": "f54e266d6902ce4e29728301a910a78458cacb3f5a97925b8fa08350c3f8aa32"
+    }
+  },
+  "readiness": {
+    "capturedAt": "2026-10-09T07:47:21.239Z",
+    "ok": true,
+    "status": "ready",
+    "summary": {
+      "checkCount": 21,
+      "passCount": 21,
+      "warnCount": 0,
+      "failCount": 0,
+      "highestSeverity": "pass"
+    },
+    "checks": [
+      {
+        "id": "database",
+        "status": "pass"
+      },
+      {
+        "id": "formalTaskDrafts",
+        "status": "pass"
+      },
+      {
+        "id": "formalTaskActions",
+        "status": "pass"
+      },
+      {
+        "id": "serverPort",
+        "status": "pass"
+      },
+      {
+        "id": "feishuWebhookAuth",
+        "status": "pass"
+      },
+      {
+        "id": "feishuOpenApi",
+        "status": "pass"
+      },
+      {
+        "id": "feishuBotIdentity",
+        "status": "pass"
+      },
+      {
+        "id": "eventWorker",
+        "status": "pass"
+      },
+      {
+        "id": "documentSyncWorker",
+        "status": "pass"
+      },
+      {
+        "id": "reindexWorker",
+        "status": "pass"
+      },
+      {
+        "id": "answerDraftRuntime",
+        "status": "pass"
+      },
+      {
+        "id": "answerDraftModel",
+        "status": "pass"
+      },
+      {
+        "id": "documentEmbeddings",
+        "status": "pass"
+      },
+      {
+        "id": "answerDraftPermissionGuard",
+        "status": "pass"
+      },
+      {
+        "id": "internalApiToken",
+        "status": "pass"
+      },
+      {
+        "id": "knowledgeCards",
+        "status": "pass"
+      },
+      {
+        "id": "actionApprovals",
+        "status": "pass"
+      },
+      {
+        "id": "documentSourceGroupGrants",
+        "status": "pass"
+      },
+      {
+        "id": "knowledgeConflicts",
+        "status": "pass"
+      },
+      {
+        "id": "actionReviews",
+        "status": "pass"
+      },
+      {
+        "id": "managedKnowledgeUpdates",
+        "status": "pass"
+      }
+    ]
+  },
+  "feishuMessagesSent": 0,
+  "externalModelRequests": 0,
+  "globalEnabled": false,
+  "qaEnabled": false,
+  "proactiveDiscussionEnabled": false
+}

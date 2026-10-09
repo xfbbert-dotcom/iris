@@ -29,10 +29,17 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
-Application `51937b95` is [deployed with migrations 0059/0060](docs/development/iris-release-51937b95-20261006.md).
-The paired production backup was decrypted and inspected off-host before migration. Live readiness
-passes 21/21, database privileges and public ingress boundaries pass, and ordinary QA configuration
-is unchanged. Global and proactive discussion remain disabled; this is not real-Feishu quality acceptance.
+Application `c7a286f3` is [deployed with global, ordinary QA and proactive discussion disabled](docs/development/iris-release-c7a286f3-20261009.md).
+The paired backup was verified and decrypted off-host before replacing Core. Independent live checks
+pass: exact source/image/markers, readiness 21/21, unchanged database history/business records,
+preserved non-Core services/configuration, and public ingress boundaries. No new migration or model
+configuration change occurred. The ingress is restored; `replyWhenMentioned` is explicitly persisted false.
+
+The [exact-source free CI and local artifact](docs/development/iris-ci-readiness-20261008.md) and
+[four bounded synthetic cases](docs/development/iris-decision-gate-20261008.md) passed before release.
+Real opinion quality and follow-up replies to `@Iris` remain unaccepted; IRIS-CORE-005 is still partial.
+This closed-state release does not enable a new group window or ordinary QA. The dated notes below
+retain historical validation and execution states.
 
 The [historical basis fix](docs/development/iris-pd-history-basis-20261006.md), application `51937b95`,
 restores verified source text for an existing issue after its premises leave the recent-message window.
