@@ -1,0 +1,101 @@
+{
+  "kind": "iris-local-image-preparation-recovered",
+  "applicationSha": "c7a286f37a85afa5c023359135b1331fdc556e94",
+  "priorBlockedMetadata": "iris-local-image-20261008-c7a286f3-blocked.json",
+  "imageTag": "iris-core:c7a286f3-local-20261008",
+  "sourceArchiveSha256": "38bdacc296e6fc320b676b9ddbd34905468d109ccdf6ec0817585b55b47a8420",
+  "startedAt": "2026-10-08T19:06:10.107716+08:00",
+  "uploaded": false,
+  "deployed": false,
+  "applicationServerStarted": false,
+  "providerRequests": 0,
+  "feishuRequests": 0,
+  "releaseAccepted": false,
+  "build": {
+    "exitCode": 0,
+    "timedOut": false,
+    "elapsedSeconds": 39.19,
+    "timeoutSeconds": 1200
+  },
+  "inspect": {
+    "exitCode": 0,
+    "timedOut": false,
+    "elapsedSeconds": 0.38,
+    "timeoutSeconds": 20
+  },
+  "image": {
+    "id": "sha256:19cce91342a177a68bb5cb94efb86e69c011cf54829a118f40ef990974bbea4e",
+    "architecture": "amd64",
+    "os": "linux",
+    "revision": "c7a286f37a85afa5c023359135b1331fdc556e94",
+    "user": "node"
+  },
+  "production-dependency-audit": {
+    "exitCode": 0,
+    "timedOut": false,
+    "elapsedSeconds": 3.2,
+    "timeoutSeconds": 180
+  },
+  "productionDependencyVulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "offline-smoke": {
+    "exitCode": 0,
+    "timedOut": false,
+    "elapsedSeconds": 0.91,
+    "timeoutSeconds": 60
+  },
+  "offlineSmokeResult": {
+    "kind": "iris-core-offline-image-smoke",
+    "ok": true,
+    "node": "v22.23.1",
+    "platform": "linux",
+    "architecture": "x64",
+    "fastify": "5.12.5",
+    "sourceSelectionModule": true,
+    "exactContinuousSourceReconstruction": true,
+    "dependencyDecisionGate": true,
+    "obsoleteTargetRejected": true,
+    "quoteOnlyLiveSelectionRejected": true,
+    "withdrawalReasonsChecked": 3,
+    "generationAndRepairSchemaChecked": true,
+    "developmentPackagesAbsent": [
+      "vitest",
+      "typescript",
+      "vite"
+    ],
+    "applicationServerStarted": false,
+    "providerRequests": 0,
+    "feishuRequests": 0,
+    "network": "none"
+  },
+  "finishedAt": "2026-10-08T19:06:53.836057+08:00",
+  "localPreparationPassed": true,
+  "export": {
+    "bytes": 84104192,
+    "sha256": "04616cc23732f064141f0f174fc0369c3d2ba4c285014836c415205efa2b4370",
+    "storage": "operator-local release directory",
+    "uploaded": false
+  },
+  "offlineSmokeScriptSha256": "4411fa485819754ba0a783f204bcf52db493bbf95df1abfe1c508b2b92a5ef14",
+  "recovery": {
+    "confirmedFailure": "Docker backend could not remove stale zero-byte AF_UNIX reparse points in two runtime directories",
+    "scope": [
+      "LocalAppData/Docker/run",
+      "LocalAppData/docker-secrets-engine"
+    ],
+    "oldDirectoriesPreserved": true,
+    "imagesAndVolumesChanged": false,
+    "privilegeElevation": false,
+    "serviceConfigurationChanged": false,
+    "wslConfigurationChanged": false,
+    "engineVerified": "29.6.1 linux/x86_64",
+    "windowsServiceAfterRecovery": "Stopped",
+    "underlyingWindowsAttribution": "unresolved"
+  }
+}

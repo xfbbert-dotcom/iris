@@ -1,5 +1,9 @@
 # Iris 依赖缺口建议：有限四例实模通过，尚未部署
 
+后续[2026-10-08发布验证](iris-ci-readiness-20261008.md)已获明确授权完成push及精确
+免费CI，含PG集成与归档回放；本地Docker启动问题已恢复，精确部署镜像和断网检查通过，未部署。
+以下窗口中的未push/未执行PG等文字保留其当时范围，不覆盖后续记录。
+
 日期2026-10-08，实现树 `D:/work/AGE-org/.worktrees/iris-daily-pilot-1eb86`，分支
 `codex/iris-daily-pilot-followup`。承接[来源位置窗口失败](iris-source-selection-20261008.md)，
 保留其4次HTTP200/11385tokens、引用成功但实际意见价值失败的原件，不重跑该版本。

@@ -1,0 +1,58 @@
+{
+  "kind": "iris-local-image-preparation",
+  "applicationSha": "c7a286f37a85afa5c023359135b1331fdc556e94",
+  "repositoryHeadAtStart": "f103ff6a",
+  "finishedAt": "2026-10-08T10:56:11.8149317Z",
+  "source": {
+    "method": "git archive",
+    "sha256": "38bdacc296e6fc320b676b9ddbd34905468d109ccdf6ec0817585b55b47a8420",
+    "exactCommit": true,
+    "extracted": true
+  },
+  "dockerfile": {
+    "path": "deploy/pilot/Dockerfile",
+    "sha256": "c3e3dfc3641f0e6147383ef3f67655668307685c6de831ce5d0f55863e82eae7",
+    "base": "node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf",
+    "modified": false
+  },
+  "dockerStartup": {
+    "attempted": true,
+    "hidden": true,
+    "deadlineSeconds": 180,
+    "ready": false,
+    "engineEndpoint": "desktop-linux named pipe unavailable",
+    "finalProcessCount": 0,
+    "finalServiceState": "Stopped",
+    "rootCause": "not established; bounded startup failed"
+  },
+  "build": {
+    "status": "not_started",
+    "imageId": null,
+    "imageTag": null,
+    "revisionLabel": null,
+    "architecture": null
+  },
+  "productionDependencyAudit": {
+    "status": "not_run",
+    "reason": "runtime image was not built"
+  },
+  "offlineSmoke": {
+    "status": "prepared_not_run",
+    "scriptSha256": "4411fa485819754ba0a783f204bcf52db493bbf95df1abfe1c508b2b92a5ef14",
+    "applicationStarted": false
+  },
+  "preparationIncident": "Initial git archive failed due to shell argument parsing without creating an archive; corrected explicit -o command succeeded.",
+  "published": false,
+  "uploaded": false,
+  "deployed": false,
+  "providerRequests": 0,
+  "feishuRequests": 0,
+  "releaseAccepted": false,
+  "parentServiceStartAttempt": {
+    "attempted": true,
+    "succeeded": false,
+    "error": "Cannot open 'com.docker.service' service on computer '.'",
+    "privilegeElevation": false,
+    "systemConfigurationChanged": false
+  }
+}

@@ -1,5 +1,16 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-08：Docker启动失败先核对实际崩溃点
+
+[本地发布准备](../development/iris-ci-readiness-20261008.md)中，Docker管道未出现、
+Windows服务停止且启动服务失败，起初未定位原因。backend日志实际指向两个遗留的
+0字节IPC reparse point无法移除；服务错误不是已证明的Desktop崩溃根因。停止Docker、
+验证目录只有这些运行节点并保留旧目录后重建，engine恢复，而Windows服务仍Stopped。
+失败启动本身会再次留下节点，所以需在同一次关闭期间处理已确认的相关运行目录。
+不得将该操作泛化为删除LocalAppData、清空镜像/卷、factory reset或放宽系统权限。
+退出条件是引擎可用并完成精确应用镜像验证；底层Windows旧节点异常归因不扩展本轮。
+失败记录保留，免费CI通过、镜像准备、生产部署仍为不同事实，产品语义缺陷未关闭。
+
 ## 2026-10-08：固定建议不能把已知状态当作待查问题
 
 [来源位置窗口](../development/iris-source-selection-20261008.md)的dd091d9f解决漏字并
