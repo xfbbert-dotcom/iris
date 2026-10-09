@@ -15,7 +15,7 @@ function fixture() {
   const verifier = createSharedChatSourceVerifier({
     scopes: { async validateExact(source) { return source.scopeVersion === scopeVersion && !deleted.has(source.messageId); } },
     runtimeController: { canReadGroupContext: chatId => readable && !disabledGroups.has(chatId),
-      canReplyWhenMentioned: chatId => replyEnabled && !disabledGroups.has(chatId) },
+      canReplyWhenMentioned: chatId => chatId !== undefined && replyEnabled && !disabledGroups.has(chatId) },
     botAccessChecker: { async canAccessChat({ chatId }) { return !deniedBots.has(chatId); } },
     reader: { async listRecentMessages() { throw new Error("exact proof cannot use a recent list"); },
       async readMessagesByIds({ chatId, messageIds }) {

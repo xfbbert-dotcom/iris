@@ -35,12 +35,14 @@ export type IrisCapability = {
 export type RuntimeConfig = {
   globalEnabled: boolean;
   disabledGroupIds: Set<string>;
+  answerAllowedGroupIds?: Set<string>;
   capabilities: IrisCapability;
 };
 
 type RuntimeConfigEnv = Record<string, string | undefined>;
 
 export function createDefaultRuntimeConfig(env: RuntimeConfigEnv = process.env): RuntimeConfig {
+  const answerAllowedGroupIds = readAnswerAllowedGroupIds(env.IRIS_ANSWER_ALLOWED_GROUP_IDS);
   return {
     globalEnabled: readOptionalBoolean(
       "IRIS_RUNTIME_GLOBAL_ENABLED",
@@ -48,6 +50,7 @@ export function createDefaultRuntimeConfig(env: RuntimeConfigEnv = process.env):
       true,
     ),
     disabledGroupIds: new Set<string>(),
+    ...(answerAllowedGroupIds === undefined ? {} : { answerAllowedGroupIds }),
     capabilities: {
       readGroupContext: true,
       replyWhenMentioned: true,
@@ -62,6 +65,15 @@ export function createDefaultRuntimeConfig(env: RuntimeConfigEnv = process.env):
       callExternalTools: false
     }
   };
+}
+
+function readAnswerAllowedGroupIds(value: string | undefined): Set<string> | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const groupIds = value.split(",").map((groupId) => groupId.trim());
+  if (groupIds.some((groupId) => groupId === "")) {
+    throw new Error("IRIS_ANSWER_ALLOWED_GROUP_IDS must not contain blank group IDs");
+  }
+  return new Set(groupIds);
 }
 
 function readOptionalBoolean(name: string, value: string | undefined, fallback: boolean): boolean {

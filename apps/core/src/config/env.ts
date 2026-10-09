@@ -266,6 +266,11 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
     && structuredOutputMode !== "json_schema" && structuredOutputMode !== "json_object") {
     throw new Error("IRIS_MODEL_STRUCTURED_OUTPUT_MODE must be json_schema or json_object");
   }
+  const maxTokens = readOptionalPositiveIntegerEnv("IRIS_MODEL_MAX_TOKENS", env.IRIS_MODEL_MAX_TOKENS);
+  const enableThinking = readOptionalEnv(env.IRIS_MODEL_ENABLE_THINKING);
+  if (enableThinking !== undefined && enableThinking !== "true" && enableThinking !== "false") {
+    throw new Error("IRIS_MODEL_ENABLE_THINKING must be true or false");
+  }
 
   return {
     provider,
@@ -274,6 +279,8 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
     model: readRequiredEnv("IRIS_MODEL_NAME", env.IRIS_MODEL_NAME),
     timeoutMs: readTimerDelayEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000),
     ...(structuredOutputMode === undefined ? {} : { structuredOutputMode }),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(enableThinking === undefined ? {} : { enableThinking: enableThinking === "true" }),
   };
 }
 

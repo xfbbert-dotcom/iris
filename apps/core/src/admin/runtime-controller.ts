@@ -113,12 +113,14 @@ export class RuntimeController {
     return normalized !== undefined && !this.config.disabledGroupIds.has(normalized);
   }
 
-  canReplyWhenMentioned(groupId: string): boolean {
-    return this.canProcessGroupMessage(groupId) && this.config.capabilities.replyWhenMentioned;
+  canReplyWhenMentioned(groupId?: string): boolean {
+    return groupId !== undefined && this.canProcessGroupMessage(groupId) &&
+      this.config.capabilities.replyWhenMentioned && this.isAnswerGroupAllowed(groupId);
   }
 
   canGenerateAnswerDraft(input: { groupId?: string }): boolean {
-    if (!this.config.globalEnabled || !this.config.capabilities.replyWhenMentioned) {
+    if (!this.config.globalEnabled || !this.config.capabilities.replyWhenMentioned ||
+      !this.isAnswerGroupAllowed(input.groupId)) {
       return false;
     }
     if (input.groupId === undefined) {
@@ -126,6 +128,12 @@ export class RuntimeController {
     }
 
     return this.canProcessGroupMessage(input.groupId);
+  }
+
+  private isAnswerGroupAllowed(groupId: string | undefined): boolean {
+    if (this.config.answerAllowedGroupIds === undefined) return true;
+    const normalized = groupId === undefined ? undefined : normalizeGroupId(groupId);
+    return normalized !== undefined && this.config.answerAllowedGroupIds.has(normalized);
   }
 
   canProactivelySpeak(groupId: string): boolean {

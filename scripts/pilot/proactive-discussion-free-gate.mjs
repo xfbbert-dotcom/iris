@@ -27,20 +27,24 @@ function fail(res,status) {
     res.end('{"error":"free pilot gate stopped or request rejected","retryable":false}');
   }
 }
-function validWire(bytes) {
+function validWire(bytes,profile) {
   let body;
   try {body=JSON.parse(bytes.toString('utf8'));} catch {return false;}
-  return body && !Array.isArray(body) && typeof body==='object' && body.model===MODEL &&
-    body.response_format?.type==='json_object' && body.max_tokens===4096 &&
+  if(!(body && !Array.isArray(body) && typeof body==='object' && body.model===MODEL &&
+    body.max_tokens===4096 &&
     body.enable_thinking===false && (body.stream===false || body.stream===undefined) &&
     Array.isArray(body.messages) && body.messages.length>0 &&
-    body.messages.every(m=>m && typeof m==='object' && !Array.isArray(m));
+    body.messages.every(m=>m && typeof m==='object' && !Array.isArray(m)))) return false;
+  if(body.response_format?.type==='json_object') return 'json_object';
+  if(profile==='pd-and-qa' && !Object.hasOwn(body,'response_format')) return 'text';
+  return false;
 }
 function validPermit(p,pending,now) {
   if(!p || typeof p!=='object' || Array.isArray(p)) return false;
   const observed=Date.parse(p.observedAt), expires=Date.parse(p.expiresAt);
   const requested=Date.parse(pending.at);
   return p.requestId===pending.requestId && p.requestHash===pending.requestHash &&
+    (pending.profile===undefined || (p.profile===pending.profile && p.responseMode===pending.responseMode)) &&
     p.model===MODEL && p.freeExhaustionStop===true &&
     Number.isFinite(p.remainingTokens) && p.remainingTokens>=200000 &&
     Number.isFinite(observed) && observed>=requested && observed<=now && now-observed<60000 &&
@@ -62,7 +66,8 @@ async function responseBytes(response,signal) {
 }
 
 export function createFreeGate(options={}) {
-  const {sessionParent,sessionDir:chosenDir,apiKey,upstreamUrl,fetchImpl=fetch,now=Date.now,readFileImpl=readFile,writeFileImpl=writeFile,statImpl=stat}=options;
+  const {sessionParent,sessionDir:chosenDir,apiKey,upstreamUrl,profile='pd',fetchImpl=fetch,now=Date.now,readFileImpl=readFile,writeFileImpl=writeFile,statImpl=stat}=options;
+  if(profile!=='pd' && profile!=='pd-and-qa') throw Error('invalid gate profile');
   if(typeof apiKey!=='string' || !apiKey.trim()) throw Error('gate API key required');
   if(typeof sessionParent!=='string' || !sessionParent) throw Error('session parent required');
   const upstream=endpoint(upstreamUrl);
@@ -115,9 +120,11 @@ export function createFreeGate(options={}) {
       }
       if(controller.signal.aborted) throw Error('caller disconnected');
       const bytes=Buffer.concat(chunks);
-      if(!validWire(bytes)) return fail(res,422);
-      pending={requestId:`${sessionId}-${++state.seq}`,requestHash:sha(bytes),model:MODEL,at:iso(now())};
-      record={requestId:pending.requestId,requestHash:pending.requestHash,model:MODEL,startedAt:iso(now()),status:'pending'};
+      const responseMode=validWire(bytes,profile);
+      if(!responseMode) return fail(res,422);
+      const scope=profile==='pd-and-qa'?{profile,responseMode}:{};
+      pending={requestId:`${sessionId}-${++state.seq}`,requestHash:sha(bytes),model:MODEL,...scope,at:iso(now())};
+      record={requestId:pending.requestId,requestHash:pending.requestHash,model:MODEL,...scope,startedAt:iso(now()),status:'pending'};
       await write(`pending-${pending.requestId}.json`,pending);
       const permitPath=join(sessionDir,`permit-${pending.requestId}.json`);
       const until=Math.min(state.startedAt+limits.windowMs,now()+limits.permitWaitMs);
@@ -196,14 +203,14 @@ export function createFreeGate(options={}) {
 
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   if(process.argv.length===3 && process.argv[2]==='--help') {
-    console.log('Local PD free gate. Set IRIS_PD_FREE_GATE_API_KEY, IRIS_PD_FREE_GATE_SESSION_PARENT, IRIS_PD_FREE_GATE_UPSTREAM_URL, optionally IRIS_PD_FREE_GATE_PORT. Operator writes permit-<requestId>.json after fresh free-quota check; write stop.json to stop.');
+    console.log('Local free gate. Set IRIS_PD_FREE_GATE_API_KEY, IRIS_PD_FREE_GATE_SESSION_PARENT, IRIS_PD_FREE_GATE_UPSTREAM_URL, optionally IRIS_PD_FREE_GATE_PORT and IRIS_PD_FREE_GATE_PROFILE (pd by default, or pd-and-qa). Operator writes permit-<requestId>.json after fresh free-quota check; joint permits must match pending profile and responseMode. Write stop.json to stop. Both modes share eight sends, fifteen minutes and the reported-token threshold.');
   } else if(process.argv.length!==2) {
     console.error('unsupported arguments');process.exitCode=2;
   } else {
     try {
       const port=Number(process.env.IRIS_PD_FREE_GATE_PORT??8765);
       if(!Number.isSafeInteger(port)||port<1||port>65535) throw Error('invalid port');
-      const gate=createFreeGate({sessionParent:process.env.IRIS_PD_FREE_GATE_SESSION_PARENT,apiKey:process.env.IRIS_PD_FREE_GATE_API_KEY,upstreamUrl:process.env.IRIS_PD_FREE_GATE_UPSTREAM_URL});
+      const gate=createFreeGate({sessionParent:process.env.IRIS_PD_FREE_GATE_SESSION_PARENT,apiKey:process.env.IRIS_PD_FREE_GATE_API_KEY,upstreamUrl:process.env.IRIS_PD_FREE_GATE_UPSTREAM_URL,profile:process.env.IRIS_PD_FREE_GATE_PROFILE});
       await gate.start(port);
       console.log(JSON.stringify({listening:'127.0.0.1',port,sessionDir:gate.sessionDir}));
     } catch {console.error('free gate startup rejected');process.exitCode=2;}

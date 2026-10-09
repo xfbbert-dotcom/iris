@@ -29,7 +29,7 @@ import type {
   AnswerSourcePermissionDecision,
   AnswerSourcePermissionVerifier,
 } from "../src/answer-replies/answer-source-permission-verifier.js";
-import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
+import { createFeishuMessageReplier, type FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
 
 const preparedAt = new Date("2026-08-02T01:00:00.000Z");
 const transitionAt = new Date("2026-08-02T01:01:00.000Z");
@@ -40,6 +40,153 @@ const preparedReplyUuid = createAnswerReplyUuid(incomingMessageId);
 const safeNoticeUuid = createAnswerReplySafeNoticeUuid(incomingMessageId);
 
 describe("AnswerReplyDeliveryService", () => {
+  it.each(["answer", "safe notice"])("withholds %s reply HTTP when QA closes during token retrieval", async kind => {
+    let enabled = true;
+    let resolveToken!: (token: string) => void;
+    let tokenStarted!: () => void;
+    const token = new Promise<string>(resolve => { resolveToken = resolve; });
+    const started = new Promise<void>(resolve => { tokenStarted = resolve; });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ code: 0, data: { message_id: "must-not-send" } })));
+    const realReplier = createFeishuMessageReplier({
+      baseUrl: "https://open.feishu.cn", fetch,
+      tokenProvider: { async getTenantAccessToken() { tokenStarted(); return token; } },
+    });
+    const harness = createHarness({ canReplyWhenMentioned: () => enabled });
+    harness.replier.replyText.mockImplementationOnce(realReplier.replyText);
+    if (kind === "safe notice") harness.repository.receipt = blockedReceipt(receipt());
+    const response = harness.service.respond(request(async () => preparedAnswer({ sourceTraces: [] })));
+    await started;
+    enabled = false;
+    resolveToken("fake-token");
+    await expect(response).rejects.toThrow("answer reply runtime disabled");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(harness.repository.completeAnswerSend).not.toHaveBeenCalled();
+    expect(harness.repository.completeSafeNoticeSend).not.toHaveBeenCalled();
+    expect(harness.repository.receipt?.delivery.state).toBe(kind === "answer" ? "sending" : "permission_blocked");
+    expect(harness.repository.receipt?.delivery[kind === "answer" ? "attemptCount" : "safeNoticeAttemptCount"]).toBe(1);
+  });
+
+  it("does not generate or admit a new answer when the QA runtime is closed", async () => {
+    const canReplyWhenMentioned = vi.fn(() => false);
+    const harness = createHarness({ canReplyWhenMentioned });
+    const prepare = vi.fn(async () => preparedAnswer({ sourceTraces: [] }));
+
+    await expect(harness.service.respond(request(prepare)))
+      .rejects.toThrow("answer reply runtime disabled");
+
+    expect(canReplyWhenMentioned).toHaveBeenCalledWith("oc_1");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(harness.repository.prepare).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("discards a new answer if QA closes during generation", async () => {
+    let enabled = true;
+    const harness = createHarness({ canReplyWhenMentioned: () => enabled });
+    await expect(harness.service.respond(request(async () => {
+      enabled = false;
+      return preparedAnswer({ sourceTraces: [] });
+    }))).rejects.toThrow("answer reply runtime disabled");
+    expect(harness.repository.prepare).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("leaves a prepared answer unchanged when QA is closed before resuming", async () => {
+    const harness = createHarness({ canReplyWhenMentioned: () => false });
+    const stored = receipt({}, []);
+    harness.repository.receipt = stored;
+    const inspectPromptPermissions = vi.fn(async () => ({ blockedDocumentSourceIds: [], checkedAt: transitionAt }));
+    await expect(harness.service.respond(request(vi.fn(), { inspectPromptPermissions })))
+      .rejects.toThrow("answer reply runtime disabled");
+    expect(inspectPromptPermissions).not.toHaveBeenCalled();
+    expect(harness.repository.receipt).toEqual(stored);
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it.each(["document", "local"])("rechecks QA after the final %s source verification", async sourceKind => {
+    let enabled = true;
+    const harness = createHarness({
+      canReplyWhenMentioned: () => enabled,
+      localMessageVerifier: { async verify() { enabled = false; return true; } },
+    });
+    if (sourceKind === "document") {
+      harness.verifier.verify.mockImplementationOnce(async ({ documentSourceIds }) => {
+        enabled = false;
+        return documentSourceIds.map(documentSourceId => ({ documentSourceId, outcome: "allowed" as const }));
+      });
+    }
+    const localMessageSources = [{ chatId: "oc_1", messageId: "source-local", contentHash: "a".repeat(64) }];
+    await expect(harness.service.respond(request(async () => preparedAnswer(sourceKind === "local"
+      ? { sourceTraces: [], localMessageSources } : {}))))
+      .rejects.toThrow("answer reply runtime disabled");
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expect(harness.repository.receipt?.delivery.state).toBe("prepared");
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("stops an answer after send admission closes QA and retains the sending receipt", async () => {
+    let enabled = true;
+    const harness = createHarness({ canReplyWhenMentioned: () => enabled });
+    const begin = harness.repository.beginAnswerSend.getMockImplementation()!;
+    harness.repository.beginAnswerSend.mockImplementationOnce(async input => {
+      const sending = await begin(input);
+      enabled = false;
+      return sending;
+    });
+    await expect(harness.service.respond(request(async () => preparedAnswer({ sourceTraces: [] }))))
+      .rejects.toThrow("answer reply runtime disabled");
+    expect(harness.repository.receipt?.delivery.state).toBe("sending");
+    expect(harness.repository.completeAnswerSend).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
+    await expect(harness.service.respond(request(vi.fn())))
+      .rejects.toThrow("answer reply runtime disabled");
+    expect(harness.repository.beginAnswerSend).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before notice", "during notice admission"])("withholds safe notices when QA closes %s", async phase => {
+    let enabled = phase !== "before notice";
+    const harness = createHarness({ canReplyWhenMentioned: () => enabled });
+    harness.repository.receipt = blockedReceipt(receipt());
+    const begin = harness.repository.beginSafeNoticeSend.getMockImplementation()!;
+    harness.repository.beginSafeNoticeSend.mockImplementationOnce(async input => {
+      const sending = await begin(input);
+      enabled = false;
+      return sending;
+    });
+    await expect(harness.service.respond(request(vi.fn())))
+      .rejects.toThrow("answer reply runtime disabled");
+    expect(harness.repository.beginSafeNoticeSend).toHaveBeenCalledTimes(phase === "before notice" ? 0 : 1);
+    expect(harness.repository.completeSafeNoticeSend).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it.each(["answer", "safe notice"])("preserves completed %s receipts while QA is closed", async kind => {
+    const harness = createHarness({ canReplyWhenMentioned: () => false });
+    const stored = kind === "answer"
+      ? completedAnswerReceipt(beginAnswerReceipt(receipt()), "already-sent")
+      : completedSafeNoticeReceipt(beginSafeNoticeReceipt(blockedReceipt(receipt())), "already-sent");
+    harness.repository.receipt = stored;
+    await expect(harness.service.respond(request(vi.fn())))
+      .resolves.toEqual({ replyMessageId: "already-sent" });
+    expect(harness.repository.receipt).toEqual(stored);
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("records a successful send even if QA closes while Feishu is responding", async () => {
+    let enabled = true;
+    const harness = createHarness({ canReplyWhenMentioned: () => enabled });
+    harness.replier.replyText.mockImplementationOnce(async () => {
+      enabled = false;
+      return { replyMessageId: "sent-before-close" };
+    });
+    await expect(harness.service.respond(request(async () => preparedAnswer({ sourceTraces: [] }))))
+      .resolves.toEqual({ replyMessageId: "sent-before-close" });
+    expect(harness.repository.receipt?.delivery.state).toBe("sent");
+    expect(harness.repository.completeAnswerSend).toHaveBeenCalledOnce();
+    expect(harness.replier.replyText).toHaveBeenCalledOnce();
+  });
+
   it("binds the knowledge-conflict candidate to preparation and receipt identity", async () => {
     const harness = createHarness();
     const validateKnowledgeConflictForSend = vi.fn(async () => ({
@@ -233,12 +380,14 @@ describe("AnswerReplyDeliveryService", () => {
       text: preparedText,
       replyInThread: true,
       uuid: preparedReplyUuid,
+      assertCanSend: expect.any(Function),
     });
     expect(harness.replier.replyText).toHaveBeenNthCalledWith(2, {
       messageId: "om_1",
       text: preparedText,
       replyInThread: true,
       uuid: preparedReplyUuid,
+      assertCanSend: expect.any(Function),
     });
     expect(harness.repository.completeAnswerSend).toHaveBeenCalledWith({
       deliveryId: preparedDeliveryId,
@@ -674,7 +823,7 @@ describe("AnswerReplyDeliveryService", () => {
     expect(prepareAnswer).toHaveBeenCalledTimes(1);
     expect(harness.replier.replyText).toHaveBeenCalledTimes(2);
     expect(harness.replier.replyText.mock.calls[0]).toEqual(
-      harness.replier.replyText.mock.calls[1],
+      [{ ...harness.replier.replyText.mock.calls[1]![0], assertCanSend: expect.any(Function) }],
     );
     expect(harness.repository.receipt?.delivery).toMatchObject({
       state: "sent",
@@ -698,6 +847,7 @@ describe("AnswerReplyDeliveryService", () => {
       text: preparedText,
       replyInThread: true,
       uuid: preparedReplyUuid,
+      assertCanSend: expect.any(Function),
     });
   });
 
@@ -806,6 +956,7 @@ describe("AnswerReplyDeliveryService", () => {
       text: ANSWER_PERMISSION_CHANGED_NOTICE,
       replyInThread: true,
       uuid: safeNoticeUuid,
+      assertCanSend: expect.any(Function),
     });
     expect(JSON.stringify(harness.replier.replyText.mock.calls)).not.toContain(quelloConclusion);
   });
@@ -892,6 +1043,7 @@ describe("AnswerReplyDeliveryService", () => {
       text: ANSWER_PERMISSION_CHANGED_NOTICE,
       replyInThread: true,
       uuid: safeNoticeUuid,
+      assertCanSend: expect.any(Function),
     });
     expect(harness.repository.blockForPermission.mock.invocationCallOrder[0]).toBeLessThan(
       harness.repository.beginSafeNoticeSend.mock.invocationCallOrder[0]!,
@@ -912,6 +1064,7 @@ describe("AnswerReplyDeliveryService", () => {
       text: "资料权限已变化，我没有发送原答案。请重新提问。",
       replyInThread: true,
       uuid: safeNoticeUuid,
+      assertCanSend: expect.any(Function),
     });
     expect(harness.repository.completeSafeNoticeSend).toHaveBeenCalledWith({
       deliveryId: preparedDeliveryId,
@@ -946,7 +1099,7 @@ describe("AnswerReplyDeliveryService", () => {
     expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
     expect(harness.replier.replyText).toHaveBeenCalledTimes(2);
     expect(harness.replier.replyText.mock.calls[0]).toEqual(
-      harness.replier.replyText.mock.calls[1],
+      [{ ...harness.replier.replyText.mock.calls[1]![0], assertCanSend: expect.any(Function) }],
     );
     expectOnlySafeNoticeWasSent(harness);
   });
@@ -1015,6 +1168,7 @@ describe("AnswerReplyDeliveryService", () => {
       messageId: reconciled.delivery.incomingMessageId,
       text: ANSWER_PERMISSION_CHANGED_NOTICE,
       uuid: reconciled.delivery.safeNoticeUuid,
+      assertCanSend: expect.any(Function),
       replyInThread: true,
     });
   });
@@ -1394,6 +1548,7 @@ describe("AnswerReplyDeliveryService", () => {
         text: ANSWER_PERMISSION_CHANGED_NOTICE,
         replyInThread: true,
         uuid: safeNoticeUuid,
+        assertCanSend: expect.any(Function),
       });
     },
   );
@@ -1423,11 +1578,13 @@ function createHarness({
   replyResults = [{ replyMessageId: "reply-default" }],
   sharedChatVerifier,
   localMessageVerifier,
+  canReplyWhenMentioned,
 }: {
   verifierResults?: Array<AnswerSourcePermissionDecision[] | Error>;
   replyResults?: Array<{ replyMessageId?: string } | Error>;
   sharedChatVerifier?: import("../src/shared-chat/working-chat-scope.js").SharedChatSourceVerifier;
   localMessageVerifier?: import("../src/memory/local-message-source.js").LocalMessageSourceVerifier;
+  canReplyWhenMentioned?: (chatId: string) => boolean;
 } = {}) {
   const repository = new RecordingAnswerReplyRepository();
   const queuedVerifierResults = [...verifierResults];
@@ -1461,6 +1618,7 @@ function createHarness({
     replier,
     sharedChatVerifier,
     localMessageVerifier,
+    canReplyWhenMentioned,
     now: () => new Date(transitionAt.getTime()),
   });
 
@@ -1840,6 +1998,7 @@ function expectOnlySafeNoticeWasSent(harness: Harness): void {
       text: ANSWER_PERMISSION_CHANGED_NOTICE,
       replyInThread: true,
       uuid: safeNoticeUuid,
+      assertCanSend: expect.any(Function),
     });
   }
 }

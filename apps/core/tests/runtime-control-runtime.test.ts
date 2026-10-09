@@ -10,6 +10,45 @@ import type { IrisCapability } from "../src/config/runtime-config.js";
 import type { DatabaseConfig } from "../src/database/database-config.js";
 
 describe("createRuntimeControlRuntime", () => {
+  it("preserves the deployment answer allowlist after loading durable policy and enabling runtime", async () => {
+    const fixture = runtimeFixture({ rows: [snapshotRow({ desired_global_enabled: true })] });
+    const runtime = await createRuntimeControlRuntime({
+      env: {
+        DATABASE_URL: "postgres://localhost/iris",
+        IRIS_RUNTIME_GLOBAL_ENABLED: "true",
+        IRIS_ANSWER_ALLOWED_GROUP_IDS: " chat-a ",
+      },
+      createPool: fixture.createPool,
+    });
+    try {
+      const controller = runtime.runtimeControl.controller;
+      expect(controller.getSnapshot().globalEnabled).toBe(false);
+      expect(controller.canReplyWhenMentioned("chat-a")).toBe(false);
+      controller.enableGlobal();
+      expect(controller.canReplyWhenMentioned("chat-a")).toBe(true);
+      expect(controller.canGenerateAnswerDraft({ groupId: "chat-a" })).toBe(true);
+      expect(controller.canReplyWhenMentioned("chat-b")).toBe(false);
+      expect(controller.canGenerateAnswerDraft({ groupId: "chat-b" })).toBe(false);
+      expect(controller.canGenerateAnswerDraft({})).toBe(false);
+      expect(controller.canReadGroupContext("chat-b")).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+    expect(fixture.end).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed deployment answer scope and closes its pool", async () => {
+    const fixture = runtimeFixture();
+    await expect(createRuntimeControlRuntime({
+      env: {
+        DATABASE_URL: "postgres://localhost/iris",
+        IRIS_ANSWER_ALLOWED_GROUP_IDS: "chat-a,",
+      },
+      createPool: fixture.createPool,
+    })).rejects.toThrow("IRIS_ANSWER_ALLOWED_GROUP_IDS must not contain blank group IDs");
+    expect(fixture.end).toHaveBeenCalledOnce();
+  });
+
   it("restores durable policy and metadata while forcing live global disabled", async () => {
     const snapshot = snapshotRow({
       revision: "7",

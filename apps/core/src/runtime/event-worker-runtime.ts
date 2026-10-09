@@ -495,6 +495,9 @@ function createOptionalMentionAnswerResponder({
     ...(localMessageVerifier === undefined ? {} : { localMessageVerifier }),
     replier,
     now,
+    ...(runtimeController?.canReplyWhenMentioned === undefined
+      ? {}
+      : { canReplyWhenMentioned: runtimeController.canReplyWhenMentioned.bind(runtimeController) }),
   });
 
   return {

@@ -9,6 +9,7 @@ export type FeishuMessageReplier = {
     text: string;
     uuid?: string;
     replyInThread?: boolean;
+    assertCanSend?: () => void;
   }): Promise<{ replyMessageId?: string }>;
 };
 
@@ -46,6 +47,7 @@ export function createFeishuMessageReplier({
           ? undefined
           : normalizeRequiredString("uuid", input.uuid, MAX_FEISHU_REPLY_UUID_CHARS);
       const tenantAccessToken = await tokenProvider.getTenantAccessToken();
+      input.assertCanSend?.();
 
       const { response, responseBody } = await fetchJsonWithTimeout({
         fetch,

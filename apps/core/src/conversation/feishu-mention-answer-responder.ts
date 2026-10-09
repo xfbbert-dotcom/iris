@@ -1,5 +1,8 @@
 import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
-import type { AnswerReplyDeliveryService } from "../answer-replies/answer-reply-delivery-service.js";
+import {
+  AnswerReplyRuntimeDisabledError,
+  type AnswerReplyDeliveryService,
+} from "../answer-replies/answer-reply-delivery-service.js";
 import {
   createAnswerReplySafeNoticeUuid,
   createAnswerReplyUuid,
@@ -471,6 +474,10 @@ export function createFeishuMentionAnswerResponder({
               return { status: "skipped", reason: "duplicate_message" };
             }
             try {
+              if (!canReplyWhenMentioned(input.chatId)) {
+                replyDeduper.markHandled(input.messageId);
+                return { status: "skipped", reason: "runtime_disabled" };
+              }
               const answerDraftInput = {
                 executionId: input.messageId,
                 question,
@@ -507,6 +514,9 @@ export function createFeishuMentionAnswerResponder({
                       };
                     },
                     prepareAnswer: async () => {
+                      if (!canReplyWhenMentioned(input.chatId)) {
+                        throw new AnswerReplyRuntimeDisabledError();
+                      }
                       let answer: Awaited<ReturnType<AnswerDraftOrchestrator["generateDraft"]>>;
                       try {
                         answer = await answerDraftOrchestrator.generateDraft(answerDraftInput);
@@ -554,18 +564,30 @@ export function createFeishuMentionAnswerResponder({
                   ? BLANK_MODEL_ANSWER_FALLBACK
                   : MODEL_CAPACITY_FALLBACK;
 
-                const result = await runLegacyEffect(async () => toRepliedResult(
-                  await replier.replyText({
+                const result = await runLegacyEffect(async () => {
+                  if (!canReplyWhenMentioned(input.chatId)) {
+                    return { status: "skipped", reason: "runtime_disabled" };
+                  }
+                  return toRepliedResult(await replier.replyText({
                     messageId: input.messageId,
                     text: fallbackText,
                     replyInThread: true,
                     uuid: replyUuid,
-                  }),
-                ));
+                    assertCanSend: () => {
+                      if (!canReplyWhenMentioned(input.chatId)) {
+                        throw new AnswerReplyRuntimeDisabledError();
+                      }
+                    },
+                  }));
+                });
                 replyDeduper.markHandled(input.messageId);
                 return result;
               }
             } catch (error) {
+              if (error instanceof AnswerReplyRuntimeDisabledError) {
+                replyDeduper.markHandled(input.messageId);
+                return { status: "skipped", reason: "runtime_disabled" };
+              }
               replyDeduper.release(input.messageId);
               throw error;
             }

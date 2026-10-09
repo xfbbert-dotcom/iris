@@ -247,6 +247,87 @@ describe("RuntimeController", () => {
     expect(controller.canGenerateKnowledgeDrafts({})).toBe(false);
   });
 
+  describe("ordinary answer deployment group scope", () => {
+    function scopedController() {
+      return new RuntimeController(createRuntimeConfigFromEnv({
+        IRIS_ANSWER_ALLOWED_GROUP_IDS: "chat-a",
+      }));
+    }
+
+    it("rejects mention replies and answer drafts for a different group", () => {
+      const controller = scopedController();
+      expect(controller.canReplyWhenMentioned("chat-b")).toBe(false);
+      expect(controller.canGenerateAnswerDraft({ groupId: "chat-b" })).toBe(false);
+    });
+
+    it("rejects answer drafts without a group", () => {
+      expect(scopedController().canGenerateAnswerDraft({})).toBe(false);
+    });
+
+    it("rejects mention replies without a group", () => {
+      expect(scopedController().canReplyWhenMentioned()).toBe(false);
+    });
+
+    it("allows the configured group and rejects empty group ids", () => {
+      const controller = scopedController();
+      expect(controller.canReplyWhenMentioned(" chat-a ")).toBe(true);
+      expect(controller.canGenerateAnswerDraft({ groupId: " chat-a " })).toBe(true);
+      expect(controller.canReplyWhenMentioned("")).toBe(false);
+      expect(controller.canGenerateAnswerDraft({ groupId: "   " })).toBe(false);
+    });
+
+    it("keeps global, capability and disabled-group gates necessary for the allowed group", () => {
+      const controller = scopedController();
+      const expectDenied = () => {
+        expect(controller.canReplyWhenMentioned("chat-a")).toBe(false);
+        expect(controller.canGenerateAnswerDraft({ groupId: "chat-a" })).toBe(false);
+      };
+      controller.disableGlobal();
+      expectDenied();
+      controller.enableGlobal();
+      controller.setCapability("replyWhenMentioned", false);
+      expectDenied();
+      controller.setCapability("replyWhenMentioned", true);
+      controller.disableGroup("chat-a");
+      expectDenied();
+      controller.enableGroup("chat-a");
+      expect(controller.canReplyWhenMentioned("chat-a")).toBe(true);
+      expect(controller.canGenerateAnswerDraft({ groupId: "chat-a" })).toBe(true);
+    });
+
+    it("cannot widen deployment scope by restoring durable policy or enabling another group", () => {
+      const controller = scopedController();
+      controller.disableGroup("chat-b");
+      controller.enableGroup("chat-b");
+      controller.replaceDurablePolicy(durableSnapshot({ disabledGroupIds: [] }));
+      controller.enableGlobal();
+      expect(controller.canReplyWhenMentioned("chat-a")).toBe(true);
+      expect(controller.canReplyWhenMentioned("chat-b")).toBe(false);
+      expect(controller.canGenerateAnswerDraft({ groupId: "chat-b" })).toBe(false);
+      expect(controller.canGenerateAnswerDraft({})).toBe(false);
+    });
+
+    it("does not apply the answer allowlist to unrelated capabilities or ingress", () => {
+      const controller = scopedController();
+      expect(controller.canProcessGroupMessage("chat-b")).toBe(true);
+      expect(controller.canProcessIncomingEvent({ groupId: "chat-b" })).toBe(true);
+      expect(controller.canProcessIncomingEvent({})).toBe(true);
+      expect(controller.canReadGroupContext("chat-b")).toBe(true);
+      expect(controller.canProactivelySpeak("chat-b")).toBe(true);
+      expect(controller.canGenerateKnowledgeDrafts({ sourceGroupId: "chat-b" })).toBe(true);
+      expect(controller.canGenerateKnowledgeDrafts({})).toBe(true);
+    });
+
+    it.each([undefined, "", "   "])("preserves unrestricted QA when scope is absent or blank: %s", (value) => {
+      const controller = new RuntimeController(createRuntimeConfigFromEnv({
+        IRIS_ANSWER_ALLOWED_GROUP_IDS: value,
+      }));
+      expect(controller.canReplyWhenMentioned("chat-b")).toBe(true);
+      expect(controller.canGenerateAnswerDraft({ groupId: "chat-b" })).toBe(true);
+      expect(controller.canGenerateAnswerDraft({})).toBe(true);
+    });
+  });
+
   it("gates formal task draft creation by its default-off capability and source group", () => {
     const controller = new RuntimeController(createDefaultRuntimeConfig());
 

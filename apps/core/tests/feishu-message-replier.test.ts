@@ -3,6 +3,25 @@ import { describe, expect, it, vi } from "vitest";
 import { createFeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
 
 describe("FeishuMessageReplier", () => {
+  it("rechecks per-call send permission after awaiting a tenant token before reply HTTP", async () => {
+    let resolveToken!: (token: string) => void;
+    const token = new Promise<string>(resolve => { resolveToken = resolve; });
+    let enabled = true;
+    const stopped = new Error("send stopped");
+    const assertCanSend = vi.fn(() => { if (!enabled) throw stopped; });
+    const fetch = vi.fn(async () => jsonResponse({ code: 0 }));
+    const replier = createFeishuMessageReplier({
+      baseUrl: "https://open.feishu.cn", tokenProvider: { getTenantAccessToken: () => token }, fetch,
+    });
+    const reply = replier.replyText({ messageId: "om_1", text: "Hello", assertCanSend });
+    expect(fetch).not.toHaveBeenCalled();
+    enabled = false;
+    resolveToken("fake-token");
+    await expect(reply).rejects.toBe(stopped);
+    expect(assertCanSend).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("sends text replies to a Feishu message", async () => {
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
     const fetch = vi.fn(async () =>

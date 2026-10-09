@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, readdir, stat, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createFreeGate } from './proactive-discussion-free-gate.mjs';
 
 const secret = 'test-only-secret-never-log';
 const wire = JSON.stringify({model:'qwen3.8-max',messages:[{role:'user',content:'private-wire-marker'}],response_format:{type:'json_object'},max_tokens:4096,enable_thinking:false,stream:false});
+const textWire = JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(wire)).filter(([key])=>key!=='response_format')));
 const validUpstream = () => new Response(JSON.stringify({model:'qwen3.8-max',choices:[{finish_reason:'stop',message:{role:'assistant',content:'{"ok":true}'}}],usage:{total_tokens:123}}),{status:200,headers:{'content-type':'application/json'}});
 
 async function setup(options={}) {
@@ -33,10 +36,151 @@ async function pending(gate,afterId) {
   throw Error('pending not created');
 }
 async function permit(gate,p,overrides={}) {
-  await writeFile(join(gate.sessionDir,`permit-${p.requestId}.json`),JSON.stringify({requestId:p.requestId,requestHash:p.requestHash,model:'qwen3.8-max',remainingTokens:200000,observedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+30000).toISOString(),freeExhaustionStop:true,...overrides}),{flag:'wx'});
+  await writeFile(join(gate.sessionDir,`permit-${p.requestId}.json`),JSON.stringify({requestId:p.requestId,requestHash:p.requestHash,model:'qwen3.8-max',remainingTokens:200000,observedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+30000).toISOString(),freeExhaustionStop:true,...(p.profile===undefined?{}:{profile:p.profile,responseMode:p.responseMode}),...overrides}),{flag:'wx'});
 }
 function request(url,body=wire) {return fetch(url,{method:'POST',headers:{authorization:`Bearer ${secret}`,'content-type':'application/json'},body});}
 function deferred() {let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};}
+
+test('default and explicit PD profiles reject text before creating a permit request',async t=>{
+  for(const options of [{},{profile:'pd'}]) {
+    const x=await setup(options);t.after(x.cleanup);
+    assert.equal((await request(x.url,textWire)).status,422);
+    assert.equal(x.calls.length,0);
+    assert.deepEqual(await readdir(x.gate.sessionDir),[]);
+  }
+});
+
+test('unknown gate profiles fail before starting a session',()=>{
+  for(const profile of ['',null,'qa','PD','pd-and-qa-extra']) {
+    assert.throws(()=>createFreeGate({sessionParent:tmpdir(),apiKey:secret,upstreamUrl:'https://example.invalid/v1/chat/completions',profile}),/invalid.*profile/);
+  }
+});
+
+test('joint profile requires exact existing wire controls and only JSON-object or absent response format',async t=>{
+  const x=await setup({profile:'pd-and-qa'});t.after(x.cleanup);
+  for(const override of [
+    {response_format:null},{response_format:{}},{response_format:{type:'json_schema'}},
+    {response_format:{type:'text'}},{model:'other'},{max_tokens:2048},
+    {max_tokens:undefined},{enable_thinking:true},{enable_thinking:undefined},{stream:true}
+  ]) {
+    assert.equal((await request(x.url,JSON.stringify({...JSON.parse(textWire),...override}))).status,422);
+  }
+  assert.equal(x.calls.length,0);
+  assert.deepEqual(await readdir(x.gate.sessionDir),[]);
+});
+
+test('joint profile forwards both permitted modes unchanged and records scope without sensitive content',async t=>{
+  const x=await setup({profile:'pd-and-qa'});t.after(x.cleanup);
+  let prior;
+  for(const [body,responseMode] of [[wire,'json_object'],[textWire,'text']]) {
+    const reply=request(x.url,body);const p=await pending(x.gate,prior);prior=p.requestId;
+    assert.equal(p.profile,'pd-and-qa');assert.equal(p.responseMode,responseMode);
+    await permit(x.gate,p);assert.equal((await reply).status,200);
+    assert.deepEqual(x.calls.at(-1).init.body,Buffer.from(body));
+    for(const prefix of ['outcome','final']) {
+      const record=JSON.parse(await readFile(join(x.gate.sessionDir,`${prefix}-${p.requestId}.json`),'utf8'));
+      assert.equal(record.profile,'pd-and-qa');assert.equal(record.responseMode,responseMode);
+      assert.equal(record.requestHash,p.requestHash);
+    }
+  }
+  assert.equal(x.calls.length,2);
+  const contents=(await Promise.all((await readdir(x.gate.sessionDir)).map(f=>readFile(join(x.gate.sessionDir,f),'utf8')))).join('\n');
+  assert.ok(!contents.includes(secret));assert.ok(!contents.includes('private-wire-marker'));
+});
+
+test('joint profile binds each permit to its profile and actual response mode',async t=>{
+  for(const body of [wire,textWire]) for(const override of [
+    {profile:undefined},{profile:'pd'},{responseMode:undefined},
+    {responseMode:body===wire?'text':'json_object'}
+  ]) {
+    const x=await setup({profile:'pd-and-qa'});t.after(x.cleanup);
+    const reply=request(x.url,body);const p=await pending(x.gate);await permit(x.gate,p,override);
+    assert.equal((await reply).status,422);assert.equal(x.calls.length,0);
+    assert.equal((await request(x.url,body===wire?textWire:wire)).status,422);
+    assert.ok((await readdir(x.gate.sessionDir)).includes('stopped.json'));
+  }
+});
+
+test('joint text without a permit stops the whole window with zero sends',async t=>{
+  const x=await setup({profile:'pd-and-qa',permitWaitMs:90});t.after(x.cleanup);
+  const reply=request(x.url,textWire);const p=await pending(x.gate);
+  assert.equal(p.responseMode,'text');assert.equal((await reply).status,422);
+  assert.equal((await request(x.url,wire)).status,422);
+  assert.equal(x.calls.length,0);
+  assert.ok((await readdir(x.gate.sessionDir)).includes('stopped.json'));
+});
+
+test('joint structured and text requests share the default eight-send budget',async t=>{
+  const x=await setup({profile:'pd-and-qa'});t.after(x.cleanup);
+  let prior;
+  for(let i=0;i<8;i++) {
+    const reply=request(x.url,i%2===0?wire:textWire);const p=await pending(x.gate,prior);prior=p.requestId;
+    await permit(x.gate,p);assert.equal((await reply).status,200);
+  }
+  for(const body of [wire,textWire]) assert.equal((await request(x.url,body)).status,422);
+  assert.equal(x.calls.length,8);
+  assert.equal(JSON.parse(await readFile(join(x.gate.sessionDir,'stopped.json'),'utf8')).reason,'request-cap');
+});
+
+test('joint modes share the token threshold and original fifteen-minute window',async t=>{
+  for(const boundary of ['token','time']) {
+    let clock=Date.now(),sends=0;
+    const x=await setup({profile:'pd-and-qa',now:()=>clock,fetchImpl:async()=>{
+      sends++;return new Response(JSON.stringify({model:'qwen3.8-max',choices:[{finish_reason:'stop',message:{content:'accepted'}}],usage:{total_tokens:boundary==='token'?60000:123}}));
+    }});t.after(x.cleanup);
+    const reply=request(x.url,textWire);const p=await pending(x.gate);
+    await permit(x.gate,p,{observedAt:new Date(clock).toISOString(),expiresAt:new Date(clock+30000).toISOString()});
+    assert.equal((await reply).status,200);
+    if(boundary==='time') clock+=900000;
+    assert.equal((await request(x.url,wire)).status,422);assert.equal(sends,1);
+    assert.equal(JSON.parse(await readFile(join(x.gate.sessionDir,'stopped.json'),'utf8')).reason,boundary==='token'?'reported-token-threshold':'window-expired');
+  }
+});
+
+test('joint upstream failure stops subsequent requests of the other mode',async t=>{
+  for(const body of [wire,textWire]) {
+    let sends=0;
+    const x=await setup({profile:'pd-and-qa',fetchImpl:async()=>{sends++;return new Response('unavailable',{status:503});}});t.after(x.cleanup);
+    const reply=request(x.url,body);const p=await pending(x.gate);await permit(x.gate,p);
+    assert.equal((await reply).status,422);
+    assert.equal((await request(x.url,body===wire?textWire:wire)).status,422);
+    assert.equal(sends,1);
+  }
+});
+
+test('CLI opts into joint mode but exposes no budget overrides', {timeout:15000},async t=>{
+  const parent=await mkdtemp(join(tmpdir(),'iris-gate-test-'));
+  const hook=`globalThis.fetch=async url=>{if(url!=='https://example.invalid/v1/chat/completions')throw Error('unexpected upstream');return new Response(JSON.stringify({model:'qwen3.8-max',choices:[{finish_reason:'stop',message:{content:'fake'}}],usage:{total_tokens:1}}));};`;
+  const gatePath=fileURLToPath(new URL('./proactive-discussion-free-gate.mjs',import.meta.url));
+  // Reserve an ephemeral loopback port using the same local-only listener, then release it.
+  const reserve=await setup();const port=reserve.gate.server.address().port;await reserve.cleanup();
+  const child=spawn(process.execPath,['--import',`data:text/javascript,${encodeURIComponent(hook)}`,gatePath],{
+    env:{SystemRoot:process.env.SystemRoot,IRIS_PD_FREE_GATE_API_KEY:secret,IRIS_PD_FREE_GATE_SESSION_PARENT:parent,
+      IRIS_PD_FREE_GATE_UPSTREAM_URL:'https://example.invalid/v1/chat/completions',IRIS_PD_FREE_GATE_PORT:String(port),
+      IRIS_PD_FREE_GATE_PROFILE:'pd-and-qa',IRIS_PD_FREE_GATE_MAX_REQUESTS:'99',IRIS_PD_FREE_GATE_WINDOW_MS:'99999999',IRIS_PD_FREE_GATE_TOKEN_STOP:'99999999'},
+    stdio:['ignore','pipe','pipe'],windowsHide:true,
+  });
+  let output='',errors='';child.stdout.on('data',chunk=>{output+=chunk;});child.stderr.on('data',chunk=>{errors+=chunk;});
+  const exited=new Promise(resolve=>child.once('exit',resolve));
+  t.after(async()=>{
+    child.kill();await exited;
+    const target=resolve(parent),root=resolve(tmpdir());
+    assert.ok(target.startsWith(root+sep) && basename(target).startsWith('iris-gate-test-'));
+    await rm(target,{recursive:true,force:true});
+  });
+  for(let i=0;i<300 && !output.includes('\n') && child.exitCode===null;i++) await new Promise(r=>setTimeout(r,10));
+  assert.ok(output.includes('\n'),`CLI did not start: ${errors}`);
+  const metadata=JSON.parse(output.trim());assert.equal(metadata.listening,'127.0.0.1');
+  const gate={sessionDir:metadata.sessionDir},url=`http://127.0.0.1:${port}/v1/chat/completions`;
+  let prior;
+  for(let i=0;i<8;i++) {
+    const reply=request(url,i%2===0?textWire:wire);const p=await pending(gate,prior);prior=p.requestId;
+    assert.equal(p.profile,'pd-and-qa');await permit(gate,p);assert.equal((await reply).status,200);
+  }
+  assert.equal((await request(url,textWire)).status,422);
+  assert.equal((await readdir(gate.sessionDir)).filter(f=>f.startsWith('final-')).length,8);
+  assert.equal(JSON.parse(await readFile(join(gate.sessionDir,'stopped.json'),'utf8')).reason,'request-cap');
+});
 
 test('missing permit never sends and expires the window',async t=>{
   const x=await setup({permitWaitMs:90});t.after(x.cleanup);
@@ -49,6 +193,7 @@ test('missing permit never sends and expires the window',async t=>{
 test('fresh bound permit forwards identical wire once without sensitive records',async t=>{
   const x=await setup();t.after(x.cleanup);
   const reply=request(x.url);const p=await pending(x.gate);
+  assert.equal(p.profile,undefined);assert.equal(p.responseMode,undefined);
   await permit(x.gate,p);
   assert.equal((await reply).status,200);
   assert.equal(x.calls.length,1);

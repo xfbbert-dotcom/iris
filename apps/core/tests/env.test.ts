@@ -687,6 +687,37 @@ describe("readMemoryExtractionRuntimeConfig", () => {
 });
 
 describe("readModelProviderConfig", () => {
+  const freePilotEnv = {
+    IRIS_MODEL_PROVIDER: "openai-compatible", IRIS_MODEL_BASE_URL: "http://127.0.0.1:8765/v1",
+    IRIS_MODEL_API_KEY: "test-only", IRIS_MODEL_NAME: "qwen3.8-max",
+  };
+  it("preserves explicit shared-model free-pilot output controls", () => {
+    expect(readModelProviderConfig({ ...freePilotEnv,
+      IRIS_MODEL_MAX_TOKENS: " 4096 ", IRIS_MODEL_ENABLE_THINKING: " false ",
+    })).toMatchObject({ maxTokens: 4096, enableThinking: false });
+    expect(readModelProviderConfig({ ...freePilotEnv,
+      IRIS_MODEL_ENABLE_THINKING: "true",
+    })).toMatchObject({ enableThinking: true });
+    const defaults = readModelProviderConfig({ ...freePilotEnv,
+      IRIS_MODEL_MAX_TOKENS: "", IRIS_MODEL_ENABLE_THINKING: " ",
+    });
+    expect(defaults).not.toHaveProperty("maxTokens");
+    expect(defaults).not.toHaveProperty("enableThinking");
+  });
+  it.each(["0", "-1", "1.5", "9007199254740992", "invalid-private-value"])(
+    "rejects invalid shared-model output limit %s", value => {
+      expect(() => readModelProviderConfig({ ...freePilotEnv,
+        IRIS_MODEL_MAX_TOKENS: value,
+      })).toThrow("IRIS_MODEL_MAX_TOKENS");
+    },
+  );
+  it("rejects invalid shared-model thinking controls without exposing values", () => {
+    const read = () => readModelProviderConfig({ ...freePilotEnv,
+      IRIS_MODEL_ENABLE_THINKING: "invalid-private-value",
+    });
+    expect(read).toThrow("IRIS_MODEL_ENABLE_THINKING must be true or false");
+    expect(read).not.toThrow("invalid-private-value");
+  });
   it("returns undefined when no model provider is configured", () => {
     expect(readModelProviderConfig({})).toBeUndefined();
   });

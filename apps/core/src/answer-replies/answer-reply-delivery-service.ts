@@ -35,6 +35,13 @@ import type {
 export const ANSWER_PERMISSION_CHANGED_NOTICE =
   "资料权限已变化，我没有发送原答案。请重新提问。";
 
+export class AnswerReplyRuntimeDisabledError extends Error {
+  constructor() {
+    super("answer reply runtime disabled");
+    this.name = "AnswerReplyRuntimeDisabledError";
+  }
+}
+
 export type AnswerReplyDeliveryRequest = {
   provider: "feishu";
   incomingMessageId: string;
@@ -71,6 +78,7 @@ type AnswerReplyDeliveryServiceDependencies = {
   sharedChatVerifier?: SharedChatSourceVerifier;
   localMessageVerifier?: LocalMessageSourceVerifier;
   replier: Pick<FeishuMessageReplier, "replyText">;
+  canReplyWhenMentioned?: (chatId: string) => boolean;
   now?: () => Date;
 };
 type PreparedAnswer = Awaited<
@@ -88,6 +96,7 @@ export function createAnswerReplyDeliveryService({
   sharedChatVerifier,
   localMessageVerifier,
   replier,
+  canReplyWhenMentioned = () => true,
   now = () => new Date(),
 }: AnswerReplyDeliveryServiceDependencies): AnswerReplyDeliveryService {
   const responseTails = new Map<string, Promise<void>>();
@@ -168,6 +177,7 @@ export function createAnswerReplyDeliveryService({
       return receipt;
     }
 
+    requireRuntimeEnabled(receipt.delivery.chatId);
     const inspection = await input.inspectPromptPermissions();
     if (
       !isRecord(inspection)
@@ -249,7 +259,9 @@ export function createAnswerReplyDeliveryService({
   async function prepareReceipt(
     input: AnswerReplyDeliveryRequest,
   ): Promise<AnswerReplyReceipt> {
+    requireRuntimeEnabled(input.chatId);
     const preparedCandidate = await input.prepareAnswer();
+    requireRuntimeEnabled(input.chatId);
     const inspectedBlockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
       preparedCandidate.blockedDocumentSourceIds,
       preparedCandidate.sourceTraces,
@@ -292,6 +304,7 @@ export function createAnswerReplyDeliveryService({
     input: AnswerReplyDeliveryRequest,
     receipt: AnswerReplyReceipt,
   ): Promise<{ replyMessageId?: string }> {
+    requireRuntimeEnabled(receipt.delivery.chatId);
     const documentSourceIds = uniqueDocumentSourceIds(receipt);
     const blockedDocumentSourceIds = await findBlockedDocumentSourceIds(receipt);
 
@@ -322,6 +335,7 @@ export function createAnswerReplyDeliveryService({
       }
     }
 
+    requireRuntimeEnabled(receipt.delivery.chatId);
     const beginAt = now();
     let sending: AnswerReplyReceipt;
     try {
@@ -344,11 +358,14 @@ export function createAnswerReplyDeliveryService({
       }
       throw error;
     }
+    // Admission may yield while runtime control closes. Keep its receipt for reconciliation.
+    requireRuntimeEnabled(sending.delivery.chatId);
     const reply = await replier.replyText({
       messageId: sending.delivery.incomingMessageId,
       text: sending.delivery.preparedReplyText!,
       replyInThread: true,
       uuid: sending.delivery.replyUuid,
+      assertCanSend: () => requireRuntimeEnabled(sending.delivery.chatId),
     });
     const completeAt = now();
     const sent = requireSentReceipt(
@@ -445,6 +462,7 @@ export function createAnswerReplyDeliveryService({
       return optionalReplyId(receipt.delivery.safeNoticeMessageId);
     }
 
+    requireRuntimeEnabled(receipt.delivery.chatId);
     const beginAt = now();
     const sending = requireSafeNoticeSendingReceipt(
       await repository.beginSafeNoticeSend({
@@ -455,11 +473,13 @@ export function createAnswerReplyDeliveryService({
       receipt,
       beginAt,
     );
+    requireRuntimeEnabled(sending.delivery.chatId);
     const reply = await replier.replyText({
       messageId: sending.delivery.incomingMessageId,
       text: ANSWER_PERMISSION_CHANGED_NOTICE,
       replyInThread: true,
       uuid: sending.delivery.safeNoticeUuid,
+      assertCanSend: () => requireRuntimeEnabled(sending.delivery.chatId),
     });
     const completeAt = now();
     const completed = requireCompletedSafeNoticeReceipt(
@@ -476,6 +496,10 @@ export function createAnswerReplyDeliveryService({
       completeAt,
     );
     return optionalReplyId(completed.delivery.safeNoticeMessageId);
+  }
+
+  function requireRuntimeEnabled(chatId: string): void {
+    if (!canReplyWhenMentioned(chatId)) throw new AnswerReplyRuntimeDisabledError();
   }
 }
 

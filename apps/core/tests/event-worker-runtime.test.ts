@@ -219,6 +219,7 @@ describe("createEventWorkerRuntime", () => {
     const answerReplyDeliveryService = { respond: vi.fn() };
     const sharedChatVerifier = { verify: vi.fn(async () => true) };
     let deliveryServiceVerifier: AnswerSourcePermissionVerifier | undefined;
+    let deliveryRuntimeGate: ((chatId: string) => boolean) | undefined;
     const now = () => new Date("2026-08-02T06:07:08.000Z");
     const redisClient = {
       connect: vi.fn(async () => redisClient),
@@ -286,8 +287,9 @@ describe("createEventWorkerRuntime", () => {
       }),
       createPostgresAnswerReplyRepository: vi.fn(() => answerReplyRepository),
       createAnswerReplyDeliveryService: vi.fn(
-        (input: { verifier: AnswerSourcePermissionVerifier }) => {
+        (input: { verifier: AnswerSourcePermissionVerifier; canReplyWhenMentioned?: (chatId: string) => boolean }) => {
           deliveryServiceVerifier = input.verifier;
+          deliveryRuntimeGate = input.canReplyWhenMentioned;
           return answerReplyDeliveryService;
         },
       ),
@@ -359,7 +361,12 @@ describe("createEventWorkerRuntime", () => {
       sharedChatVerifier,
       localMessageVerifier,
       now,
+      canReplyWhenMentioned: expect.any(Function),
     });
+    expect(deliveryRuntimeGate?.("oc_pilot")).toBe(true);
+    runtimeController.canReplyWhenMentioned.mockReturnValueOnce(false);
+    expect(deliveryRuntimeGate?.("oc_pilot")).toBe(false);
+    expect(runtimeController.canReplyWhenMentioned).toHaveBeenLastCalledWith("oc_pilot");
     await expect(deliveryServiceVerifier?.verify({
       chatId: "oc_pilot",
       documentSourceIds: ["source-1"],

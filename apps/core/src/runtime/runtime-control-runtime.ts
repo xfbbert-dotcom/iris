@@ -25,7 +25,8 @@ export async function createRuntimeControlRuntime(input: {
   env?: NodeJS.ProcessEnv;
   createPool?: typeof createPostgresPool;
 } = {}): Promise<RuntimeControlRuntime> {
-  const databaseConfig = readDatabaseConfig(input.env ?? process.env);
+  const env = input.env ?? process.env;
+  const databaseConfig = readDatabaseConfig(env);
   const pool = (input.createPool ?? createPostgresPool)(databaseConfig);
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -37,7 +38,10 @@ export async function createRuntimeControlRuntime(input: {
     const repository = createPostgresRuntimeControlStateRepository({ queryable: pool });
     const durableSnapshot = await repository.getSnapshot();
     const controller = new RuntimeController(
-      createDefaultRuntimeConfig({ IRIS_RUNTIME_GLOBAL_ENABLED: "false" }),
+      createDefaultRuntimeConfig({
+        ...env,
+        IRIS_RUNTIME_GLOBAL_ENABLED: "false",
+      }),
     );
     controller.replaceDurablePolicy(durableSnapshot);
     const service = createRuntimeControlService({ controller, repository });

@@ -68,6 +68,37 @@ test("propagates the explicit Core structured-output mode without changing the m
   assert.equal(readEnvAssignment(pilotEnvExample, "IRIS_MODEL_STRUCTURED_OUTPUT_MODE"), "json_schema");
 });
 
+test("forwards optional Core output controls without changing the memory provider", () => {
+  const defaults = loadPilotCompose("deploy/pilot/ci.env", {
+    IRIS_MODEL_MAX_TOKENS: "", IRIS_MODEL_ENABLE_THINKING: "",
+  });
+  assert.equal(defaults.services.core.environment.IRIS_MODEL_MAX_TOKENS, "");
+  assert.equal(defaults.services.core.environment.IRIS_MODEL_ENABLE_THINKING, "");
+  const selected = loadPilotCompose("deploy/pilot/ci.env", {
+    IRIS_MODEL_MAX_TOKENS: "4096", IRIS_MODEL_ENABLE_THINKING: "false",
+  });
+  assert.equal(selected.services.core.environment.IRIS_MODEL_MAX_TOKENS, "4096");
+  assert.equal(selected.services.core.environment.IRIS_MODEL_ENABLE_THINKING, "false");
+  for (const name of ["IRIS_MODEL_MAX_TOKENS", "IRIS_MODEL_ENABLE_THINKING"])
+    assert.equal(selected.services["ai-worker"].environment[name], undefined);
+});
+
+test("forwards the optional answer group allowlist only to Core", () => {
+  const name = "IRIS_ANSWER_ALLOWED_GROUP_IDS";
+  const defaults = loadPilotCompose("deploy/pilot/ci.env", { [name]: undefined });
+  assert.equal(defaults.services.core.environment[name], "");
+  for (const value of ["", " chat-a,chat-b,chat-a ", "chat-a,,chat-b"]) {
+    const selected = loadPilotCompose("deploy/pilot/ci.env", { [name]: value });
+    assert.deepEqual(selected.services.core.environment, {
+      ...defaults.services.core.environment,
+      [name]: value,
+    });
+    for (const [serviceName, service] of Object.entries(selected.services)) {
+      if (serviceName !== "core") assert.deepEqual(service, defaults.services[serviceName]);
+    }
+  }
+});
+
 test("forwards the opinion contract into Core with legacy as the absent default", () => {
   const name = "IRIS_PROACTIVE_DISCUSSION_OPINION_MODE";
   const defaults = loadPilotCompose("deploy/pilot/ci.env", { [name]: undefined });

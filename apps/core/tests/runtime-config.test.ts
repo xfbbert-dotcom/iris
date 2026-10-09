@@ -51,6 +51,26 @@ describe("createDefaultRuntimeConfig", () => {
   });
 });
 
+describe("ordinary answer deployment group scope", () => {
+  it.each([undefined, "", "   "])("keeps an absent or blank allowlist unrestricted: %s", (value) => {
+    expect(createDefaultRuntimeConfig({ IRIS_ANSWER_ALLOWED_GROUP_IDS: value }).answerAllowedGroupIds)
+      .toBeUndefined();
+  });
+
+  it("trims and deduplicates explicitly allowed groups", () => {
+    expect(createDefaultRuntimeConfig({
+      IRIS_ANSWER_ALLOWED_GROUP_IDS: " chat-a, chat-b ,chat-a ",
+    }).answerAllowedGroupIds).toEqual(new Set(["chat-a", "chat-b"]));
+  });
+
+  it.each([",", "chat-a,", ",chat-a", "chat-a, ,chat-b"])(
+    "rejects blank entries in a nonempty allowlist: %s", (value) => {
+      expect(() => createDefaultRuntimeConfig({ IRIS_ANSWER_ALLOWED_GROUP_IDS: value }))
+        .toThrow("IRIS_ANSWER_ALLOWED_GROUP_IDS must not contain blank group IDs");
+    },
+  );
+});
+
 describe("managed knowledge update deployment configuration", () => {
   it("defaults off and accepts only one explicit pilot group", () => {
     expect(readManagedKnowledgeUpdateDeploymentConfig({})).toEqual({

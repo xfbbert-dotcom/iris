@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
-import type {
-  AnswerReplyDeliveryRequest,
-  AnswerReplyDeliveryService,
+import {
+  AnswerReplyRuntimeDisabledError,
+  type AnswerReplyDeliveryRequest,
+  type AnswerReplyDeliveryService,
 } from "../src/answer-replies/answer-reply-delivery-service.js";
 import {
   createFeishuMentionAnswerResponder as createProductionFeishuMentionAnswerResponder,
@@ -11,7 +12,7 @@ import {
 } from "../src/conversation/feishu-mention-answer-responder.js";
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import { createFeishuDocumentLinkExtractor } from "../src/documents/feishu-document-link-extractor.js";
-import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
+import { createFeishuMessageReplier, type FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
 import type { ChatKnowledgeDraftCommand } from "../src/knowledge-governance/chat-knowledge-draft-command.js";
 import { ChatKnowledgeDraftModelUnavailableError } from "../src/knowledge-governance/chat-knowledge-draft-generator.js";
@@ -1494,6 +1495,115 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(replier.replyText).not.toHaveBeenCalled();
   });
 
+  it("skips deferred QA when runtime closes before generation and does not replay it after reopening", async () => {
+    let enabled = true;
+    const generateDraft = vi.fn();
+    const respond = vi.fn(async () => ({ replyMessageId: "must-not-reply" }));
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris", answerDraftOrchestrator: { generateDraft },
+      answerReplyDeliveryService: { respond }, replier,
+      canReplyWhenMentioned: () => enabled,
+    });
+    const input = {
+      messageId: "om_deferred_close", chatId: "oc_group_1", senderId: "ou_alice",
+      text: "@_user_1 summarize", mentions: [{ key: "@_user_1", openId: "ou_iris" }],
+    };
+    const deferred = await responder.prepareResponse!(input);
+    expect(deferred.status).toBe("deferred");
+    if (deferred.status !== "deferred") throw new Error("expected deferred QA");
+    enabled = false;
+    await expect(deferred.respond(effect => effect())).resolves.toEqual({ status: "skipped", reason: "runtime_disabled" });
+    enabled = true;
+    await expect(responder.maybeRespond(input)).resolves.toEqual({ status: "skipped", reason: "duplicate_message" });
+    expect(generateDraft).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it.each(["during generation", "inside legacy effect"])("does not send model fallback after QA closes %s", async phase => {
+    let enabled = true;
+    const generateDraft = vi.fn(async () => {
+      if (phase === "during generation") enabled = false;
+      throw new Error("model answer draft must not be blank");
+    });
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "must-not-send" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris", answerDraftOrchestrator: { generateDraft }, replier,
+      canReplyWhenMentioned: () => enabled,
+    });
+    const deferred = await responder.prepareResponse!({
+      messageId: "om_fallback_close", chatId: "oc_group_1", senderId: "ou_alice",
+      text: "@_user_1 summarize", mentions: [{ key: "@_user_1", openId: "ou_iris" }],
+    });
+    if (deferred.status !== "deferred") throw new Error("expected deferred QA");
+    await expect(deferred.respond(async effect => {
+      enabled = false;
+      return effect();
+    })).resolves.toEqual({ status: "skipped", reason: "runtime_disabled" });
+    expect(generateDraft).toHaveBeenCalledOnce();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("reports the receipt service runtime stop as skipped without claiming a reply or retrying", async () => {
+    let enabled = true;
+    const generateDraft = vi.fn();
+    const respond = vi.fn(async () => {
+      enabled = false;
+      throw new AnswerReplyRuntimeDisabledError();
+    });
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris", answerDraftOrchestrator: { generateDraft },
+      answerReplyDeliveryService: { respond }, replier,
+      canReplyWhenMentioned: () => enabled,
+    });
+    const input = {
+      messageId: "om_delivery_close", chatId: "oc_group_1", senderId: "ou_alice",
+      text: "@_user_1 summarize", mentions: [{ key: "@_user_1", openId: "ou_iris" }],
+    };
+    await expect(responder.maybeRespond(input)).resolves.toEqual({ status: "skipped", reason: "runtime_disabled" });
+    enabled = true;
+    await expect(responder.maybeRespond(input)).resolves.toEqual({ status: "skipped", reason: "duplicate_message" });
+    expect(respond).toHaveBeenCalledOnce();
+    expect(generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it.each(["blank", "capacity"])("skips the %s model fallback if QA closes while awaiting a tenant token", async kind => {
+    let enabled = true;
+    let resolveToken!: (token: string) => void;
+    let tokenStarted!: () => void;
+    const token = new Promise<string>(resolve => { resolveToken = resolve; });
+    const started = new Promise<void>(resolve => { tokenStarted = resolve; });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ code: 0, data: { message_id: "must-not-send" } })));
+    const replier = createFeishuMessageReplier({
+      baseUrl: "https://open.feishu.cn", fetch,
+      tokenProvider: { async getTenantAccessToken() { tokenStarted(); return token; } },
+    });
+    const generateDraft = vi.fn(async () => {
+      throw kind === "blank" ? new Error("model answer draft must not be blank")
+        : new ModelProviderHttpError(429, "model capacity reached");
+    });
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris", answerDraftOrchestrator: { generateDraft }, replier,
+      canReplyWhenMentioned: () => enabled,
+    });
+    const input = {
+      messageId: "om_token_close", chatId: "oc_group_1", senderId: "ou_alice",
+      text: "@_user_1 summarize", mentions: [{ key: "@_user_1", openId: "ou_iris" }],
+    };
+    const response = responder.maybeRespond(input);
+    await started;
+    enabled = false;
+    resolveToken("fake-token");
+    await expect(response).resolves.toEqual({ status: "skipped", reason: "runtime_disabled" });
+    enabled = true;
+    await expect(responder.maybeRespond(input)).resolves.toEqual({ status: "skipped", reason: "duplicate_message" });
+    expect(generateDraft).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("does not answer an old duplicate mention after replies are re-enabled", async () => {
     let repliesEnabled = false;
     const answerDraftOrchestrator = {
@@ -1662,6 +1772,7 @@ describe("FeishuMentionAnswerResponder", () => {
     const fallbackReply = replier.replyText.mock.calls[0]?.[0];
     expect(fallbackReply).toEqual({
       messageId: "om_blank_model_answer",
+      assertCanSend: expect.any(Function),
       text: "我没拿到可用答案，你可以换个说法再问我一次。",
       replyInThread: true,
       uuid: "iris-7900347c03b79015c84fd1ec6c58db825f66e3d133bdd",
@@ -1719,6 +1830,7 @@ describe("FeishuMentionAnswerResponder", () => {
     const fallbackReply = replier.replyText.mock.calls[0]?.[0];
     expect(fallbackReply).toEqual({
       messageId: "om_model_capacity",
+      assertCanSend: expect.any(Function),
       text: "模型服务暂时达到使用上限，我现在无法可靠回答。恢复后，请再 @我一次。",
       replyInThread: true,
       uuid: "iris-05b16c71a9f4fa2fd04f9e214e9c7b8487352b93476c7",
@@ -1799,6 +1911,7 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(replier.replyText).toHaveBeenCalledTimes(2);
     expect(replier.replyText).toHaveBeenLastCalledWith({
       messageId: "om_model_capacity_reply_retry",
+      assertCanSend: expect.any(Function),
       text: "模型服务暂时达到使用上限，我现在无法可靠回答。恢复后，请再 @我一次。",
       replyInThread: true,
       uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
