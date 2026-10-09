@@ -29,6 +29,11 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
+The [local QA pilot preparation](docs/development/iris-qa-free-pilot-20261009.md) adds optional QA group
+restriction, shared-model output controls and runtime checks before reply dispatch. One supervised gate
+can cover both structured PD/QA and plain-text answers with a shared budget. Local simulated wiring is
+distinct from new model-semantic or real-Feishu acceptance; this candidate has not been deployed or enabled.
+
 Application `c7a286f3` is [deployed with global, ordinary QA and proactive discussion disabled](docs/development/iris-release-c7a286f3-20261009.md).
 The paired backup was verified and decrypted off-host before replacing Core. Independent live checks
 pass: exact source/image/markers, readiness 21/21, unchanged database history/business records,

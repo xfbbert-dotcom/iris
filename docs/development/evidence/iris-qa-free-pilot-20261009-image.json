@@ -1,0 +1,65 @@
+{
+  "applicationSha": "aff258f7fa0a1560cdbe51d305bf97bb88c5a0b5",
+  "imageTag": "iris-core:aff258f7-local-20261009",
+  "startedAt": "2026-10-09T08:48:36.115319+00:00",
+  "sourceArchiveSha256": "86a84b0338694abd16606911566315cfb9f1a2d9959b5c01f79c66adb7b3cde2",
+  "uploaded": false,
+  "deployed": false,
+  "providerRequests": 0,
+  "feishuRequests": 0,
+  "build": {
+    "exitCode": 0,
+    "elapsedSeconds": 86.05
+  },
+  "inspect": {
+    "exitCode": 0,
+    "elapsedSeconds": 0.28
+  },
+  "image": {
+    "id": "sha256:9be24803b0a63b12b29dd2fe158f0c7e3506b803ba013b25db7335fc24866f6c",
+    "architecture": "amd64",
+    "os": "linux",
+    "user": "node",
+    "revision": "aff258f7fa0a1560cdbe51d305bf97bb88c5a0b5"
+  },
+  "runtimeAudit": {
+    "exitCode": 0,
+    "elapsedSeconds": 2.36
+  },
+  "productionDependencyVulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "offlineQaSmoke": {
+    "exitCode": 0,
+    "elapsedSeconds": 1.09
+  },
+  "offlineQaSmokeResult": {
+    "kind": "compiled-qa-joint-free-gate-wiring",
+    "checks": [
+      {
+        "case": "qa-without-permit-zero-upstream-and-zero-delivery",
+        "passed": true
+      },
+      {
+        "case": "compiled-mention-router-planner-text-and-grounded-answer-through-one-gate",
+        "passed": true,
+        "loopbackHttp": 7,
+        "fakeDeliveries": 2
+      }
+    ],
+    "providerHttp": 0,
+    "feishuMessages": 0,
+    "readsProductionConfig": false,
+    "semanticAcceptance": false,
+    "realFeishuAcceptance": false
+  },
+  "completedAt": "2026-10-09T08:50:05.915219+00:00",
+  "applicationServerStarted": false,
+  "semanticAcceptance": false,
+  "realFeishuAcceptance": false
+}

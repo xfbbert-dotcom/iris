@@ -1,0 +1,80 @@
+{
+  "capturedAt": "2026-10-09T08:46:20.752579+00:00",
+  "baseCommit": "4eeadd9fe8f5e625056c908e1f6333a88a2740a6",
+  "applicationSha": "aff258f7fa0a1560cdbe51d305bf97bb88c5a0b5",
+  "imageEvidence": "iris-qa-free-pilot-20261009-image.json",
+  "scope": "local QA deployment scope, shared model controls, joint free gate and send boundary",
+  "finalCore": {
+    "passed": 5165,
+    "conditionalSkipped": 471,
+    "filesPassed": 285,
+    "filesSkipped": 13,
+    "durationSeconds": 29.05
+  },
+  "pilot": {
+    "passed": 230,
+    "failed": 0,
+    "skipped": 0,
+    "durationSeconds": 320.7137784,
+    "scopeNote": "Full pilot suite before final token-await fix; affected compiled QA wiring was rebuilt and rerun after that fix."
+  },
+  "finalTypecheck": {
+    "exitCode": 0
+  },
+  "finalBuild": {
+    "exitCode": 0
+  },
+  "finalCompiledWiring": {
+    "passed": 1,
+    "failed": 0,
+    "providerHttp": 0,
+    "feishuMessages": 0,
+    "fakeUpstreamAllowedCase": 7,
+    "fakeDeliveriesAllowedCase": 2,
+    "contextAndDeliveryAreDoubles": true,
+    "actualPdRuntimeExecuted": false
+  },
+  "initialCore": {
+    "passed": 5160,
+    "conditionalSkipped": 471,
+    "scopeNote": "Before token-await reviewer fix; superseded by final Core run."
+  },
+  "regressions": {
+    "sharedOutputControlsRedFailures": 7,
+    "composeOutputControlsRedFailures": 1,
+    "qaScopeAndFactoryRedThenGreen": true,
+    "jointGateRed": {
+      "pass": 25,
+      "fail": 7
+    },
+    "jointGateGreen": {
+      "pass": 32,
+      "fail": 0
+    },
+    "tokenAwaitRedFailures": 5,
+    "finalAffectedSendSuitesPassed": 265
+  },
+  "review": {
+    "initialTokenAwaitGap": "Actual fake-token replier started one reply HTTP after QA closed; rejected as a pre-dispatch gap, not an already-sent request.",
+    "fixedIndependentReplay": {
+      "replyHttpAfterClose": 0,
+      "status": "skipped/runtime_disabled",
+      "reopenSameMessage": "duplicate_message"
+    },
+    "remainingBlockingFindings": 0
+  },
+  "localLogSha256": {
+    "core.log": "e2269d51d0a571a4ddb0d642efc443dc7d5618d281d712eb98dfe61f3237e5b9",
+    "core-final.log": "d48edac6bff13c5ac8d3e5c12855bea6b1560e87f2497b9be2c6fec64493a2c8",
+    "pilot.log": "960d5087f654baa55330f2b663efc781ae2c1b50c2c1deb408edd856f4ec2792",
+    "typecheck-final.log": "1f11615ae215eeaa43974bc53e51ea9d6c48ff1d8022eb1b46f7bc85a74a0d95",
+    "build-final.log": "fe6927995c55421b67a7907ee236356225aad082bae335b537db464f0fab8175",
+    "wiring-final.log": "d76a9e7608176162b3a8641f2274259fad82bf2df2c343af379c12eba22e3d22"
+  },
+  "productionAccess": false,
+  "externalModelRequests": 0,
+  "feishuMessagesSent": 0,
+  "semanticAcceptance": false,
+  "realFeishuAcceptance": false,
+  "deployed": false
+}

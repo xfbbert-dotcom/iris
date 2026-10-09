@@ -840,6 +840,20 @@ require both the token and signature to match.
 
 When Iris is disabled, it should stop processing new messages, stop proactive speech, and stop executing tasks. Admins may still view logs and configuration.
 
+Ordinary QA may be restricted by an optional deployment-level group allowlist,
+`IRIS_ANSWER_ALLOWED_GROUP_IDS`. When configured, both mention replies and internal answer drafts
+require a listed group; a missing group is denied. Global, capability and disabled-group controls
+still apply. Durable policy refresh and group re-enablement cannot widen this deployment scope.
+An absent or blank setting preserves existing behavior. This is a QA boundary, not a global event
+or document-access allowlist, and it must be carried through the real runtime-control factory.
+
+QA must recheck runtime permission before deferred generation and before new reply or safe-notice
+dispatch, including after asynchronous token acquisition. A later close cannot undo a request
+already dispatched; successful external effects must still be recorded. Preserve existing pending
+receipts for reconciliation when closure interrupts admission, rather than falsely recording delivery
+or blindly resending. The [bounded QA pilot preparation](../../development/iris-qa-free-pilot-20261009.md)
+records implementation, simulated transport checks and the remaining real-use acceptance boundary.
+
 Feishu may still deliver events to the system while Iris is disabled. In that state, Iris should acknowledge or safely discard events according to Feishu platform requirements, but must not index message content, update semantic memory, generate replies, or execute actions unless an administrator explicitly re-enables the relevant scope.
 
 ### 8.1 Durable Runtime Control

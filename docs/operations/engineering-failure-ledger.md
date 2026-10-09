@@ -1,5 +1,16 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-09：主动门禁不能自动覆盖普通问答与最终发送
+
+[QA限定试点修复](../development/iris-qa-free-pilot-20261009.md)确认普通QA共享client、文本
+输出与PD专用JSON门禁不同，共享env还缺输出上限/thinking透传。联合档位保持逐HTTP许可，
+两类请求必须合并预算；不能给QA另开计数或由PD成功推定普通QA免费。QA白名单需同时
+穿过默认配置和真实runtime-control工厂，持久快照不能冲掉部署限制；构造器测试不足以
+证明应用启动有效。来源权限复查也不能代替QA开关，deferred、正式回复、安全提示及模型
+回退均需复查。独立假令牌复现表明replyText内部还会await令牌，调用该方法前检查不等于
+HTTP发送前检查；应在令牌返回后、真正fetch前复查。保留已开始请求的成功回执与需对账
+状态，不新增自动重发。出口为有限本地门槛和联合窗口方案；实际模型解释和飞书体验仍待验。
+
 ## 2026-10-09：备份短传不能凭SSH退出码判定成功
 
 [c7a286f3发布记录](../development/iris-release-c7a286f3-20261009.md)保留三次并发raw-PTY
