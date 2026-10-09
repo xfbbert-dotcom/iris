@@ -1,0 +1,19 @@
+{
+  "capturedAt": "2026-10-09T09:58:45.573807+00:00",
+  "applicationSha": "aff258f7fa0a1560cdbe51d305bf97bb88c5a0b5",
+  "ciSourceSha": "147d14fcb94d1a345343c05665dc3329225356bb",
+  "repository": "xfbbert-dotcom/iris",
+  "visibility": "PUBLIC",
+  "runner": "ubuntu-latest",
+  "cacheBytesBefore": 46494627,
+  "artifactUploads": false,
+  "largerRunners": false,
+  "billingPolicyUrl": "https://docs.github.com/en/billing/concepts/product-billing/github-actions",
+  "runId": 37914079405,
+  "runUrl": "https://github.com/xfbbert-dotcom/iris/actions/runs/37914079405",
+  "dispatches": 1,
+  "paidFallback": false,
+  "diffCredentialPatternHits": 0,
+  "diffInspectionScope": "34 changed files; code/tests/config examples and local synthetic validation evidence, no new real discussion payloads",
+  "productionCutover": false
+}

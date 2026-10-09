@@ -1,0 +1,73 @@
+{
+  "at": "2026-10-09T10:16:48.762Z",
+  "restored": true,
+  "global": false,
+  "desired": false,
+  "replyEnabled": false,
+  "pdEnabled": false,
+  "gateStop": {
+    "absent": true
+  },
+  "temporaryGateContainerReplaced": true,
+  "counts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 3,
+    "proactive_discussion_evaluations": 2,
+    "proactive_discussion_issues": 1,
+    "proactive_discussion_deliveries": 1,
+    "proactive_discussion_sources": 63,
+    "proactive_discussion_events": 42,
+    "answer_reply_deliveries": 89,
+    "answer_reply_delivery_events": 289,
+    "answer_reply_source_traces": 647
+  },
+  "jobs": [
+    {
+      "state": "completed",
+      "n": 2
+    },
+    {
+      "state": "cancelled",
+      "n": 1
+    }
+  ],
+  "deliveries": [
+    {
+      "state": "sent",
+      "n": 1
+    }
+  ],
+  "qaStates": [
+    {
+      "state": "sent",
+      "n": 72
+    },
+    {
+      "state": "not_sent_reconciled",
+      "n": 1
+    },
+    {
+      "state": "permission_blocked",
+      "n": 16
+    }
+  ],
+  "qaReconciliation": {
+    "unresolved": 0,
+    "reconciliation_required": 0,
+    "pending_safe_notice": 0,
+    "uncertain_safe_notice": 0
+  },
+  "requiresReconciliation": false,
+  "replayPerformed": false,
+  "nonCoreUnchanged": true,
+  "startedMarkerAbsent": true,
+  "watchdogMarkerAbsent": true,
+  "coreEnvironmentFullyRestored": true,
+  "envAndComposeBytesRestored": true,
+  "domainCountsUnchanged": true,
+  "modelRequests": 0,
+  "feishuMessages": 0,
+  "semanticAcceptance": false,
+  "realFeishuAcceptance": false
+}

@@ -1,0 +1,15 @@
+{
+  "recordedAt": "2026-10-09T10:17:56.440997+00:00",
+  "operation": "start authorized original-group QA and PD supervised window",
+  "tool": "exec_command",
+  "result": "automatic approval rejection",
+  "reasonReturned": "blocked by policy",
+  "moreSpecificReasonProvided": false,
+  "processCreated": false,
+  "remoteStartCommandDispatched": false,
+  "userHadAuthorizedScope": true,
+  "userPresenceConfirmed": true,
+  "equivalentStartRetried": false,
+  "saferAction": "stop prepared window and restore original configuration",
+  "restorationEvidence": "iris-qa-pd-window-20261009-restored.json"
+}

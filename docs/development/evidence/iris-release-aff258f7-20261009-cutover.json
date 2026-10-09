@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-10-09T10:12:20.746059+00:00",
+  "applicationSha": "aff258f7fa0a1560cdbe51d305bf97bb88c5a0b5",
+  "imageId": "sha256:9be24803b0a63b12b29dd2fe158f0c7e3506b803ba013b25db7335fc24866f6c",
+  "coreContainerId": "722572f46f13a277effa1de2dacd59680c2002a814b9e7fd57e4be523136751f",
+  "coreHealthy": true,
+  "migrationsRun": false,
+  "caddyRunning": false,
+  "acceptancePending": true
+}

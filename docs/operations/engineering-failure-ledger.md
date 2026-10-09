@@ -1,5 +1,14 @@
 # Iris Engineering Failure Ledger
 
+## 2026-10-09：已授权联合窗口的启动被执行策略阻止
+
+[执行记录](../development/iris-qa-pd-release-window-20261009.md)固定aff258f7部署及免费CI
+通过后，用户已确认联合范围与在场，工具却在CreateProcess前拒绝start，仅返回
+`blocked by policy`。不据此推断模型/免费额度/用户授权有问题，也不换等价调用绕过。
+本次stop恢复原环境与配置、全局/QA/PD关闭、业务及回执不变，最终独立19项通过。
+真实窗口0启动、模型HTTP0、飞书外发0，真实意见与追问缺口仍开放。工具未返回更具体的
+拒绝原因，后续缺少的是该开窗动作的执行策略放行，不能让用户反复登录或重复授权。
+
 ## 2026-10-09：主动门禁不能自动覆盖普通问答与最终发送
 
 [QA限定试点修复](../development/iris-qa-free-pilot-20261009.md)确认普通QA共享client、文本

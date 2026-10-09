@@ -1,0 +1,69 @@
+{
+  "at": "2026-10-09T10:13:18.777Z",
+  "ok": true,
+  "app": "aff258f7",
+  "coreHealthy": true,
+  "global": false,
+  "desired": false,
+  "replyEnabled": false,
+  "revision": 3430,
+  "capabilities": {
+    "readGroupContext": true,
+    "replyWhenMentioned": false,
+    "readGroupDocuments": true,
+    "retrieveKnowledgeBase": true,
+    "proactiveSpeech": false,
+    "generateKnowledgeDrafts": true,
+    "generateTaskDrafts": false,
+    "createFeishuTasks": false,
+    "writeKnowledgeBase": false,
+    "updateManagedKnowledge": false,
+    "callExternalTools": false
+  },
+  "disabledGroups": 14,
+  "targetDisabled": false,
+  "domainCounts": {
+    "proactive_discussion_policies": 1,
+    "proactive_discussion_groups": 1,
+    "proactive_discussion_jobs": 3,
+    "proactive_discussion_evaluations": 2,
+    "proactive_discussion_issues": 1,
+    "proactive_discussion_deliveries": 1,
+    "proactive_discussion_sources": 63,
+    "proactive_discussion_events": 42,
+    "answer_reply_deliveries": 89,
+    "answer_reply_delivery_events": 289,
+    "answer_reply_source_traces": 647
+  },
+  "qaStates": [
+    {
+      "state": "sent",
+      "n": 72
+    },
+    {
+      "state": "not_sent_reconciled",
+      "n": 1
+    },
+    {
+      "state": "permission_blocked",
+      "n": 16
+    }
+  ],
+  "qaReconciliation": {
+    "unresolved": 0,
+    "reconciliation_required": 0,
+    "pending_safe_notice": 0,
+    "uncertain_safe_notice": 0
+  },
+  "offEntrypoints": {
+    "IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED": "false",
+    "IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED": "false",
+    "IRIS_MEMORY_EXTRACTION_ENABLED": "false",
+    "IRIS_KNOWLEDGE_CONFLICT_ENABLED": "false",
+    "IRIS_FEISHU_TASK_CREATION_ENABLED": "false"
+  },
+  "embeddingLocal": true,
+  "wikiInitiallyEnabled": true,
+  "auditActorConfigured": false,
+  "composeSha256": "f55119ba089befc721f1920a0647a80518da62c40f758cbe363fd3799444de48"
+}

@@ -1,0 +1,9 @@
+{
+  "origin": "https://iris.quello.cn",
+  "http": {
+    "/health": 200,
+    "/internal/status": 404,
+    "/internal/runtime-control/status": 404
+  },
+  "tlsVerificationBypassed": false
+}

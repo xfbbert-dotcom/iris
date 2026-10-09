@@ -1,0 +1,29 @@
+{
+  "prepared": true,
+  "global": false,
+  "desired": false,
+  "policy": {
+    "version": "10",
+    "enabled": false
+  },
+  "wiringSmoke": {
+    "kind": "compiled-qa-joint-free-gate-wiring",
+    "checks": [
+      {
+        "case": "qa-without-permit-zero-upstream-and-zero-delivery",
+        "passed": true
+      },
+      {
+        "case": "compiled-mention-router-planner-text-and-grounded-answer-through-one-gate",
+        "passed": true,
+        "loopbackHttp": 7,
+        "fakeDeliveries": 2
+      }
+    ],
+    "providerHttp": 0,
+    "feishuMessages": 0,
+    "readsProductionConfig": false,
+    "semanticAcceptance": false,
+    "realFeishuAcceptance": false
+  }
+}

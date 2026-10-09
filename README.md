@@ -29,22 +29,19 @@ The internal MVP acceptance checklist lives at:
 
 ## Current Product State
 
-The [local QA pilot preparation](docs/development/iris-qa-free-pilot-20261009.md) adds optional QA group
-restriction, shared-model output controls and runtime checks before reply dispatch. One supervised gate
-can cover both structured PD/QA and plain-text answers with a shared budget. Local simulated wiring is
-distinct from new model-semantic or real-Feishu acceptance; this candidate has not been deployed or enabled.
+Application `aff258f7` is [deployed and independently verified](docs/development/iris-qa-pd-release-window-20261009.md).
+Exact-source free CI, off-host backup verification, all 19 independent checks and readiness 21/21 passed.
+Migration history, business records and non-Core containers are preserved; public ingress is restored.
+The [QA changes](docs/development/iris-qa-free-pilot-20261009.md) add group scope, shared-model controls
+and permission checks immediately before reply dispatch.
 
-Application `c7a286f3` is [deployed with global, ordinary QA and proactive discussion disabled](docs/development/iris-release-c7a286f3-20261009.md).
-The paired backup was verified and decrypted off-host before replacing Core. Independent live checks
-pass: exact source/image/markers, readiness 21/21, unchanged database history/business records,
-preserved non-Core services/configuration, and public ingress boundaries. No new migration or model
-configuration change occurred. The ingress is restored; `replyWhenMentioned` is explicitly persisted false.
-
-The [exact-source free CI and local artifact](docs/development/iris-ci-readiness-20261008.md) and
-[four bounded synthetic cases](docs/development/iris-decision-gate-20261008.md) passed before release.
+The authorized joint QA/PD pilot passed preparation and container-local synthetic wiring, but automatic
+execution-policy review rejected its start before dispatch despite confirmed user presence. Temporary
+configuration was restored and all 19 independent checks passed again. Global, mention replies and
+group policy remain closed, with zero new provider or Feishu calls; the real window never started.
 Real opinion quality and follow-up replies to `@Iris` remain unaccepted; IRIS-CORE-005 is still partial.
-This closed-state release does not enable a new group window or ordinary QA. The dated notes below
-retain historical validation and execution states.
+The [four bounded synthetic cases](docs/development/iris-decision-gate-20261008.md) and dated notes below
+retain their original validation scope; deployment does not establish real-use acceptance.
 
 The [historical basis fix](docs/development/iris-pd-history-basis-20261006.md), application `51937b95`,
 restores verified source text for an existing issue after its premises leave the recent-message window.
